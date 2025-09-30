@@ -67,6 +67,11 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 		return fmt.Errorf("failed to register list_agent_tasks tool: %w", err)
 	}
 
+	// Register coordinator_clear_task_board
+	if err := h.registerClearTaskBoard(server); err != nil {
+		return fmt.Errorf("failed to register clear_task_board tool: %w", err)
+	}
+
 	return nil
 }
 
@@ -687,4 +692,64 @@ func createErrorResult(message string) *mcp.CallToolResult {
 		},
 		IsError: true,
 	}
+}
+
+// registerClearTaskBoard registers the coordinator_clear_task_board tool
+func (h *ToolHandler) registerClearTaskBoard(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_clear_task_board",
+		Description: "Clear all tasks from the coordinator. ⚠️ DESTRUCTIVE OPERATION - Cannot be undone. Removes all human tasks and agent tasks.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"confirm": {
+					Type:        "boolean",
+					Description: "Must be true to confirm deletion",
+				},
+			},
+			Required: []string{"confirm"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+
+		result, _, err := h.handleClearTaskBoard(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleClearTaskBoard clears all tasks from the database
+func (h *ToolHandler) handleClearTaskBoard(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, map[string]interface{}, error) {
+	// Check confirmation
+	confirm, ok := args["confirm"].(bool)
+	if !ok || !confirm {
+		return createErrorResult("Confirmation required: set confirm=true to clear all tasks"), nil, nil
+	}
+
+	// Clear all tasks
+	result, err := h.taskStorage.ClearAllTasks()
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to clear tasks: %v", err)), nil, nil
+	}
+
+	// Format result
+	resultJSON, _ := json.MarshalIndent(result, "", "  ")
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("✓ Task board cleared successfully\n\n%s", string(resultJSON)),
+			},
+		},
+	}, map[string]interface{}{
+		"humanTasksDeleted": result.HumanTasksDeleted,
+		"agentTasksDeleted": result.AgentTasksDeleted,
+		"clearedAt":         result.ClearedAt,
+	}, nil
 }

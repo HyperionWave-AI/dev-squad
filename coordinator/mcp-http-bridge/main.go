@@ -17,11 +17,14 @@ import (
 
 // HTTPBridge provides HTTP access to the MCP server via stdio
 type HTTPBridge struct {
-	mcpServerPath string
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	stdout        io.ReadCloser
-	mu            sync.Mutex
+	mcpServerPath  string
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	stdout         io.ReadCloser
+	mu             sync.Mutex
+	pendingReqs    map[interface{}]chan MCPResponse
+	pendingReqsMu  sync.RWMutex
+	responseReader *json.Decoder
 }
 
 // MCPRequest represents an MCP JSON-RPC request
@@ -50,6 +53,7 @@ type MCPError struct {
 func NewHTTPBridge(mcpServerPath string) (*HTTPBridge, error) {
 	bridge := &HTTPBridge{
 		mcpServerPath: mcpServerPath,
+		pendingReqs:   make(map[interface{}]chan MCPResponse),
 	}
 
 	if err := bridge.start(); err != nil {
@@ -82,6 +86,12 @@ func (b *HTTPBridge) start() error {
 	}
 
 	log.Printf("MCP server started with PID: %d", b.cmd.Process.Pid)
+
+	// Initialize response reader
+	b.responseReader = json.NewDecoder(b.stdout)
+
+	// Start background response handler
+	go b.handleResponses()
 
 	// Initialize MCP connection
 	if err := b.initialize(); err != nil {
@@ -128,10 +138,65 @@ func (b *HTTPBridge) initialize() error {
 	return nil
 }
 
+// handleResponses continuously reads responses from the MCP server and routes them to pending requests
+func (b *HTTPBridge) handleResponses() {
+	for {
+		var resp MCPResponse
+		if err := b.responseReader.Decode(&resp); err != nil {
+			if err == io.EOF {
+				log.Println("MCP server connection closed")
+				return
+			}
+			log.Printf("Error reading response: %v", err)
+			continue
+		}
+
+		log.Printf("Received MCP response for ID: %v", resp.ID)
+
+		// Route response to the appropriate pending request
+		b.pendingReqsMu.RLock()
+		respChan, exists := b.pendingReqs[resp.ID]
+		b.pendingReqsMu.RUnlock()
+
+		if exists {
+			// Send response to waiting goroutine
+			select {
+			case respChan <- resp:
+				log.Printf("Response delivered for ID: %v", resp.ID)
+			default:
+				log.Printf("Warning: response channel full for ID: %v", resp.ID)
+			}
+
+			// Clean up pending request
+			b.pendingReqsMu.Lock()
+			delete(b.pendingReqs, resp.ID)
+			close(respChan)
+			b.pendingReqsMu.Unlock()
+		} else {
+			log.Printf("Warning: received response for unknown request ID: %v", resp.ID)
+		}
+	}
+}
+
 // sendRequest sends a request to the MCP server and returns the response
 func (b *HTTPBridge) sendRequest(req MCPRequest) (map[string]interface{}, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	// Create response channel for this request
+	respChan := make(chan MCPResponse, 1)
+
+	// Register pending request
+	b.pendingReqsMu.Lock()
+	b.pendingReqs[req.ID] = respChan
+	b.pendingReqsMu.Unlock()
+
+	// Ensure cleanup even if we timeout
+	defer func() {
+		b.pendingReqsMu.Lock()
+		if _, exists := b.pendingReqs[req.ID]; exists {
+			delete(b.pendingReqs, req.ID)
+			close(respChan)
+		}
+		b.pendingReqsMu.Unlock()
+	}()
 
 	// Marshal request
 	reqJSON, err := json.Marshal(req)
@@ -141,24 +206,13 @@ func (b *HTTPBridge) sendRequest(req MCPRequest) (map[string]interface{}, error)
 
 	log.Printf("Sending MCP request: %s", string(reqJSON))
 
-	// Send request
+	// Send request (locked to prevent interleaved writes)
+	b.mu.Lock()
 	if _, err := b.stdin.Write(append(reqJSON, '\n')); err != nil {
+		b.mu.Unlock()
 		return nil, fmt.Errorf("failed to write request: %w", err)
 	}
-
-	// Read response with timeout
-	respChan := make(chan MCPResponse, 1)
-	errChan := make(chan error, 1)
-
-	go func() {
-		decoder := json.NewDecoder(b.stdout)
-		var resp MCPResponse
-		if err := decoder.Decode(&resp); err != nil {
-			errChan <- fmt.Errorf("failed to decode response: %w", err)
-			return
-		}
-		respChan <- resp
-	}()
+	b.mu.Unlock()
 
 	// Use longer timeout for initialization, shorter for regular requests
 	timeout := 10 * time.Second
@@ -166,6 +220,7 @@ func (b *HTTPBridge) sendRequest(req MCPRequest) (map[string]interface{}, error)
 		timeout = 30 * time.Second // MongoDB connection can take time
 	}
 
+	// Wait for response
 	select {
 	case resp := <-respChan:
 		if resp.Error != nil {
@@ -173,9 +228,6 @@ func (b *HTTPBridge) sendRequest(req MCPRequest) (map[string]interface{}, error)
 		}
 		log.Printf("Received MCP response: %+v", resp.Result)
 		return resp.Result, nil
-
-	case err := <-errChan:
-		return nil, err
 
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("request timeout after %v", timeout)
