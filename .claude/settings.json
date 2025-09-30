@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*ws://hyperion:9999/loki/loki/*)",
+      "Bash(curl -s:*)",
+      "Bash(curl:*)",
+      "WebFetch(domain:hyperion)",
+      "WebFetch(domain:localhost)",
+      "Bash(kubectl exec -n hyperion-dev:*)",
+      "Bash(go tool cover:*)",
+      "Bash(go test:*)",
+      "Bash(kubectl --context=kind-hyperion-dev:*)",
+      "Bash(JWT_TOKEN=$(node /tmp/generate-test-jwt.js) && curl:*)"
+    ],
+    "deny": [
+      "Bash(kind delete cluster:*)"
+    ]
+  }
+}

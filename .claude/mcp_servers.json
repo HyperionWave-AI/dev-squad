@@ -1,0 +1,52 @@
+{
+  "mcpServers": {
+    "hyperion-config-api": {
+      "url": "ws://hyperion:9999/config-api/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    },
+    "hyperion-tasks": {
+      "url": "ws://hyperion:9999/tasks-api/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    },
+    "hyperion-documents": {
+      "url": "ws://hyperion:9999/documents-api/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    },
+    "hyperion-staff": {
+      "url": "ws://hyperion:9999/staff-api/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    },
+    "hyperion-chat": {
+      "url": "ws://hyperion:9999/chat-api/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    },
+    "hyperion-core": {
+      "url": "ws://hyperion:9999/hyperion-core/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    },
+    "hyperion-core-mcp": {
+      "url": "ws://hyperion:9999/core-mcp/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    },
+    "hyperion-data-api": {
+      "url": "ws://hyperion:9999/data-api/exposed_mcp/",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiQWRtaW4iLCJpZCI6IjY4YjZiM2U2NDBlMjk4MDYyZDE3MDNiMSJ9LCJ1c2VyX2lkIjoiNjhiNmIzZTY0MGUyOTgwNjJkMTcwM2IxIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjE3ODg1NTI4NTMsIm5iZiI6MTc1NzAxNjg1MywiaWF0IjoxNzU3MDE2ODUzfQ.zcQhVnipTYVuh5nA7d77QFz7xk_uHP1-POEfoMxShc4"
+      }
+    }
+  }
+}
