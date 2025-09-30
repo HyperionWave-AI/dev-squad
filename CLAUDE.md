@@ -51,9 +51,11 @@ This ensures proper multi-tenant isolation and prevents privilege escalation thr
 - **go-mcp-dev** MCP protocols, AI tools, prompts, resources.
 - **Data Platform Specialist**: MongoDB optimization, Qdrant operations, data modeling, migrations
 
-**AI & Experience Squad:**
+**Frontend & Experience Squad:**
+- **Frontend Experience Specialist**: React architecture, component design systems, TypeScript patterns, atomic design, reusable component libraries (hyperion-ui architecture)
+- **ui-dev**: UI feature implementation, component development, bug fixes, styling, day-to-day UI development tasks (hyperion-ui implementation)
+- **ui-tester**: Playwright test automation, visual regression testing, accessibility testing, user journey validation (hyperion-ui quality)
 - **AI Integration Specialist**: AI3 framework, Claude/GPT integration, streaming protocols (chat-api, hyperion-core)
-- **Frontend Experience Specialist**: React/TypeScript, UI components, API clients (hyperion-ui)
 - **Real-time Systems Specialist**: WebSocket coordination, streaming protocols, live updates
 
 **Platform & Security Squad:**
@@ -364,13 +366,45 @@ Hyperion uses TWO complementary MCP servers for maximum efficiency:
 - **@modelcontextprotocol/server-fetch**: API testing, service validation
 - **mcp-server-mongodb**: Database operations, query testing
 
-### **AI & Experience Squad**
+### **Frontend & Experience Squad**
+
+**Frontend Experience Specialist:**
 - **hyperion-coordinator**: Task tracking (MANDATORY)
 - **qdrant-mcp**: Knowledge and coordination (MANDATORY)
-- **@modelcontextprotocol/server-filesystem**: React components, AI configurations
-- **@modelcontextprotocol/server-github**: UI feature branches, PR management
-- **playwright-mcp**: UI testing automation, user interaction validation
-- **@modelcontextprotocol/server-fetch**: API client testing, AI endpoint validation
+- **@modelcontextprotocol/server-filesystem**: React components, design systems
+- **@modelcontextprotocol/server-github**: PR reviews, architecture decisions
+- **playwright-mcp**: Validate architectural patterns
+- **@modelcontextprotocol/server-fetch**: API contract validation
+
+**ui-dev:**
+- **hyperion-coordinator**: Task tracking (MANDATORY)
+- **qdrant-mcp**: Knowledge and coordination (MANDATORY)
+- **@modelcontextprotocol/server-filesystem**: Component implementation
+- **@modelcontextprotocol/server-github**: Feature branches, PRs
+- **@modelcontextprotocol/server-fetch**: API validation
+- **playwright-mcp**: Run tests during development
+
+**ui-tester:**
+- **hyperion-coordinator**: Task tracking (MANDATORY)
+- **qdrant-mcp**: Knowledge and coordination (MANDATORY)
+- **playwright-mcp**: PRIMARY - Test automation
+- **@modelcontextprotocol/server-filesystem**: Test files, screenshots
+- **@modelcontextprotocol/server-github**: Test result reporting
+- **@modelcontextprotocol/server-fetch**: API mocking validation
+
+**AI Integration Specialist:**
+- **hyperion-coordinator**: Task tracking (MANDATORY)
+- **qdrant-mcp**: Knowledge and coordination (MANDATORY)
+- **@modelcontextprotocol/server-filesystem**: AI configurations
+- **@modelcontextprotocol/server-github**: AI feature branches
+- **@modelcontextprotocol/server-fetch**: AI endpoint validation
+
+**Real-time Systems Specialist:**
+- **hyperion-coordinator**: Task tracking (MANDATORY)
+- **qdrant-mcp**: Knowledge and coordination (MANDATORY)
+- **@modelcontextprotocol/server-filesystem**: WebSocket implementations
+- **@modelcontextprotocol/server-github**: Real-time feature branches
+- **@modelcontextprotocol/server-fetch**: WebSocket endpoint validation
 
 ### **Platform & Security Squad**
 - **hyperion-coordinator**: Task tracking (MANDATORY)
@@ -513,11 +547,30 @@ userName := c.Query("user_name") // ❌ FORBIDDEN
 - DRY violations: Zero duplicate database patterns
 - God file threshold: Any file >500 lines triggers IMMEDIATE refactoring requirement
 
-**AI & Experience Squad:**
-- Component reusability: 80% shared component usage
-- Props interface segregation: ≤5 props per component
-- React Components: ≤250 lines, Hooks: ≤150 lines, API Clients: ≤300 lines
-- SOLID compliance: Clear separation of concerns between UI and business logic
+**Frontend & Experience Squad:**
+
+**Frontend Experience Specialist:**
+- Component architecture complexity: ≤250 lines per pattern definition
+- Design system documentation: Complete for all reusable patterns
+- Pattern reusability: 80% shared component usage target
+- Props interface segregation: ≤5 props per component pattern
+- Architecture review: All new patterns before ui-dev implementation
+
+**ui-dev:**
+- Component size: ≤250 lines per component
+- Hook complexity: ≤150 lines per hook
+- API client files: ≤300 lines
+- SOLID compliance: Clear separation UI/business logic
+- Pattern adherence: 100% use of Frontend Experience Specialist patterns
+- Code quality: Zero duplicate component logic
+
+**ui-tester:**
+- Test coverage: ≥80% for critical user journeys
+- Visual regression: Zero unintended UI changes
+- Accessibility: WCAG 2.1 AA compliance mandatory
+- Test reliability: ≥95% non-flaky test rate
+- Test file size: ≤300 lines per test suite
+- Test execution time: ≤5 minutes for full suite
 
 **Platform & Security Squad:**
 - Configuration DRY: Zero hardcoded values
@@ -561,6 +614,69 @@ userName := c.Query("user_name") // ❌ FORBIDDEN
 - **Security Updates**: Security squad alerts all squads, each squad handles their domain
 - **Performance Issues**: Observability squad identifies, relevant squads coordinate fixes
 - **Testing Failures**: E2E coordinator identifies failures, relevant squads coordinate fixes
+
+### **UI Squad Coordination Patterns**
+
+**Pattern 1: Feature Development (Architecture → Implementation → Validation)**
+```
+Human Task: "Build user profile editing UI"
+    ↓
+Workflow Coordinator creates agent tasks:
+    ↓
+├─→ Frontend Experience Specialist (parallel - architecture)
+│   ├─→ Define component structure and patterns
+│   ├─→ Document in Qdrant: ui-component-patterns
+│   └─→ Status: completed → triggers ui-dev
+│
+├─→ Backend Services Specialist (parallel - API)
+│   └─→ Create/update API endpoints
+│
+└─→ ui-dev (after architecture patterns available)
+    ├─→ Query Qdrant for component patterns
+    ├─→ Implement UI using defined patterns
+    ├─→ Post completion to team-coordination
+    └─→ Status: completed → triggers ui-tester
+        ↓
+    ui-tester (validation)
+    ├─→ Create Playwright test scenarios
+    ├─→ Run accessibility audit
+    ├─→ Validate visual consistency
+    └─→ Report results in team-coordination
+```
+
+**Pattern 2: Bug Fix (Direct Implementation + Regression Test)**
+```
+Human Task: "Fix button alignment issue"
+    ↓
+├─→ ui-dev (primary)
+│   ├─→ Fix styling issue
+│   └─→ Post fix notes to team-coordination
+│
+└─→ ui-tester (parallel - can start immediately)
+    └─→ Add regression test to prevent recurrence
+```
+
+**Pattern 3: Quality Assurance (Test Coverage Improvement)**
+```
+Human Task: "Ensure checkout flow has full test coverage"
+    ↓
+└─→ ui-tester (primary)
+    ├─→ Query Qdrant for checkout flow components
+    ├─→ Identify coverage gaps
+    ├─→ Implement missing tests
+    └─→ Document in ui-test-strategies collection
+```
+
+**UI Squad Handoff Rules:**
+- **Frontend Experience Specialist → ui-dev**: Patterns posted to `ui-component-patterns`, ui-dev queries before implementation
+- **ui-dev → ui-tester**: Implementation notes in `team-coordination`, ui-tester queries for recent changes
+- **ui-tester → ui-dev**: Test failures posted with "blocked" status, ui-dev monitors and fixes
+
+**UI Coordination Collections:**
+- `ui-component-patterns` - Reusable component designs and architecture patterns
+- `ui-test-strategies` - Testing approaches for specific UI patterns
+- `ui-accessibility-standards` - A11y requirements and validation rules
+- `ui-visual-regression-baseline` - Visual test baseline metadata
 
 ### **Technical Debt Sprint Coordination**
 
@@ -641,6 +757,32 @@ userName := c.Query("user_name") // ❌ FORBIDDEN
 - **Other squads** coordinate deployment needs through Qdrant team-coordination
 - **Production manifests** stored in `./deployment/production/` only
 - **Never run kubectl directly** against production - use GitHub Actions
+
+---
+
+## 📚 **Recommended Qdrant Collections**
+
+**Task & Coordination:**
+- `task:hyperion://task/human/{taskId}` - Task-specific knowledge linked to task URIs
+- `team-coordination` - Cross-squad status updates and coordination messages
+- `agent-coordination` - Agent-to-agent coordination and handoffs
+
+**Technical Knowledge:**
+- `technical-knowledge` - Reusable solutions, patterns, and best practices
+- `code-patterns` - Code patterns and implementation examples
+- `adr` - Architecture Decision Records
+- `data-contracts` - API contracts and data schemas
+- `technical-debt-registry` - Technical debt tracking and resolution
+
+**UI-Specific Collections:**
+- `ui-component-patterns` - Reusable component designs and architecture patterns
+- `ui-test-strategies` - Testing approaches for specific UI patterns
+- `ui-accessibility-standards` - A11y requirements and validation rules
+- `ui-visual-regression-baseline` - Visual test baseline metadata
+
+**Operations & Quality:**
+- `mcp-operations` - MCP tool usage insights and optimizations
+- `code-quality-violations` - God file detection and refactoring tracking
 
 ---
 

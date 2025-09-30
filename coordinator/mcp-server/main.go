@@ -107,7 +107,7 @@ func main() {
 	}
 
 	logger.Info("All handlers registered successfully",
-		zap.Int("tools", 5),
+		zap.Int("tools", 9),
 		zap.Int("resources", 2))
 
 	// Start the server using stdio transport

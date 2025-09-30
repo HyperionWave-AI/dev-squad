@@ -71,6 +71,13 @@ type AgentTask struct {
 	Notes       string     `json:"notes,omitempty" bson:"notes,omitempty"`
 }
 
+// ClearResult contains statistics about cleared tasks
+type ClearResult struct {
+	HumanTasksDeleted int64     `json:"humanTasksDeleted"`
+	AgentTasksDeleted int64     `json:"agentTasksDeleted"`
+	ClearedAt         time.Time `json:"clearedAt"`
+}
+
 // TaskStorage provides storage interface for tasks
 type TaskStorage interface {
 	CreateHumanTask(prompt string) (*HumanTask, error)
@@ -82,6 +89,7 @@ type TaskStorage interface {
 	ListAllAgentTasks() []*AgentTask
 	UpdateTaskStatus(taskID string, status TaskStatus, notes string) error
 	UpdateTodoStatus(agentTaskID, todoID string, status TodoStatus, notes string) error
+	ClearAllTasks() (*ClearResult, error)
 }
 
 // MongoTaskStorage implements TaskStorage using MongoDB
@@ -407,4 +415,28 @@ func (s *MongoTaskStorage) UpdateTodoStatus(agentTaskID, todoID string, status T
 	}
 
 	return nil
+}
+
+// ClearAllTasks removes all tasks from the database
+func (s *MongoTaskStorage) ClearAllTasks() (*ClearResult, error) {
+	ctx := context.Background()
+	result := &ClearResult{
+		ClearedAt: time.Now(),
+	}
+
+	// Delete all human tasks
+	humanResult, err := s.humanTasksCollection.DeleteMany(ctx, bson.M{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete human tasks: %w", err)
+	}
+	result.HumanTasksDeleted = humanResult.DeletedCount
+
+	// Delete all agent tasks
+	agentResult, err := s.agentTasksCollection.DeleteMany(ctx, bson.M{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete agent tasks: %w", err)
+	}
+	result.AgentTasksDeleted = agentResult.DeletedCount
+
+	return result, nil
 }
