@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "Bash(touch:*)",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_snapshot",
+      "Bash(npm run build:*)",
+      "mcp__playwright__browser_install",
+      "Bash(mkdir:*)",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_network_requests",
+      "mcp__playwright__browser_evaluate",
+      "Bash(git rm:*)",
+      "Bash(xargs ls:*)",
+      "Bash(sort:*)",
+      "Bash(grep:*)",
+      "Bash(xargs:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(awk:*)",
+      "mcp__qdrant__qdrant-find",
+      "mcp__playwright__browser_wait_for",
+      "Bash(find:*)",
+      "Bash(go:*)",
+      "Bash(chmod:*)"
+      "Bash(find:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "outputStyle": "Explanatory"
+}

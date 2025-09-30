@@ -1,0 +1,347 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"sync"
+	"time"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+)
+
+// HTTPBridge provides HTTP access to the MCP server via stdio
+type HTTPBridge struct {
+	mcpServerPath string
+	cmd           *exec.Cmd
+	stdin         io.WriteCloser
+	stdout        io.ReadCloser
+	mu            sync.Mutex
+}
+
+// MCPRequest represents an MCP JSON-RPC request
+type MCPRequest struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      interface{}            `json:"id"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+}
+
+// MCPResponse represents an MCP JSON-RPC response
+type MCPResponse struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      interface{}            `json:"id"`
+	Result  map[string]interface{} `json:"result,omitempty"`
+	Error   *MCPError              `json:"error,omitempty"`
+}
+
+// MCPError represents an MCP error
+type MCPError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// NewHTTPBridge creates a new HTTP bridge to the MCP server
+func NewHTTPBridge(mcpServerPath string) (*HTTPBridge, error) {
+	bridge := &HTTPBridge{
+		mcpServerPath: mcpServerPath,
+	}
+
+	if err := bridge.start(); err != nil {
+		return nil, fmt.Errorf("failed to start MCP server: %w", err)
+	}
+
+	return bridge, nil
+}
+
+// start launches the MCP server process
+func (b *HTTPBridge) start() error {
+	b.cmd = exec.Command(b.mcpServerPath)
+
+	var err error
+	b.stdin, err = b.cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	b.stdout, err = b.cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	// Also capture stderr for debugging
+	b.cmd.Stderr = os.Stderr
+
+	if err := b.cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start MCP server: %w", err)
+	}
+
+	log.Printf("MCP server started with PID: %d", b.cmd.Process.Pid)
+
+	// Initialize MCP connection
+	if err := b.initialize(); err != nil {
+		b.stop()
+		return fmt.Errorf("failed to initialize MCP connection: %w", err)
+	}
+
+	return nil
+}
+
+// initialize sends the initialize request to the MCP server
+func (b *HTTPBridge) initialize() error {
+	initRequest := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      "init",
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]interface{}{},
+			"clientInfo": map[string]interface{}{
+				"name":    "hyperion-coordinator-http-bridge",
+				"version": "1.0.0",
+			},
+		},
+	}
+
+	_, err := b.sendRequest(initRequest)
+	if err != nil {
+		return fmt.Errorf("initialization failed: %w", err)
+	}
+
+	// Send initialized notification
+	initializedNotification := MCPRequest{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	}
+
+	notifJSON, _ := json.Marshal(initializedNotification)
+	if _, err := b.stdin.Write(append(notifJSON, '\n')); err != nil {
+		return fmt.Errorf("failed to send initialized notification: %w", err)
+	}
+
+	log.Println("MCP connection initialized successfully")
+	return nil
+}
+
+// sendRequest sends a request to the MCP server and returns the response
+func (b *HTTPBridge) sendRequest(req MCPRequest) (map[string]interface{}, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Marshal request
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	log.Printf("Sending MCP request: %s", string(reqJSON))
+
+	// Send request
+	if _, err := b.stdin.Write(append(reqJSON, '\n')); err != nil {
+		return nil, fmt.Errorf("failed to write request: %w", err)
+	}
+
+	// Read response with timeout
+	respChan := make(chan MCPResponse, 1)
+	errChan := make(chan error, 1)
+
+	go func() {
+		decoder := json.NewDecoder(b.stdout)
+		var resp MCPResponse
+		if err := decoder.Decode(&resp); err != nil {
+			errChan <- fmt.Errorf("failed to decode response: %w", err)
+			return
+		}
+		respChan <- resp
+	}()
+
+	// Use longer timeout for initialization, shorter for regular requests
+	timeout := 10 * time.Second
+	if req.Method == "initialize" {
+		timeout = 30 * time.Second // MongoDB connection can take time
+	}
+
+	select {
+	case resp := <-respChan:
+		if resp.Error != nil {
+			return nil, fmt.Errorf("MCP error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+		log.Printf("Received MCP response: %+v", resp.Result)
+		return resp.Result, nil
+
+	case err := <-errChan:
+		return nil, err
+
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("request timeout after %v", timeout)
+	}
+}
+
+// stop terminates the MCP server process
+func (b *HTTPBridge) stop() error {
+	if b.cmd != nil && b.cmd.Process != nil {
+		log.Printf("Stopping MCP server (PID: %d)", b.cmd.Process.Pid)
+		if err := b.cmd.Process.Kill(); err != nil {
+			return fmt.Errorf("failed to kill MCP server: %w", err)
+		}
+		b.cmd.Wait()
+	}
+	return nil
+}
+
+// Handler functions for HTTP endpoints
+
+func (b *HTTPBridge) handleListTools(c *gin.Context) {
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.GetHeader("X-Request-ID"),
+		Method:  "tools/list",
+	}
+
+	result, err := b.sendRequest(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (b *HTTPBridge) handleCallTool(c *gin.Context) {
+	var body struct {
+		Name      string                 `json:"name"`
+		Arguments map[string]interface{} `json:"arguments"`
+	}
+
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.GetHeader("X-Request-ID"),
+		Method:  "tools/call",
+		Params: map[string]interface{}{
+			"name":      body.Name,
+			"arguments": body.Arguments,
+		},
+	}
+
+	result, err := b.sendRequest(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (b *HTTPBridge) handleListResources(c *gin.Context) {
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.GetHeader("X-Request-ID"),
+		Method:  "resources/list",
+	}
+
+	result, err := b.sendRequest(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (b *HTTPBridge) handleReadResource(c *gin.Context) {
+	uri := c.Query("uri")
+	if uri == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "uri parameter required"})
+		return
+	}
+
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.GetHeader("X-Request-ID"),
+		Method:  "resources/read",
+		Params: map[string]interface{}{
+			"uri": uri,
+		},
+	}
+
+	result, err := b.sendRequest(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func main() {
+	// Get MCP server path from environment or use default
+	mcpServerPath := os.Getenv("MCP_SERVER_PATH")
+	if mcpServerPath == "" {
+		mcpServerPath = "../mcp-server/hyperion-coordinator-mcp"
+	}
+
+	// Verify MCP server exists
+	if _, err := os.Stat(mcpServerPath); os.IsNotExist(err) {
+		log.Fatalf("MCP server not found at: %s", mcpServerPath)
+	}
+
+	// Create HTTP bridge
+	bridge, err := NewHTTPBridge(mcpServerPath)
+	if err != nil {
+		log.Fatalf("Failed to create HTTP bridge: %v", err)
+	}
+	defer bridge.stop()
+
+	// Setup Gin router
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.Default()
+
+	// Configure CORS for frontend
+	config := cors.DefaultConfig()
+	config.AllowOrigins = []string{"http://localhost:5173", "http://localhost:3000"}
+	config.AllowMethods = []string{"GET", "POST", "OPTIONS"}
+	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "X-Request-ID"}
+	r.Use(cors.New(config))
+
+	// Health check
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "healthy",
+			"service": "hyperion-coordinator-http-bridge",
+			"version": "1.0.0",
+		})
+	})
+
+	// MCP API endpoints
+	api := r.Group("/api/mcp")
+	{
+		api.GET("/tools", bridge.handleListTools)
+		api.POST("/tools/call", bridge.handleCallTool)
+		api.GET("/resources", bridge.handleListResources)
+		api.GET("/resources/read", bridge.handleReadResource)
+	}
+
+	// Start server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8095"
+	}
+
+	log.Printf("HTTP bridge listening on port %s", port)
+	log.Printf("MCP server path: %s", mcpServerPath)
+	log.Printf("Frontend CORS enabled for: http://localhost:5173, http://localhost:3000")
+
+	if err := r.Run(":" + port); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
+	}
+}
