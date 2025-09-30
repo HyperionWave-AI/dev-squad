@@ -7,15 +7,31 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report",
+    "test:accessibility": "playwright test --grep @accessibility",
+    "test:mobile": "playwright test --project=mobile",
+    "test:tablet": "playwright test --project=tablet",
+    "test:desktop": "playwright test --project=chromium-desktop --project=webkit-desktop"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@hello-pangea/dnd": "^18.0.1",
     "@modelcontextprotocol/sdk": "^1.18.2",
+    "@mui/icons-material": "^7.3.2",
+    "@mui/material": "^7.3.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
     "@eslint/js": "^9.36.0",
+    "@playwright/test": "^1.55.1",
     "@tailwindcss/postcss": "^4.1.13",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
