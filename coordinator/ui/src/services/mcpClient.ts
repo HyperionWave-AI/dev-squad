@@ -74,24 +74,7 @@ class MCPCoordinatorClient {
     return result;
   }
 
-  private async listResources(): Promise<any> {
-    const requestId = `req-${++this.requestId}`;
-
-    const response = await fetch(`${this.bridgeUrl}/api/mcp/resources`, {
-      method: 'GET',
-      headers: {
-        'X-Request-ID': requestId,
-      },
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Resource list failed');
-    }
-
-    const result = await response.json();
-    return result;
-  }
+  // Removed unused listResources method
 
   // Task reading methods using tools for dynamic data
   async listHumanTasks(): Promise<HumanTask[]> {

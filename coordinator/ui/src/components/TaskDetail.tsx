@@ -43,7 +43,6 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
     try {
       setUpdating(true);
       await mcpClient.updateTaskStatus({
-        taskType,
         taskId: task.id,
         status: newStatus
       });
@@ -136,22 +135,22 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
                 <p className="text-gray-800">{(task as AgentTask).assignedBy}</p>
               </div>
 
-              {(task as AgentTask).dependencies.length > 0 && (
+              {(task as AgentTask).dependencies && (task as AgentTask).dependencies!.length > 0 && (
                 <div>
                   <label className="text-sm font-semibold text-gray-600">Dependencies</label>
                   <ul className="mt-1 space-y-1">
-                    {(task as AgentTask).dependencies.map((dep, i) => (
+                    {(task as AgentTask).dependencies!.map((dep: string, i: number) => (
                       <li key={i} className="text-sm text-gray-600">• {dep}</li>
                     ))}
                   </ul>
                 </div>
               )}
 
-              {(task as AgentTask).blockers.length > 0 && (
+              {(task as AgentTask).blockers && (task as AgentTask).blockers!.length > 0 && (
                 <div>
                   <label className="text-sm font-semibold text-red-600">Blockers</label>
                   <ul className="mt-1 space-y-1">
-                    {(task as AgentTask).blockers.map((blocker, i) => (
+                    {(task as AgentTask).blockers!.map((blocker: string, i: number) => (
                       <li key={i} className="text-sm text-red-600">🚫 {blocker}</li>
                     ))}
                   </ul>
@@ -179,7 +178,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
             <div>
               <label className="text-sm font-semibold text-gray-600">Priority</label>
               <p className="mt-1 px-3 py-2 bg-gray-50 rounded text-gray-800">
-                {task.priority}
+                {task.priority || 'N/A'}
               </p>
             </div>
           </div>
@@ -209,11 +208,11 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
             </div>
           )}
 
-          {task.tags.length > 0 && (
+          {task.tags && task.tags.length > 0 && (
             <div>
               <label className="text-sm font-semibold text-gray-600">Tags</label>
               <div className="flex gap-2 flex-wrap mt-1">
-                {task.tags.map((tag) => (
+                {task.tags.map((tag: string) => (
                   <span
                     key={tag}
                     className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-sm"
