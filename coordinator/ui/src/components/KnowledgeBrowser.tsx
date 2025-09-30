@@ -27,7 +27,7 @@ export const KnowledgeBrowser: React.FC = () => {
       setError(null);
 
       const entries = await mcpClient.queryKnowledge({
-        collection: collection === 'All Collections' ? undefined : collection,
+        collection: collection === 'All Collections' ? '' : collection,
         query,
         limit: 20
       });

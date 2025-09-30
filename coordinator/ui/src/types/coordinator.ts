@@ -12,6 +12,7 @@ export interface HumanTask {
   completedAt?: string;
   createdBy: string;
   tags: string[];
+  notes?: string;
 }
 
 export interface TodoItem {
@@ -32,7 +33,15 @@ export interface AgentTask {
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;
+  completedAt?: string;
   notes?: string;
+  title?: string;
+  description?: string;
+  priority?: Priority;
+  assignedBy?: string;
+  dependencies?: string[];
+  blockers?: string[];
+  tags?: string[];
 }
 
 export interface AgentRole {

@@ -1,65 +1,148 @@
 import { useState } from 'react';
-import { TaskDashboard } from './components/TaskDashboard';
+import {
+  ThemeProvider,
+  CssBaseline,
+  AppBar,
+  Toolbar,
+  Typography,
+  Button,
+  Container,
+  Box,
+  IconButton,
+} from '@mui/material';
+import { Dashboard, Psychology, Refresh } from '@mui/icons-material';
+import { theme } from './theme';
+import { KanbanBoard } from './components/KanbanBoard';
 import { KnowledgeBrowser } from './components/KnowledgeBrowser';
-import './App.css';
 
 type View = 'dashboard' | 'knowledge';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const handleRefresh = () => {
+    setRefreshKey((prev) => prev + 1);
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        {/* AppBar Header */}
+        <AppBar
+          position="sticky"
+          elevation={1}
+          sx={{
+            backgroundColor: 'white',
+            color: 'text.primary',
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Toolbar sx={{ gap: 2 }}>
+            {/* Logo and Title */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
+              <Typography
+                variant="h1"
+                sx={{
+                  fontSize: '1.5rem',
+                  fontWeight: 700,
+                  background: 'linear-gradient(135deg, #2563eb 0%, #9333ea 100%)',
+                  backgroundClip: 'text',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}
+              >
                 🚀 Hyperion Coordinator
-              </h1>
-              <p className="text-sm text-gray-600 mt-1">
-                Task & Knowledge Management for Parallel Squad System
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  display: { xs: 'none', sm: 'block' },
+                }}
+              >
+                • Task & Knowledge Management
+              </Typography>
+            </Box>
+
+            {/* Navigation Buttons */}
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                variant={currentView === 'dashboard' ? 'contained' : 'outlined'}
+                startIcon={<Dashboard />}
                 onClick={() => setCurrentView('dashboard')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  currentView === 'dashboard'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 500,
+                }}
               >
-                📊 Dashboard
-              </button>
-              <button
+                Dashboard
+              </Button>
+              <Button
+                variant={currentView === 'knowledge' ? 'contained' : 'outlined'}
+                startIcon={<Psychology />}
                 onClick={() => setCurrentView('knowledge')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  currentView === 'knowledge'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 500,
+                }}
               >
-                🧠 Knowledge
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
+                Knowledge
+              </Button>
+              <IconButton
+                onClick={handleRefresh}
+                color="primary"
+                sx={{
+                  ml: 1,
+                }}
+              >
+                <Refresh />
+              </IconButton>
+            </Box>
+          </Toolbar>
+        </AppBar>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {currentView === 'dashboard' && <TaskDashboard />}
-        {currentView === 'knowledge' && <KnowledgeBrowser />}
-      </main>
+        {/* Main Content */}
+        <Box
+          component="main"
+          sx={{
+            flexGrow: 1,
+            backgroundColor: 'background.default',
+            py: 3,
+          }}
+        >
+          <Container maxWidth="xl">
+            {currentView === 'dashboard' && <KanbanBoard key={refreshKey} />}
+            {currentView === 'knowledge' && <KnowledgeBrowser />}
+          </Container>
+        </Box>
 
-      <footer className="bg-white border-t mt-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <p className="text-center text-sm text-gray-500">
-            Hyperion AI Platform • Coordinator MCP • Local Dev Environment
-          </p>
-        </div>
-      </footer>
-    </div>
+        {/* Footer */}
+        <Box
+          component="footer"
+          sx={{
+            py: 2,
+            px: 2,
+            mt: 'auto',
+            backgroundColor: 'white',
+            borderTop: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Container maxWidth="xl">
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              align="center"
+            >
+              Hyperion AI Platform • Coordinator MCP • Local Dev Environment
+            </Typography>
+          </Container>
+        </Box>
+      </Box>
+    </ThemeProvider>
   );
 }
 
