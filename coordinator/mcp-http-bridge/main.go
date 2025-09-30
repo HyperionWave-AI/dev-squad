@@ -360,7 +360,7 @@ func main() {
 
 	// Configure CORS for frontend
 	config := cors.DefaultConfig()
-	config.AllowOrigins = []string{"http://localhost:5173", "http://localhost:3000"}
+	config.AllowOrigins = []string{"http://localhost:5173", "http://localhost:5178", "http://localhost:3000"}
 	config.AllowMethods = []string{"GET", "POST", "OPTIONS"}
 	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "X-Request-ID"}
 	r.Use(cors.New(config))
