@@ -22,6 +22,9 @@ export interface TodoItem {
   createdAt: string;
   completedAt?: string;
   notes?: string;
+  filePath?: string;
+  functionName?: string;
+  contextHint?: string;
 }
 
 export type TaskType = 'human' | 'agent' | 'todo';
@@ -37,6 +40,10 @@ export interface AgentTask {
   updatedAt: string;
   completedAt?: string;
   notes?: string;
+  contextSummary?: string;
+  filesModified?: string[];
+  qdrantCollections?: string[];
+  priorWorkSummary?: string;
   title?: string;
   description?: string;
   priority?: Priority;
@@ -65,6 +72,10 @@ export interface FlattenedTask {
   tags?: string[];
   notes?: string;
   createdBy?: string;
+  contextSummary?: string;
+  filesModified?: string[];
+  qdrantCollections?: string[];
+  priorWorkSummary?: string;
 }
 
 export interface AgentRole {

@@ -126,6 +126,10 @@ export function KanbanBoard() {
         humanTaskId: agentTask.humanTaskId,
         tags: agentTask.tags || [],
         notes: agentTask.notes,
+        contextSummary: agentTask.contextSummary,
+        filesModified: agentTask.filesModified,
+        qdrantCollections: agentTask.qdrantCollections,
+        priorWorkSummary: agentTask.priorWorkSummary,
       });
 
       // Add each todo as a separate task
