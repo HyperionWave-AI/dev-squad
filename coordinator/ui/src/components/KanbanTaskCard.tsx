@@ -82,6 +82,7 @@ export function KanbanTaskCard({ task, index, onClick }: KanbanTaskCardProps) {
           sx={{
             mb: 1.5,
             cursor: 'pointer',
+            pointerEvents: 'auto',
             backgroundColor: snapshot.isDragging ? '#f1f5f9' : 'white',
             transform: snapshot.isDragging ? 'rotate(2deg)' : 'none',
             boxShadow: snapshot.isDragging
