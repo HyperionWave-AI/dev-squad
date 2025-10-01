@@ -33,11 +33,11 @@ import {
   SmartToy,
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
-import type { HumanTask, AgentTask, Priority, TaskStatus, TodoStatus } from '../types/coordinator';
+import type { HumanTask, AgentTask, FlattenedTask, Priority, TaskStatus, TodoStatus } from '../types/coordinator';
 import { mcpClient } from '../services/mcpClient';
 
 interface TaskDetailDialogProps {
-  task: any | null; // Can be HumanTask or AgentTask
+  task: FlattenedTask | null;
   open: boolean;
   onClose: () => void;
 }
@@ -269,7 +269,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
               </Typography>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <AccessTime fontSize="small" color="action" />
-                <Typography variant="body2">{formatDate(task.updatedAt)}</Typography>
+                <Typography variant="body2">{task.updatedAt ? formatDate(task.updatedAt) : 'N/A'}</Typography>
               </Box>
             </Box>
             <Box>
@@ -323,7 +323,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
               },
             }}
           >
-            <ReactMarkdown>{task.description || task.prompt || 'No description available'}</ReactMarkdown>
+            <ReactMarkdown>{task.description || 'No description available'}</ReactMarkdown>
           </Paper>
         </Box>
 
@@ -346,11 +346,11 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
           </Box>
         )}
 
-        {/* Agent Task TODOs (for agent tasks) */}
-        {isAgentTask && task.todos && task.todos.length > 0 && (
+        {/* Agent/Todo Task Metadata */}
+        {(task.taskType === 'agent' || task.taskType === 'todo') && (
           <Box sx={{ mb: 3 }}>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-              Tasks & Progress
+              Agent Details
             </Typography>
             <Paper
               elevation={0}
@@ -361,47 +361,24 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                 borderColor: 'divider',
               }}
             >
-              <Box sx={{ mb: 2 }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                  <Typography variant="caption" color="text.secondary">
-                    Progress
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {task.todos.filter((t: any) => t.status === 'completed').length} / {task.todos.length}
-                  </Typography>
+              {task.agentName && (
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Agent Name</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>🤖 {task.agentName}</Typography>
                 </Box>
-                <LinearProgress
-                  variant="determinate"
-                  value={(task.todos.filter((t: any) => t.status === 'completed').length / task.todos.length) * 100}
-                  sx={{ borderRadius: 1, height: 8 }}
-                />
-              </Box>
-              <List dense disablePadding>
-                {task.todos.map((todo: any) => (
-                  <ListItem
-                    key={todo.id}
-                    sx={{
-                      px: 0,
-                      py: 1,
-                      opacity: todo.status === 'completed' ? 0.6 : 1,
-                    }}
-                  >
-                    <ListItemIcon sx={{ minWidth: 32 }}>
-                      {getTodoStatusIcon(todo.status)}
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={todo.description}
-                      secondary={todo.notes}
-                      primaryTypographyProps={{
-                        sx: {
-                          textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
-                          fontWeight: todo.status === 'in_progress' ? 600 : 400,
-                        },
-                      }}
-                    />
-                  </ListItem>
-                ))}
-              </List>
+              )}
+              {task.role && (
+                <Box sx={{ mb: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Role</Typography>
+                  <Typography variant="body2">{task.role}</Typography>
+                </Box>
+              )}
+              {task.parentTaskTitle && (
+                <Box>
+                  <Typography variant="caption" color="text.secondary">Parent Task</Typography>
+                  <Typography variant="body2">{task.parentTaskTitle}</Typography>
+                </Box>
+              )}
             </Paper>
           </Box>
         )}
