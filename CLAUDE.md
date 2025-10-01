@@ -563,6 +563,7 @@ userName := c.Query("user_name") // ❌ FORBIDDEN
 - SOLID compliance: Clear separation UI/business logic
 - Pattern adherence: 100% use of Frontend Experience Specialist patterns
 - Code quality: Zero duplicate component logic
+- **Immediate Feedback UX (MANDATORY)**: When user submits a prompt that triggers agent coordination, the task board/progress UI MUST open immediately (optimistic UI pattern). Never make users wait for backend task creation before showing coordination interface. Show loading states while tasks are being created in the background.
 
 **ui-tester:**
 - Test coverage: ≥80% for critical user journeys

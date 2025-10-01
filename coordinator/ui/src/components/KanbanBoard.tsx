@@ -12,8 +12,9 @@ import {
 import { Search } from '@mui/icons-material';
 import { DragDropContext, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { KanbanTaskCard } from './KanbanTaskCard';
+import { TaskDetailDialog } from './TaskDetailDialog';
 import { mcpClient } from '../services/mcpClient';
-import type { HumanTask, TaskStatus } from '../types/coordinator';
+import type { HumanTask, AgentTask, TaskStatus } from '../types/coordinator';
 
 interface KanbanColumn {
   id: TaskStatus;
@@ -51,9 +52,12 @@ const columns: KanbanColumn[] = [
 
 export function KanbanBoard() {
   const [tasks, setTasks] = useState<HumanTask[]>([]);
+  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTask, setSelectedTask] = useState<HumanTask | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   // Load tasks on mount
   useEffect(() => {
@@ -68,8 +72,12 @@ export function KanbanBoard() {
     try {
       setError(null);
       await mcpClient.connect();
-      const humanTasks = await mcpClient.listHumanTasks();
+      const [humanTasks, agents] = await Promise.all([
+        mcpClient.listHumanTasks(),
+        mcpClient.listAgentTasks()
+      ]);
       setTasks(humanTasks);
+      setAgentTasks(agents);
     } catch (err) {
       console.error('Failed to load tasks:', err);
       setError(err instanceof Error ? err.message : 'Failed to load tasks');
@@ -78,18 +86,24 @@ export function KanbanBoard() {
     }
   };
 
-  // Filter and organize tasks by status
+  // Filter and organize tasks by status (combine human and agent tasks)
   const tasksByStatus = useMemo(() => {
+    // Combine human and agent tasks into unified list
+    const allTasks = [
+      ...tasks.map(t => ({ ...t, taskType: 'human' as const })),
+      ...agentTasks.map(t => ({ ...t, taskType: 'agent' as const, tags: [] }))
+    ];
+
     const filtered = searchQuery
-      ? tasks.filter(
+      ? allTasks.filter(
           (task) =>
             task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             task.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            task.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
+            ('tags' in task && task.tags.some((tag: string) => tag.toLowerCase().includes(searchQuery.toLowerCase())))
         )
-      : tasks;
+      : allTasks;
 
-    const grouped: Record<TaskStatus, HumanTask[]> = {
+    const grouped: Record<TaskStatus, any[]> = {
       pending: [],
       in_progress: [],
       blocked: [],
@@ -101,7 +115,7 @@ export function KanbanBoard() {
     });
 
     return grouped;
-  }, [tasks, searchQuery]);
+  }, [tasks, agentTasks, searchQuery]);
 
   // Handle drag and drop
   const onDragEnd = async (result: DropResult) => {
@@ -145,8 +159,15 @@ export function KanbanBoard() {
     }
   };
 
-  const handleTaskClick = (_task: HumanTask) => {
-    // TODO: Open task detail modal
+  const handleTaskClick = (task: any) => {
+    // Open dialog for both human and agent tasks
+    setSelectedTask(task);
+    setDialogOpen(true);
+  };
+
+  const handleDialogClose = () => {
+    setDialogOpen(false);
+    setSelectedTask(null);
   };
 
   if (loading) {
@@ -323,6 +344,13 @@ export function KanbanBoard() {
           })}
         </Box>
       </DragDropContext>
+
+      {/* Task Detail Dialog */}
+      <TaskDetailDialog
+        task={selectedTask}
+        open={dialogOpen}
+        onClose={handleDialogClose}
+      />
     </Box>
   );
 }

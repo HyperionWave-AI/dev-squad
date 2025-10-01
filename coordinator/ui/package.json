@@ -26,7 +26,8 @@
     "@mui/icons-material": "^7.3.2",
     "@mui/material": "^7.3.2",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",
