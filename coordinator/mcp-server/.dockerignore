@@ -1,0 +1,26 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build artifacts
+hyperion-coordinator-mcp
+*.exe
+*.test
+*.out
+
+# Test files
+*_test.go
+
+# Development
+.env
+.env.local

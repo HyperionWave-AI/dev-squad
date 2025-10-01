@@ -40,12 +40,24 @@ const (
 
 // TodoItem represents a single trackable subtask within an agent task
 type TodoItem struct {
-	ID          string     `json:"id" bson:"id"`
-	Description string     `json:"description" bson:"description"`
-	Status      TodoStatus `json:"status" bson:"status"`
-	CreatedAt   time.Time  `json:"createdAt" bson:"createdAt"`
-	CompletedAt *time.Time `json:"completedAt,omitempty" bson:"completedAt,omitempty"`
-	Notes       string     `json:"notes,omitempty" bson:"notes,omitempty"`
+	ID           string     `json:"id" bson:"id"`
+	Description  string     `json:"description" bson:"description"`
+	Status       TodoStatus `json:"status" bson:"status"`
+	CreatedAt    time.Time  `json:"createdAt" bson:"createdAt"`
+	CompletedAt  *time.Time `json:"completedAt,omitempty" bson:"completedAt,omitempty"`
+	Notes        string     `json:"notes,omitempty" bson:"notes,omitempty"`
+	FilePath     string     `json:"filePath,omitempty" bson:"filePath,omitempty"`
+	FunctionName string     `json:"functionName,omitempty" bson:"functionName,omitempty"`
+	ContextHint  string     `json:"contextHint,omitempty" bson:"contextHint,omitempty"`
+}
+
+// TodoItemInput represents the input format for creating a TODO item
+type TodoItemInput struct {
+	Description  string `json:"description"`
+	FilePath     string `json:"filePath,omitempty"`
+	FunctionName string `json:"functionName,omitempty"`
+	ContextHint  string `json:"contextHint,omitempty"`
+	Notes        string `json:"notes,omitempty"`
 }
 
 // HumanTask represents a task created by a human user
@@ -60,15 +72,19 @@ type HumanTask struct {
 
 // AgentTask represents a task assigned to an agent
 type AgentTask struct {
-	ID          string     `json:"id" bson:"taskId"`
-	HumanTaskID string     `json:"humanTaskId" bson:"humanTaskId"`
-	AgentName   string     `json:"agentName" bson:"agentName"`
-	Role        string     `json:"role" bson:"role"`
-	Todos       []TodoItem `json:"todos" bson:"todos"`
-	CreatedAt   time.Time  `json:"createdAt" bson:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt" bson:"updatedAt"`
-	Status      TaskStatus `json:"status" bson:"status"`
-	Notes       string     `json:"notes,omitempty" bson:"notes,omitempty"`
+	ID                string     `json:"id" bson:"taskId"`
+	HumanTaskID       string     `json:"humanTaskId" bson:"humanTaskId"`
+	AgentName         string     `json:"agentName" bson:"agentName"`
+	Role              string     `json:"role" bson:"role"`
+	Todos             []TodoItem `json:"todos" bson:"todos"`
+	CreatedAt         time.Time  `json:"createdAt" bson:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt" bson:"updatedAt"`
+	Status            TaskStatus `json:"status" bson:"status"`
+	Notes             string     `json:"notes,omitempty" bson:"notes,omitempty"`
+	ContextSummary    string     `json:"contextSummary,omitempty" bson:"contextSummary,omitempty"`
+	FilesModified     []string   `json:"filesModified,omitempty" bson:"filesModified,omitempty"`
+	QdrantCollections []string   `json:"qdrantCollections,omitempty" bson:"qdrantCollections,omitempty"`
+	PriorWorkSummary  string     `json:"priorWorkSummary,omitempty" bson:"priorWorkSummary,omitempty"`
 }
 
 // ClearResult contains statistics about cleared tasks
@@ -81,7 +97,7 @@ type ClearResult struct {
 // TaskStorage provides storage interface for tasks
 type TaskStorage interface {
 	CreateHumanTask(prompt string) (*HumanTask, error)
-	CreateAgentTask(humanTaskID, agentName, role string, todos []string) (*AgentTask, error)
+	CreateAgentTask(humanTaskID, agentName, role string, todos []TodoItemInput, contextSummary string, filesModified []string, qdrantCollections []string, priorWorkSummary string) (*AgentTask, error)
 	GetHumanTask(taskID string) (*HumanTask, error)
 	GetAgentTask(taskID string) (*AgentTask, error)
 	GetAgentTasksByName(agentName string) ([]*AgentTask, error)
@@ -167,7 +183,7 @@ func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 }
 
 // CreateAgentTask creates a new agent task
-func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, todos []string) (*AgentTask, error) {
+func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, todos []TodoItemInput, contextSummary string, filesModified []string, qdrantCollections []string, priorWorkSummary string) (*AgentTask, error) {
 	ctx := context.Background()
 
 	// Validate human task exists
@@ -182,26 +198,34 @@ func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, 
 
 	now := time.Now().UTC()
 
-	// Convert string todos to TodoItem structs
+	// Convert TodoItemInput to TodoItem structs
 	todoItems := make([]TodoItem, len(todos))
-	for i, desc := range todos {
+	for i, input := range todos {
 		todoItems[i] = TodoItem{
-			ID:          uuid.New().String(),
-			Description: desc,
-			Status:      TodoStatusPending,
-			CreatedAt:   now,
+			ID:           uuid.New().String(),
+			Description:  input.Description,
+			Status:       TodoStatusPending,
+			CreatedAt:    now,
+			FilePath:     input.FilePath,
+			FunctionName: input.FunctionName,
+			ContextHint:  input.ContextHint,
+			Notes:        input.Notes,
 		}
 	}
 
 	task := &AgentTask{
-		ID:          uuid.New().String(),
-		HumanTaskID: humanTaskID,
-		AgentName:   agentName,
-		Role:        role,
-		Todos:       todoItems,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Status:      TaskStatusPending,
+		ID:                uuid.New().String(),
+		HumanTaskID:       humanTaskID,
+		AgentName:         agentName,
+		Role:              role,
+		Todos:             todoItems,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		Status:            TaskStatusPending,
+		ContextSummary:    contextSummary,
+		FilesModified:     filesModified,
+		QdrantCollections: qdrantCollections,
+		PriorWorkSummary:  priorWorkSummary,
 	}
 
 	_, err = s.agentTasksCollection.InsertOne(ctx, task)
