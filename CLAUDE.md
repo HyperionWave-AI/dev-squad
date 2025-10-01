@@ -1,6 +1,30 @@
-# Hyperion Parallel Squad System – Agent Guide (v2025-09-22)
+# Hyperion Parallel Squad System – Agent Guide (v2025-10-01)
 
 > **Mission:** Operate as part of a parallel squad system using Qdrant MCP for coordination, delivering 15x development efficiency through autonomous domain expertise and intelligent collaboration.
+
+---
+
+## 📚 **QUICK START - READ FIRST**
+
+### **Essential Documents (Read in Order):**
+
+1. **🔴 HYPERION_COORDINATOR_MCP_REFERENCE.md** - Complete tool reference (READ THIS FIRST!)
+2. **🟡 This document (CLAUDE.md)** - Squad coordination patterns and workflows
+3. **🟢 AI-BAND-MANAGER-SPEC.md** - Current project specification (if working on demo app)
+
+### **MCP Tool Quick Reference:**
+
+| Tool | Parameters | Purpose |
+|------|-----------|---------|
+| `mcp__hyperion-coordinator__coordinator_list_agent_tasks` | `{ agentName: "..." }` | Get your assigned tasks |
+| `mcp__hyperion-coordinator__coordinator_update_task_status` | `{ taskId: "...", status: "...", notes: "..." }` | Update task progress |
+| `mcp__hyperion-coordinator__coordinator_update_todo_status` | `{ agentTaskId: "...", todoId: "...", status: "..." }` | Update individual TODO |
+| `mcp__qdrant__qdrant-find` | `{ collection_name: "...", query: "..." }` | Search knowledge base |
+| `mcp__qdrant__qdrant-store` | `{ collection_name: "...", information: "...", metadata: {...} }` | Store knowledge |
+
+**⚠️ Remember:** All coordinator tools require the full `mcp__hyperion-coordinator__` prefix!
+
+---
 
 ## 🚨 CRITICAL SECURITY: USER IDENTITY ONLY - NO SYSTEM IDENTITIES
 
@@ -76,6 +100,44 @@ This ensures proper multi-tenant isolation and prevents privilege escalation thr
 ---
 
 ## 🗂️ **Mandatory Dual-MCP Workflow (REQUIRED - NO EXCEPTIONS)**
+
+### **🚨 CRITICAL: MCP Tool Reference**
+
+**BEFORE starting any work, read the complete MCP tool reference:**
+📖 **File:** `/HYPERION_COORDINATOR_MCP_REFERENCE.md`
+
+**This document contains:**
+- ✅ Correct tool names with full `mcp__hyperion-coordinator__` prefix
+- ✅ Exact parameter names (camelCase, no typos)
+- ✅ Complete examples for every tool
+- ✅ Common errors and solutions
+- ✅ Full workflow examples
+
+**⚠️ MOST COMMON MISTAKES:**
+1. ❌ Using `todoIndex` instead of `todoId` (TODO IDs are UUIDs, not indices!)
+2. ❌ Using `taskId` instead of `agentTaskId` in `coordinator_update_todo_status`
+3. ❌ Missing the `mcp__hyperion-coordinator__` prefix on tool names
+4. ❌ Using wrong parameter types (strings vs integers)
+
+**✅ CORRECT TODO UPDATE PATTERN:**
+```typescript
+// STEP 1: Get your task and TODO IDs
+const myTasks = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+  agentName: "Backend Services Specialist"  // Your exact agent name
+})
+const agentTaskId = myTasks.tasks[0].id
+const todoId = myTasks.tasks[0].todos[0].id  // UUID, not index!
+
+// STEP 2: Update TODO with correct parameters
+await mcp__hyperion-coordinator__coordinator_update_todo_status({
+  agentTaskId: agentTaskId,  // ✅ Not "taskId"
+  todoId: todoId,            // ✅ UUID from task listing, not an index
+  status: "completed",       // ✅ Must be: pending, in_progress, or completed
+  notes: "Task completed successfully"
+})
+```
+
+---
 
 ### **Pre-Work Protocol: Task Assignment & Context Discovery**
 
