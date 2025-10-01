@@ -14,7 +14,7 @@ import { DragDropContext, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { KanbanTaskCard } from './KanbanTaskCard';
 import { TaskDetailDialog } from './TaskDetailDialog';
 import { mcpClient } from '../services/mcpClient';
-import type { HumanTask, AgentTask, TaskStatus } from '../types/coordinator';
+import type { HumanTask, AgentTask, TaskStatus, FlattenedTask } from '../types/coordinator';
 
 interface KanbanColumn {
   id: TaskStatus;
@@ -56,7 +56,7 @@ export function KanbanBoard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTask, setSelectedTask] = useState<HumanTask | null>(null);
+  const [selectedTask, setSelectedTask] = useState<FlattenedTask | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   // Load tasks on mount
@@ -86,24 +86,83 @@ export function KanbanBoard() {
     }
   };
 
-  // Filter and organize tasks by status (combine human and agent tasks)
+  // Flatten all tasks (human tasks, agent tasks, and todos) into individual cards
   const tasksByStatus = useMemo(() => {
-    // Combine human and agent tasks into unified list
-    const allTasks = [
-      ...tasks.map(t => ({ ...t, taskType: 'human' as const })),
-      ...agentTasks.map(t => ({ ...t, taskType: 'agent' as const, tags: [] }))
-    ];
+    const flattenedTasks: FlattenedTask[] = [];
 
+    // Add human tasks
+    tasks.forEach(humanTask => {
+      flattenedTasks.push({
+        id: humanTask.id,
+        title: humanTask.title,
+        description: humanTask.description,
+        status: humanTask.status,
+        priority: humanTask.priority,
+        createdAt: humanTask.createdAt,
+        updatedAt: humanTask.updatedAt,
+        completedAt: humanTask.completedAt,
+        taskType: 'human',
+        tags: humanTask.tags,
+        notes: humanTask.notes,
+        createdBy: humanTask.createdBy,
+      });
+    });
+
+    // Add agent tasks and their todos as individual tasks
+    agentTasks.forEach(agentTask => {
+      // Add the agent task itself
+      flattenedTasks.push({
+        id: agentTask.id,
+        title: agentTask.title || `${agentTask.agentName}: ${agentTask.role}`,
+        description: agentTask.role,
+        status: agentTask.status,
+        priority: agentTask.priority,
+        createdAt: agentTask.createdAt,
+        updatedAt: agentTask.updatedAt,
+        completedAt: agentTask.completedAt,
+        taskType: 'agent',
+        agentName: agentTask.agentName,
+        role: agentTask.role,
+        humanTaskId: agentTask.humanTaskId,
+        tags: agentTask.tags || [],
+        notes: agentTask.notes,
+      });
+
+      // Add each todo as a separate task
+      agentTask.todos.forEach(todo => {
+        flattenedTasks.push({
+          id: `${agentTask.id}-todo-${todo.id}`,
+          title: todo.description,
+          description: `${agentTask.agentName} - ${agentTask.role}`,
+          status: todo.status === 'pending' ? 'pending'
+                : todo.status === 'in_progress' ? 'in_progress'
+                : 'completed',
+          createdAt: todo.createdAt,
+          completedAt: todo.completedAt,
+          taskType: 'todo',
+          agentName: agentTask.agentName,
+          role: agentTask.role,
+          humanTaskId: agentTask.humanTaskId,
+          agentTaskId: agentTask.id,
+          parentTaskTitle: agentTask.title || agentTask.role,
+          tags: [`📋 ${agentTask.agentName}`],
+          notes: todo.notes,
+        });
+      });
+    });
+
+    // Filter by search query
     const filtered = searchQuery
-      ? allTasks.filter(
+      ? flattenedTasks.filter(
           (task) =>
             task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             task.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            ('tags' in task && task.tags.some((tag: string) => tag.toLowerCase().includes(searchQuery.toLowerCase())))
+            task.tags?.some((tag: string) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
         )
-      : allTasks;
+      : flattenedTasks;
 
-    const grouped: Record<TaskStatus, any[]> = {
+    // Group by status
+    const grouped: Record<TaskStatus, FlattenedTask[]> = {
       pending: [],
       in_progress: [],
       blocked: [],
