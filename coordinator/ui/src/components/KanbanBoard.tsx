@@ -190,31 +190,71 @@ export function KanbanBoard() {
 
     // Update task status
     const newStatus = destination.droppableId as TaskStatus;
-    const taskId = draggableId;
 
-    // Optimistic update
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId ? { ...task, status: newStatus } : task
-      )
-    );
+    // Check if this is a todo card (synthetic ID format: agentTaskId-todo-todoId)
+    const isTodoCard = draggableId.includes('-todo-');
 
     // Update on server
     try {
-      await mcpClient.updateTaskStatus({
-        taskId,
-        status: newStatus,
-        notes: `Status changed from ${source.droppableId} to ${newStatus}`,
-      });
+      if (isTodoCard) {
+        // Parse the synthetic ID to extract agentTaskId and todoId
+        const parts = draggableId.split('-todo-');
+        const agentTaskId = parts[0];
+        const todoId = parts[1];
+
+        // Map TaskStatus to TodoStatus (both use same values: pending, in_progress, completed)
+        const todoStatus = newStatus === 'blocked' ? 'pending' : newStatus;
+
+        await mcpClient.updateTodoStatus({
+          agentTaskId,
+          todoId,
+          status: todoStatus,
+          notes: `Status changed from ${source.droppableId} to ${newStatus}`,
+        });
+
+        // Reload tasks to get updated data
+        await loadTasks();
+      } else {
+        // Regular human or agent task
+        await mcpClient.updateTaskStatus({
+          taskId: draggableId,
+          status: newStatus,
+          notes: `Status changed from ${source.droppableId} to ${newStatus}`,
+        });
+
+        // Optimistic update for human tasks
+        setTasks((prevTasks) =>
+          prevTasks.map((task) =>
+            task.id === draggableId ? { ...task, status: newStatus } : task
+          )
+        );
+
+        // Optimistic update for agent tasks
+        setAgentTasks((prevTasks) =>
+          prevTasks.map((task) =>
+            task.id === draggableId ? { ...task, status: newStatus } : task
+          )
+        );
+      }
     } catch (err) {
       console.error('Failed to update task status:', err);
-      // Revert optimistic update
+
+      // Revert optimistic updates
       setTasks((prevTasks) =>
         prevTasks.map((task) =>
-          task.id === taskId ? { ...task, status: source.droppableId as TaskStatus } : task
+          task.id === draggableId ? { ...task, status: source.droppableId as TaskStatus } : task
         )
       );
+      setAgentTasks((prevTasks) =>
+        prevTasks.map((task) =>
+          task.id === draggableId ? { ...task, status: source.droppableId as TaskStatus } : task
+        )
+      );
+
       setError('Failed to update task status');
+
+      // Reload to ensure UI is in sync
+      await loadTasks();
     }
   };
 

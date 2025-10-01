@@ -263,6 +263,27 @@ class MCPCoordinatorClient {
     }
   }
 
+  async updateTodoStatus(params: {
+    agentTaskId: string;
+    todoId: string;
+    status: string;
+    notes?: string;
+  }): Promise<{ success: boolean }> {
+    try {
+      await this.callTool('coordinator_update_todo_status', {
+        agentTaskId: params.agentTaskId,
+        todoId: params.todoId,
+        status: params.status,
+        notes: params.notes || ''
+      });
+
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to update todo status:', error);
+      throw error;
+    }
+  }
+
   async queryKnowledge(params: {
     collection: string;
     query: string;
