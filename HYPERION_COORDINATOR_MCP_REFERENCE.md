@@ -141,15 +141,30 @@ mcp__hyperion-coordinator__coordinator_create_human_task({
 
 **Tool Name:** `mcp__hyperion-coordinator__coordinator_create_agent_task`
 
-**Description:** Create a new agent task with TODOs under a human task
+**Description:** Create a new agent task with TODOs under a human task. **Supports context-rich task creation** to minimize agent context window usage by embedding business context, file paths, pattern references, and implementation hints directly in the task.
 
 **Parameters:**
 - `humanTaskId` (string, REQUIRED): Parent human task UUID
 - `agentName` (string, REQUIRED): Name of the agent (must match your agent identity)
 - `role` (string, REQUIRED): Description of agent's role/responsibility
-- `todos` (array of strings, REQUIRED): List of TODO descriptions
+- `todos` (array, REQUIRED): List of TODO items - can be strings (legacy) or objects with context hints (recommended)
+- `contextSummary` (string, optional): 200-word summary of what agent needs to know (business context, constraints, pattern references)
+- `filesModified` (array of strings, optional): List of file paths this task will create or modify
+- `qdrantCollections` (array of strings, optional): Suggested Qdrant collections to query if technical patterns needed (1-2 max)
+- `priorWorkSummary` (string, optional): Summary of previous agent's work and key decisions (for multi-phase tasks)
 
-**Example:**
+**TodoItem Format (New - Recommended):**
+```typescript
+{
+  description: string,      // REQUIRED: What to do
+  filePath?: string,        // Optional: Specific file to modify
+  functionName?: string,    // Optional: Specific function to create/modify
+  contextHint?: string,     // Optional: 50-word hint of how to implement
+  notes?: string           // Optional: Additional context for this TODO
+}
+```
+
+**Example 1: Legacy Format (String Array - Still Supported)**
 ```typescript
 mcp__hyperion-coordinator__coordinator_create_agent_task({
   humanTaskId: "4361dcdb-3781-4686-88d3-3feb20c6948e",
@@ -164,17 +179,89 @@ mcp__hyperion-coordinator__coordinator_create_agent_task({
 })
 ```
 
+**Example 2: Context-Rich Format (Recommended - Prevents Context Exhaustion)**
+```typescript
+mcp__hyperion-coordinator__coordinator_create_agent_task({
+  humanTaskId: "4361dcdb-3781-4686-88d3-3feb20c6948e",
+  agentName: "Backend Services Specialist",
+
+  role: "Add CSV export endpoint for staff data. User wants downloadable staff list with filters. Must follow existing PDF export pattern for consistency. Use streaming for datasets >1000 rows. Respect company-level data isolation via JWT identity.",
+
+  contextSummary: `User wants CSV export for staff data with filters.
+PATTERN TO FOLLOW: documents-api/handlers/export.go (streaming export with io.Pipe)
+KEY DECISIONS: Use io.Pipe() for streaming (handles large datasets), set Content-Type: text/csv and Content-Disposition: attachment headers, extract identity from JWT context.
+GOTCHAS: Must call w.Flush() after each row for true streaming, test with >10K rows.`,
+
+  filesModified: [
+    "staff-api/handlers/export_handler.go",
+    "staff-api/services/export_service.go",
+    "staff-api/handlers/export_handler_test.go"
+  ],
+
+  qdrantCollections: ["code-patterns", "technical-knowledge"],
+
+  todos: [
+    {
+      description: "Create CSV export handler",
+      filePath: "staff-api/handlers/export_handler.go",
+      functionName: "HandleStaffExport",
+      contextHint: "Mirror documents-api pattern at line 45-78. Use Gin context for identity extraction (c.MustGet('identity')). Return 400 for invalid filters.",
+      notes: "Set Content-Type: text/csv, Content-Disposition: attachment"
+    },
+    {
+      description: "Implement CSV formatting service",
+      filePath: "staff-api/services/export_service.go",
+      functionName: "FormatStaffAsCSV",
+      contextHint: "Use encoding/csv Writer. Include header row: ID,Name,Email,Role,Department. Respect company-level filter via identity.CompanyId."
+    },
+    {
+      description: "Add streaming with io.Pipe",
+      filePath: "staff-api/services/export_service.go",
+      functionName: "StreamStaffCSV",
+      contextHint: "Copy pattern from documents-api lines 45-78. Create pipe, write CSV rows in goroutine, return reader. Call w.Flush() after each row."
+    },
+    {
+      description: "Add unit tests",
+      filePath: "staff-api/handlers/export_handler_test.go",
+      contextHint: "Test: streaming works, permissions enforced (company-level isolation), headers correct, large datasets (10K rows) don't cause memory bloat"
+    }
+  ]
+})
+```
+
 **Returns:**
 ```json
 {
   "taskId": "uuid",
   "agentName": "Backend Services Specialist",
   "status": "pending",
+  "role": "Add CSV export endpoint...",
+  "contextSummary": "User wants CSV export...",
+  "filesModified": ["staff-api/handlers/export_handler.go", "..."],
+  "qdrantCollections": ["code-patterns", "technical-knowledge"],
   "todos": [
-    {"id": "uuid", "description": "...", "status": "pending"}
+    {
+      "id": "uuid",
+      "description": "Create CSV export handler",
+      "status": "pending",
+      "filePath": "staff-api/handlers/export_handler.go",
+      "functionName": "HandleStaffExport",
+      "contextHint": "Mirror documents-api pattern..."
+    }
   ]
 }
 ```
+
+**Context-Rich Task Benefits:**
+- ✅ Agent starts work in <2 minutes vs. 20+ minutes of exploration
+- ✅ Minimizes context window usage (agent uses <20% for planning vs. 80%)
+- ✅ Prevents context exhaustion mid-implementation
+- ✅ Reduces Qdrant queries from 5+ to 0-1
+- ✅ Eliminates need to read 10+ files for "understanding"
+- ✅ Enables task completion instead of stopping halfway through
+
+**Workflow Coordinator: Use Context-Rich Format**
+Workflow Coordinators should ALWAYS use the context-rich format to prevent agent context exhaustion. See CLAUDE.md section "🎯 Workflow Coordinator: Context-Rich Task Creation" for complete guidelines.
 
 ---
 

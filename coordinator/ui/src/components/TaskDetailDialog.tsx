@@ -31,6 +31,10 @@ import {
   RadioButtonUnchecked,
   Circle,
   SmartToy,
+  Code,
+  Functions,
+  Storage,
+  Lightbulb,
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import type { HumanTask, AgentTask, FlattenedTask, Priority, TaskStatus, TodoStatus } from '../types/coordinator';
@@ -383,6 +387,220 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
           </Box>
         )}
 
+        {/* Context Summary - for agent tasks */}
+        {isAgentTask && task.contextSummary && (
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Lightbulb color="success" />
+              Context Summary
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #86efac',
+              }}
+            >
+              <ReactMarkdown>{task.contextSummary}</ReactMarkdown>
+            </Paper>
+          </Box>
+        )}
+        {!isAgentTask && agentTasks.map((agentTask) => agentTask.contextSummary && (
+          <Box key={`context-${agentTask.id}`} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Lightbulb color="success" />
+              Context Summary ({agentTask.agentName})
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #86efac',
+              }}
+            >
+              <ReactMarkdown>{agentTask.contextSummary}</ReactMarkdown>
+            </Paper>
+          </Box>
+        ))}
+
+        {/* Files Modified - for agent tasks */}
+        {isAgentTask && task.filesModified && task.filesModified.length > 0 && (
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Code color="primary" />
+              Files to Modify
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: 'white',
+                border: '1px solid',
+                borderColor: 'divider',
+              }}
+            >
+              <List dense disablePadding>
+                {task.filesModified.map((filePath, idx) => (
+                  <ListItem key={idx} sx={{ px: 0, py: 0.5 }}>
+                    <ListItemIcon sx={{ minWidth: 32 }}>
+                      <Code fontSize="small" color="action" />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={filePath}
+                      primaryTypographyProps={{
+                        sx: { fontFamily: 'monospace', fontSize: '0.875rem' }
+                      }}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            </Paper>
+          </Box>
+        )}
+        {!isAgentTask && agentTasks.map((agentTask) => agentTask.filesModified && agentTask.filesModified.length > 0 && (
+          <Box key={`files-${agentTask.id}`} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Code color="primary" />
+              Files to Modify ({agentTask.agentName})
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: 'white',
+                border: '1px solid',
+                borderColor: 'divider',
+              }}
+            >
+              <List dense disablePadding>
+                {agentTask.filesModified.map((filePath, idx) => (
+                  <ListItem key={idx} sx={{ px: 0, py: 0.5 }}>
+                    <ListItemIcon sx={{ minWidth: 32 }}>
+                      <Code fontSize="small" color="action" />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={filePath}
+                      primaryTypographyProps={{
+                        sx: { fontFamily: 'monospace', fontSize: '0.875rem' }
+                      }}
+                    />
+                  </ListItem>
+                ))}
+              </List>
+            </Paper>
+          </Box>
+        ))}
+
+        {/* Qdrant Collections - for agent tasks */}
+        {isAgentTask && task.qdrantCollections && task.qdrantCollections.length > 0 && (
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Storage color="warning" />
+              Suggested Qdrant Collections
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: '#fefce8',
+                border: '1px solid #fde047',
+              }}
+            >
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+                {task.qdrantCollections.map((collection, idx) => (
+                  <Chip
+                    key={idx}
+                    label={collection}
+                    size="small"
+                    icon={<Storage fontSize="small" />}
+                    sx={{
+                      backgroundColor: 'white',
+                      border: '1px solid #fde047',
+                    }}
+                  />
+                ))}
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                💡 Query these collections only if you need specific technical patterns
+              </Typography>
+            </Paper>
+          </Box>
+        )}
+        {!isAgentTask && agentTasks.map((agentTask) => agentTask.qdrantCollections && agentTask.qdrantCollections.length > 0 && (
+          <Box key={`qdrant-${agentTask.id}`} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Storage color="warning" />
+              Suggested Qdrant Collections ({agentTask.agentName})
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: '#fefce8',
+                border: '1px solid #fde047',
+              }}
+            >
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+                {agentTask.qdrantCollections.map((collection, idx) => (
+                  <Chip
+                    key={idx}
+                    label={collection}
+                    size="small"
+                    icon={<Storage fontSize="small" />}
+                    sx={{
+                      backgroundColor: 'white',
+                      border: '1px solid #fde047',
+                    }}
+                  />
+                ))}
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                💡 Query these collections only if you need specific technical patterns
+              </Typography>
+            </Paper>
+          </Box>
+        ))}
+
+        {/* Prior Work Summary - for agent tasks */}
+        {isAgentTask && task.priorWorkSummary && (
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <SmartToy color="secondary" />
+              Prior Work Summary
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: '#ede9fe',
+                border: '1px solid #c4b5fd',
+              }}
+            >
+              <ReactMarkdown>{task.priorWorkSummary}</ReactMarkdown>
+            </Paper>
+          </Box>
+        )}
+        {!isAgentTask && agentTasks.map((agentTask) => agentTask.priorWorkSummary && (
+          <Box key={`prior-${agentTask.id}`} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <SmartToy color="secondary" />
+              Prior Work Summary ({agentTask.agentName})
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                p: 2,
+                backgroundColor: '#ede9fe',
+                border: '1px solid #c4b5fd',
+              }}
+            >
+              <ReactMarkdown>{agentTask.priorWorkSummary}</ReactMarkdown>
+            </Paper>
+          </Box>
+        ))}
+
         {/* Parent Human Task (for agent tasks) */}
         {isAgentTask && parentTask && (
           <Box sx={{ mb: 3 }}>
@@ -478,6 +696,19 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <SmartToy fontSize="small" color="action" />
                       <Typography sx={{ fontWeight: 600 }}>{agentTask.agentName}</Typography>
+                      {agentTask.contextSummary && (
+                        <Chip
+                          label="📋 Context-Rich"
+                          size="small"
+                          sx={{
+                            height: 20,
+                            backgroundColor: '#f0fdf4',
+                            color: '#16a34a',
+                            fontSize: '0.7rem',
+                            fontWeight: 600,
+                          }}
+                        />
+                      )}
                     </Box>
                     <Chip
                       icon={getStatusIcon(agentTask.status)}
@@ -538,28 +769,116 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                         Tasks
                       </Typography>
                       <List dense disablePadding>
-                        {agentTask.todos.map((todo) => (
-                          <ListItem
-                            key={todo.id}
-                            sx={{
-                              px: 0,
-                              py: 0.5,
-                              opacity: todo.status === 'completed' ? 0.6 : 1,
-                            }}
-                          >
-                            <ListItemIcon sx={{ minWidth: 32 }}>
-                              {getTodoStatusIcon(todo.status)}
-                            </ListItemIcon>
-                            <ListItemText
-                              primary={todo.description}
-                              secondary={todo.notes}
-                              primaryTypographyProps={{
-                                sx: {
-                                  textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
-                                },
+                        {agentTask.todos.map((todo, idx) => (
+                          <Box key={todo.id}>
+                            <ListItem
+                              sx={{
+                                px: 0,
+                                py: 1,
+                                opacity: todo.status === 'completed' ? 0.6 : 1,
+                                alignItems: 'flex-start',
                               }}
-                            />
-                          </ListItem>
+                            >
+                              <ListItemIcon sx={{ minWidth: 32, mt: 0.5 }}>
+                                {getTodoStatusIcon(todo.status)}
+                              </ListItemIcon>
+                              <Box sx={{ flex: 1 }}>
+                                {/* Description */}
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    fontWeight: 600,
+                                    textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
+                                    mb: 0.5,
+                                  }}
+                                >
+                                  {todo.description}
+                                </Typography>
+
+                                {/* File Path */}
+                                {todo.filePath && (
+                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                                    <Code fontSize="small" sx={{ color: 'text.secondary' }} />
+                                    <Typography
+                                      variant="caption"
+                                      sx={{
+                                        fontFamily: 'monospace',
+                                        color: 'text.secondary',
+                                        backgroundColor: 'grey.100',
+                                        px: 0.5,
+                                        py: 0.25,
+                                        borderRadius: 0.5,
+                                      }}
+                                    >
+                                      {todo.filePath}
+                                    </Typography>
+                                  </Box>
+                                )}
+
+                                {/* Function Name */}
+                                {todo.functionName && (
+                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                                    <Functions fontSize="small" sx={{ color: 'primary.main' }} />
+                                    <Typography
+                                      variant="caption"
+                                      sx={{
+                                        fontFamily: 'monospace',
+                                        color: 'primary.main',
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {todo.functionName}()
+                                    </Typography>
+                                  </Box>
+                                )}
+
+                                {/* Context Hint */}
+                                {todo.contextHint && (
+                                  <Paper
+                                    elevation={0}
+                                    sx={{
+                                      mt: 1,
+                                      p: 1,
+                                      backgroundColor: '#f0fdf4',
+                                      border: '1px solid #86efac',
+                                    }}
+                                  >
+                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                                      <Lightbulb fontSize="small" sx={{ color: '#16a34a' }} />
+                                      <Typography variant="caption" sx={{ fontWeight: 600, color: '#16a34a' }}>
+                                        Implementation Hint:
+                                      </Typography>
+                                    </Box>
+                                    <Typography variant="caption" color="text.secondary">
+                                      {todo.contextHint}
+                                    </Typography>
+                                  </Paper>
+                                )}
+
+                                {/* Notes */}
+                                {todo.notes && (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{
+                                      display: 'block',
+                                      mt: 0.5,
+                                      fontStyle: 'italic',
+                                      pl: 1,
+                                      borderLeft: '2px solid',
+                                      borderColor: 'divider',
+                                    }}
+                                  >
+                                    {todo.notes}
+                                  </Typography>
+                                )}
+                              </Box>
+                            </ListItem>
+                            {/* Divider between todos */}
+                            {idx < agentTask.todos.length - 1 && (
+                              <Divider sx={{ my: 1 }} />
+                            )}
+                          </Box>
                         ))}
                       </List>
                     </Box>

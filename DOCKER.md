@@ -1,0 +1,573 @@
+# Docker Installation Guide
+
+> **Complete guide to installing and running Hyperion Coordinator MCP with Docker**
+
+## Quick Start
+
+```bash
+# 1. Clone the repository
+git clone <repository-url>
+cd hyperion-coordinator-mcp
+
+# 2. Run the installation script
+./install.sh
+
+# 3. Start the server
+docker-compose up -d
+
+# 4. Verify it's running
+docker-compose logs -f hyperion-coordinator-mcp
+```
+
+That's it! The MCP server is now running and configured for Claude Code.
+
+---
+
+## Prerequisites
+
+### Required
+- **Docker Desktop** (macOS/Windows) or **Docker Engine** (Linux)
+  - macOS: https://docs.docker.com/desktop/install/mac-install/
+  - Windows: https://docs.docker.com/desktop/install/windows-install/
+  - Linux: https://docs.docker.com/engine/install/
+- **Docker Compose** (included with Docker Desktop)
+
+### Optional
+- **Claude Code** - For automatic MCP client configuration
+
+---
+
+## Installation Steps
+
+### Step 1: Clone Repository
+
+```bash
+git clone <repository-url>
+cd hyperion-coordinator-mcp
+```
+
+### Step 2: Run Installation Script
+
+The `install.sh` script automates the entire setup:
+
+```bash
+./install.sh
+```
+
+**What it does:**
+- ✅ Checks Docker and Docker Compose are installed
+- ✅ Creates `.env` configuration from template
+- ✅ Builds the Docker image
+- ✅ Detects Claude Code configuration location
+- ✅ Automatically configures Claude Code (macOS/Linux)
+- ✅ Provides manual configuration instructions if needed
+
+**Expected output:**
+```
+═══════════════════════════════════════════════════════
+  Hyperion Coordinator MCP - Docker Installation
+═══════════════════════════════════════════════════════
+
+ℹ Checking prerequisites...
+✓ Docker is installed
+✓ Docker Compose is installed
+
+ℹ Creating .env file from template...
+✓ .env file created (using default MongoDB Atlas dev cluster)
+
+ℹ Building Hyperion Coordinator MCP Docker image...
+✓ Docker image built successfully
+
+ℹ Configuring Claude Code...
+✓ Claude Code configured successfully
+ℹ Restart Claude Code to load the MCP server
+
+═══════════════════════════════════════════════════════
+✓ Installation complete!
+═══════════════════════════════════════════════════════
+```
+
+### Step 3: Start the Server
+
+```bash
+docker-compose up -d
+```
+
+**Flags explained:**
+- `-d` - Detached mode (runs in background)
+
+**What happens:**
+- Docker builds the image (if not already built)
+- Container starts with stdio transport ready
+- Connects to MongoDB Atlas
+- Registers all MCP tools and resources
+
+### Step 4: Verify Installation
+
+**Check logs:**
+```bash
+docker-compose logs -f hyperion-coordinator-mcp
+```
+
+**Expected output:**
+```
+hyperion-coordinator-mcp  | Starting Hyperion Coordinator MCP Server
+hyperion-coordinator-mcp  | Connecting to MongoDB Atlas database=coordinator_db
+hyperion-coordinator-mcp  | Successfully connected to MongoDB Atlas
+hyperion-coordinator-mcp  | Task storage initialized with MongoDB
+hyperion-coordinator-mcp  | Knowledge storage initialized with MongoDB
+hyperion-coordinator-mcp  | All handlers registered successfully tools=9 resources=2
+hyperion-coordinator-mcp  | Starting MCP server with stdio transport
+```
+
+**Check container status:**
+```bash
+docker-compose ps
+```
+
+**Expected output:**
+```
+NAME                        STATUS              PORTS
+hyperion-coordinator-mcp    Up 2 minutes
+```
+
+### Step 5: Configure MCP Client
+
+#### Automatic Configuration (Claude Code)
+
+If you ran `./install.sh` on macOS or Linux, Claude Code should already be configured. Just **restart Claude Code**.
+
+**Verify configuration:**
+- macOS: Check `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Linux: Check `~/.config/Claude/claude_desktop_config.json`
+
+#### Manual Configuration (Other MCP Clients)
+
+Add this to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "hyperion-coordinator": {
+      "command": "docker-compose",
+      "args": [
+        "-f", "/absolute/path/to/docker-compose.yml",
+        "run",
+        "--rm",
+        "hyperion-coordinator-mcp"
+      ]
+    }
+  }
+}
+```
+
+**Replace** `/absolute/path/to/` with the actual path to your installation.
+
+---
+
+## Configuration
+
+### Environment Variables
+
+Edit `.env` to customize configuration:
+
+```bash
+# MongoDB Connection (default uses dev cluster)
+MONGODB_URI=mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB
+
+# Database name
+MONGODB_DATABASE=coordinator_db
+
+# Log level (debug, info, warn, error)
+LOG_LEVEL=info
+```
+
+**After editing `.env`, restart the container:**
+```bash
+docker-compose restart
+```
+
+### Custom MongoDB
+
+To use your own MongoDB instance:
+
+1. **Edit `.env`:**
+   ```bash
+   MONGODB_URI=mongodb+srv://username:password@your-cluster.mongodb.net/?retryWrites=true&w=majority
+   ```
+
+2. **Restart:**
+   ```bash
+   docker-compose restart
+   ```
+
+3. **Verify connection:**
+   ```bash
+   docker-compose logs hyperion-coordinator-mcp | grep MongoDB
+   ```
+
+---
+
+## Usage
+
+### Start Server
+```bash
+docker-compose up -d
+```
+
+### Stop Server
+```bash
+docker-compose down
+```
+
+### Restart Server
+```bash
+docker-compose restart
+```
+
+### View Logs
+```bash
+# Follow logs in real-time
+docker-compose logs -f hyperion-coordinator-mcp
+
+# View last 100 lines
+docker-compose logs --tail=100 hyperion-coordinator-mcp
+
+# View logs since 10 minutes ago
+docker-compose logs --since=10m hyperion-coordinator-mcp
+```
+
+### Check Status
+```bash
+docker-compose ps
+```
+
+### Access Container Shell
+```bash
+docker-compose exec hyperion-coordinator-mcp /bin/sh
+```
+
+### Rebuild Image
+```bash
+# After code changes
+docker-compose build
+
+# Or rebuild without cache
+docker-compose build --no-cache
+```
+
+---
+
+## Testing with Docker
+
+### Test MCP Communication
+
+```bash
+# Test tools/list
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
+  docker-compose run --rm hyperion-coordinator-mcp
+
+# Test tool call
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"coordinator_list_human_tasks","arguments":{}}}' | \
+  docker-compose run --rm hyperion-coordinator-mcp
+```
+
+### Run Integration Tests
+
+```bash
+# From the test directory
+cd coordinator/mcp-server
+go test -v
+```
+
+---
+
+## Troubleshooting
+
+### Container Won't Start
+
+**Check logs:**
+```bash
+docker-compose logs hyperion-coordinator-mcp
+```
+
+**Common issues:**
+- MongoDB connection failed → Check `MONGODB_URI` in `.env`
+- Port already in use → No ports are exposed (uses stdio)
+- Image build failed → Run `docker-compose build --no-cache`
+
+### MongoDB Connection Errors
+
+**Verify environment variables:**
+```bash
+docker-compose exec hyperion-coordinator-mcp env | grep MONGODB
+```
+
+**Test MongoDB connection:**
+```bash
+# Check if MongoDB Atlas is accessible
+curl -v https://devdb.yqf8f8r.mongodb.net/
+```
+
+**Common fixes:**
+- Verify MongoDB URI is correct in `.env`
+- Check MongoDB Atlas network access (whitelist your IP)
+- Ensure MongoDB Atlas cluster is running
+
+### Claude Code Not Detecting Server
+
+1. **Verify Docker is running:**
+   ```bash
+   docker ps
+   ```
+
+2. **Check Claude Code config:**
+   ```bash
+   # macOS
+   cat ~/Library/Application\ Support/Claude/claude_desktop_config.json
+
+   # Linux
+   cat ~/.config/Claude/claude_desktop_config.json
+   ```
+
+3. **Verify paths are absolute:**
+   - The `-f` argument must point to the full path of `docker-compose.yml`
+
+4. **Restart Claude Code completely:**
+   - Quit Claude Code (not just close window)
+   - Reopen Claude Code
+
+5. **Check Claude Code logs:**
+   - macOS: `~/Library/Logs/Claude/`
+   - Linux: `~/.config/Claude/logs/`
+
+### Permission Errors
+
+```bash
+# Make install script executable
+chmod +x install.sh
+
+# Reset Docker volumes
+docker-compose down -v
+docker-compose up -d
+```
+
+### Image Build Fails
+
+```bash
+# Clear Docker cache
+docker system prune -a
+
+# Rebuild from scratch
+docker-compose build --no-cache
+```
+
+### Container Stops Immediately
+
+**Check for startup errors:**
+```bash
+docker-compose logs hyperion-coordinator-mcp
+```
+
+**Verify Dockerfile:**
+```bash
+# Test build manually
+cd coordinator/mcp-server
+docker build -t hyperion-test .
+docker run --rm -it hyperion-test
+```
+
+---
+
+## Advanced Usage
+
+### Custom Docker Compose
+
+Create `docker-compose.override.yml` for local customizations:
+
+```yaml
+version: '3.8'
+
+services:
+  hyperion-coordinator-mcp:
+    environment:
+      - LOG_LEVEL=debug
+    volumes:
+      - ./logs:/app/logs
+```
+
+**Apply changes:**
+```bash
+docker-compose up -d
+```
+
+### Multi-Container Setup
+
+Add additional services to `docker-compose.yml`:
+
+```yaml
+services:
+  hyperion-coordinator-mcp:
+    # ... existing config ...
+
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  mongodb_data:
+  qdrant_storage:
+```
+
+### Health Checks
+
+Monitor container health:
+
+```bash
+# Check health status
+docker inspect hyperion-coordinator-mcp | grep -A 10 Health
+
+# Auto-restart on failure (already configured)
+# See docker-compose.yml: restart: unless-stopped
+```
+
+---
+
+## Production Deployment
+
+### Deployment Checklist
+
+- [ ] Set production MongoDB URI in `.env`
+- [ ] Change default credentials/keys
+- [ ] Configure log rotation
+- [ ] Set up monitoring (Prometheus, Grafana)
+- [ ] Configure backups for MongoDB
+- [ ] Set up reverse proxy for HTTPS
+- [ ] Implement rate limiting
+- [ ] Configure firewall rules
+
+### Docker Compose Production
+
+```yaml
+version: '3.8'
+
+services:
+  hyperion-coordinator-mcp:
+    build:
+      context: ./coordinator/mcp-server
+      dockerfile: Dockerfile
+    container_name: hyperion-coordinator-mcp-prod
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - MONGODB_DATABASE=${MONGODB_DATABASE}
+      - LOG_LEVEL=warn
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - hyperion-prod-network
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "hyperion-coordinator-mcp"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  hyperion-prod-network:
+    driver: bridge
+```
+
+### Monitoring
+
+**View resource usage:**
+```bash
+docker stats hyperion-coordinator-mcp
+```
+
+**Export logs:**
+```bash
+docker-compose logs --no-color hyperion-coordinator-mcp > logs.txt
+```
+
+---
+
+## Cleanup
+
+### Remove Container & Image
+```bash
+# Stop and remove container
+docker-compose down
+
+# Remove image
+docker rmi hyperion-coordinator-mcp
+```
+
+### Full Cleanup
+```bash
+# Stop containers
+docker-compose down -v
+
+# Remove images
+docker rmi $(docker images -q hyperion-coordinator-mcp)
+
+# Prune system (careful!)
+docker system prune -a --volumes
+```
+
+---
+
+## FAQ
+
+### Q: Can I run this on Windows?
+
+**A:** Yes! Docker Desktop for Windows supports both Windows and Linux containers. Follow the same installation steps.
+
+### Q: Do I need MongoDB Atlas?
+
+**A:** The default configuration uses MongoDB Atlas dev cluster. You can use your own MongoDB by editing `.env`.
+
+### Q: How do I update to the latest version?
+
+**A:**
+```bash
+git pull origin main
+docker-compose build
+docker-compose up -d
+```
+
+### Q: Can I run multiple instances?
+
+**A:** Yes, but you'll need to modify `docker-compose.yml` to use different container names and configurations.
+
+### Q: How do I backup data?
+
+**A:** Data is stored in MongoDB Atlas. Use MongoDB's built-in backup features or export data via the MCP tools.
+
+### Q: What's the performance impact?
+
+**A:** Docker adds minimal overhead (<5%) for CPU/memory. The MCP server is lightweight and designed for concurrent requests.
+
+---
+
+## Support
+
+- **Documentation**: See main [README.md](./README.md)
+- **MCP Reference**: [HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)
+- **Issues**: GitHub Issues
+
+---
+
+**Built with ❤️ for seamless AI agent coordination**
