@@ -156,14 +156,64 @@ The Hyperion Coordinator is a production-ready MCP (Model Context Protocol) serv
 
 ## 🚀 Getting Started
 
-### Prerequisites
+### Quick Install with Docker (Recommended)
 
+The fastest way to get started is with Docker:
+
+#### Prerequisites
+- **Docker & Docker Compose**: [Install Docker](https://docs.docker.com/get-docker/)
+- **Claude Code** (optional): For MCP client integration
+
+#### Installation
+
+1. **Clone and install:**
+   ```bash
+   git clone <repository-url>
+   cd hyperion-coordinator-mcp
+   ./install.sh
+   ```
+
+   The install script will:
+   - ✅ Build the Docker image
+   - ✅ Create `.env` configuration
+   - ✅ Configure Claude Code automatically (macOS/Linux)
+   - ✅ Provide setup instructions
+
+2. **Start the MCP server:**
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **Verify it's running:**
+   ```bash
+   docker-compose logs -f hyperion-coordinator-mcp
+   ```
+
+   You should see:
+   ```
+   Starting Hyperion Coordinator MCP Server
+   Successfully connected to MongoDB Atlas
+   All handlers registered successfully tools=9 resources=2
+   ```
+
+4. **Restart Claude Code** to load the MCP server
+
+#### Stop the Server
+```bash
+docker-compose down
+```
+
+### Native Installation (Development)
+
+For local development without Docker:
+
+#### Prerequisites
 - **Go 1.25+**: [Download](https://go.dev/dl/)
 - **Node.js 18+**: [Download](https://nodejs.org/)
 - **MongoDB Atlas Account**: [Sign Up](https://www.mongodb.com/cloud/atlas)
-- **Qdrant Cloud Account**: [Sign Up](https://cloud.qdrant.io/) (optional for knowledge features)
+- **Qdrant Cloud Account**: [Sign Up](https://cloud.qdrant.io/) (optional)
 
-### Environment Setup
+#### Setup
 
 1. **Clone the repository**
    ```bash
@@ -172,23 +222,19 @@ The Hyperion Coordinator is a production-ready MCP (Model Context Protocol) serv
    ```
 
 2. **Configure MongoDB**
-
-   Set your MongoDB Atlas connection string:
    ```bash
    export MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/coordinator_db?retryWrites=true&w=majority"
    ```
 
 3. **Configure Qdrant (Optional)**
-
-   For knowledge management features:
    ```bash
    export QDRANT_URL="https://your-cluster.cloud.qdrant.io"
    export QDRANT_API_KEY="your-api-key"
    ```
 
-### Quick Start
+#### Quick Start
 
-The entire stack (MCP server + HTTP bridge + React UI) starts with a single command:
+Start the entire stack (MCP server + HTTP bridge + React UI):
 
 ```bash
 ./start-coordinator.sh
@@ -205,9 +251,9 @@ This will:
 - 🎨 **React UI**: http://localhost:5173
 - 💾 **MongoDB**: MongoDB Atlas (cloud)
 
-### Manual Start (Alternative)
+#### Manual Start (Alternative)
 
-If you prefer to run components individually:
+Run components individually:
 
 ```bash
 # Terminal 1: Start MCP Server + HTTP Bridge
@@ -463,21 +509,64 @@ BenchmarkStressTest-8              50   22.1 ms/op
 
 ## 🚢 Deployment
 
+### Docker Deployment (Recommended)
+
+**Production deployment with Docker:**
+
+1. **Clone repository on server:**
+   ```bash
+   git clone <repository-url>
+   cd hyperion-coordinator-mcp
+   ```
+
+2. **Configure production environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env with production MongoDB URI and settings
+   ```
+
+3. **Build and start:**
+   ```bash
+   docker-compose up -d
+   ```
+
+4. **Set up reverse proxy** (nginx example):
+   ```nginx
+   location /mcp {
+       proxy_pass http://localhost:8095;
+       proxy_http_version 1.1;
+       proxy_set_header Upgrade $http_upgrade;
+       proxy_set_header Connection 'upgrade';
+       proxy_set_header Host $host;
+       proxy_cache_bypass $http_upgrade;
+   }
+   ```
+
+5. **Enable monitoring:**
+   ```bash
+   docker-compose logs -f hyperion-coordinator-mcp
+   ```
+
 ### Production Checklist
 
-- [ ] Set `MONGODB_URI` environment variable
+- [ ] Set production `MONGODB_URI` in `.env`
 - [ ] Set `QDRANT_URL` and `QDRANT_API_KEY` (if using knowledge features)
-- [ ] Configure CORS origins in `mcp-http-bridge/main.go`
-- [ ] Build binaries: `go build` in both Go directories
-- [ ] Build frontend: `npm run build` in ui/
+- [ ] Configure CORS origins in docker-compose.yml if needed
 - [ ] Set up reverse proxy (nginx/Caddy) for HTTPS
 - [ ] Configure firewall rules (port 8095 internal only)
-- [ ] Set up monitoring and logging
+- [ ] Set up monitoring and logging (Docker logs)
 - [ ] Configure backup strategy for MongoDB
+- [ ] Set up automatic restarts: `restart: unless-stopped` (already in docker-compose.yml)
+- [ ] Configure log rotation for Docker logs
 
-### Docker (Future)
+### Native Binary Deployment
 
-Docker support is planned for containerized deployments.
+For deployment without Docker:
+
+1. Build binaries: `go build` in both Go directories
+2. Build frontend: `npm run build` in ui/
+3. Set environment variables
+4. Run binaries as systemd services
 
 ---
 
