@@ -182,7 +182,7 @@ func (h *ToolHandler) registerCreateHumanTask(server *mcp.Server) error {
 func (h *ToolHandler) registerCreateAgentTask(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "coordinator_create_agent_task",
-		Description: "Create a new agent task linked to a human task. Returns a unique taskId (UUID format).",
+		Description: "Create a new agent task linked to a human task. Returns a unique taskId (UUID format). Supports context-rich task creation to minimize agent context window usage.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -198,11 +198,61 @@ func (h *ToolHandler) registerCreateAgentTask(server *mcp.Server) error {
 					Type:        "string",
 					Description: "Agent's role/responsibility for this task",
 				},
-				"todos": {
+				"contextSummary": {
+					Type:        "string",
+					Description: "200-word summary of what agent needs to know (business context, constraints, pattern references). Optional but highly recommended for context efficiency.",
+				},
+				"filesModified": {
 					Type:        "array",
-					Description: "List of TODO items for the agent",
+					Description: "List of file paths this task will create or modify. Optional.",
 					Items: &jsonschema.Schema{
 						Type: "string",
+					},
+				},
+				"qdrantCollections": {
+					Type:        "array",
+					Description: "Suggested Qdrant collections to query if technical patterns needed (1-2 max). Optional.",
+					Items: &jsonschema.Schema{
+						Type: "string",
+					},
+				},
+				"priorWorkSummary": {
+					Type:        "string",
+					Description: "Summary of previous agent's work and key decisions (for multi-phase tasks). Optional.",
+				},
+				"todos": {
+					Type:        "array",
+					Description: "List of TODO items. Can be strings (legacy) or objects with context hints (recommended).",
+					Items: &jsonschema.Schema{
+						OneOf: []*jsonschema.Schema{
+							{Type: "string"},
+							{
+								Type: "object",
+								Properties: map[string]*jsonschema.Schema{
+									"description": {
+										Type:        "string",
+										Description: "What to do",
+									},
+									"filePath": {
+										Type:        "string",
+										Description: "Specific file to modify (optional)",
+									},
+									"functionName": {
+										Type:        "string",
+										Description: "Specific function to create/modify (optional)",
+									},
+									"contextHint": {
+										Type:        "string",
+										Description: "50-word hint of how to implement (optional)",
+									},
+									"notes": {
+										Type:        "string",
+										Description: "Additional context for this TODO (optional)",
+									},
+								},
+								Required: []string{"description"},
+							},
+						},
 					},
 				},
 			},
@@ -382,30 +432,108 @@ func (h *ToolHandler) handleCreateAgentTask(ctx context.Context, args map[string
 		return createErrorResult("role parameter is required and must be a non-empty string"), nil, nil
 	}
 
+	// Parse todos - support both string[] (legacy) and TodoItemInput[] (new)
 	todosInterface, ok := args["todos"].([]interface{})
 	if !ok || len(todosInterface) == 0 {
 		return createErrorResult("todos parameter is required and must be a non-empty array"), nil, nil
 	}
 
-	todos := make([]string, len(todosInterface))
+	todos := make([]storage.TodoItemInput, len(todosInterface))
 	for i, t := range todosInterface {
+		// Check if it's a string (legacy format)
 		if str, ok := t.(string); ok {
-			todos[i] = str
+			todos[i] = storage.TodoItemInput{
+				Description: str,
+			}
+		} else if todoMap, ok := t.(map[string]interface{}); ok {
+			// New format with context hints
+			desc, ok := todoMap["description"].(string)
+			if !ok || desc == "" {
+				return createErrorResult(fmt.Sprintf("todos[%d].description is required and must be a non-empty string", i)), nil, nil
+			}
+			todos[i] = storage.TodoItemInput{
+				Description: desc,
+			}
+			// Optional fields
+			if filePath, ok := todoMap["filePath"].(string); ok {
+				todos[i].FilePath = filePath
+			}
+			if functionName, ok := todoMap["functionName"].(string); ok {
+				todos[i].FunctionName = functionName
+			}
+			if contextHint, ok := todoMap["contextHint"].(string); ok {
+				todos[i].ContextHint = contextHint
+			}
+			if notes, ok := todoMap["notes"].(string); ok {
+				todos[i].Notes = notes
+			}
 		} else {
-			return createErrorResult(fmt.Sprintf("todos[%d] must be a string", i)), nil, nil
+			return createErrorResult(fmt.Sprintf("todos[%d] must be a string or an object with description field", i)), nil, nil
 		}
 	}
 
-	task, err := h.taskStorage.CreateAgentTask(humanTaskID, agentName, role, todos)
+	// Parse optional context fields
+	contextSummary := ""
+	if cs, ok := args["contextSummary"].(string); ok {
+		contextSummary = cs
+	}
+
+	var filesModified []string
+	if fm, ok := args["filesModified"].([]interface{}); ok {
+		filesModified = make([]string, len(fm))
+		for i, f := range fm {
+			if str, ok := f.(string); ok {
+				filesModified[i] = str
+			}
+		}
+	}
+
+	var qdrantCollections []string
+	if qc, ok := args["qdrantCollections"].([]interface{}); ok {
+		qdrantCollections = make([]string, len(qc))
+		for i, c := range qc {
+			if str, ok := c.(string); ok {
+				qdrantCollections[i] = str
+			}
+		}
+	}
+
+	priorWorkSummary := ""
+	if pws, ok := args["priorWorkSummary"].(string); ok {
+		priorWorkSummary = pws
+	}
+
+	task, err := h.taskStorage.CreateAgentTask(humanTaskID, agentName, role, todos, contextSummary, filesModified, qdrantCollections, priorWorkSummary)
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to create agent task: %s", err.Error())), nil, nil
 	}
 
-	resultText := fmt.Sprintf("✓ Agent task created successfully\n\nTask ID: %s\nAgent: %s\nRole: %s\nParent Task: %s\nCreated: %s\nStatus: %s\n\nTODOs:\n",
+	resultText := fmt.Sprintf("✓ Agent task created successfully\n\nTask ID: %s\nAgent: %s\nRole: %s\nParent Task: %s\nCreated: %s\nStatus: %s\n",
 		task.ID, task.AgentName, task.Role, task.HumanTaskID, task.CreatedAt.Format("2006-01-02 15:04:05 UTC"), task.Status)
 
+	if task.ContextSummary != "" {
+		resultText += fmt.Sprintf("\nContext Summary: %s\n", task.ContextSummary)
+	}
+	if len(task.FilesModified) > 0 {
+		resultText += fmt.Sprintf("\nFiles to Modify: %v\n", task.FilesModified)
+	}
+	if len(task.QdrantCollections) > 0 {
+		resultText += fmt.Sprintf("\nSuggested Qdrant Collections: %v\n", task.QdrantCollections)
+	}
+
+	resultText += "\nTODOs:\n"
 	for i, todo := range task.Todos {
-		resultText += fmt.Sprintf("  %d. %s\n", i+1, todo)
+		resultText += fmt.Sprintf("  %d. %s", i+1, todo.Description)
+		if todo.FilePath != "" {
+			resultText += fmt.Sprintf(" (File: %s)", todo.FilePath)
+		}
+		if todo.FunctionName != "" {
+			resultText += fmt.Sprintf(" (Function: %s)", todo.FunctionName)
+		}
+		resultText += "\n"
+		if todo.ContextHint != "" {
+			resultText += fmt.Sprintf("     Hint: %s\n", todo.ContextHint)
+		}
 	}
 
 	return &mcp.CallToolResult{
