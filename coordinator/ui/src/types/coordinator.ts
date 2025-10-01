@@ -24,6 +24,8 @@ export interface TodoItem {
   notes?: string;
 }
 
+export type TaskType = 'human' | 'agent' | 'todo';
+
 export interface AgentTask {
   id: string;
   humanTaskId: string;
@@ -42,6 +44,27 @@ export interface AgentTask {
   dependencies?: string[];
   blockers?: string[];
   tags?: string[];
+}
+
+// Flattened task representation for Kanban board
+export interface FlattenedTask {
+  id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority?: Priority;
+  createdAt: string;
+  updatedAt?: string;
+  completedAt?: string;
+  taskType: TaskType;
+  agentName?: string;
+  role?: string;
+  humanTaskId?: string;
+  agentTaskId?: string;
+  parentTaskTitle?: string;
+  tags?: string[];
+  notes?: string;
+  createdBy?: string;
 }
 
 export interface AgentRole {
