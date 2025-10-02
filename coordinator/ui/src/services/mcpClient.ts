@@ -165,6 +165,7 @@ class MCPCoordinatorClient {
         id: task.id,
         humanTaskId: task.humanTaskId,
         agentName: task.agentName,
+        role: task.role,
         title: task.role || 'Untitled Agent Task',
         description: task.role || '',
         status: task.status,
@@ -176,7 +177,11 @@ class MCPCoordinatorClient {
         blockers: [],
         tags: [],
         todos: task.todos || [],
-        notes: task.notes
+        notes: task.notes,
+        contextSummary: task.contextSummary,
+        filesModified: task.filesModified,
+        qdrantCollections: task.qdrantCollections,
+        priorWorkSummary: task.priorWorkSummary
       }));
     } catch (error) {
       console.error('Failed to list agent tasks:', error);
