@@ -1,0 +1,38 @@
+# Docker Compose Override Example
+#
+# This file shows how to customize ports if the defaults (5173, 8095) conflict
+# with other services on your machine.
+#
+# HOW TO USE:
+# 1. Copy this file: cp docker-compose.override.yml.example docker-compose.override.yml
+# 2. Edit the ports below to your preferred values
+# 3. Run: docker-compose down && docker-compose up -d
+#
+# IMPORTANT:
+# - Only change the FIRST port number (host port)
+# - Keep the SECOND port number (container port) unchanged
+# - Format: "HOST_PORT:CONTAINER_PORT"
+
+version: '3.8'
+
+services:
+  # HTTP Bridge - Change 9095 to any available port on your machine
+  hyperion-http-bridge:
+    ports:
+      - "9095:8095"  # Example: 9095 (your machine) -> 8095 (container)
+      # Other examples:
+      # - "10095:8095"
+      # - "18095:8095"
+
+  # React UI - Change 9173 to any available port on your machine
+  hyperion-ui:
+    ports:
+      - "9173:80"    # Example: 9173 (your machine) -> 80 (container)
+      # Other examples:
+      # - "10173:80"
+      # - "18173:80"
+
+# AFTER CHANGING PORTS:
+# - Access UI at: http://localhost:YOUR_UI_PORT (e.g., http://localhost:9173)
+# - Access Bridge at: http://localhost:YOUR_BRIDGE_PORT (e.g., http://localhost:9095)
+# - No CORS issues! The nginx proxy handles everything internally.
