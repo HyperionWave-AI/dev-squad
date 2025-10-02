@@ -3,9 +3,9 @@ module hyperion-coordinator-mcp
 go 1.25
 
 require (
-	github.com/google/jsonschema-go v0.2.0
+	github.com/google/jsonschema-go v0.3.0
 	github.com/google/uuid v1.6.0
-	github.com/modelcontextprotocol/go-sdk v0.3.0
+	github.com/modelcontextprotocol/go-sdk v1.0.0
 	go.mongodb.org/mongo-driver v1.17.2
 	go.uber.org/zap v1.27.0
 )
