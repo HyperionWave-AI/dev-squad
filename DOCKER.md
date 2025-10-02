@@ -12,14 +12,20 @@ cd hyperion-coordinator-mcp
 # 2. Run the installation script
 ./install.sh
 
-# 3. Start the server
+# 3. Start all services
 docker-compose up -d
 
-# 4. Verify it's running
-docker-compose logs -f hyperion-coordinator-mcp
+# 4. Access services
+# - UI Dashboard: http://localhost:5173
+# - HTTP API: http://localhost:8095/health
+
+# 5. View logs
+docker-compose logs -f
 ```
 
-That's it! The MCP server is now running and configured for Claude Code.
+That's it! All services are now running:
+- **HTTP Bridge + MCP Server** (port 8095) - API backend
+- **React UI** (port 5173) - Kanban dashboard
 
 ---
 
@@ -57,9 +63,9 @@ The `install.sh` script automates the entire setup:
 **What it does:**
 - ✅ Checks Docker and Docker Compose are installed
 - ✅ Creates `.env` configuration from template
-- ✅ Builds the Docker image
+- ✅ Builds all Docker images (HTTP Bridge, UI)
 - ✅ Detects Claude Code configuration location
-- ✅ Automatically configures Claude Code (macOS/Linux)
+- ✅ Automatically configures Claude Code MCP server (macOS/Linux)
 - ✅ Provides manual configuration instructions if needed
 
 **Expected output:**
@@ -97,27 +103,38 @@ docker-compose up -d
 - `-d` - Detached mode (runs in background)
 
 **What happens:**
-- Docker builds the image (if not already built)
-- Container starts with stdio transport ready
+- Docker builds all images (HTTP Bridge with MCP Server, React UI)
+- HTTP Bridge starts and spawns MCP Server process
 - Connects to MongoDB Atlas
 - Registers all MCP tools and resources
+- UI starts and serves on port 5173
+- CORS configured for cross-origin requests
 
 ### Step 4: Verify Installation
 
 **Check logs:**
 ```bash
-docker-compose logs -f hyperion-coordinator-mcp
+# All services
+docker-compose logs -f
+
+# Just HTTP Bridge
+docker-compose logs -f hyperion-http-bridge
+
+# Just UI
+docker-compose logs -f hyperion-ui
 ```
 
-**Expected output:**
+**Expected HTTP Bridge output:**
 ```
-hyperion-coordinator-mcp  | Starting Hyperion Coordinator MCP Server
-hyperion-coordinator-mcp  | Connecting to MongoDB Atlas database=coordinator_db
-hyperion-coordinator-mcp  | Successfully connected to MongoDB Atlas
-hyperion-coordinator-mcp  | Task storage initialized with MongoDB
-hyperion-coordinator-mcp  | Knowledge storage initialized with MongoDB
-hyperion-coordinator-mcp  | All handlers registered successfully tools=9 resources=2
-hyperion-coordinator-mcp  | Starting MCP server with stdio transport
+hyperion-http-bridge  | MCP server started with PID: 14
+hyperion-http-bridge  | Starting Hyperion Coordinator MCP Server
+hyperion-http-bridge  | Connecting to MongoDB Atlas database=coordinator_db
+hyperion-http-bridge  | Successfully connected to MongoDB Atlas
+hyperion-http-bridge  | Task storage initialized with MongoDB
+hyperion-http-bridge  | Knowledge storage initialized with MongoDB
+hyperion-http-bridge  | All handlers registered successfully tools=9 resources=2
+hyperion-http-bridge  | MCP connection initialized successfully
+hyperion-http-bridge  | HTTP bridge listening on port 8095
 ```
 
 **Check container status:**
@@ -127,8 +144,18 @@ docker-compose ps
 
 **Expected output:**
 ```
-NAME                        STATUS              PORTS
-hyperion-coordinator-mcp    Up 2 minutes
+NAME                    STATUS                    PORTS
+hyperion-http-bridge    Up 2 minutes (healthy)    0.0.0.0:8095->8095/tcp
+hyperion-ui             Up 2 minutes (healthy)    0.0.0.0:5173->80/tcp
+```
+
+**Test services:**
+```bash
+# Test HTTP API
+curl http://localhost:8095/health
+
+# Test UI (should return HTML)
+curl -I http://localhost:5173
 ```
 
 ### Step 5: Configure MCP Client
@@ -227,14 +254,18 @@ docker-compose restart
 
 ### View Logs
 ```bash
-# Follow logs in real-time
-docker-compose logs -f hyperion-coordinator-mcp
+# Follow all logs in real-time
+docker-compose logs -f
+
+# Follow specific service logs
+docker-compose logs -f hyperion-http-bridge
+docker-compose logs -f hyperion-ui
 
 # View last 100 lines
-docker-compose logs --tail=100 hyperion-coordinator-mcp
+docker-compose logs --tail=100 hyperion-http-bridge
 
 # View logs since 10 minutes ago
-docker-compose logs --since=10m hyperion-coordinator-mcp
+docker-compose logs --since=10m
 ```
 
 ### Check Status
@@ -244,7 +275,11 @@ docker-compose ps
 
 ### Access Container Shell
 ```bash
-docker-compose exec hyperion-coordinator-mcp /bin/sh
+# HTTP Bridge container
+docker-compose exec hyperion-http-bridge /bin/sh
+
+# UI container
+docker-compose exec hyperion-ui /bin/sh
 ```
 
 ### Rebuild Image
@@ -260,16 +295,31 @@ docker-compose build --no-cache
 
 ## Testing with Docker
 
-### Test MCP Communication
+### Test HTTP API
 
 ```bash
-# Test tools/list
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
-  docker-compose run --rm hyperion-coordinator-mcp
+# Test health endpoint
+curl http://localhost:8095/health
 
-# Test tool call
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"coordinator_list_human_tasks","arguments":{}}}' | \
-  docker-compose run --rm hyperion-coordinator-mcp
+# List available tools
+curl http://localhost:8095/api/mcp/tools
+
+# Call a tool
+curl -X POST http://localhost:8095/api/mcp/tools/call \
+  -H "Content-Type: application/json" \
+  -H "X-Request-ID: test-1" \
+  -d '{
+    "name": "coordinator_list_human_tasks",
+    "arguments": {}
+  }'
+
+# List resources
+curl http://localhost:8095/api/mcp/resources
+
+# Test CORS
+curl -v -H "Origin: http://localhost:5173" \
+  -H "Access-Control-Request-Method: POST" \
+  -X OPTIONS http://localhost:8095/api/mcp/tools/call
 ```
 
 ### Run Integration Tests
@@ -288,19 +338,22 @@ go test -v
 
 **Check logs:**
 ```bash
-docker-compose logs hyperion-coordinator-mcp
+docker-compose logs hyperion-http-bridge
+docker-compose logs hyperion-ui
 ```
 
 **Common issues:**
 - MongoDB connection failed → Check `MONGODB_URI` in `.env`
-- Port already in use → No ports are exposed (uses stdio)
+- Port 8095 already in use → Stop other services using the port
+- Port 5173 already in use → Stop other services or change port mapping
 - Image build failed → Run `docker-compose build --no-cache`
+- Health check failing → Check logs for startup errors
 
 ### MongoDB Connection Errors
 
 **Verify environment variables:**
 ```bash
-docker-compose exec hyperion-coordinator-mcp env | grep MONGODB
+docker-compose exec hyperion-http-bridge env | grep MONGODB
 ```
 
 **Test MongoDB connection:**
@@ -362,19 +415,56 @@ docker system prune -a
 docker-compose build --no-cache
 ```
 
+### CORS Errors in Browser
+
+**Symptoms:**
+- UI can't connect to API
+- Browser console shows CORS errors
+- OPTIONS preflight requests failing
+
+**Solutions:**
+
+1. **Verify CORS configuration:**
+```bash
+# Test CORS headers
+curl -v -H "Origin: http://localhost:5173" \
+  -H "Access-Control-Request-Method: POST" \
+  -X OPTIONS http://localhost:8095/api/mcp/tools/call
+```
+
+2. **Check allowed origins in main.go:**
+```go
+// Should include:
+"http://localhost:5173",  // UI origin
+"http://localhost",       // Docker UI
+"http://hyperion-ui",     // Docker internal
+```
+
+3. **Rebuild after CORS changes:**
+```bash
+docker-compose build hyperion-http-bridge
+docker-compose up -d
+```
+
 ### Container Stops Immediately
 
 **Check for startup errors:**
 ```bash
-docker-compose logs hyperion-coordinator-mcp
+docker-compose logs hyperion-http-bridge
+docker-compose logs hyperion-ui
 ```
 
 **Verify Dockerfile:**
 ```bash
-# Test build manually
-cd coordinator/mcp-server
-docker build -t hyperion-test .
+# Test HTTP Bridge build manually
+docker build -f coordinator/mcp-http-bridge/Dockerfile.combined \
+  -t hyperion-test \
+  coordinator/
 docker run --rm -it hyperion-test
+
+# Test UI build manually
+docker build -t hyperion-ui-test coordinator/ui/
+docker run --rm -p 8080:80 hyperion-ui-test
 ```
 
 ---
