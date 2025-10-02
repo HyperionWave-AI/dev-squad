@@ -1,69 +1,83 @@
-# 🚀 Hyperion Coordinator
+# 🚀 Hyperion Coordinator MCP
 
-> **AI-Powered Task Coordination System with Model Context Protocol (MCP)**
+> **Model Context Protocol server for AI agent task coordination**
 
-A modern, full-stack task management system designed for AI agent coordination, featuring hierarchical task decomposition, real-time progress tracking, and intelligent knowledge management.
+[![Docker](https://img.shields.io/badge/Docker-ready-blue.svg)](https://www.docker.com/)
+[![Go](https://img.shields.io/badge/Go-1.25-blue.svg)](https://golang.org/)
+[![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-green.svg)](https://www.mongodb.com/cloud/atlas)
 
-![Hyperion Coordinator Dashboard](readme-resources/screenshot.png)
+**Orchestrate AI agents with hierarchical task management, real-time progress tracking, and intelligent knowledge coordination.**
 
----
+## 🎯 What is Hyperion Coordinator?
 
-## 📋 Table of Contents
+A production-ready MCP server that enables AI agents to coordinate complex workflows through:
 
-- [Overview](#overview)
+- **Hierarchical Tasks** - Human tasks → Agent tasks → TODO tracking
+- **Knowledge Base** - Store and query coordination knowledge with semantic search
+- **MCP Native** - 9 tools for complete task lifecycle management
+- **MongoDB Persistence** - Cloud-based storage with real-time sync
+- **Kanban UI** - Visual progress tracking with drag-and-drop
+
+Perfect for multi-agent systems, autonomous coding agents, and AI workflow orchestration.
+
+## ⚡ Quick Start (60 seconds)
+
+```bash
+# 1. Clone and install
+git clone <repository-url>
+cd hyperion-coordinator-mcp
+./install.sh
+
+# 2. Start all services (HTTP Bridge + UI)
+docker-compose up -d
+
+# 3. Access services
+# - UI Dashboard: http://localhost:5173
+# - HTTP API: http://localhost:8095/health
+
+# 4. For Claude Code integration
+# Restart Claude Code - The MCP server is now available!
+```
+
+**That's it!** All services are now running in Docker with proper CORS configuration.
+
+## 📚 Table of Contents
+
 - [Features](#features)
-- [Technology Stack](#technology-stack)
-- [Architecture](#architecture)
-- [Getting Started](#getting-started)
-- [Project Structure](#project-structure)
-- [API Documentation](#api-documentation)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [MCP Tools](#mcp-tools)
 - [Development](#development)
-- [Testing](#testing)
 - [Deployment](#deployment)
-- [Contributing](#contributing)
-
----
-
-## 🎯 Overview
-
-The Hyperion Coordinator is a production-ready MCP (Model Context Protocol) server that orchestrates complex AI agent workflows through hierarchical task management. It bridges human-level planning with agent-level execution, providing a unified coordination layer for multi-agent systems.
-
-### Key Capabilities
-
-- **Hierarchical Task Management**: Human tasks decompose into agent tasks with fine-grained TODO tracking
-- **Real-Time Progress Tracking**: Live status updates across distributed agent workflows
-- **Knowledge Management**: Vector-based knowledge storage for contextual task execution
-- **Modern UI**: Kanban-style dashboard built with Material-UI and React 19
-- **MCP-Native**: First-class support for Model Context Protocol with 9 tools and dynamic resources
-- **Production-Grade**: Comprehensive test coverage, concurrent request handling, and resilient architecture
-
----
+- [Documentation](#documentation)
 
 ## ✨ Features
 
-### 🎨 Kanban Dashboard
+**🤖 Multi-Agent Coordination**
+- Task decomposition (human → agent workflows)
+- TODO-level progress tracking
+- Role-based agent assignment
+- Status tracking (pending/in_progress/completed/blocked)
 
-- **4-Column Board**: PENDING → IN PROGRESS → BLOCKED → COMPLETED
-- **Priority Color-Coding**: Visual priority indicators (High/Medium/Low)
-- **Drag & Drop**: Intuitive task state management
-- **Real-Time Updates**: Automatic polling for live coordination
-- **Responsive Design**: Desktop, tablet, and mobile optimized
+**📊 Kanban Dashboard**
+- 4-column board with drag-and-drop
+- Priority color-coding
+- Real-time updates
+- Responsive design (desktop/tablet/mobile)
 
-### 🤖 AI Agent Coordination
+**🧠 Knowledge Management**
+- Vector-based semantic search
+- Task-specific collections
+- MongoDB + Qdrant integration
+- Context preservation across agents
 
-- **Task Decomposition**: Human tasks break down into agent-specific subtasks
-- **Role Assignment**: Agents receive tasks with clear roles and responsibilities
-- **TODO Management**: Granular progress tracking at the sub-task level
-- **Status Tracking**: Multi-state workflow (pending/in_progress/completed/blocked)
-- **Knowledge Integration**: Task-specific knowledge stored and queried via Qdrant
-
-### 🔧 MCP Integration
-
-- **9 Coordination Tools**: Complete task lifecycle management via MCP
-- **Dynamic Resources**: URI-based access to task data (`hyperion://task/*`)
-- **HTTP Bridge**: RESTful API gateway for web clients
-- **Concurrent Request Handling**: Production-tested for high-concurrency scenarios
-- **Protocol Compliance**: Official MCP Go SDK v0.3.0 implementation
+**🔧 MCP Integration**
+- 9 coordination tools
+- Dynamic resources (`hyperion://task/*`)
+- HTTP bridge for web clients
+- Official MCP Go SDK v0.3.0
 
 ---
 
@@ -154,143 +168,226 @@ The Hyperion Coordinator is a production-ready MCP (Model Context Protocol) serv
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Installation
 
-### Quick Install with Docker (Recommended)
+### Option 1: Docker (Recommended)
 
-The fastest way to get started is with Docker:
+**Prerequisites:** Docker & Docker Compose ([Install Docker](https://docs.docker.com/get-docker/))
 
-#### Prerequisites
-- **Docker & Docker Compose**: [Install Docker](https://docs.docker.com/get-docker/)
-- **Claude Code** (optional): For MCP client integration
-
-#### Installation
-
-1. **Clone and install:**
-   ```bash
-   git clone <repository-url>
-   cd hyperion-coordinator-mcp
-   ./install.sh
-   ```
-
-   The install script will:
-   - ✅ Build the Docker image
-   - ✅ Create `.env` configuration
-   - ✅ Configure Claude Code automatically (macOS/Linux)
-   - ✅ Provide setup instructions
-
-2. **Start the MCP server:**
-   ```bash
-   docker-compose up -d
-   ```
-
-3. **Verify it's running:**
-   ```bash
-   docker-compose logs -f hyperion-coordinator-mcp
-   ```
-
-   You should see:
-   ```
-   Starting Hyperion Coordinator MCP Server
-   Successfully connected to MongoDB Atlas
-   All handlers registered successfully tools=9 resources=2
-   ```
-
-4. **Restart Claude Code** to load the MCP server
-
-#### Stop the Server
 ```bash
-docker-compose down
+# Clone repository
+git clone <repository-url>
+cd hyperion-coordinator-mcp
+
+# Install and start
+./install.sh
+docker-compose up -d
+
+# Verify
+docker-compose logs -f hyperion-coordinator-mcp
+
+# Restart Claude Code
+# MCP server is now available!
 ```
 
-### Native Installation (Development)
+**What you get:**
+- ✅ Automatic Claude Code configuration (macOS/Linux)
+- ✅ MongoDB Atlas connection (dev cluster included)
+- ✅ All 9 MCP tools ready to use
+- ✅ Auto-restart on failure
 
-For local development without Docker:
+**Common commands:**
+```bash
+docker-compose up -d                          # Start all services
+docker-compose down                           # Stop all services
+docker-compose logs -f                        # View all logs
+docker-compose logs -f hyperion-http-bridge   # View bridge logs
+docker-compose logs -f hyperion-ui            # View UI logs
+docker-compose restart                        # Restart all services
+docker-compose build                          # Rebuild images
+```
 
-#### Prerequisites
-- **Go 1.25+**: [Download](https://go.dev/dl/)
-- **Node.js 18+**: [Download](https://nodejs.org/)
-- **MongoDB Atlas Account**: [Sign Up](https://www.mongodb.com/cloud/atlas)
-- **Qdrant Cloud Account**: [Sign Up](https://cloud.qdrant.io/) (optional)
+**Services running:**
+- `hyperion-http-bridge` - HTTP API + MCP Server (port 8095)
+- `hyperion-ui` - React dashboard (port 5173)
 
-#### Setup
+### Option 2: Native (Development)
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd coordinator
-   ```
-
-2. **Configure MongoDB**
-   ```bash
-   export MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/coordinator_db?retryWrites=true&w=majority"
-   ```
-
-3. **Configure Qdrant (Optional)**
-   ```bash
-   export QDRANT_URL="https://your-cluster.cloud.qdrant.io"
-   export QDRANT_API_KEY="your-api-key"
-   ```
-
-#### Quick Start
-
-Start the entire stack (MCP server + HTTP bridge + React UI):
+**Prerequisites:** Go 1.25+, Node.js 18+, MongoDB Atlas
 
 ```bash
+# Clone and setup
+git clone <repository-url>
+cd coordinator
+export MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/coordinator_db"
+
+# Start full stack (MCP + HTTP bridge + UI)
 ./start-coordinator.sh
 ```
 
-This will:
-- ✅ Build the Go MCP server
-- ✅ Build the Go HTTP bridge
-- ✅ Install UI dependencies
-- ✅ Start all services in the background
-
 **Service URLs:**
-- 🌉 **HTTP Bridge**: http://localhost:8095
-- 🎨 **React UI**: http://localhost:5173
-- 💾 **MongoDB**: MongoDB Atlas (cloud)
+- MCP Server: stdio (for MCP clients)
+- HTTP Bridge: http://localhost:8095
+- React UI: http://localhost:5173
 
-#### Manual Start (Alternative)
+## ⚙️ Configuration
 
-Run components individually:
+### Environment Variables
+
+Edit `.env` (created by `install.sh`):
 
 ```bash
-# Terminal 1: Start MCP Server + HTTP Bridge
-cd mcp-http-bridge
-go build -o mcp-http-bridge
-./mcp-http-bridge
+# MongoDB (required)
+MONGODB_URI=mongodb+srv://dev:pass@cluster.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DATABASE=coordinator_db
 
-# Terminal 2: Start React UI
-cd ui
-npm install
-npm run dev
+# Qdrant (optional - for knowledge features)
+QDRANT_URL=https://your-cluster.cloud.qdrant.io
+QDRANT_API_KEY=your-api-key
+
+# Logging
+LOG_LEVEL=info  # debug, info, warn, error
 ```
 
-### Verify Installation
+**After editing `.env`:**
+```bash
+docker-compose restart  # Docker
+# or
+./start-coordinator.sh  # Native
+```
 
-1. **Check HTTP Bridge Health**
-   ```bash
-   curl http://localhost:8095/health
-   # Expected: {"status":"healthy","service":"hyperion-coordinator-http-bridge","version":"1.0.0"}
-   ```
+### Custom MongoDB
 
-2. **Create a Test Task**
-   ```bash
-   curl -X POST http://localhost:8095/api/mcp/tools/call \
-     -H "Content-Type: application/json" \
-     -H "X-Request-ID: test-1" \
-     -d '{
-       "name": "coordinator_create_human_task",
-       "arguments": {
-         "prompt": "Test task from README"
-       }
-     }'
-   ```
+1. Create MongoDB Atlas cluster
+2. Get connection string
+3. Update `MONGODB_URI` in `.env`
+4. Restart server
 
-3. **Open the UI**
+## 📖 Usage
 
-   Visit http://localhost:5173 and verify the Kanban board displays your test task.
+### Using with Claude Code
+
+After installation and restarting Claude Code, the MCP server provides 9 tools:
+
+```javascript
+// Create human task
+coordinator_create_human_task({
+  prompt: "Build user authentication system"
+})
+
+// Create agent task
+coordinator_create_agent_task({
+  humanTaskId: "task-id",
+  agentName: "backend-specialist",
+  role: "JWT middleware",
+  todos: ["Design schema", "Implement", "Test"]
+})
+
+// Update status
+coordinator_update_task_status({
+  taskId: "task-id",
+  status: "in_progress",
+  notes: "Started implementation"
+})
+```
+
+### Using the HTTP API
+
+The HTTP bridge (port 8095) provides REST access:
+
+```bash
+# List tools
+curl http://localhost:8095/api/mcp/tools
+
+# Call tool
+curl -X POST http://localhost:8095/api/mcp/tools/call \
+  -H "Content-Type: application/json" \
+  -H "X-Request-ID: req-1" \
+  -d '{
+    "name": "coordinator_list_human_tasks",
+    "arguments": {}
+  }'
+
+# Read resource
+curl "http://localhost:8095/api/mcp/resources/read?uri=hyperion://task/human/abc-123"
+```
+
+### Using the Kanban UI
+
+Visit http://localhost:5173 for visual task management:
+
+- **Drag & drop** tasks between columns
+- **Click** cards to view details
+- **Real-time** updates every 5 seconds
+- **Filter** by priority, agent, status
+
+## 🔧 MCP Tools
+
+The server provides 9 coordination tools:
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `coordinator_create_human_task` | Create user-level task | `prompt` |
+| `coordinator_create_agent_task` | Assign task to agent | `humanTaskId`, `agentName`, `role`, `todos` |
+| `coordinator_list_human_tasks` | List all human tasks | None |
+| `coordinator_list_agent_tasks` | List agent tasks | `agentName?`, `humanTaskId?` |
+| `coordinator_update_task_status` | Update task status | `taskId`, `status`, `notes?` |
+| `coordinator_update_todo_status` | Update TODO item | `agentTaskId`, `todoId`, `status` |
+| `coordinator_clear_task_board` | Clear all tasks | `confirm: true` |
+| `coordinator_upsert_knowledge` | Store knowledge | `collection`, `text`, `metadata?` |
+| `coordinator_query_knowledge` | Query knowledge | `collection`, `query`, `limit?` |
+
+**📖 Complete reference:** [HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)
+
+### Example Workflow
+
+```javascript
+// 1. Create human task
+const humanTaskId = await coordinator_create_human_task({
+  prompt: "Implement user authentication"
+})
+
+// 2. Create agent tasks
+await coordinator_create_agent_task({
+  humanTaskId,
+  agentName: "backend-specialist",
+  role: "JWT middleware implementation",
+  todos: [
+    "Design JWT schema",
+    "Implement token generation",
+    "Add validation middleware",
+    "Write unit tests"
+  ]
+})
+
+await coordinator_create_agent_task({
+  humanTaskId,
+  agentName: "frontend-specialist",
+  role: "Login UI",
+  todos: [
+    "Create login form component",
+    "Add authentication context",
+    "Handle token storage"
+  ]
+})
+
+// 3. Store implementation knowledge
+await coordinator_upsert_knowledge({
+  collection: `task:hyperion://task/human/${humanTaskId}`,
+  text: "Using bcrypt for password hashing with cost factor 12. JWT tokens expire after 24 hours.",
+  metadata: {
+    agentName: "backend-specialist",
+    taskId: humanTaskId
+  }
+})
+
+// 4. Query knowledge later
+const results = await coordinator_query_knowledge({
+  collection: `task:hyperion://task/human/${humanTaskId}`,
+  query: "password security approach",
+  limit: 5
+})
+```
 
 ---
 
@@ -341,138 +438,38 @@ coordinator/
 └── README.md                    # This file
 ```
 
----
-
-## 📚 API Documentation
-
-### HTTP Bridge Endpoints
-
-#### Health Check
-```http
-GET /health
-```
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "service": "hyperion-coordinator-http-bridge",
-  "version": "1.0.0"
-}
-```
-
-#### List MCP Tools
-```http
-GET /api/mcp/tools
-X-Request-ID: <unique-id>
-```
-
-**Response:**
-```json
-{
-  "tools": [
-    {
-      "name": "coordinator_create_human_task",
-      "description": "Create a new human task",
-      "inputSchema": { ... }
-    },
-    ...
-  ]
-}
-```
-
-#### Call MCP Tool
-```http
-POST /api/mcp/tools/call
-Content-Type: application/json
-X-Request-ID: <unique-id>
-
-{
-  "name": "coordinator_list_human_tasks",
-  "arguments": {}
-}
-```
-
-**Response:**
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "✓ Retrieved 2 human tasks\n\nTasks:\n[...]"
-    }
-  ]
-}
-```
-
-#### Read Resource
-```http
-GET /api/mcp/resources/read?uri=hyperion://task/human/{taskId}
-X-Request-ID: <unique-id>
-```
-
-### MCP Tools
-
-| Tool | Purpose | Parameters |
-|------|---------|------------|
-| `coordinator_create_human_task` | Create user task | `prompt: string` |
-| `coordinator_create_agent_task` | Create agent task | `humanTaskId, agentName, role, todos` |
-| `coordinator_list_human_tasks` | List all human tasks | None |
-| `coordinator_list_agent_tasks` | List agent tasks | `agentName?`, `humanTaskId?` |
-| `coordinator_update_task_status` | Update task status | `taskId, status, notes?` |
-| `coordinator_update_todo_status` | Update TODO status | `agentTaskId, todoId, status, notes?` |
-| `coordinator_clear_task_board` | Clear all tasks | `confirm: true` |
-| `coordinator_upsert_knowledge` | Store knowledge | `collection, text, metadata?` |
-| `coordinator_query_knowledge` | Query knowledge | `collection, query, limit?` |
-
----
-
 ## 🔧 Development
 
-### Running Tests
-
-**Backend Tests:**
-```bash
-cd mcp-http-bridge
-go test -v -timeout=120s                    # All tests
-go test -cover                              # With coverage
-go test -bench=. -benchtime=10s             # Benchmarks
-go test -run TestConcurrentRequests         # Specific test
-```
-
-**Frontend Tests:**
-```bash
-cd ui
-npm run test                                # Headless tests
-npm run test:headed                         # Headed mode
-npm run test:ui                             # Interactive UI
-npm run test:accessibility                  # A11y tests only
-```
-
-### Building
+### Building from Source
 
 **Backend:**
 ```bash
-cd mcp-server && go build -o hyperion-coordinator-mcp
-cd mcp-http-bridge && go build -o mcp-http-bridge
+# MCP Server
+cd coordinator/mcp-server
+go build -o hyperion-coordinator-mcp
+
+# HTTP Bridge
+cd ../mcp-http-bridge
+go build -o mcp-http-bridge
 ```
 
 **Frontend:**
 ```bash
-cd ui && npm run build
+cd coordinator/ui
+npm install
+npm run build
 ```
 
-### Code Quality
+**Docker:**
+```bash
+docker-compose build
+```
 
-**Go:**
-- File size limits: Handlers ≤300 lines, Services ≤400 lines
-- Test coverage target: >80%
-- Concurrent request handling validated
+### Code Quality Standards
 
-**TypeScript:**
-- ESLint configured
-- React Hooks rules enforced
-- TypeScript strict mode enabled
+- **Go**: Handlers ≤300 lines, Services ≤400, coverage >60%
+- **TypeScript**: ESLint + strict mode, React Hooks compliance
+- **Testing**: Unit + integration + E2E (109 Playwright tests)
 
 ---
 
@@ -593,31 +590,90 @@ Contributions are welcome! Please follow these guidelines:
 
 ---
 
-## 📄 License
+## 📚 Documentation
 
-This project is part of the Hyperion AI Platform. See LICENSE file for details.
+| Document | Description |
+|----------|-------------|
+| **[DOCKER.md](./DOCKER.md)** | Complete Docker installation & usage guide |
+| **[HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)** | MCP tool reference with examples |
+| **[CLAUDE.md](./CLAUDE.md)** | Multi-agent coordination patterns |
+| **[coordinator/mcp-server/README.md](./coordinator/mcp-server/README.md)** | MCP server technical details |
+| **[SPECIFICATION.md](./SPECIFICATION.md)** | Full technical specification |
+| **[mcp-http-bridge/CLAUDE.md](./mcp-http-bridge/CLAUDE.md)** | HTTP bridge architecture |
 
----
+## 🧪 Testing
+
+### Backend Tests
+```bash
+cd mcp-http-bridge
+go test -v              # All tests
+go test -cover          # With coverage (60.3%)
+go test -bench=.        # Benchmarks
+```
+
+### Frontend Tests
+```bash
+cd ui
+npm run test            # Headless tests (109 tests)
+npm run test:headed     # Headed mode
+npm run test:ui         # Interactive UI
+```
+
+**Coverage:**
+- HTTP Bridge: 60.3% (9 unit tests + 6 benchmarks)
+- React UI: ~85% (109 Playwright tests)
+- Concurrent requests: Tested up to 20 simultaneous
+
+## 🚢 Deployment
+
+### Docker Production
+
+```bash
+# On production server
+git clone <repository-url>
+cd hyperion-coordinator-mcp
+cp .env.example .env
+# Edit .env with production MongoDB URI
+docker-compose up -d
+```
+
+**Production checklist:**
+- [ ] Set production `MONGODB_URI` in `.env`
+- [ ] Configure reverse proxy (nginx/Caddy) for HTTPS
+- [ ] Set up monitoring and log rotation
+- [ ] Configure MongoDB backups
+- [ ] Verify auto-restart is enabled
+
+### Native Deployment
+
+Build binaries and deploy as systemd services. See [README sections](#installation) for build instructions.
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create feature branch: `git checkout -b feature/amazing-feature`
+3. Run tests: Ensure all tests pass
+4. Follow code style: Go formatting, TypeScript ESLint
+5. Write tests: Coverage for new features
+6. Submit PR with detailed description
 
 ## 🙏 Acknowledgments
 
-- **Model Context Protocol**: [MCP Specification](https://modelcontextprotocol.io)
-- **Material-UI**: [MUI Docs](https://mui.com)
-- **Go MCP SDK**: [GitHub](https://github.com/modelcontextprotocol/go-sdk)
-- **MongoDB Atlas**: Cloud database hosting
-- **Qdrant**: Vector database for knowledge management
+Built with:
+- [Model Context Protocol](https://modelcontextprotocol.io) - MCP specification
+- [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk) - Official Go SDK
+- [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) - Cloud database
+- [Material-UI](https://mui.com) - React UI components
+- [Qdrant](https://qdrant.tech) - Vector database
+
+## 📄 License
+
+Part of the Hyperion AI Platform. See LICENSE file for details.
 
 ---
 
-## 📞 Support
+**Built with ❤️ for AI agent coordination**
 
-- **Documentation**: See `SPECIFICATION.md` for technical details
-- **Testing Guide**: See `mcp-http-bridge/TEST_README.md`
-- **Architecture**: See `mcp-http-bridge/CLAUDE.md`
-- **Issues**: [GitHub Issues](https://github.com/your-org/hyperion-coordinator/issues)
-
----
-
-**Built with ❤️ for AI Agent Coordination**
-
-*Hyperion Coordinator - Orchestrating Intelligence, One Task at a Time*
+*Need help? Check [DOCKER.md](./DOCKER.md) for troubleshooting or open an [issue](https://github.com/your-org/hyperion-coordinator/issues)*
