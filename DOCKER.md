@@ -2,6 +2,17 @@
 
 > **Complete guide to installing and running Hyperion Coordinator MCP with Docker**
 
+## Architecture Overview
+
+The Docker deployment uses a **combined container approach**:
+- **Container name:** `hyperion-http-bridge`
+- **Contains:** Both the HTTP Bridge (port 8095) and the MCP Server binary (`/app/hyperion-coordinator-mcp`)
+- **MCP Clients:** Connect via `docker exec -i hyperion-http-bridge /app/hyperion-coordinator-mcp`
+
+This single container serves both HTTP requests (for the UI) and stdio MCP connections (for Claude Code and other MCP clients).
+
+---
+
 ## Quick Start
 
 ```bash
@@ -176,19 +187,21 @@ Add this to your MCP client configuration:
 {
   "mcpServers": {
     "hyperion-coordinator": {
-      "command": "docker-compose",
+      "type": "stdio",
+      "command": "/usr/local/bin/docker",
       "args": [
-        "-f", "/absolute/path/to/docker-compose.yml",
-        "run",
-        "--rm",
-        "hyperion-coordinator-mcp"
-      ]
+        "exec",
+        "-i",
+        "hyperion-http-bridge",
+        "/app/hyperion-coordinator-mcp"
+      ],
+      "env": {}
     }
   }
 }
 ```
 
-**Replace** `/absolute/path/to/` with the actual path to your installation.
+**Note:** This connects to the running `hyperion-http-bridge` container. Ensure the container is running with `docker-compose up -d` before starting your MCP client.
 
 ---
 
@@ -230,7 +243,7 @@ To use your own MongoDB instance:
 
 3. **Verify connection:**
    ```bash
-   docker-compose logs hyperion-coordinator-mcp | grep MongoDB
+   docker-compose logs hyperion-http-bridge | grep MongoDB
    ```
 
 ---

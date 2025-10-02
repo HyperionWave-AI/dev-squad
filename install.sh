@@ -107,7 +107,7 @@ main() {
             warning "hyperion-coordinator already configured in Claude Code"
         else
             # Add the MCP server configuration
-            # Using docker-compose run for stdio transport
+            # Using docker exec to connect to running container
             cat <<EOF | python3 - "$CLAUDE_CONFIG"
 import json
 import sys
@@ -120,13 +120,14 @@ if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
 config['mcpServers']['hyperion-coordinator'] = {
-    'command': 'docker-compose',
+    'command': '/usr/local/bin/docker',
     'args': [
-        '-f', '${COMPOSE_FILE}',
-        'run',
-        '--rm',
-        'hyperion-coordinator-mcp'
-    ]
+        'exec',
+        '-i',
+        'hyperion-http-bridge',
+        '/app/hyperion-coordinator-mcp'
+    ],
+    'env': {}
 }
 
 with open(config_file, 'w') as f:
@@ -168,13 +169,15 @@ EOF
         echo '   {'
         echo '     "mcpServers": {'
         echo '       "hyperion-coordinator": {'
-        echo '         "command": "docker-compose",'
+        echo '         "type": "stdio",'
+        echo '         "command": "/usr/local/bin/docker",'
         echo '         "args": ['
-        echo "           \"-f\", \"${COMPOSE_FILE}\","
-        echo '           "run",'
-        echo '           "--rm",'
-        echo '           "hyperion-coordinator-mcp"'
-        echo '         ]'
+        echo '           "exec",'
+        echo '           "-i",'
+        echo '           "hyperion-http-bridge",'
+        echo '           "/app/hyperion-coordinator-mcp"'
+        echo '         ],'
+        echo '         "env": {}'
         echo '       }'
         echo '     }'
         echo '   }'
