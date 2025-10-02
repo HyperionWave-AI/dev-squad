@@ -15,10 +15,14 @@ build: ## Build the MCP server binary
 	cd coordinator/mcp-server && go build -o hyperion-coordinator-mcp main.go
 	@echo "✓ Build complete: coordinator/mcp-server/hyperion-coordinator-mcp"
 
-install: ## Install Go dependencies
+install: ## Install all dependencies (Go + Node)
 	@echo "Installing Go dependencies..."
 	cd coordinator/mcp-server && go mod download
-	@echo "✓ Dependencies installed"
+	@echo "✓ Go dependencies installed"
+	@echo "Installing Node.js dependencies..."
+	cd coordinator/ui && npm install
+	@echo "✓ Node.js dependencies installed"
+	@echo "✓ All dependencies installed"
 
 run-mcp: ## Run the MCP server (stdio mode for Claude Code)
 	@echo "Starting MCP server in stdio mode..."
