@@ -7,20 +7,22 @@ class MCPCoordinatorClient {
   private requestId = 0;
 
   constructor() {
-    this.bridgeUrl = import.meta.env.VITE_MCP_BRIDGE_URL || 'http://localhost:8095';
+    // Use relative URL so nginx proxy handles routing
+    // This eliminates CORS issues by making requests same-origin
+    this.bridgeUrl = '';
   }
 
   async connect() {
     if (this.connected) return;
 
-    // Check if bridge is healthy
+    // Check if bridge is healthy via nginx proxy
     try {
-      const response = await fetch(`${this.bridgeUrl}/health`);
+      const response = await fetch('/bridge-health');
       if (!response.ok) {
         throw new Error('HTTP bridge not healthy');
       }
       this.connected = true;
-      console.log('Connected to MCP HTTP bridge at:', this.bridgeUrl);
+      console.log('Connected to MCP HTTP bridge via nginx proxy');
     } catch (error) {
       console.error('Failed to connect to MCP HTTP bridge:', error);
       throw error;
