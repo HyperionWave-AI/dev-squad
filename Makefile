@@ -54,10 +54,33 @@ clean: ## Clean build artifacts
 	rm -f coordinator/mcp-server/*.tgz
 	@echo "✓ Clean complete"
 
-configure-claude: ## Add MCP server to Claude Code
+configure-claude: ## Add MCP server to Claude Code (stdio mode)
 	@echo "Configuring Claude Code MCP server..."
 	cd coordinator/mcp-server && ./add-to-claude-code.sh
 	@echo "✓ Claude Code configured"
+
+configure-claude-http: ## Add MCP server to Claude Code (HTTP mode using docker-compose ports)
+	@echo "Configuring Claude Code for HTTP mode..."
+	@echo "Adding HTTP transport configuration to Claude Code settings..."
+	@mkdir -p ~/.config/claude
+	@echo '{' > ~/.config/claude/mcp-http-config.json
+	@echo '  "mcpServers": {' >> ~/.config/claude/mcp-http-config.json
+	@echo '    "hyperion-coordinator": {' >> ~/.config/claude/mcp-http-config.json
+	@echo '      "url": "http://localhost:7778/mcp",' >> ~/.config/claude/mcp-http-config.json
+	@echo '      "transport": "http"' >> ~/.config/claude/mcp-http-config.json
+	@echo '    }' >> ~/.config/claude/mcp-http-config.json
+	@echo '  }' >> ~/.config/claude/mcp-http-config.json
+	@echo '}' >> ~/.config/claude/mcp-http-config.json
+	@echo ""
+	@echo "✓ HTTP configuration created at ~/.config/claude/mcp-http-config.json"
+	@echo ""
+	@echo "Add this to your Claude Code settings:"
+	@echo "  Port: 7778 (maps to container port 8095)"
+	@echo "  URL: http://localhost:7778/mcp"
+	@echo ""
+	@cat ~/.config/claude/mcp-http-config.json
+	@echo ""
+	@echo "Note: Make sure docker-compose is running first!"
 
 test-connection: ## Test MongoDB and Qdrant connections
 	@echo "Testing connections..."
