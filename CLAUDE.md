@@ -229,51 +229,343 @@ coordinator_update_task_status({ taskId, status: "completed", notes: "..." })
 
 ### **🎯 Workflow Coordinator: Context-Rich Task Creation**
 
-**Mission:** Embed 80% of context IN the task to minimize agent exploration queries.
-
-**Task Structure:**
-1. **`role`** - Business context + what to build + constraints (100-200 words)
-2. **`notes`** - Pattern to follow + files to modify + key decisions + gotchas
-3. **`todos`** - Each with file/function/contextHint in notes
-4. **`qdrantCollections`** - 1-2 collections IF patterns needed
-
-**Example:** See full template in HYPERION_COORDINATOR_MCP_REFERENCE.md
-
-**Checklist (embed ALL in task):**
-- Business context, pattern reference, file paths, function names
-- Technical constraints, key decisions, gotchas, test requirements
-
-**Task Sizing:**
-- **Small:** 1-3 files, 3-5 TODOs, <30 min
-- **Medium:** 3-5 files, 5-7 TODOs, <60 min
-- **Large:** SPLIT IT (never >7 TODOs, never multiple services, never >5 file reads)
-
-**Progressive Handoff:** When Agent 2 depends on Agent 1:
-1. Agent 1 completes with detailed notes (completed work, key decisions, API contract)
-2. Workflow Coordinator creates Agent 2 task WITH Agent 1's context embedded in notes
-3. Result: Agent 2 starts coding in <2 minutes without reading Agent 1's code
+**Mission:** Embed 90%+ of context IN the task during planning to eliminate agent exploration during implementation.
 
 ---
 
-## ⚡ **Execution Workflow**
+### **PLANNING STAGE: Maximum Context Offloading**
 
-**Phase 1: Discovery (2-5 min max)**
-1. Get task: `coordinator_list_agent_tasks({ agentName })`
-2. Read task.role, task.todos, task.notes (80% of context)
-3. Grep to locate files (don't read yet)
-4. Check blockers ONLY if task mentions dependencies
-5. START CODING within 5 minutes
+**Goal:** Store ALL context so implementation agents can code immediately without research.
 
-**Phase 2: Implementation**
-- Update status to "in_progress"
-- Work in your domain with your MCP tools
-- Update coordinator on blockers immediately
-- Post Qdrant updates every 30-60 min (long tasks only)
+**Required Task Fields (MUST all be populated):**
 
-**Phase 3: Completion (2-5 min)**
-- Store knowledge in coordinator + Qdrant
-- Mark task "completed"
-- Document for future agent searchability
+1. **`contextSummary`** (150-250 words) - The agent's complete briefing:
+   - Business context: WHY this task exists, user impact, success criteria
+   - Technical approach: WHAT solution pattern to use (be specific)
+   - Integration points: HOW this connects to other components
+   - Constraints: Resource limits, performance targets, security requirements
+   - Testing approach: Unit tests, integration tests, edge cases to cover
+
+2. **`role`** (50-100 words) - High-level mission statement:
+   - One-sentence objective
+   - Primary deliverable
+   - Acceptance criteria
+
+3. **`filesModified`** (COMPLETE list) - EVERY file the agent will touch:
+   - New files to create with full paths
+   - Existing files to modify with full paths
+   - Related files to read for context (mark as "reference only")
+   - Test files to create/update
+
+4. **`qdrantCollections`** (1-3 collections) - Where to find patterns:
+   - Name specific collections with relevant examples
+   - Indicate what to search for ("search for JWT middleware pattern")
+   - Only include if genuinely needed
+
+5. **`priorWorkSummary`** (100-150 words, multi-phase tasks only):
+   - What previous agent accomplished
+   - API contracts/interfaces established
+   - Key decisions made that affect this task
+   - Gotchas discovered
+   - Where to find the completed code
+
+6. **`notes`** (50-100 words) - Critical gotchas and shortcuts:
+   - Common pitfalls specific to this task
+   - Non-obvious requirements
+   - Performance considerations
+   - Security notes
+
+---
+
+### **TODO Item Structure (Each must have):**
+
+**MANDATORY fields for EVERY TODO:**
+
+1. **`description`** (10-20 words) - Specific, actionable task
+   - ✅ "Create JWT middleware with token validation and error handling"
+   - ❌ "Add authentication"
+
+2. **`contextHint`** (50-100 words) - HOW to implement:
+   - Code structure/pattern to follow
+   - Key functions/methods to use
+   - Error handling approach
+   - Example code snippets if helpful
+   - What to return/output
+
+3. **`filePath`** - EXACT file location:
+   - Full path from project root
+   - Create new vs modify existing (be explicit)
+
+4. **`functionName`** (if applicable) - Specific function/method:
+   - Exact name to use
+   - Function signature if creating new
+   - Where to add if modifying existing file
+
+**Example TODO (GOOD):**
+```json
+{
+  "description": "Implement JWT token validation middleware",
+  "filePath": "backend/middleware/auth.go",
+  "functionName": "ValidateJWT",
+  "contextHint": "Extract token from Authorization header (Bearer scheme). Use jwt.Parse() with HS256. Validate exp, iss, aud claims. Store user ID in gin.Context. Return 401 with {\"error\": \"invalid_token\"} on failure. See code-patterns collection for example."
+}
+```
+
+**Example TODO (BAD - missing context):**
+```json
+{
+  "description": "Add authentication",
+  "filePath": "backend/auth.go"
+}
+```
+
+---
+
+### **Context Quality Checklist (Workflow Coordinator)**
+
+Before creating a task, verify:
+
+- [ ] `contextSummary` answers: WHY, WHAT, HOW, and TESTING
+- [ ] `filesModified` is COMPLETE (agent won't need to search for files)
+- [ ] `role` clearly states the deliverable
+- [ ] EVERY TODO has `contextHint` with implementation guidance
+- [ ] EVERY TODO has `filePath` (exact location)
+- [ ] Function-level TODOs have `functionName`
+- [ ] `qdrantCollections` specifies WHAT to search for
+- [ ] Multi-phase tasks have `priorWorkSummary` with API contracts
+- [ ] Agent can start coding in <2 minutes by reading task only
+
+---
+
+### **Task Sizing:**
+- **Small:** 1-3 files, 3-5 TODOs, <30 min, single responsibility
+- **Medium:** 3-5 files, 5-7 TODOs, <60 min, one feature/fix
+- **Large:** SPLIT IT (never >7 TODOs, never multiple services, never >5 file reads)
+
+---
+
+### **Progressive Handoff (Multi-Phase Tasks):**
+
+**Phase 1 Agent completes:**
+1. Update all TODOs with detailed notes (what was done, line numbers, key decisions)
+2. Store final state in coordinator knowledge with API contracts
+
+**Workflow Coordinator creates Phase 2 task:**
+1. Copies Phase 1 completion notes into `priorWorkSummary`
+2. Specifies exact API endpoints/functions Phase 2 will call
+3. Includes sample request/response if applicable
+4. Lists files Phase 1 created (for reference only, don't modify)
+
+**Result:** Phase 2 agent starts coding in <2 minutes without reading Phase 1 code
+
+---
+
+## ⚡ **IMPLEMENTATION STAGE: Execution Workflow**
+
+**Goal:** Use stored context efficiently, code immediately, minimize exploration.
+
+---
+
+### **Phase 1: Context Discovery (2 minutes max)**
+
+**Step 1: Retrieve Task (30 seconds)**
+```typescript
+const tasks = await coordinator_list_agent_tasks({ agentName: "your-name" });
+const task = tasks.tasks[0]; // Your assigned task
+```
+
+**Step 2: Read ALL Context Fields (60 seconds)**
+
+Read in this order:
+1. **`contextSummary`** - Your complete briefing (WHY, WHAT, HOW, TESTING)
+2. **`role`** - Your specific objective
+3. **`filesModified`** - EXACT files to create/modify (no searching needed)
+4. **`todos`** - Each has `description`, `contextHint`, `filePath`, `functionName`
+5. **`priorWorkSummary`** - What previous agent did (if multi-phase)
+6. **`qdrantCollections`** - Where to find patterns (if you need them)
+7. **`notes`** - Gotchas and shortcuts
+
+**Step 3: Validate Context Sufficiency (30 seconds)**
+
+Ask yourself:
+- [ ] Do I know WHY I'm doing this? → Check `contextSummary`
+- [ ] Do I know WHAT to build? → Check `role` and TODOs
+- [ ] Do I know WHERE to write code? → Check `filesModified` and `filePath`
+- [ ] Do I know HOW to implement? → Check `contextHint` in each TODO
+- [ ] Do I have integration details? → Check `priorWorkSummary`
+
+**If ANY answer is NO:** STOP and ask Workflow Coordinator for clarification. DO NOT proceed with incomplete context.
+
+**If ALL answers are YES:** START CODING immediately (skip to Phase 2).
+
+---
+
+### **Context Usage Rules (CRITICAL)**
+
+**✅ DO:**
+- Trust the context provided in task fields
+- Use `filesModified` as your complete file list
+- Use `contextHint` as your implementation guide
+- Use `priorWorkSummary` for API contracts (don't read other agent's code)
+- Query Qdrant ONLY for patterns mentioned in `qdrantCollections`
+- Start with first TODO's `filePath` and `functionName`
+
+**❌ DON'T:**
+- Search for files (you already have `filesModified`)
+- Read files speculatively (only read files you'll modify)
+- Query Qdrant without checking `qdrantCollections` first
+- Ignore `contextHint` and figure it out yourself
+- Read previous agent's code (use `priorWorkSummary` instead)
+- Spend >2 minutes planning (context already has the plan)
+
+**🚫 FORBIDDEN:**
+- Starting implementation without reading `contextSummary`
+- Skipping `contextHint` in TODOs
+- Searching for "similar code" when pattern is in `qdrantCollections`
+- Making >2 Qdrant queries (context should have everything)
+- Reading >3 files before writing first line of code
+
+---
+
+### **Phase 2: Implementation (80% of time)**
+
+**Before starting:**
+```typescript
+coordinator_update_task_status({
+  taskId: task.id,
+  status: "in_progress",
+  notes: "Starting implementation with context from planning phase"
+});
+```
+
+**For each TODO:**
+
+1. **Read the TODO context:**
+   - `description` - What to do
+   - `contextHint` - HOW to do it (use this as your guide!)
+   - `filePath` - Where to write code
+   - `functionName` - What to name it
+
+2. **Implement exactly as described:**
+   - Follow the pattern in `contextHint`
+   - Use the exact file path and function name
+   - Don't deviate unless you find a critical issue
+
+3. **Update TODO status immediately:**
+   ```typescript
+   coordinator_update_todo_status({
+     agentTaskId: task.id,
+     todoId: todo.id,
+     status: "completed",
+     notes: "Implemented at lines 45-78. Used pattern from contextHint. Returns JSON as specified."
+   });
+   ```
+
+4. **Store implementation details for next agent:**
+   - What you actually built (line numbers, file paths)
+   - Any deviations from `contextHint` (with reasons)
+   - API contracts created (request/response formats)
+   - Gotchas discovered
+
+**Query Qdrant ONLY if:**
+- Task explicitly mentions a pattern in `qdrantCollections`
+- You need a specific example after reading `contextHint`
+- **Limit: 1 query max per task**
+
+**Example:**
+```typescript
+// Task says: qdrantCollections: ["jwt-middleware-patterns"]
+// contextHint says: "Use jwt.Parse() with HS256. See jwt-middleware-patterns for example."
+
+// GOOD: One targeted query
+qdrant_find({
+  collection_name: "jwt-middleware-patterns",
+  query: "HS256 token validation error handling"
+});
+
+// BAD: Speculative exploration
+qdrant_find({ collection_name: "backend-patterns", query: "authentication" });
+qdrant_find({ collection_name: "go-examples", query: "middleware" });
+```
+
+---
+
+### **Phase 3: Completion (2-5 min)**
+
+**Step 1: Update all TODOs with implementation notes**
+
+For EACH completed TODO:
+```typescript
+coordinator_update_todo_status({
+  agentTaskId: task.id,
+  todoId: todo.id,
+  status: "completed",
+  notes: "Created ValidateJWT() in backend/middleware/auth.go:15-45. Uses HS256. Returns 401 on invalid token. Stores userID in context. Tested with expired/invalid tokens."
+});
+```
+
+**Step 2: Store task completion in coordinator knowledge**
+
+```typescript
+coordinator_upsert_knowledge({
+  collection: `task:hyperion://task/human/${task.humanTaskId}`,
+  text: `
+## Implementation Summary
+Agent: ${task.agentName}
+Files Created: ${filesCreated}
+API Contracts: ${apiContracts}
+Key Decisions: ${decisions}
+Gotchas: ${gotchas}
+Next Agent Should Know: ${handoffInfo}
+  `,
+  metadata: {
+    taskId: task.id,
+    agentName: task.agentName,
+    completedAt: new Date().toISOString()
+  }
+});
+```
+
+**Step 3: Store reusable patterns in Qdrant (if created new pattern)**
+
+Only if you created a NEW pattern not in `qdrantCollections`:
+```typescript
+qdrant_store({
+  collection_name: "technical-knowledge",
+  information: "Detailed implementation of ${pattern} with code examples",
+  metadata: {
+    knowledgeType: "pattern",
+    domain: "backend",
+    tags: ["jwt", "middleware", "authentication"]
+  }
+});
+```
+
+**Step 4: Mark task complete**
+
+```typescript
+coordinator_update_task_status({
+  taskId: task.id,
+  status: "completed",
+  notes: "All TODOs completed. Created JWT middleware at backend/middleware/auth.go. Exports ValidateJWT() function. See task knowledge for API contract and testing details."
+});
+```
+
+---
+
+### **Context Efficiency Metrics (Self-Check)**
+
+After completing a task, verify you used context efficiently:
+
+- [ ] Started coding within 2 minutes of reading task
+- [ ] Made ≤1 Qdrant query (only if `qdrantCollections` specified)
+- [ ] Read ≤3 files (only files in `filesModified`)
+- [ ] Used `contextHint` for every TODO (didn't reinvent approach)
+- [ ] Used `priorWorkSummary` instead of reading other agent's code
+- [ ] Updated all TODOs with implementation notes
+- [ ] Stored completion summary for next agent
+
+**If any checkbox is unchecked:** Review why and improve next time.
 
 ---
 
