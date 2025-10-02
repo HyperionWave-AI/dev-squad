@@ -178,6 +178,71 @@ export function KanbanTaskCard({ task, index, onClick }: KanbanTaskCardProps) {
               </Typography>
             )}
 
+            {/* Context Information */}
+            {task.contextSummary && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#1e3a8a', mb: 0.5 }}>
+                  📋 Context
+                </Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: '#1e40af' }}>
+                  {task.contextSummary}
+                </Typography>
+              </Box>
+            )}
+
+            {task.filesModified && task.filesModified.length > 0 && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#581c87', mb: 0.5 }}>
+                  📁 Files ({task.filesModified.length})
+                </Typography>
+                <Box component="ul" sx={{ fontSize: '0.65rem', color: '#6b21a8', pl: 2, m: 0 }}>
+                  {task.filesModified.slice(0, 3).map((file, idx) => (
+                    <li key={idx} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {file}
+                    </li>
+                  ))}
+                  {task.filesModified.length > 3 && (
+                    <li style={{ fontStyle: 'italic' }}>+ {task.filesModified.length - 3} more</li>
+                  )}
+                </Box>
+              </Box>
+            )}
+
+            {task.qdrantCollections && task.qdrantCollections.length > 0 && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#14532d', mb: 0.5 }}>
+                  🔍 Knowledge
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {task.qdrantCollections.map((collection, idx) => (
+                    <Chip
+                      key={idx}
+                      label={collection}
+                      size="small"
+                      sx={{
+                        height: 16,
+                        fontSize: '0.6rem',
+                        backgroundColor: '#bbf7d0',
+                        color: '#15803d',
+                        '& .MuiChip-label': { px: 0.75 }
+                      }}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {task.priorWorkSummary && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#78350f', mb: 0.5 }}>
+                  🔗 Prior Work
+                </Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: '#92400e' }}>
+                  {task.priorWorkSummary}
+                </Typography>
+              </Box>
+            )}
+
             {/* Tags */}
             {task.tags && task.tags.length > 0 && (
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
