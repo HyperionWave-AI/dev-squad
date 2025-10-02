@@ -788,25 +788,14 @@ func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]
 
 // extractArguments safely extracts arguments from CallToolRequest
 func (h *ToolHandler) extractArguments(req *mcp.CallToolRequest) (map[string]interface{}, error) {
-	if req.Params.Arguments == nil {
+	if req.Params.Arguments == nil || len(req.Params.Arguments) == 0 {
 		return make(map[string]interface{}), nil
 	}
 
-	// First try direct type assertion
-	args, ok := req.Params.Arguments.(map[string]interface{})
-	if ok {
-		return args, nil
-	}
-
-	// If that fails, try JSON round-trip for proper type conversion
-	jsonBytes, err := json.Marshal(req.Params.Arguments)
-	if err != nil {
-		return nil, fmt.Errorf("arguments must be serializable: %w", err)
-	}
-
+	// Arguments is json.RawMessage in SDK v1.0.0, unmarshal it directly
 	var result map[string]interface{}
-	if err := json.Unmarshal(jsonBytes, &result); err != nil {
-		return nil, fmt.Errorf("arguments must be unmarshable to map[string]interface{}: %w", err)
+	if err := json.Unmarshal(req.Params.Arguments, &result); err != nil {
+		return nil, fmt.Errorf("arguments must be a valid JSON object: %w", err)
 	}
 
 	return result, nil
