@@ -364,6 +364,7 @@ func main() {
 		"http://localhost:5173",     // Vite dev server (host)
 		"http://localhost:5177",     // Alt Vite port
 		"http://localhost:5178",     // Alt Vite port
+		"http://localhost:9173",     // Custom UI port (via docker-compose.override.yml)
 		"http://localhost:3000",     // React dev server
 		"http://localhost",          // Docker UI (mapped to host)
 		"http://hyperion-ui",        // Docker internal network

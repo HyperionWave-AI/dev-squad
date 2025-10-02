@@ -1,0 +1,16 @@
+# Docker Compose Override - Custom Port Configuration
+# This file overrides the default ports in docker-compose.yml
+# You can customize these ports to avoid conflicts on your machine
+
+version: '3.8'
+
+services:
+  # HTTP Bridge - Override host port
+  hyperion-http-bridge:
+    ports:
+      - "9095:8095"  # host:container (container port must stay 8095)
+
+  # React UI - Override host port
+  hyperion-ui:
+    ports:
+      - "9173:80"    # host:container (container port must stay 80)
