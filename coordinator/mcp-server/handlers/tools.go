@@ -72,6 +72,36 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 		return fmt.Errorf("failed to register clear_task_board tool: %w", err)
 	}
 
+	// Register coordinator_add_task_prompt_notes
+	if err := h.registerAddTaskPromptNotes(server); err != nil {
+		return fmt.Errorf("failed to register add_task_prompt_notes tool: %w", err)
+	}
+
+	// Register coordinator_update_task_prompt_notes
+	if err := h.registerUpdateTaskPromptNotes(server); err != nil {
+		return fmt.Errorf("failed to register update_task_prompt_notes tool: %w", err)
+	}
+
+	// Register coordinator_clear_task_prompt_notes
+	if err := h.registerClearTaskPromptNotes(server); err != nil {
+		return fmt.Errorf("failed to register clear_task_prompt_notes tool: %w", err)
+	}
+
+	// Register coordinator_add_todo_prompt_notes
+	if err := h.registerAddTodoPromptNotes(server); err != nil {
+		return fmt.Errorf("failed to register add_todo_prompt_notes tool: %w", err)
+	}
+
+	// Register coordinator_update_todo_prompt_notes
+	if err := h.registerUpdateTodoPromptNotes(server); err != nil {
+		return fmt.Errorf("failed to register update_todo_prompt_notes tool: %w", err)
+	}
+
+	// Register coordinator_clear_todo_prompt_notes
+	if err := h.registerClearTodoPromptNotes(server); err != nil {
+		return fmt.Errorf("failed to register clear_todo_prompt_notes tool: %w", err)
+	}
+
 	return nil
 }
 
@@ -869,4 +899,397 @@ func (h *ToolHandler) handleClearTaskBoard(ctx context.Context, args map[string]
 		"agentTasksDeleted": result.AgentTasksDeleted,
 		"clearedAt":         result.ClearedAt,
 	}, nil
+}
+
+// registerAddTaskPromptNotes registers the coordinator_add_task_prompt_notes tool
+func (h *ToolHandler) registerAddTaskPromptNotes(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_add_task_prompt_notes",
+		Description: "Add human guidance notes to an agent task",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"agentTaskId": {
+					Type:        "string",
+					Description: "Agent task UUID",
+				},
+				"promptNotes": {
+					Type:        "string",
+					Description: "Human guidance notes, markdown supported",
+				},
+			},
+			Required: []string{"agentTaskId", "promptNotes"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleAddTaskPromptNotes(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// registerUpdateTaskPromptNotes registers the coordinator_update_task_prompt_notes tool
+func (h *ToolHandler) registerUpdateTaskPromptNotes(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_update_task_prompt_notes",
+		Description: "Update existing human guidance notes on an agent task",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"agentTaskId": {
+					Type:        "string",
+					Description: "Agent task UUID",
+				},
+				"promptNotes": {
+					Type:        "string",
+					Description: "Human guidance notes, markdown supported",
+				},
+			},
+			Required: []string{"agentTaskId", "promptNotes"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleUpdateTaskPromptNotes(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// registerClearTaskPromptNotes registers the coordinator_clear_task_prompt_notes tool
+func (h *ToolHandler) registerClearTaskPromptNotes(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_clear_task_prompt_notes",
+		Description: "Clear/remove human guidance notes from an agent task",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"agentTaskId": {
+					Type:        "string",
+					Description: "Agent task UUID",
+				},
+			},
+			Required: []string{"agentTaskId"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleClearTaskPromptNotes(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// registerAddTodoPromptNotes registers the coordinator_add_todo_prompt_notes tool
+func (h *ToolHandler) registerAddTodoPromptNotes(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_add_todo_prompt_notes",
+		Description: "Add human guidance notes to a specific TODO item",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"agentTaskId": {
+					Type:        "string",
+					Description: "Agent task UUID",
+				},
+				"todoId": {
+					Type:        "string",
+					Description: "TODO item UUID",
+				},
+				"promptNotes": {
+					Type:        "string",
+					Description: "Human guidance notes, markdown supported",
+				},
+			},
+			Required: []string{"agentTaskId", "todoId", "promptNotes"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleAddTodoPromptNotes(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// registerUpdateTodoPromptNotes registers the coordinator_update_todo_prompt_notes tool
+func (h *ToolHandler) registerUpdateTodoPromptNotes(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_update_todo_prompt_notes",
+		Description: "Update existing human guidance notes on a TODO item",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"agentTaskId": {
+					Type:        "string",
+					Description: "Agent task UUID",
+				},
+				"todoId": {
+					Type:        "string",
+					Description: "TODO item UUID",
+				},
+				"promptNotes": {
+					Type:        "string",
+					Description: "Human guidance notes, markdown supported",
+				},
+			},
+			Required: []string{"agentTaskId", "todoId", "promptNotes"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleUpdateTodoPromptNotes(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// registerClearTodoPromptNotes registers the coordinator_clear_todo_prompt_notes tool
+func (h *ToolHandler) registerClearTodoPromptNotes(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_clear_todo_prompt_notes",
+		Description: "Clear/remove human guidance notes from a TODO item",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"agentTaskId": {
+					Type:        "string",
+					Description: "Agent task UUID",
+				},
+				"todoId": {
+					Type:        "string",
+					Description: "TODO item UUID",
+				},
+			},
+			Required: []string{"agentTaskId", "todoId"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleClearTodoPromptNotes(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleAddTaskPromptNotes adds human prompt notes to an agent task
+func (h *ToolHandler) handleAddTaskPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	agentTaskId, ok := args["agentTaskId"].(string)
+	if !ok || agentTaskId == "" {
+		return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	promptNotes, ok := args["promptNotes"].(string)
+	if !ok || promptNotes == "" {
+		return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Validate and sanitize prompt notes
+	sanitized, err := storage.ValidatePromptNotes(promptNotes)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+	}
+
+	// Add prompt notes to task
+	err = h.taskStorage.AddTaskPromptNotes(agentTaskId, sanitized)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to add prompt notes: %v", err)), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("✓ Added prompt notes to task %s", agentTaskId),
+			},
+		},
+	}, nil, nil
+}
+
+// handleUpdateTaskPromptNotes updates existing human prompt notes on an agent task
+func (h *ToolHandler) handleUpdateTaskPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	agentTaskId, ok := args["agentTaskId"].(string)
+	if !ok || agentTaskId == "" {
+		return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	promptNotes, ok := args["promptNotes"].(string)
+	if !ok || promptNotes == "" {
+		return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Validate and sanitize prompt notes
+	sanitized, err := storage.ValidatePromptNotes(promptNotes)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+	}
+
+	// Update prompt notes
+	err = h.taskStorage.UpdateTaskPromptNotes(agentTaskId, sanitized)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to update prompt notes: %v", err)), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("✓ Updated prompt notes for task %s", agentTaskId),
+			},
+		},
+	}, nil, nil
+}
+
+// handleClearTaskPromptNotes clears human prompt notes from an agent task
+func (h *ToolHandler) handleClearTaskPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	agentTaskId, ok := args["agentTaskId"].(string)
+	if !ok || agentTaskId == "" {
+		return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Clear prompt notes
+	err := h.taskStorage.ClearTaskPromptNotes(agentTaskId)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to clear prompt notes: %v", err)), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("✓ Cleared prompt notes from task %s", agentTaskId),
+			},
+		},
+	}, nil, nil
+}
+
+// handleAddTodoPromptNotes adds human prompt notes to a specific TODO item
+func (h *ToolHandler) handleAddTodoPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	agentTaskId, ok := args["agentTaskId"].(string)
+	if !ok || agentTaskId == "" {
+		return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	todoId, ok := args["todoId"].(string)
+	if !ok || todoId == "" {
+		return createErrorResult("todoId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	promptNotes, ok := args["promptNotes"].(string)
+	if !ok || promptNotes == "" {
+		return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Validate and sanitize prompt notes
+	sanitized, err := storage.ValidatePromptNotes(promptNotes)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+	}
+
+	// Add prompt notes to TODO
+	err = h.taskStorage.AddTodoPromptNotes(agentTaskId, todoId, sanitized)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to add TODO prompt notes: %v", err)), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("✓ Added prompt notes to TODO %s in task %s", todoId, agentTaskId),
+			},
+		},
+	}, nil, nil
+}
+
+// handleUpdateTodoPromptNotes updates existing human prompt notes on a specific TODO item
+func (h *ToolHandler) handleUpdateTodoPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	agentTaskId, ok := args["agentTaskId"].(string)
+	if !ok || agentTaskId == "" {
+		return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	todoId, ok := args["todoId"].(string)
+	if !ok || todoId == "" {
+		return createErrorResult("todoId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	promptNotes, ok := args["promptNotes"].(string)
+	if !ok || promptNotes == "" {
+		return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Validate and sanitize prompt notes
+	sanitized, err := storage.ValidatePromptNotes(promptNotes)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+	}
+
+	// Update prompt notes
+	err = h.taskStorage.UpdateTodoPromptNotes(agentTaskId, todoId, sanitized)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to update TODO prompt notes: %v", err)), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("✓ Updated prompt notes for TODO %s in task %s", todoId, agentTaskId),
+			},
+		},
+	}, nil, nil
+}
+
+// handleClearTodoPromptNotes clears human prompt notes from a specific TODO item
+func (h *ToolHandler) handleClearTodoPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	agentTaskId, ok := args["agentTaskId"].(string)
+	if !ok || agentTaskId == "" {
+		return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	todoId, ok := args["todoId"].(string)
+	if !ok || todoId == "" {
+		return createErrorResult("todoId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Clear prompt notes from TODO
+	err := h.taskStorage.ClearTodoPromptNotes(agentTaskId, todoId)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to clear TODO prompt notes: %v", err)), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("✓ Cleared prompt notes from TODO %s in task %s", todoId, agentTaskId),
+			},
+		},
+	}, nil, nil
 }

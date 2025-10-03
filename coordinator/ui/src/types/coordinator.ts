@@ -25,6 +25,9 @@ export interface TodoItem {
   filePath?: string;
   functionName?: string;
   contextHint?: string;
+  humanPromptNotes?: string;
+  humanPromptNotesAddedAt?: string;
+  humanPromptNotesUpdatedAt?: string;
 }
 
 export type TaskType = 'human' | 'agent' | 'todo';
@@ -51,6 +54,9 @@ export interface AgentTask {
   dependencies?: string[];
   blockers?: string[];
   tags?: string[];
+  humanPromptNotes?: string;
+  humanPromptNotesAddedAt?: string;
+  humanPromptNotesUpdatedAt?: string;
 }
 
 // Flattened task representation for Kanban board
@@ -76,6 +82,10 @@ export interface FlattenedTask {
   filesModified?: string[];
   qdrantCollections?: string[];
   priorWorkSummary?: string;
+  todos?: TodoItem[];
+  humanPromptNotes?: string;
+  humanPromptNotesAddedAt?: string;
+  humanPromptNotesUpdatedAt?: string;
 }
 
 export interface AgentRole {
