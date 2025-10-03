@@ -69,6 +69,7 @@ export function KanbanBoard() {
   }, []);
 
   const loadTasks = async () => {
+    console.log('[KanbanBoard] loadTasks called, selectedTask:', selectedTask?.id, 'dialogOpen:', dialogOpen);
     try {
       setError(null);
       await mcpClient.connect();
@@ -76,13 +77,113 @@ export function KanbanBoard() {
         mcpClient.listHumanTasks(),
         mcpClient.listAgentTasks()
       ]);
+      console.log('[KanbanBoard] Tasks loaded, agents count:', agents.length);
       setTasks(humanTasks);
       setAgentTasks(agents);
+
+      // If dialog is open, refresh the selected task with fresh data
+      if (selectedTask && dialogOpen) {
+        console.log('[KanbanBoard] Refreshing selected task:', selectedTask.id);
+        refreshSelectedTask(selectedTask.id, humanTasks, agents);
+      } else {
+        console.log('[KanbanBoard] Not refreshing - selectedTask:', !!selectedTask, 'dialogOpen:', dialogOpen);
+      }
     } catch (err) {
       console.error('Failed to load tasks:', err);
       setError(err instanceof Error ? err.message : 'Failed to load tasks');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Refresh the selected task after data is reloaded
+  const refreshSelectedTask = (taskId: string, humanTasks: HumanTask[], agents: AgentTask[]) => {
+    console.log('[KanbanBoard] refreshSelectedTask called for:', taskId);
+    // Check if it's a human task
+    const humanTask = humanTasks.find(t => t.id === taskId);
+    if (humanTask) {
+      console.log('[KanbanBoard] Found human task, updating selectedTask');
+      setSelectedTask({
+        id: humanTask.id,
+        title: humanTask.title,
+        description: humanTask.description,
+        status: humanTask.status,
+        priority: humanTask.priority,
+        createdAt: humanTask.createdAt,
+        updatedAt: humanTask.updatedAt,
+        completedAt: humanTask.completedAt,
+        taskType: 'human',
+        tags: humanTask.tags,
+        notes: humanTask.notes,
+        createdBy: humanTask.createdBy,
+      });
+      return;
+    }
+
+    // Check if it's an agent task
+    const agentTask = agents.find(t => t.id === taskId);
+    if (agentTask) {
+      console.log('[KanbanBoard] Found agent task, humanPromptNotes:', agentTask.humanPromptNotes);
+      setSelectedTask({
+        id: agentTask.id,
+        title: agentTask.title || `${agentTask.agentName}: ${agentTask.role}`,
+        description: agentTask.role,
+        status: agentTask.status,
+        priority: agentTask.priority,
+        createdAt: agentTask.createdAt,
+        updatedAt: agentTask.updatedAt,
+        completedAt: agentTask.completedAt,
+        taskType: 'agent',
+        agentName: agentTask.agentName,
+        role: agentTask.role,
+        humanTaskId: agentTask.humanTaskId,
+        tags: agentTask.tags || [],
+        notes: agentTask.notes,
+        contextSummary: agentTask.contextSummary,
+        filesModified: agentTask.filesModified,
+        qdrantCollections: agentTask.qdrantCollections,
+        priorWorkSummary: agentTask.priorWorkSummary,
+        todos: agentTask.todos,
+        humanPromptNotes: agentTask.humanPromptNotes,
+        humanPromptNotesAddedAt: agentTask.humanPromptNotesAddedAt,
+        humanPromptNotesUpdatedAt: agentTask.humanPromptNotesUpdatedAt,
+      });
+      return;
+    }
+    console.log('[KanbanBoard] Task not found in humanTasks or agents');
+
+    // Check if it's a todo (synthetic ID format: agentTaskId-todo-todoId)
+    if (taskId.includes('-todo-')) {
+      const parts = taskId.split('-todo-');
+      const agentTaskId = parts[0];
+      const todoId = parts[1];
+
+      const parentAgent = agents.find(t => t.id === agentTaskId);
+      const todo = parentAgent?.todos.find(t => t.id === todoId);
+
+      if (parentAgent && todo) {
+        setSelectedTask({
+          id: taskId,
+          title: todo.description,
+          description: `${parentAgent.agentName} - ${parentAgent.role}`,
+          status: todo.status === 'pending' ? 'pending'
+                : todo.status === 'in_progress' ? 'in_progress'
+                : 'completed',
+          createdAt: todo.createdAt,
+          completedAt: todo.completedAt,
+          taskType: 'todo',
+          agentName: parentAgent.agentName,
+          role: parentAgent.role,
+          humanTaskId: parentAgent.humanTaskId,
+          agentTaskId: parentAgent.id,
+          parentTaskTitle: parentAgent.title || parentAgent.role,
+          tags: [`📋 ${parentAgent.agentName}`],
+          notes: todo.notes,
+          humanPromptNotes: todo.humanPromptNotes,
+          humanPromptNotesAddedAt: todo.humanPromptNotesAddedAt,
+          humanPromptNotesUpdatedAt: todo.humanPromptNotesUpdatedAt,
+        });
+      }
     }
   };
 
@@ -130,6 +231,10 @@ export function KanbanBoard() {
         filesModified: agentTask.filesModified,
         qdrantCollections: agentTask.qdrantCollections,
         priorWorkSummary: agentTask.priorWorkSummary,
+        todos: agentTask.todos,
+        humanPromptNotes: agentTask.humanPromptNotes,
+        humanPromptNotesAddedAt: agentTask.humanPromptNotesAddedAt,
+        humanPromptNotesUpdatedAt: agentTask.humanPromptNotesUpdatedAt,
       });
 
       // Add each todo as a separate task
@@ -151,6 +256,9 @@ export function KanbanBoard() {
           parentTaskTitle: agentTask.title || agentTask.role,
           tags: [`📋 ${agentTask.agentName}`],
           notes: todo.notes,
+          humanPromptNotes: todo.humanPromptNotes,
+          humanPromptNotesAddedAt: todo.humanPromptNotesAddedAt,
+          humanPromptNotesUpdatedAt: todo.humanPromptNotesUpdatedAt,
         });
       });
     });
@@ -453,6 +561,7 @@ export function KanbanBoard() {
         task={selectedTask}
         open={dialogOpen}
         onClose={handleDialogClose}
+        onTaskUpdate={loadTasks}
       />
     </Box>
   );

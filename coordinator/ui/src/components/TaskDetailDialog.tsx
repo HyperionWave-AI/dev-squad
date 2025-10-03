@@ -35,15 +35,19 @@ import {
   Functions,
   Storage,
   Lightbulb,
+  NoteAdd,
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import type { HumanTask, AgentTask, FlattenedTask, Priority, TaskStatus, TodoStatus } from '../types/coordinator';
 import { mcpClient } from '../services/mcpClient';
+import { PromptNotesEditor } from './PromptNotesEditor';
+import { TodoPromptNotes } from './TodoPromptNotes';
 
 interface TaskDetailDialogProps {
   task: FlattenedTask | null;
   open: boolean;
   onClose: () => void;
+  onTaskUpdate?: () => void;
 }
 
 const getPriorityColor = (priority: Priority): 'default' | 'primary' | 'warning' | 'error' => {
@@ -100,7 +104,7 @@ const getTodoStatusIcon = (status: TodoStatus) => {
   }
 };
 
-export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps) {
+export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDetailDialogProps) {
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [parentTask, setParentTask] = useState<HumanTask | null>(null);
@@ -148,6 +152,29 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
     }
   };
 
+  const loadCurrentAgentTask = async () => {
+    console.log('[TaskDetailDialog] loadCurrentAgentTask called, taskType:', task?.taskType);
+    if (!task || task.taskType !== 'agent') return;
+
+    try {
+      setLoading(true);
+      await mcpClient.connect();
+      const allAgentTasks = await mcpClient.listAgentTasks();
+      const updatedTask = allAgentTasks.find(at => at.id === task.id);
+
+      console.log('[TaskDetailDialog] Updated task found:', !!updatedTask, 'has notes:', updatedTask?.humanPromptNotes);
+      if (updatedTask && onTaskUpdate) {
+        console.log('[TaskDetailDialog] Calling onTaskUpdate');
+        // Trigger parent to refresh with the updated task data
+        onTaskUpdate();
+      }
+    } catch (error) {
+      console.error('Failed to reload agent task:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!task) return null;
 
   const formatDate = (dateString: string) => {
@@ -165,6 +192,48 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
     if (!agentTask.todos || agentTask.todos.length === 0) return 0;
     const completed = agentTask.todos.filter(t => t.status === 'completed').length;
     return (completed / agentTask.todos.length) * 100;
+  };
+
+  const handleRefresh = () => {
+    if (isAgentTask) {
+      // Reload the agent task itself to get updated notes
+      loadCurrentAgentTask();
+      // Also load parent task for context
+      loadParentTask();
+    } else {
+      loadAgentTasks();
+      // Notify parent component to refresh task data
+      if (onTaskUpdate) {
+        onTaskUpdate();
+      }
+    }
+  };
+
+  const handleSaveTaskNotes = async (agentTaskId: string, notes: string) => {
+    const agentTask = agentTasks.find(at => at.id === agentTaskId);
+    if (!agentTask) return;
+
+    try {
+      if (agentTask.humanPromptNotes) {
+        await mcpClient.updateTaskPromptNotes(agentTaskId, notes);
+      } else {
+        await mcpClient.addTaskPromptNotes(agentTaskId, notes);
+      }
+      handleRefresh();
+    } catch (error) {
+      console.error('Failed to save task notes:', error);
+      throw error;
+    }
+  };
+
+  const handleClearTaskNotes = async (agentTaskId: string) => {
+    try {
+      await mcpClient.clearTaskPromptNotes(agentTaskId);
+      handleRefresh();
+    } catch (error) {
+      console.error('Failed to clear task notes:', error);
+      throw error;
+    }
   };
 
   return (
@@ -384,6 +453,32 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                 </Box>
               )}
             </Paper>
+          </Box>
+        )}
+
+        {/* Human Guidance Notes - for agent tasks viewed directly */}
+        {isAgentTask && (
+          <Box sx={{ mb: 3 }}>
+            <PromptNotesEditor
+              notes={task.humanPromptNotes}
+              notesAddedAt={task.humanPromptNotesAddedAt}
+              isEditable={task.status === 'pending'}
+              onSave={async (notes) => {
+                await mcpClient.connect();
+                if (task.humanPromptNotes) {
+                  await mcpClient.updateTaskPromptNotes(task.id, notes);
+                } else {
+                  await mcpClient.addTaskPromptNotes(task.id, notes);
+                }
+                handleRefresh();
+              }}
+              onClear={async () => {
+                await mcpClient.connect();
+                await mcpClient.clearTaskPromptNotes(task.id);
+                handleRefresh();
+              }}
+              placeholder="Add human guidance notes to help the agent understand requirements, constraints, or context..."
+            />
           </Box>
         )}
 
@@ -640,6 +735,137 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
           </Box>
         )}
 
+        {/* TODOs - for agent tasks viewed directly */}
+        {isAgentTask && task.todos && task.todos.length > 0 && (
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
+              Tasks ({task.todos.filter(t => t.status === 'completed').length}/{task.todos.length})
+            </Typography>
+            <List dense disablePadding>
+              {task.todos.map((todo, idx) => (
+                <Box key={todo.id}>
+                  <ListItem
+                    sx={{
+                      px: 0,
+                      py: 1,
+                      opacity: todo.status === 'completed' ? 0.6 : 1,
+                      alignItems: 'flex-start',
+                    }}
+                  >
+                    <ListItemIcon sx={{ minWidth: 32, mt: 0.5 }}>
+                      {getTodoStatusIcon(todo.status)}
+                    </ListItemIcon>
+                    <Box sx={{ flex: 1 }}>
+                      {/* Description */}
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontWeight: 600,
+                          textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
+                          mb: 0.5,
+                        }}
+                      >
+                        {todo.description}
+                      </Typography>
+
+                      {/* File Path */}
+                      {todo.filePath && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                          <Code fontSize="small" sx={{ color: 'text.secondary' }} />
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              fontFamily: 'monospace',
+                              color: 'text.secondary',
+                              backgroundColor: 'grey.100',
+                              px: 0.5,
+                              py: 0.25,
+                              borderRadius: 0.5,
+                            }}
+                          >
+                            {todo.filePath}
+                          </Typography>
+                        </Box>
+                      )}
+
+                      {/* Function Name */}
+                      {todo.functionName && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                          <Functions fontSize="small" sx={{ color: 'primary.main' }} />
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              fontFamily: 'monospace',
+                              color: 'primary.main',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {todo.functionName}()
+                          </Typography>
+                        </Box>
+                      )}
+
+                      {/* Context Hint */}
+                      {todo.contextHint && (
+                        <Paper
+                          elevation={0}
+                          sx={{
+                            mt: 1,
+                            p: 1,
+                            backgroundColor: '#f0fdf4',
+                            border: '1px solid #86efac',
+                          }}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                            <Lightbulb fontSize="small" sx={{ color: '#16a34a' }} />
+                            <Typography variant="caption" sx={{ fontWeight: 600, color: '#16a34a' }}>
+                              Implementation Hint:
+                            </Typography>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary">
+                            {todo.contextHint}
+                          </Typography>
+                        </Paper>
+                      )}
+
+                      {/* Notes */}
+                      {todo.notes && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{
+                            display: 'block',
+                            mt: 0.5,
+                            fontStyle: 'italic',
+                            pl: 1,
+                            borderLeft: '2px solid',
+                            borderColor: 'divider',
+                          }}
+                        >
+                          {todo.notes}
+                        </Typography>
+                      )}
+                    </Box>
+                  </ListItem>
+
+                  {/* TODO Prompt Notes */}
+                  <TodoPromptNotes
+                    todo={todo}
+                    agentTaskId={task.id}
+                    isTaskPending={task.status === 'pending'}
+                    onUpdate={handleRefresh}
+                  />
+
+                  {/* Divider between todos */}
+                  {idx < (task.todos?.length || 0) - 1 && (
+                    <Divider sx={{ my: 1 }} />
+                  )}
+                </Box>
+              ))}
+            </List>
+          </Box>
+        )}
+
         {/* Agent Tasks (for human tasks) */}
         {!isAgentTask && (
           <Box>
@@ -709,6 +935,20 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                           }}
                         />
                       )}
+                      {agentTask.humanPromptNotes && (
+                        <Chip
+                          icon={<NoteAdd />}
+                          label="Has Notes"
+                          size="small"
+                          sx={{
+                            height: 20,
+                            backgroundColor: '#fef3c7',
+                            color: '#92400e',
+                            fontSize: '0.7rem',
+                            fontWeight: 600,
+                          }}
+                        />
+                      )}
                     </Box>
                     <Chip
                       icon={getStatusIcon(agentTask.status)}
@@ -760,6 +1000,18 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                         <Typography variant="body2">{agentTask.notes}</Typography>
                       </Paper>
                     )}
+                  </Box>
+
+                  {/* Human Guidance Notes */}
+                  <Box sx={{ mb: 3 }}>
+                    <PromptNotesEditor
+                      notes={agentTask.humanPromptNotes}
+                      notesAddedAt={agentTask.humanPromptNotesAddedAt}
+                      isEditable={agentTask.status === 'pending'}
+                      onSave={(notes) => handleSaveTaskNotes(agentTask.id, notes)}
+                      onClear={() => handleClearTaskNotes(agentTask.id)}
+                      placeholder="Add human guidance notes to help the agent understand requirements, constraints, or context..."
+                    />
                   </Box>
 
                   {/* Todo List */}
@@ -874,6 +1126,15 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                                 )}
                               </Box>
                             </ListItem>
+
+                            {/* TODO Prompt Notes */}
+                            <TodoPromptNotes
+                              todo={todo}
+                              agentTaskId={agentTask.id}
+                              isTaskPending={agentTask.status === 'pending'}
+                              onUpdate={handleRefresh}
+                            />
+
                             {/* Divider between todos */}
                             {idx < agentTask.todos.length - 1 && (
                               <Divider sx={{ my: 1 }} />
