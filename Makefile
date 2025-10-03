@@ -54,33 +54,29 @@ clean: ## Clean build artifacts
 	rm -f coordinator/mcp-server/*.tgz
 	@echo "✓ Clean complete"
 
-configure-claude: ## Add MCP server to Claude Code (stdio mode)
-	@echo "Configuring Claude Code MCP server..."
+configure-claude-stdio: ## Add MCP server to Claude Code (stdio mode - local development)
+	@echo "Configuring Claude Code MCP server (stdio mode)..."
 	cd coordinator/mcp-server && ./add-to-claude-code.sh
-	@echo "✓ Claude Code configured"
+	@echo "✓ Claude Code configured for stdio mode"
+	@echo ""
+	@echo "Note: This requires the MCP server binary to be built locally"
+	@echo "      For Docker setup, use 'make configure-claude' instead"
 
-configure-claude-http: ## Add MCP server to Claude Code (HTTP mode using docker-compose ports)
-	@echo "Configuring Claude Code for HTTP mode..."
-	@echo "Adding HTTP transport configuration to Claude Code settings..."
-	@mkdir -p ~/.config/claude
-	@echo '{' > ~/.config/claude/mcp-http-config.json
-	@echo '  "mcpServers": {' >> ~/.config/claude/mcp-http-config.json
-	@echo '    "hyperion-coordinator": {' >> ~/.config/claude/mcp-http-config.json
-	@echo '      "url": "http://localhost:7778/mcp",' >> ~/.config/claude/mcp-http-config.json
-	@echo '      "transport": "http"' >> ~/.config/claude/mcp-http-config.json
-	@echo '    }' >> ~/.config/claude/mcp-http-config.json
-	@echo '  }' >> ~/.config/claude/mcp-http-config.json
-	@echo '}' >> ~/.config/claude/mcp-http-config.json
+configure-claude: ## Configure Claude Code MCP for HTTP transport (Docker)
+	@echo "🚀 Configuring Claude Code MCP for HTTP transport (Docker)..."
 	@echo ""
-	@echo "✓ HTTP configuration created at ~/.config/claude/mcp-http-config.json"
+	@echo "Removing old hyperion-coordinator configuration (if exists)..."
+	@claude mcp remove hyperion-coordinator --scope user 2>/dev/null || true
+	@claude mcp remove hyperion-coordinator --scope project 2>/dev/null || true
 	@echo ""
-	@echo "Add this to your Claude Code settings:"
-	@echo "  Port: 7778 (maps to container port 8095)"
-	@echo "  URL: http://localhost:7778/mcp"
+	@echo "Adding hyperion-coordinator with HTTP transport (user scope - available globally)..."
+	@claude mcp add hyperion-coordinator http://localhost:7778 --transport http --scope user
 	@echo ""
-	@cat ~/.config/claude/mcp-http-config.json
+	@echo "✅ Configuration complete!"
+	@echo "⚠️  Make sure docker-compose is running: docker-compose up -d"
 	@echo ""
-	@echo "Note: Make sure docker-compose is running first!"
+	@echo "Verify connection:"
+	@claude mcp list 2>&1 | grep hyperion-coordinator || echo "❌ Failed to configure"
 
 test-connection: ## Test MongoDB and Qdrant connections
 	@echo "Testing connections..."
