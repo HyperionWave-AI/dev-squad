@@ -45,10 +45,13 @@ type TodoItem struct {
 	Status       TodoStatus `json:"status" bson:"status"`
 	CreatedAt    time.Time  `json:"createdAt" bson:"createdAt"`
 	CompletedAt  *time.Time `json:"completedAt,omitempty" bson:"completedAt,omitempty"`
-	Notes        string     `json:"notes,omitempty" bson:"notes,omitempty"`
-	FilePath     string     `json:"filePath,omitempty" bson:"filePath,omitempty"`
-	FunctionName string     `json:"functionName,omitempty" bson:"functionName,omitempty"`
-	ContextHint  string     `json:"contextHint,omitempty" bson:"contextHint,omitempty"`
+	Notes                     string     `json:"notes,omitempty" bson:"notes,omitempty"`
+	FilePath                  string     `json:"filePath,omitempty" bson:"filePath,omitempty"`
+	FunctionName              string     `json:"functionName,omitempty" bson:"functionName,omitempty"`
+	ContextHint               string     `json:"contextHint,omitempty" bson:"contextHint,omitempty"`
+	HumanPromptNotes          string     `json:"humanPromptNotes,omitempty" bson:"humanPromptNotes,omitempty"`
+	HumanPromptNotesAddedAt   *time.Time `json:"humanPromptNotesAddedAt,omitempty" bson:"humanPromptNotesAddedAt,omitempty"`
+	HumanPromptNotesUpdatedAt *time.Time `json:"humanPromptNotesUpdatedAt,omitempty" bson:"humanPromptNotesUpdatedAt,omitempty"`
 }
 
 // TodoItemInput represents the input format for creating a TODO item
@@ -82,9 +85,12 @@ type AgentTask struct {
 	Status            TaskStatus `json:"status" bson:"status"`
 	Notes             string     `json:"notes,omitempty" bson:"notes,omitempty"`
 	ContextSummary    string     `json:"contextSummary,omitempty" bson:"contextSummary,omitempty"`
-	FilesModified     []string   `json:"filesModified,omitempty" bson:"filesModified,omitempty"`
-	QdrantCollections []string   `json:"qdrantCollections,omitempty" bson:"qdrantCollections,omitempty"`
-	PriorWorkSummary  string     `json:"priorWorkSummary,omitempty" bson:"priorWorkSummary,omitempty"`
+	FilesModified             []string   `json:"filesModified,omitempty" bson:"filesModified,omitempty"`
+	QdrantCollections         []string   `json:"qdrantCollections,omitempty" bson:"qdrantCollections,omitempty"`
+	PriorWorkSummary          string     `json:"priorWorkSummary,omitempty" bson:"priorWorkSummary,omitempty"`
+	HumanPromptNotes          string     `json:"humanPromptNotes,omitempty" bson:"humanPromptNotes,omitempty"`
+	HumanPromptNotesAddedAt   *time.Time `json:"humanPromptNotesAddedAt,omitempty" bson:"humanPromptNotesAddedAt,omitempty"`
+	HumanPromptNotesUpdatedAt *time.Time `json:"humanPromptNotesUpdatedAt,omitempty" bson:"humanPromptNotesUpdatedAt,omitempty"`
 }
 
 // ClearResult contains statistics about cleared tasks
@@ -105,6 +111,12 @@ type TaskStorage interface {
 	ListAllAgentTasks() []*AgentTask
 	UpdateTaskStatus(taskID string, status TaskStatus, notes string) error
 	UpdateTodoStatus(agentTaskID, todoID string, status TodoStatus, notes string) error
+	AddTaskPromptNotes(agentTaskID string, notes string) error
+	UpdateTaskPromptNotes(agentTaskID string, notes string) error
+	ClearTaskPromptNotes(agentTaskID string) error
+	AddTodoPromptNotes(agentTaskID string, todoID string, notes string) error
+	UpdateTodoPromptNotes(agentTaskID string, todoID string, notes string) error
+	ClearTodoPromptNotes(agentTaskID string, todoID string) error
 	ClearAllTasks() (*ClearResult, error)
 }
 
@@ -436,6 +448,224 @@ func (s *MongoTaskStorage) UpdateTodoStatus(agentTaskID, todoID string, status T
 		if allCompleted && updatedTask.Status != TaskStatusCompleted {
 			s.UpdateTaskStatus(agentTaskID, TaskStatusCompleted, "All TODO items completed")
 		}
+	}
+
+	return nil
+}
+
+// AddTaskPromptNotes adds human prompt notes to an agent task
+func (s *MongoTaskStorage) AddTaskPromptNotes(agentTaskID string, notes string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	update := bson.M{
+		"$set": bson.M{
+			"humanPromptNotes":          notes,
+			"humanPromptNotesAddedAt":   &now,
+			"humanPromptNotesUpdatedAt": &now,
+			"updatedAt":                 now,
+		},
+	}
+
+	result := s.agentTasksCollection.FindOneAndUpdate(
+		ctx,
+		bson.M{"taskId": agentTaskID},
+		update,
+	)
+
+	if result.Err() != nil {
+		if result.Err() == mongo.ErrNoDocuments {
+			return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+		}
+		return fmt.Errorf("failed to add task prompt notes: %w", result.Err())
+	}
+
+	return nil
+}
+
+// UpdateTaskPromptNotes updates existing human prompt notes on an agent task
+func (s *MongoTaskStorage) UpdateTaskPromptNotes(agentTaskID string, notes string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	update := bson.M{
+		"$set": bson.M{
+			"humanPromptNotes":          notes,
+			"humanPromptNotesUpdatedAt": &now,
+			"updatedAt":                 now,
+		},
+	}
+
+	result := s.agentTasksCollection.FindOneAndUpdate(
+		ctx,
+		bson.M{"taskId": agentTaskID},
+		update,
+	)
+
+	if result.Err() != nil {
+		if result.Err() == mongo.ErrNoDocuments {
+			return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+		}
+		return fmt.Errorf("failed to update task prompt notes: %w", result.Err())
+	}
+
+	return nil
+}
+
+// ClearTaskPromptNotes removes human prompt notes from an agent task
+func (s *MongoTaskStorage) ClearTaskPromptNotes(agentTaskID string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	update := bson.M{
+		"$unset": bson.M{
+			"humanPromptNotes":          "",
+			"humanPromptNotesAddedAt":   "",
+			"humanPromptNotesUpdatedAt": "",
+		},
+		"$set": bson.M{
+			"updatedAt": now,
+		},
+	}
+
+	result := s.agentTasksCollection.FindOneAndUpdate(
+		ctx,
+		bson.M{"taskId": agentTaskID},
+		update,
+	)
+
+	if result.Err() != nil {
+		if result.Err() == mongo.ErrNoDocuments {
+			return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+		}
+		return fmt.Errorf("failed to clear task prompt notes: %w", result.Err())
+	}
+
+	return nil
+}
+
+// AddTodoPromptNotes adds human prompt notes to a specific TODO item
+func (s *MongoTaskStorage) AddTodoPromptNotes(agentTaskID string, todoID string, notes string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	update := bson.M{
+		"$set": bson.M{
+			"todos.$[elem].humanPromptNotes":          notes,
+			"todos.$[elem].humanPromptNotesAddedAt":   &now,
+			"todos.$[elem].humanPromptNotesUpdatedAt": &now,
+			"updatedAt": now,
+		},
+	}
+
+	arrayFilters := options.Update().SetArrayFilters(options.ArrayFilters{
+		Filters: []interface{}{
+			bson.M{"elem.id": todoID},
+		},
+	})
+
+	result, err := s.agentTasksCollection.UpdateOne(
+		ctx,
+		bson.M{"taskId": agentTaskID},
+		update,
+		arrayFilters,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to add todo prompt notes: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+	}
+
+	if result.ModifiedCount == 0 {
+		return fmt.Errorf("todo item with ID %s not found in agent task %s", todoID, agentTaskID)
+	}
+
+	return nil
+}
+
+// UpdateTodoPromptNotes updates existing human prompt notes on a specific TODO item
+func (s *MongoTaskStorage) UpdateTodoPromptNotes(agentTaskID string, todoID string, notes string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	update := bson.M{
+		"$set": bson.M{
+			"todos.$[elem].humanPromptNotes":          notes,
+			"todos.$[elem].humanPromptNotesUpdatedAt": &now,
+			"updatedAt": now,
+		},
+	}
+
+	arrayFilters := options.Update().SetArrayFilters(options.ArrayFilters{
+		Filters: []interface{}{
+			bson.M{"elem.id": todoID},
+		},
+	})
+
+	result, err := s.agentTasksCollection.UpdateOne(
+		ctx,
+		bson.M{"taskId": agentTaskID},
+		update,
+		arrayFilters,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update todo prompt notes: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+	}
+
+	if result.ModifiedCount == 0 {
+		return fmt.Errorf("todo item with ID %s not found in agent task %s", todoID, agentTaskID)
+	}
+
+	return nil
+}
+
+// ClearTodoPromptNotes removes human prompt notes from a specific TODO item
+func (s *MongoTaskStorage) ClearTodoPromptNotes(agentTaskID string, todoID string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	update := bson.M{
+		"$unset": bson.M{
+			"todos.$[elem].humanPromptNotes":          "",
+			"todos.$[elem].humanPromptNotesAddedAt":   "",
+			"todos.$[elem].humanPromptNotesUpdatedAt": "",
+		},
+		"$set": bson.M{
+			"updatedAt": now,
+		},
+	}
+
+	arrayFilters := options.Update().SetArrayFilters(options.ArrayFilters{
+		Filters: []interface{}{
+			bson.M{"elem.id": todoID},
+		},
+	})
+
+	result, err := s.agentTasksCollection.UpdateOne(
+		ctx,
+		bson.M{"taskId": agentTaskID},
+		update,
+		arrayFilters,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to clear todo prompt notes: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+	}
+
+	if result.ModifiedCount == 0 {
+		return fmt.Errorf("todo item with ID %s not found in agent task %s", todoID, agentTaskID)
 	}
 
 	return nil

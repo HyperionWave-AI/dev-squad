@@ -491,6 +491,239 @@ mcp__hyperion-coordinator__coordinator_query_knowledge({
 
 ---
 
+## 📝 Human Prompt Notes Management
+
+Enable humans to add guidance notes to agent tasks and TODOs after planning. These notes provide additional context that agents must read and incorporate during implementation.
+
+---
+
+### 10. Add Task Prompt Notes
+
+**Tool Name:** `mcp__hyperion-coordinator__coordinator_add_task_prompt_notes`
+
+**Description:** Add human guidance notes to an agent task. Notes support markdown formatting.
+
+**Parameters:**
+- `agentTaskId` (string, REQUIRED): Agent task UUID
+- `promptNotes` (string, REQUIRED): Human guidance notes, markdown supported, max 5000 chars
+
+**Example:**
+```typescript
+mcp__hyperion-coordinator__coordinator_add_task_prompt_notes({
+  agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  promptNotes: "Use streaming API for large exports. See docs/patterns.md for example. Performance target: <2s for 10K rows."
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "taskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  "notesAddedAt": "2025-10-03T10:00:00Z"
+}
+```
+
+**HTTP Bridge Example:**
+```bash
+curl -X POST http://hyperion:9999/coordinator/mcp/call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "tools/call",
+    "params": {
+      "name": "coordinator_add_task_prompt_notes",
+      "arguments": {
+        "agentTaskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+        "promptNotes": "Use streaming API"
+      }
+    }
+  }'
+```
+
+---
+
+### 11. Update Task Prompt Notes
+
+**Tool Name:** `mcp__hyperion-coordinator__coordinator_update_task_prompt_notes`
+
+**Description:** Update existing human guidance notes on an agent task.
+
+**Parameters:**
+- `agentTaskId` (string, REQUIRED): Agent task UUID
+- `promptNotes` (string, REQUIRED): Updated human guidance notes, markdown supported, max 5000 chars
+
+**Example:**
+```typescript
+mcp__hyperion-coordinator__coordinator_update_task_prompt_notes({
+  agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  promptNotes: "Updated: Use batch API instead of streaming. Target: <1s for 10K rows."
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "taskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  "notesUpdatedAt": "2025-10-03T11:00:00Z"
+}
+```
+
+---
+
+### 12. Clear Task Prompt Notes
+
+**Tool Name:** `mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes`
+
+**Description:** Clear/remove human guidance notes from an agent task.
+
+**Parameters:**
+- `agentTaskId` (string, REQUIRED): Agent task UUID
+
+**Example:**
+```typescript
+mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes({
+  agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b"
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "taskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  "clearedAt": "2025-10-03T12:00:00Z"
+}
+```
+
+---
+
+### 13. Add TODO Prompt Notes
+
+**Tool Name:** `mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes`
+
+**Description:** Add human guidance notes to a specific TODO item.
+
+**Parameters:**
+- `agentTaskId` (string, REQUIRED): Agent task UUID
+- `todoId` (string, REQUIRED): TODO item UUID
+- `promptNotes` (string, REQUIRED): Human guidance notes, markdown supported, max 5000 chars
+
+**Example:**
+```typescript
+mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes({
+  agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440",
+  promptNotes: "For this TODO: ensure transaction rollback on error. Use defer pattern."
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "taskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  "todoId": "fab8f464-a42a-4fd4-adbe-ca30825e4440",
+  "notesAddedAt": "2025-10-03T10:00:00Z"
+}
+```
+
+---
+
+### 14. Update TODO Prompt Notes
+
+**Tool Name:** `mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes`
+
+**Description:** Update existing human guidance notes on a specific TODO item.
+
+**Parameters:**
+- `agentTaskId` (string, REQUIRED): Agent task UUID
+- `todoId` (string, REQUIRED): TODO item UUID
+- `promptNotes` (string, REQUIRED): Updated human guidance notes, markdown supported, max 5000 chars
+
+**Example:**
+```typescript
+mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes({
+  agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440",
+  promptNotes: "Updated: Use context.WithTimeout instead of defer for better error handling."
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "taskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  "todoId": "fab8f464-a42a-4fd4-adbe-ca30825e4440",
+  "notesUpdatedAt": "2025-10-03T11:00:00Z"
+}
+```
+
+---
+
+### 15. Clear TODO Prompt Notes
+
+**Tool Name:** `mcp__hyperion-coordinator__coordinator_clear_todo_prompt_notes`
+
+**Description:** Clear/remove human guidance notes from a specific TODO item. Removes all 3 fields (notes, addedAt, updatedAt) from the TODO.
+
+**Parameters:**
+- `agentTaskId` (string, REQUIRED): Agent task UUID
+- `todoId` (string, REQUIRED): TODO item UUID
+
+**Example:**
+```typescript
+mcp__hyperion-coordinator__coordinator_clear_todo_prompt_notes({
+  agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440"
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "taskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+  "todoId": "fab8f464-a42a-4fd4-adbe-ca30825e4440",
+  "clearedAt": "2025-10-03T12:00:00Z"
+}
+```
+
+---
+
+### Best Practices
+
+1. **Timing:** Add notes while task status is `pending` - notes should be added before agent starts implementation
+2. **Formatting:** Use markdown for clarity (headers, lists, code blocks, links)
+3. **Conciseness:** Keep notes specific but concise (max 5000 chars enforced)
+4. **Specificity:** Reference files/functions by exact path/name for clarity
+5. **Agent Responsibility:** Agents MUST read `humanPromptNotes` BEFORE starting implementation
+
+**Example Well-Formatted Note:**
+```markdown
+## Performance Requirements
+- Target: <2s for 10K rows
+- Use batch processing (size: 1000)
+
+## Implementation Details
+- File: `backend/handlers/export.go`
+- Function: `StreamCSVExport()`
+- Pattern: See `docs/streaming-patterns.md`
+
+## Gotchas
+- Don't forget to set `Content-Disposition: attachment`
+- Must close HTTP writer explicitly
+```
+
+---
+
+### Security
+
+Input is sanitized using bluemonday's UGCPolicy to prevent XSS attacks. Dangerous HTML/scripts are automatically stripped while preserving safe markdown formatting (headers, lists, code blocks, bold, italic, links).
+
+---
+
 ## 🔄 Complete Workflow Example
 
 ### Scenario: Agent completes a task with 3 TODOs
