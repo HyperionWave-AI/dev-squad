@@ -7,20 +7,22 @@ class MCPCoordinatorClient {
   private requestId = 0;
 
   constructor() {
-    this.bridgeUrl = import.meta.env.VITE_MCP_BRIDGE_URL || 'http://localhost:8095';
+    // Use relative URL so nginx proxy handles routing
+    // This eliminates CORS issues by making requests same-origin
+    this.bridgeUrl = '';
   }
 
   async connect() {
     if (this.connected) return;
 
-    // Check if bridge is healthy
+    // Check if bridge is healthy via nginx proxy
     try {
-      const response = await fetch(`${this.bridgeUrl}/health`);
+      const response = await fetch('/bridge-health');
       if (!response.ok) {
         throw new Error('HTTP bridge not healthy');
       }
       this.connected = true;
-      console.log('Connected to MCP HTTP bridge at:', this.bridgeUrl);
+      console.log('Connected to MCP HTTP bridge via nginx proxy');
     } catch (error) {
       console.error('Failed to connect to MCP HTTP bridge:', error);
       throw error;
@@ -165,6 +167,7 @@ class MCPCoordinatorClient {
         id: task.id,
         humanTaskId: task.humanTaskId,
         agentName: task.agentName,
+        role: task.role,
         title: task.role || 'Untitled Agent Task',
         description: task.role || '',
         status: task.status,
@@ -175,8 +178,29 @@ class MCPCoordinatorClient {
         dependencies: [],
         blockers: [],
         tags: [],
-        todos: task.todos || [],
-        notes: task.notes
+        // Map todos with their humanPromptNotes fields
+        todos: (task.todos || []).map((todo: any) => ({
+          id: todo.id,
+          description: todo.description,
+          status: todo.status,
+          createdAt: todo.createdAt,
+          completedAt: todo.completedAt,
+          notes: todo.notes,
+          filePath: todo.filePath,
+          functionName: todo.functionName,
+          contextHint: todo.contextHint,
+          humanPromptNotes: todo.humanPromptNotes,
+          humanPromptNotesAddedAt: todo.humanPromptNotesAddedAt,
+          humanPromptNotesUpdatedAt: todo.humanPromptNotesUpdatedAt,
+        })),
+        notes: task.notes,
+        contextSummary: task.contextSummary,
+        filesModified: task.filesModified,
+        qdrantCollections: task.qdrantCollections,
+        priorWorkSummary: task.priorWorkSummary,
+        humanPromptNotes: task.humanPromptNotes,
+        humanPromptNotesAddedAt: task.humanPromptNotesAddedAt,
+        humanPromptNotesUpdatedAt: task.humanPromptNotesUpdatedAt
       }));
     } catch (error) {
       console.error('Failed to list agent tasks:', error);
@@ -263,6 +287,27 @@ class MCPCoordinatorClient {
     }
   }
 
+  async updateTodoStatus(params: {
+    agentTaskId: string;
+    todoId: string;
+    status: string;
+    notes?: string;
+  }): Promise<{ success: boolean }> {
+    try {
+      await this.callTool('coordinator_update_todo_status', {
+        agentTaskId: params.agentTaskId,
+        todoId: params.todoId,
+        status: params.status,
+        notes: params.notes || ''
+      });
+
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to update todo status:', error);
+      throw error;
+    }
+  }
+
   async queryKnowledge(params: {
     collection: string;
     query: string;
@@ -308,6 +353,84 @@ class MCPCoordinatorClient {
       };
     } catch (error) {
       console.error('Failed to upsert knowledge:', error);
+      throw error;
+    }
+  }
+
+  // Prompt notes methods
+  async addTaskPromptNotes(agentTaskId: string, promptNotes: string): Promise<void> {
+    console.log('[mcpClient] addTaskPromptNotes called:', { agentTaskId, promptNotes: promptNotes.substring(0, 50) });
+    try {
+      const result = await this.callTool('coordinator_add_task_prompt_notes', {
+        agentTaskId,
+        promptNotes
+      });
+      console.log('[mcpClient] addTaskPromptNotes result:', result);
+    } catch (error) {
+      console.error('Failed to add task prompt notes:', error);
+      throw error;
+    }
+  }
+
+  async updateTaskPromptNotes(agentTaskId: string, promptNotes: string): Promise<void> {
+    console.log('[mcpClient] updateTaskPromptNotes called:', { agentTaskId, promptNotes: promptNotes.substring(0, 50) });
+    try {
+      const result = await this.callTool('coordinator_update_task_prompt_notes', {
+        agentTaskId,
+        promptNotes
+      });
+      console.log('[mcpClient] updateTaskPromptNotes result:', result);
+    } catch (error) {
+      console.error('Failed to update task prompt notes:', error);
+      throw error;
+    }
+  }
+
+  async clearTaskPromptNotes(agentTaskId: string): Promise<void> {
+    try {
+      await this.callTool('coordinator_clear_task_prompt_notes', {
+        agentTaskId
+      });
+    } catch (error) {
+      console.error('Failed to clear task prompt notes:', error);
+      throw error;
+    }
+  }
+
+  async addTodoPromptNotes(agentTaskId: string, todoId: string, promptNotes: string): Promise<void> {
+    try {
+      await this.callTool('coordinator_add_todo_prompt_notes', {
+        agentTaskId,
+        todoId,
+        promptNotes
+      });
+    } catch (error) {
+      console.error('Failed to add todo prompt notes:', error);
+      throw error;
+    }
+  }
+
+  async updateTodoPromptNotes(agentTaskId: string, todoId: string, promptNotes: string): Promise<void> {
+    try {
+      await this.callTool('coordinator_update_todo_prompt_notes', {
+        agentTaskId,
+        todoId,
+        promptNotes
+      });
+    } catch (error) {
+      console.error('Failed to update todo prompt notes:', error);
+      throw error;
+    }
+  }
+
+  async clearTodoPromptNotes(agentTaskId: string, todoId: string): Promise<void> {
+    try {
+      await this.callTool('coordinator_clear_todo_prompt_notes', {
+        agentTaskId,
+        todoId
+      });
+    } catch (error) {
+      console.error('Failed to clear todo prompt notes:', error);
       throw error;
     }
   }

@@ -22,7 +22,15 @@ export interface TodoItem {
   createdAt: string;
   completedAt?: string;
   notes?: string;
+  filePath?: string;
+  functionName?: string;
+  contextHint?: string;
+  humanPromptNotes?: string;
+  humanPromptNotesAddedAt?: string;
+  humanPromptNotesUpdatedAt?: string;
 }
+
+export type TaskType = 'human' | 'agent' | 'todo';
 
 export interface AgentTask {
   id: string;
@@ -35,6 +43,10 @@ export interface AgentTask {
   updatedAt: string;
   completedAt?: string;
   notes?: string;
+  contextSummary?: string;
+  filesModified?: string[];
+  qdrantCollections?: string[];
+  priorWorkSummary?: string;
   title?: string;
   description?: string;
   priority?: Priority;
@@ -42,6 +54,38 @@ export interface AgentTask {
   dependencies?: string[];
   blockers?: string[];
   tags?: string[];
+  humanPromptNotes?: string;
+  humanPromptNotesAddedAt?: string;
+  humanPromptNotesUpdatedAt?: string;
+}
+
+// Flattened task representation for Kanban board
+export interface FlattenedTask {
+  id: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority?: Priority;
+  createdAt: string;
+  updatedAt?: string;
+  completedAt?: string;
+  taskType: TaskType;
+  agentName?: string;
+  role?: string;
+  humanTaskId?: string;
+  agentTaskId?: string;
+  parentTaskTitle?: string;
+  tags?: string[];
+  notes?: string;
+  createdBy?: string;
+  contextSummary?: string;
+  filesModified?: string[];
+  qdrantCollections?: string[];
+  priorWorkSummary?: string;
+  todos?: TodoItem[];
+  humanPromptNotes?: string;
+  humanPromptNotesAddedAt?: string;
+  humanPromptNotesUpdatedAt?: string;
 }
 
 export interface AgentRole {
