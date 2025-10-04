@@ -55,6 +55,45 @@ export const AgentTaskCard: React.FC<AgentTaskCardProps> = ({ task, onClick }) =
         </div>
       </div>
 
+      {/* Context Information */}
+      {task.contextSummary && (
+        <div className="mb-2 p-2 bg-blue-50 border border-blue-200 rounded">
+          <p className="text-xs font-semibold text-blue-900 mb-1">📋 Context</p>
+          <p className="text-xs text-blue-800">{task.contextSummary}</p>
+        </div>
+      )}
+
+      {task.filesModified && task.filesModified.length > 0 && (
+        <div className="mb-2 p-2 bg-purple-50 border border-purple-200 rounded">
+          <p className="text-xs font-semibold text-purple-900 mb-1">📁 Files to Modify</p>
+          <ul className="text-xs text-purple-800 list-disc list-inside">
+            {task.filesModified.map((file, idx) => (
+              <li key={idx} className="truncate">{file}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {task.qdrantCollections && task.qdrantCollections.length > 0 && (
+        <div className="mb-2 p-2 bg-green-50 border border-green-200 rounded">
+          <p className="text-xs font-semibold text-green-900 mb-1">🔍 Knowledge Collections</p>
+          <div className="flex gap-1 flex-wrap">
+            {task.qdrantCollections.map((collection, idx) => (
+              <span key={idx} className="text-xs px-2 py-0.5 bg-green-200 text-green-900 rounded">
+                {collection}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {task.priorWorkSummary && (
+        <div className="mb-2 p-2 bg-amber-50 border border-amber-200 rounded">
+          <p className="text-xs font-semibold text-amber-900 mb-1">🔗 Prior Work</p>
+          <p className="text-xs text-amber-800">{task.priorWorkSummary}</p>
+        </div>
+      )}
+
       {task.notes && (
         <p className="text-xs text-gray-600 mb-2 italic">{task.notes}</p>
       )}
@@ -104,6 +143,33 @@ export const AgentTaskCard: React.FC<AgentTaskCardProps> = ({ task, onClick }) =
                 }`}>
                   {todo.description}
                 </p>
+
+                {/* TODO Context Information */}
+                {todo.contextHint && (
+                  <div className="mt-1 p-1.5 bg-blue-50 border border-blue-200 rounded">
+                    <p className="text-xs font-semibold text-blue-900">💡 Context Hint</p>
+                    <p className="text-xs text-blue-800">{todo.contextHint}</p>
+                  </div>
+                )}
+
+                {todo.filePath && (
+                  <div className="mt-1 flex items-center gap-1">
+                    <span className="text-purple-700 font-semibold">📄 File:</span>
+                    <code className="text-xs bg-purple-100 px-1 py-0.5 rounded text-purple-900">
+                      {todo.filePath}
+                    </code>
+                  </div>
+                )}
+
+                {todo.functionName && (
+                  <div className="mt-1 flex items-center gap-1">
+                    <span className="text-green-700 font-semibold">⚡ Function:</span>
+                    <code className="text-xs bg-green-100 px-1 py-0.5 rounded text-green-900">
+                      {todo.functionName}
+                    </code>
+                  </div>
+                )}
+
                 {todo.notes && (
                   <p className="text-gray-500 italic mt-1">{todo.notes}</p>
                 )}

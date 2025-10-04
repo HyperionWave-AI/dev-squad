@@ -8,12 +8,12 @@ import {
   Block,
   MoreVert
 } from '@mui/icons-material';
-import type { HumanTask, Priority, TaskStatus } from '../types/coordinator';
+import type { FlattenedTask, Priority, TaskStatus } from '../types/coordinator';
 
 interface KanbanTaskCardProps {
-  task: HumanTask;
+  task: FlattenedTask;
   index: number;
-  onClick?: (task: HumanTask) => void;
+  onClick?: (task: FlattenedTask) => void;
 }
 
 const getPriorityColor = (priority: Priority): 'default' | 'primary' | 'warning' | 'error' => {
@@ -71,6 +71,25 @@ export function KanbanTaskCard({ task, index, onClick }: KanbanTaskCardProps) {
     return date.toLocaleDateString();
   };
 
+  // Visual styling based on task type
+  const getTaskTypeColor = () => {
+    switch (task.taskType) {
+      case 'human': return '#3b82f6'; // Blue
+      case 'agent': return '#8b5cf6'; // Purple
+      case 'todo': return '#10b981'; // Green
+      default: return '#64748b'; // Gray
+    }
+  };
+
+  const getTaskTypeLabel = () => {
+    switch (task.taskType) {
+      case 'human': return '👤 Human';
+      case 'agent': return '🤖 Agent';
+      case 'todo': return '📋 Todo';
+      default: return '';
+    }
+  };
+
   return (
     <Draggable draggableId={task.id} index={index}>
       {(provided, snapshot) => (
@@ -89,6 +108,7 @@ export function KanbanTaskCard({ task, index, onClick }: KanbanTaskCardProps) {
               ? '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)'
               : undefined,
             transition: 'all 0.2s ease',
+            borderLeft: `4px solid ${getTaskTypeColor()}`,
             '&:hover': {
               transform: 'translateY(-2px)',
               boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
@@ -96,14 +116,29 @@ export function KanbanTaskCard({ task, index, onClick }: KanbanTaskCardProps) {
           }}
         >
           <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-            {/* Header with Priority and Menu */}
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-              <Chip
-                label={task.priority.toUpperCase()}
-                size="small"
-                color={getPriorityColor(task.priority)}
-                sx={{ height: 20, fontSize: '0.65rem', fontWeight: 600 }}
-              />
+            {/* Header with Task Type and Priority */}
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1, gap: 1 }}>
+              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                <Chip
+                  label={getTaskTypeLabel()}
+                  size="small"
+                  sx={{
+                    height: 20,
+                    fontSize: '0.65rem',
+                    fontWeight: 600,
+                    backgroundColor: getTaskTypeColor(),
+                    color: 'white',
+                  }}
+                />
+                {task.priority && (
+                  <Chip
+                    label={task.priority.toUpperCase()}
+                    size="small"
+                    color={getPriorityColor(task.priority)}
+                    sx={{ height: 20, fontSize: '0.65rem', fontWeight: 600 }}
+                  />
+                )}
+              </Box>
               <IconButton size="small" sx={{ mt: -0.5, mr: -0.5 }}>
                 <MoreVert fontSize="small" />
               </IconButton>
@@ -141,6 +176,71 @@ export function KanbanTaskCard({ task, index, onClick }: KanbanTaskCardProps) {
               >
                 {task.description}
               </Typography>
+            )}
+
+            {/* Context Information */}
+            {task.contextSummary && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#1e3a8a', mb: 0.5 }}>
+                  📋 Context
+                </Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: '#1e40af' }}>
+                  {task.contextSummary}
+                </Typography>
+              </Box>
+            )}
+
+            {task.filesModified && task.filesModified.length > 0 && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#581c87', mb: 0.5 }}>
+                  📁 Files ({task.filesModified.length})
+                </Typography>
+                <Box component="ul" sx={{ fontSize: '0.65rem', color: '#6b21a8', pl: 2, m: 0 }}>
+                  {task.filesModified.slice(0, 3).map((file, idx) => (
+                    <li key={idx} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {file}
+                    </li>
+                  ))}
+                  {task.filesModified.length > 3 && (
+                    <li style={{ fontStyle: 'italic' }}>+ {task.filesModified.length - 3} more</li>
+                  )}
+                </Box>
+              </Box>
+            )}
+
+            {task.qdrantCollections && task.qdrantCollections.length > 0 && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#14532d', mb: 0.5 }}>
+                  🔍 Knowledge
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {task.qdrantCollections.map((collection, idx) => (
+                    <Chip
+                      key={idx}
+                      label={collection}
+                      size="small"
+                      sx={{
+                        height: 16,
+                        fontSize: '0.6rem',
+                        backgroundColor: '#bbf7d0',
+                        color: '#15803d',
+                        '& .MuiChip-label': { px: 0.75 }
+                      }}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {task.priorWorkSummary && (
+              <Box sx={{ mb: 1, p: 1, backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: '#78350f', mb: 0.5 }}>
+                  🔗 Prior Work
+                </Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: '#92400e' }}>
+                  {task.priorWorkSummary}
+                </Typography>
+              </Box>
             )}
 
             {/* Tags */}
