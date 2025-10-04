@@ -360,9 +360,19 @@ func main() {
 
 	// Configure CORS for frontend
 	config := cors.DefaultConfig()
-	config.AllowOrigins = []string{"http://localhost:5173", "http://localhost:5177", "http://localhost:5178", "http://localhost:3000"}
+	config.AllowOrigins = []string{
+		"http://localhost:5173",     // Vite dev server (host)
+		"http://localhost:5177",     // Alt Vite port
+		"http://localhost:5178",     // Alt Vite port
+		"http://localhost:9173",     // Custom UI port (via docker-compose.override.yml)
+		"http://localhost:3000",     // React dev server
+		"http://localhost",          // Docker UI (mapped to host)
+		"http://hyperion-ui",        // Docker internal network
+		"http://hyperion-ui:80",     // Docker internal network with port
+	}
 	config.AllowMethods = []string{"GET", "POST", "OPTIONS"}
 	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "X-Request-ID"}
+	config.AllowCredentials = true
 	r.Use(cors.New(config))
 
 	// Health check
