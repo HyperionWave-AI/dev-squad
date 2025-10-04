@@ -14,7 +14,7 @@ import { DragDropContext, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { KanbanTaskCard } from './KanbanTaskCard';
 import { TaskDetailDialog } from './TaskDetailDialog';
 import { mcpClient } from '../services/mcpClient';
-import type { HumanTask, AgentTask, TaskStatus } from '../types/coordinator';
+import type { HumanTask, AgentTask, TaskStatus, FlattenedTask } from '../types/coordinator';
 
 interface KanbanColumn {
   id: TaskStatus;
@@ -56,7 +56,7 @@ export function KanbanBoard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTask, setSelectedTask] = useState<HumanTask | null>(null);
+  const [selectedTask, setSelectedTask] = useState<FlattenedTask | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   // Load tasks on mount
@@ -69,6 +69,7 @@ export function KanbanBoard() {
   }, []);
 
   const loadTasks = async () => {
+    console.log('[KanbanBoard] loadTasks called, selectedTask:', selectedTask?.id, 'dialogOpen:', dialogOpen);
     try {
       setError(null);
       await mcpClient.connect();
@@ -76,8 +77,17 @@ export function KanbanBoard() {
         mcpClient.listHumanTasks(),
         mcpClient.listAgentTasks()
       ]);
+      console.log('[KanbanBoard] Tasks loaded, agents count:', agents.length);
       setTasks(humanTasks);
       setAgentTasks(agents);
+
+      // If dialog is open, refresh the selected task with fresh data
+      if (selectedTask && dialogOpen) {
+        console.log('[KanbanBoard] Refreshing selected task:', selectedTask.id);
+        refreshSelectedTask(selectedTask.id, humanTasks, agents);
+      } else {
+        console.log('[KanbanBoard] Not refreshing - selectedTask:', !!selectedTask, 'dialogOpen:', dialogOpen);
+      }
     } catch (err) {
       console.error('Failed to load tasks:', err);
       setError(err instanceof Error ? err.message : 'Failed to load tasks');
@@ -86,24 +96,185 @@ export function KanbanBoard() {
     }
   };
 
-  // Filter and organize tasks by status (combine human and agent tasks)
-  const tasksByStatus = useMemo(() => {
-    // Combine human and agent tasks into unified list
-    const allTasks = [
-      ...tasks.map(t => ({ ...t, taskType: 'human' as const })),
-      ...agentTasks.map(t => ({ ...t, taskType: 'agent' as const, tags: [] }))
-    ];
+  // Refresh the selected task after data is reloaded
+  const refreshSelectedTask = (taskId: string, humanTasks: HumanTask[], agents: AgentTask[]) => {
+    console.log('[KanbanBoard] refreshSelectedTask called for:', taskId);
+    // Check if it's a human task
+    const humanTask = humanTasks.find(t => t.id === taskId);
+    if (humanTask) {
+      console.log('[KanbanBoard] Found human task, updating selectedTask');
+      setSelectedTask({
+        id: humanTask.id,
+        title: humanTask.title,
+        description: humanTask.description,
+        status: humanTask.status,
+        priority: humanTask.priority,
+        createdAt: humanTask.createdAt,
+        updatedAt: humanTask.updatedAt,
+        completedAt: humanTask.completedAt,
+        taskType: 'human',
+        tags: humanTask.tags,
+        notes: humanTask.notes,
+        createdBy: humanTask.createdBy,
+      });
+      return;
+    }
 
+    // Check if it's an agent task
+    const agentTask = agents.find(t => t.id === taskId);
+    if (agentTask) {
+      console.log('[KanbanBoard] Found agent task, humanPromptNotes:', agentTask.humanPromptNotes);
+      setSelectedTask({
+        id: agentTask.id,
+        title: agentTask.title || `${agentTask.agentName}: ${agentTask.role}`,
+        description: agentTask.role,
+        status: agentTask.status,
+        priority: agentTask.priority,
+        createdAt: agentTask.createdAt,
+        updatedAt: agentTask.updatedAt,
+        completedAt: agentTask.completedAt,
+        taskType: 'agent',
+        agentName: agentTask.agentName,
+        role: agentTask.role,
+        humanTaskId: agentTask.humanTaskId,
+        tags: agentTask.tags || [],
+        notes: agentTask.notes,
+        contextSummary: agentTask.contextSummary,
+        filesModified: agentTask.filesModified,
+        qdrantCollections: agentTask.qdrantCollections,
+        priorWorkSummary: agentTask.priorWorkSummary,
+        todos: agentTask.todos,
+        humanPromptNotes: agentTask.humanPromptNotes,
+        humanPromptNotesAddedAt: agentTask.humanPromptNotesAddedAt,
+        humanPromptNotesUpdatedAt: agentTask.humanPromptNotesUpdatedAt,
+      });
+      return;
+    }
+    console.log('[KanbanBoard] Task not found in humanTasks or agents');
+
+    // Check if it's a todo (synthetic ID format: agentTaskId-todo-todoId)
+    if (taskId.includes('-todo-')) {
+      const parts = taskId.split('-todo-');
+      const agentTaskId = parts[0];
+      const todoId = parts[1];
+
+      const parentAgent = agents.find(t => t.id === agentTaskId);
+      const todo = parentAgent?.todos.find(t => t.id === todoId);
+
+      if (parentAgent && todo) {
+        setSelectedTask({
+          id: taskId,
+          title: todo.description,
+          description: `${parentAgent.agentName} - ${parentAgent.role}`,
+          status: todo.status === 'pending' ? 'pending'
+                : todo.status === 'in_progress' ? 'in_progress'
+                : 'completed',
+          createdAt: todo.createdAt,
+          completedAt: todo.completedAt,
+          taskType: 'todo',
+          agentName: parentAgent.agentName,
+          role: parentAgent.role,
+          humanTaskId: parentAgent.humanTaskId,
+          agentTaskId: parentAgent.id,
+          parentTaskTitle: parentAgent.title || parentAgent.role,
+          tags: [`📋 ${parentAgent.agentName}`],
+          notes: todo.notes,
+          humanPromptNotes: todo.humanPromptNotes,
+          humanPromptNotesAddedAt: todo.humanPromptNotesAddedAt,
+          humanPromptNotesUpdatedAt: todo.humanPromptNotesUpdatedAt,
+        });
+      }
+    }
+  };
+
+  // Flatten all tasks (human tasks, agent tasks, and todos) into individual cards
+  const tasksByStatus = useMemo(() => {
+    const flattenedTasks: FlattenedTask[] = [];
+
+    // Add human tasks
+    tasks.forEach(humanTask => {
+      flattenedTasks.push({
+        id: humanTask.id,
+        title: humanTask.title,
+        description: humanTask.description,
+        status: humanTask.status,
+        priority: humanTask.priority,
+        createdAt: humanTask.createdAt,
+        updatedAt: humanTask.updatedAt,
+        completedAt: humanTask.completedAt,
+        taskType: 'human',
+        tags: humanTask.tags,
+        notes: humanTask.notes,
+        createdBy: humanTask.createdBy,
+      });
+    });
+
+    // Add agent tasks and their todos as individual tasks
+    agentTasks.forEach(agentTask => {
+      // Add the agent task itself
+      flattenedTasks.push({
+        id: agentTask.id,
+        title: agentTask.title || `${agentTask.agentName}: ${agentTask.role}`,
+        description: agentTask.role,
+        status: agentTask.status,
+        priority: agentTask.priority,
+        createdAt: agentTask.createdAt,
+        updatedAt: agentTask.updatedAt,
+        completedAt: agentTask.completedAt,
+        taskType: 'agent',
+        agentName: agentTask.agentName,
+        role: agentTask.role,
+        humanTaskId: agentTask.humanTaskId,
+        tags: agentTask.tags || [],
+        notes: agentTask.notes,
+        contextSummary: agentTask.contextSummary,
+        filesModified: agentTask.filesModified,
+        qdrantCollections: agentTask.qdrantCollections,
+        priorWorkSummary: agentTask.priorWorkSummary,
+        todos: agentTask.todos,
+        humanPromptNotes: agentTask.humanPromptNotes,
+        humanPromptNotesAddedAt: agentTask.humanPromptNotesAddedAt,
+        humanPromptNotesUpdatedAt: agentTask.humanPromptNotesUpdatedAt,
+      });
+
+      // Add each todo as a separate task
+      agentTask.todos.forEach(todo => {
+        flattenedTasks.push({
+          id: `${agentTask.id}-todo-${todo.id}`,
+          title: todo.description,
+          description: `${agentTask.agentName} - ${agentTask.role}`,
+          status: todo.status === 'pending' ? 'pending'
+                : todo.status === 'in_progress' ? 'in_progress'
+                : 'completed',
+          createdAt: todo.createdAt,
+          completedAt: todo.completedAt,
+          taskType: 'todo',
+          agentName: agentTask.agentName,
+          role: agentTask.role,
+          humanTaskId: agentTask.humanTaskId,
+          agentTaskId: agentTask.id,
+          parentTaskTitle: agentTask.title || agentTask.role,
+          tags: [`📋 ${agentTask.agentName}`],
+          notes: todo.notes,
+          humanPromptNotes: todo.humanPromptNotes,
+          humanPromptNotesAddedAt: todo.humanPromptNotesAddedAt,
+          humanPromptNotesUpdatedAt: todo.humanPromptNotesUpdatedAt,
+        });
+      });
+    });
+
+    // Filter by search query
     const filtered = searchQuery
-      ? allTasks.filter(
+      ? flattenedTasks.filter(
           (task) =>
             task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             task.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            ('tags' in task && task.tags.some((tag: string) => tag.toLowerCase().includes(searchQuery.toLowerCase())))
+            task.tags?.some((tag: string) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
         )
-      : allTasks;
+      : flattenedTasks;
 
-    const grouped: Record<TaskStatus, any[]> = {
+    // Group by status
+    const grouped: Record<TaskStatus, FlattenedTask[]> = {
       pending: [],
       in_progress: [],
       blocked: [],
@@ -131,31 +302,71 @@ export function KanbanBoard() {
 
     // Update task status
     const newStatus = destination.droppableId as TaskStatus;
-    const taskId = draggableId;
 
-    // Optimistic update
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId ? { ...task, status: newStatus } : task
-      )
-    );
+    // Check if this is a todo card (synthetic ID format: agentTaskId-todo-todoId)
+    const isTodoCard = draggableId.includes('-todo-');
 
     // Update on server
     try {
-      await mcpClient.updateTaskStatus({
-        taskId,
-        status: newStatus,
-        notes: `Status changed from ${source.droppableId} to ${newStatus}`,
-      });
+      if (isTodoCard) {
+        // Parse the synthetic ID to extract agentTaskId and todoId
+        const parts = draggableId.split('-todo-');
+        const agentTaskId = parts[0];
+        const todoId = parts[1];
+
+        // Map TaskStatus to TodoStatus (both use same values: pending, in_progress, completed)
+        const todoStatus = newStatus === 'blocked' ? 'pending' : newStatus;
+
+        await mcpClient.updateTodoStatus({
+          agentTaskId,
+          todoId,
+          status: todoStatus,
+          notes: `Status changed from ${source.droppableId} to ${newStatus}`,
+        });
+
+        // Reload tasks to get updated data
+        await loadTasks();
+      } else {
+        // Regular human or agent task
+        await mcpClient.updateTaskStatus({
+          taskId: draggableId,
+          status: newStatus,
+          notes: `Status changed from ${source.droppableId} to ${newStatus}`,
+        });
+
+        // Optimistic update for human tasks
+        setTasks((prevTasks) =>
+          prevTasks.map((task) =>
+            task.id === draggableId ? { ...task, status: newStatus } : task
+          )
+        );
+
+        // Optimistic update for agent tasks
+        setAgentTasks((prevTasks) =>
+          prevTasks.map((task) =>
+            task.id === draggableId ? { ...task, status: newStatus } : task
+          )
+        );
+      }
     } catch (err) {
       console.error('Failed to update task status:', err);
-      // Revert optimistic update
+
+      // Revert optimistic updates
       setTasks((prevTasks) =>
         prevTasks.map((task) =>
-          task.id === taskId ? { ...task, status: source.droppableId as TaskStatus } : task
+          task.id === draggableId ? { ...task, status: source.droppableId as TaskStatus } : task
         )
       );
+      setAgentTasks((prevTasks) =>
+        prevTasks.map((task) =>
+          task.id === draggableId ? { ...task, status: source.droppableId as TaskStatus } : task
+        )
+      );
+
       setError('Failed to update task status');
+
+      // Reload to ensure UI is in sync
+      await loadTasks();
     }
   };
 
@@ -350,6 +561,7 @@ export function KanbanBoard() {
         task={selectedTask}
         open={dialogOpen}
         onClose={handleDialogClose}
+        onTaskUpdate={loadTasks}
       />
     </Box>
   );
