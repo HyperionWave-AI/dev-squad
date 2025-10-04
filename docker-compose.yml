@@ -1,0 +1,54 @@
+version: '3.8'
+
+# 3 Containers
+services:
+  # HTTP Bridge (connects MCP server to UI via HTTP)
+  hyperion-http-bridge:
+    build:
+      context: ./coordinator
+      dockerfile: mcp-http-bridge/Dockerfile.combined
+    container_name: hyperion-http-bridge
+    ports:
+      - "8095:8095"
+    environment:
+      - MCP_SERVER_PATH=/app/hyperion-coordinator-mcp
+      - PORT=8095
+      - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8095/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # React UI
+  hyperion-ui:
+    build:
+      context: ./coordinator/ui
+      dockerfile: Dockerfile
+      args:
+        - VITE_MCP_BRIDGE_URL=http://localhost:8095
+    container_name: hyperion-ui
+    ports:
+      - "5173:80"
+    depends_on:
+      hyperion-http-bridge:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  hyperion-network:
+    driver: bridge
+    name: hyperion-network

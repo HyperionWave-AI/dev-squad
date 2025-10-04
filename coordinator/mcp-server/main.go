@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -110,12 +111,67 @@ func main() {
 		zap.Int("tools", 9),
 		zap.Int("resources", 2))
 
-	// Start the server using stdio transport
-	logger.Info("Starting MCP server with stdio transport")
+	// Get transport mode from environment (default: stdio)
+	transportMode := os.Getenv("TRANSPORT_MODE")
+	if transportMode == "" {
+		transportMode = "stdio"
+	}
 
-	transport := mcp.NewStdioTransport()
-	if err := server.Run(context.Background(), transport); err != nil {
-		logger.Fatal("Server error", zap.Error(err))
+	mcpPort := os.Getenv("MCP_PORT")
+	if mcpPort == "" {
+		mcpPort = "7778"
+	}
+
+	switch transportMode {
+	case "http":
+		// Start HTTP Streamable transport
+		logger.Info("Starting MCP server with HTTP Streamable transport",
+			zap.String("port", mcpPort),
+			zap.String("endpoint", fmt.Sprintf("http://localhost:%s/mcp", mcpPort)))
+
+		// Create HTTP handler with streamable transport
+		handler := mcp.NewStreamableHTTPHandler(
+			func(req *http.Request) *mcp.Server {
+				return server
+			},
+			&mcp.StreamableHTTPOptions{
+				Stateless:    false, // Support stateful sessions
+				JSONResponse: true,  // Use application/json for responses
+			},
+		)
+
+		// Setup HTTP server
+		mux := http.NewServeMux()
+		mux.Handle("/mcp", handler)
+
+		// Add health check endpoint
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		})
+
+		httpServer := &http.Server{
+			Addr:    fmt.Sprintf(":%s", mcpPort),
+			Handler: mux,
+		}
+
+		logger.Info("HTTP server listening",
+			zap.String("address", httpServer.Addr),
+			zap.String("mcp_endpoint", "/mcp"),
+			zap.String("health_endpoint", "/health"))
+
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatal("HTTP server error", zap.Error(err))
+		}
+
+	default:
+		// Start stdio transport (default for Claude Code)
+		logger.Info("Starting MCP server with stdio transport")
+
+		transport := &mcp.StdioTransport{}
+		if err := server.Run(context.Background(), transport); err != nil {
+			logger.Fatal("Server error", zap.Error(err))
+		}
 	}
 
 	logger.Info("Server shutdown complete")
