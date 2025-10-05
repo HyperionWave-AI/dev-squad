@@ -4,14 +4,14 @@
 
 ### 1. Get My Tasks
 ```typescript
-mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+mcp__hyper__coordinator_list_agent_tasks({
   agentName: "YOUR_AGENT_NAME"  // Exact match required
 })
 ```
 
 ### 2. Start Working on Task
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_task_status({
+mcp__hyper__coordinator_update_task_status({
   taskId: "AGENT_TASK_UUID",
   status: "in_progress",
   notes: "Started implementation"
@@ -21,12 +21,12 @@ mcp__hyperion-coordinator__coordinator_update_task_status({
 ### 3. Update a TODO
 ```typescript
 // Get TODO IDs first!
-const tasks = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({ agentName: "..." })
+const tasks = await mcp__hyper__coordinator_list_agent_tasks({ agentName: "..." })
 const agentTaskId = tasks.tasks[0].id
 const todoId = tasks.tasks[0].todos[0].id
 
 // Then update
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,  // UUID from above
   todoId: todoId,            // UUID from above
   status: "completed",
@@ -36,7 +36,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_status({
 
 ### 4. Mark TODO In Progress
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "AGENT_TASK_UUID",
   todoId: "TODO_UUID",
   status: "in_progress",
@@ -46,7 +46,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_status({
 
 ### 5. Complete a TODO
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "AGENT_TASK_UUID",
   todoId: "TODO_UUID",
   status: "completed",
@@ -82,7 +82,7 @@ mcp__qdrant__qdrant-store({
 ### ❌ WRONG: Using todoIndex
 ```typescript
 // DON'T DO THIS
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "...",
   todoIndex: 0,  // ❌ WRONG - doesn't exist
   status: "completed"
@@ -92,11 +92,11 @@ mcp__hyperion-coordinator__coordinator_update_todo_status({
 ### ✅ CORRECT: Using todoId
 ```typescript
 // Get the UUID first
-const tasks = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({ agentName: "..." })
+const tasks = await mcp__hyper__coordinator_list_agent_tasks({ agentName: "..." })
 const todoId = tasks.tasks[0].todos[0].id  // This is a UUID
 
 // Then use it
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "...",
   todoId: todoId,  // ✅ CORRECT - UUID
   status: "completed"
@@ -138,7 +138,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_status({
 
 ```typescript
 // 1. Get your tasks
-const tasks = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+const tasks = await mcp__hyper__coordinator_list_agent_tasks({
   agentName: "Backend Services Specialist"
 })
 
@@ -146,7 +146,7 @@ const myTask = tasks.tasks[0]
 const agentTaskId = myTask.id
 
 // 2. Mark task as in progress
-await mcp__hyperion-coordinator__coordinator_update_task_status({
+await mcp__hyper__coordinator_update_task_status({
   taskId: agentTaskId,
   status: "in_progress",
   notes: "Starting work"
@@ -155,7 +155,7 @@ await mcp__hyperion-coordinator__coordinator_update_task_status({
 // 3. Work through each TODO
 for (const todo of myTask.todos) {
   // Mark TODO as in progress
-  await mcp__hyperion-coordinator__coordinator_update_todo_status({
+  await mcp__hyper__coordinator_update_todo_status({
     agentTaskId: agentTaskId,
     todoId: todo.id,
     status: "in_progress"
@@ -164,7 +164,7 @@ for (const todo of myTask.todos) {
   // Do the work...
 
   // Mark TODO as completed
-  await mcp__hyperion-coordinator__coordinator_update_todo_status({
+  await mcp__hyper__coordinator_update_todo_status({
     agentTaskId: agentTaskId,
     todoId: todo.id,
     status: "completed",

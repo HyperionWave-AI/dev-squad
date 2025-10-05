@@ -23,7 +23,7 @@ Phase 2 knowledge management prompts help agents optimize their Qdrant queries a
 
 **Example Usage:**
 ```typescript
-const prompt = await mcp__hyperion-coordinator__prompts_get({
+const prompt = await mcp__hyper__prompts_get({
   name: "recommend_qdrant_query",
   arguments: {
     agentQuestion: "How do I implement JWT authentication middleware?",
@@ -67,7 +67,7 @@ const contextJSON = JSON.stringify({
   filesModified: ["middleware/auth.go", "middleware/auth_test.go"]
 });
 
-const prompt = await mcp__hyperion-coordinator__prompts_get({
+const prompt = await mcp__hyper__prompts_get({
   name: "suggest_knowledge_structure",
   arguments: {
     rawLearning: "Implemented JWT validation using HS256. Had to handle token expiration carefully.",

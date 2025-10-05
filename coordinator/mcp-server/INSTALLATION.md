@@ -29,7 +29,7 @@ npm install -g @hyperion/coordinator-mcp
 Restart Claude Code, then test:
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 ```
 
 **Updates:**
@@ -70,7 +70,7 @@ Then manually add to Claude Code config:
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
+    "hyper": {
       "command": "npx",
       "args": ["-y", "@hyperion/coordinator-mcp"]
     }
@@ -84,22 +84,22 @@ Then manually add to Claude Code config:
 
 **Download for your platform:**
 
-- **macOS (Intel):** [hyperion-coordinator-mcp-darwin-amd64](https://github.com/yourorg/hyperion-coordinator-mcp/releases)
-- **macOS (Apple Silicon):** [hyperion-coordinator-mcp-darwin-arm64](https://github.com/yourorg/hyperion-coordinator-mcp/releases)
-- **Linux (x64):** [hyperion-coordinator-mcp-linux-amd64](https://github.com/yourorg/hyperion-coordinator-mcp/releases)
-- **Windows (x64):** [hyperion-coordinator-mcp-windows-amd64.exe](https://github.com/yourorg/hyperion-coordinator-mcp/releases)
+- **macOS (Intel):** [hyper-mcp-darwin-amd64](https://github.com/yourorg/hyper-mcp/releases)
+- **macOS (Apple Silicon):** [hyper-mcp-darwin-arm64](https://github.com/yourorg/hyper-mcp/releases)
+- **Linux (x64):** [hyper-mcp-linux-amd64](https://github.com/yourorg/hyper-mcp/releases)
+- **Windows (x64):** [hyper-mcp-windows-amd64.exe](https://github.com/yourorg/hyper-mcp/releases)
 
 **Installation:**
 
 ```bash
 # macOS/Linux
-curl -L https://github.com/yourorg/hyperion-coordinator-mcp/releases/latest/download/hyperion-coordinator-mcp-$(uname -s)-$(uname -m) -o hyperion-coordinator-mcp
-chmod +x hyperion-coordinator-mcp
-sudo mv hyperion-coordinator-mcp /usr/local/bin/
+curl -L https://github.com/yourorg/hyper-mcp/releases/latest/download/hyper-mcp-$(uname -s)-$(uname -m) -o hyper-mcp
+chmod +x hyper-mcp
+sudo mv hyper-mcp /usr/local/bin/
 
 # Windows (PowerShell)
-Invoke-WebRequest -Uri "https://github.com/yourorg/hyperion-coordinator-mcp/releases/latest/download/hyperion-coordinator-mcp-windows-amd64.exe" -OutFile "hyperion-coordinator-mcp.exe"
-Move-Item hyperion-coordinator-mcp.exe "$env:ProgramFiles\hyperion-coordinator-mcp.exe"
+Invoke-WebRequest -Uri "https://github.com/yourorg/hyper-mcp/releases/latest/download/hyper-mcp-windows-amd64.exe" -OutFile "hyper-mcp.exe"
+Move-Item hyper-mcp.exe "$env:ProgramFiles\hyper-mcp.exe"
 ```
 
 **Claude Code configuration:**
@@ -107,8 +107,8 @@ Move-Item hyperion-coordinator-mcp.exe "$env:ProgramFiles\hyperion-coordinator-m
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
-      "command": "/usr/local/bin/hyperion-coordinator-mcp"
+    "hyper": {
+      "command": "/usr/local/bin/hyper-mcp"
     }
   }
 }
@@ -126,20 +126,20 @@ Move-Item hyperion-coordinator-mcp.exe "$env:ProgramFiles\hyperion-coordinator-m
 
 ```bash
 # Clone repository
-git clone https://github.com/yourorg/hyperion-coordinator-mcp.git
-cd hyperion-coordinator-mcp
+git clone https://github.com/yourorg/hyper-mcp.git
+cd hyper-mcp
 
 # Install dependencies
 go mod download
 
 # Build binary
-go build -o hyperion-coordinator-mcp main.go
+go build -o hyper-mcp main.go
 
 # Make executable (macOS/Linux)
-chmod +x hyperion-coordinator-mcp
+chmod +x hyper-mcp
 
 # Add to PATH (optional)
-sudo mv hyperion-coordinator-mcp /usr/local/bin/
+sudo mv hyper-mcp /usr/local/bin/
 ```
 
 **Auto-configure Claude Code:**
@@ -155,8 +155,8 @@ Edit Claude Code config file and add:
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
-      "command": "/path/to/hyperion-coordinator-mcp",
+    "hyper": {
+      "command": "/path/to/hyper-mcp",
       "env": {
         "MONGODB_URI": "your_mongodb_uri",
         "MONGODB_DATABASE": "coordinator_db"
@@ -179,7 +179,7 @@ Edit Claude Code config file and add:
 
 ```bash
 docker run -d \
-  --name hyperion-coordinator-mcp \
+  --name hyper-mcp \
   -e MONGODB_URI="your_mongodb_uri" \
   -e MONGODB_DATABASE="coordinator_db" \
   hyperion/coordinator-mcp:latest
@@ -190,9 +190,9 @@ docker run -d \
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
+    "hyper": {
       "command": "docker",
-      "args": ["exec", "-i", "hyperion-coordinator-mcp", "/app/hyperion-coordinator-mcp"]
+      "args": ["exec", "-i", "hyper-mcp", "/app/hyper-mcp"]
     }
   }
 }
@@ -201,7 +201,7 @@ docker run -d \
 **Build Docker image:**
 
 ```bash
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 docker build -t hyperion/coordinator-mcp:latest .
 ```
 
@@ -215,15 +215,15 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -o hyperion-coordinator-mcp main.go
+RUN go build -o hyper-mcp main.go
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
-COPY --from=builder /build/hyperion-coordinator-mcp .
+COPY --from=builder /build/hyper-mcp .
 
-ENTRYPOINT ["/app/hyperion-coordinator-mcp"]
+ENTRYPOINT ["/app/hyper-mcp"]
 ```
 
 ---
@@ -264,7 +264,7 @@ Create MongoDB Atlas account: https://www.mongodb.com/cloud/atlas/register
 
 ```bash
 # Test with echo
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | hyperion-coordinator-mcp
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | hyper-mcp
 ```
 
 **Expected output:**
@@ -289,15 +289,15 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | hyperion-coo
 
 ```typescript
 // List available tools
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 
 // Create a test task
-mcp__hyperion-coordinator__coordinator_create_human_task({
+mcp__hyper__coordinator_create_human_task({
   prompt: "Test task"
 })
 
 // Query knowledge
-mcp__hyperion-coordinator__coordinator_query_knowledge({
+mcp__hyper__coordinator_query_knowledge({
   collection: "technical-knowledge",
   query: "test",
   limit: 5
@@ -308,10 +308,10 @@ mcp__hyperion-coordinator__coordinator_query_knowledge({
 
 ## 🔧 Troubleshooting
 
-### "command not found: hyperion-coordinator-mcp"
+### "command not found: hyper-mcp"
 
 **Solution:** Binary not in PATH. Either:
-1. Use full path: `/usr/local/bin/hyperion-coordinator-mcp`
+1. Use full path: `/usr/local/bin/hyper-mcp`
 2. Add to PATH: `export PATH=$PATH:/path/to/binary`
 
 ### "Go is not installed"
@@ -353,10 +353,10 @@ tail -f ~/Library/Logs/Claude/mcp*.log
 
 ```bash
 # Make binary executable
-chmod +x hyperion-coordinator-mcp
+chmod +x hyper-mcp
 
 # If installing to /usr/local/bin
-sudo mv hyperion-coordinator-mcp /usr/local/bin/
+sudo mv hyper-mcp /usr/local/bin/
 ```
 
 ---
@@ -375,9 +375,9 @@ sudo mv hyperion-coordinator-mcp /usr/local/bin/
 
 ## 🆘 Support
 
-- **Documentation:** https://github.com/yourorg/hyperion-coordinator-mcp
-- **Issues:** https://github.com/yourorg/hyperion-coordinator-mcp/issues
-- **Discussions:** https://github.com/yourorg/hyperion-coordinator-mcp/discussions
+- **Documentation:** https://github.com/yourorg/hyper-mcp
+- **Issues:** https://github.com/yourorg/hyper-mcp/issues
+- **Discussions:** https://github.com/yourorg/hyper-mcp/discussions
 
 ---
 
@@ -398,7 +398,7 @@ If you previously installed manually, migrate to npm:
 
 ```bash
 # Remove old binary
-sudo rm /usr/local/bin/hyperion-coordinator-mcp
+sudo rm /usr/local/bin/hyper-mcp
 
 # Install via npm
 npm install -g @hyperion/coordinator-mcp

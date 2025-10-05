@@ -1,6 +1,6 @@
 version: '3.8'
 
-# 4 Containers
+# 6 Containers: MCP Server, HTTP Bridge, UI, MongoDB, Qdrant, (optional: Mongo Express)
 services:
   # MCP Server (HTTP mode for Claude CLI)
   hyperion-mcp-server:
@@ -13,12 +13,14 @@ services:
     environment:
       - TRANSPORT_MODE=http
       - MCP_PORT=7778
-      - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db_max}
-      - QDRANT_URL=http://qdrant:6333
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     depends_on:
+      mongodb:
+        condition: service_healthy
       qdrant:
         condition: service_healthy
     restart: unless-stopped
@@ -42,12 +44,14 @@ services:
     environment:
       - MCP_SERVER_PATH=/app/hyperion-coordinator-mcp
       - PORT=8095
-      - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db_max}
-      - QDRANT_URL=http://qdrant:6333
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     depends_on:
+      mongodb:
+        condition: service_healthy
       qdrant:
         condition: service_healthy
     restart: unless-stopped
@@ -82,6 +86,29 @@ services:
       timeout: 5s
       retries: 3
 
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: hyperion-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin123
+      - MONGO_INITDB_DATABASE=coordinator_db
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # Qdrant Vector Database
   qdrant:
     image: qdrant/qdrant:latest
@@ -102,6 +129,10 @@ services:
       start_period: 10s
 
 volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
   qdrant_data:
     driver: local
 
