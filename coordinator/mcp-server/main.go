@@ -36,7 +36,7 @@ func main() {
 
 	mongoDatabase := os.Getenv("MONGODB_DATABASE")
 	if mongoDatabase == "" {
-		mongoDatabase = "coordinator_db"
+		mongoDatabase = "coordinator_db1"
 	}
 
 	logger.Info("Connecting to MongoDB Atlas",
@@ -89,17 +89,54 @@ func main() {
 	opts := &mcp.ServerOptions{
 		HasResources: true,
 		HasTools:     true,
+		HasPrompts:   true,
 	}
 
 	server := mcp.NewServer(impl, opts)
 
+	// Initialize Qdrant client
+	qdrantURL := os.Getenv("QDRANT_URL")
+	if qdrantURL == "" {
+		qdrantURL = "http://qdrant:6333"
+	}
+	qdrantClient := storage.NewQdrantClient(qdrantURL)
+	logger.Info("Qdrant client initialized", zap.String("url", qdrantURL))
+
 	// Initialize handlers
 	resourceHandler := handlers.NewResourceHandler(taskStorage, knowledgeStorage)
+	docResourceHandler := handlers.NewDocResourceHandler()
+	workflowResourceHandler := handlers.NewWorkflowResourceHandler(taskStorage)
+	knowledgeResourceHandler := handlers.NewKnowledgeResourceHandler(knowledgeStorage)
+	metricsResourceHandler := handlers.NewMetricsResourceHandler(taskStorage)
 	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage)
+	qdrantToolHandler := handlers.NewQdrantToolHandler(qdrantClient)
+	planningPromptHandler := handlers.NewPlanningPromptHandler()
+	knowledgePromptHandler := handlers.NewKnowledgePromptHandler()
+	coordinationPromptHandler := handlers.NewCoordinationPromptHandler()
 
 	// Register resource handlers
 	if err := resourceHandler.RegisterResourceHandlers(server); err != nil {
 		logger.Fatal("Failed to register resource handlers", zap.Error(err))
+	}
+
+	// Register documentation resource handlers
+	if err := docResourceHandler.RegisterDocResources(server); err != nil {
+		logger.Fatal("Failed to register documentation resource handlers", zap.Error(err))
+	}
+
+	// Register workflow resource handlers
+	if err := workflowResourceHandler.RegisterWorkflowResources(server); err != nil {
+		logger.Fatal("Failed to register workflow resource handlers", zap.Error(err))
+	}
+
+	// Register knowledge resource handlers
+	if err := knowledgeResourceHandler.RegisterKnowledgeResources(server); err != nil {
+		logger.Fatal("Failed to register knowledge resource handlers", zap.Error(err))
+	}
+
+	// Register metrics resource handlers
+	if err := metricsResourceHandler.RegisterMetricsResources(server); err != nil {
+		logger.Fatal("Failed to register metrics resource handlers", zap.Error(err))
 	}
 
 	// Register tool handlers
@@ -107,9 +144,30 @@ func main() {
 		logger.Fatal("Failed to register tool handlers", zap.Error(err))
 	}
 
+	// Register Qdrant tool handlers
+	if err := qdrantToolHandler.RegisterQdrantTools(server); err != nil {
+		logger.Fatal("Failed to register Qdrant tool handlers", zap.Error(err))
+	}
+
+	// Register planning prompts
+	if err := planningPromptHandler.RegisterPlanningPrompts(server); err != nil {
+		logger.Fatal("Failed to register planning prompts", zap.Error(err))
+	}
+
+	// Register knowledge management prompts
+	if err := knowledgePromptHandler.RegisterKnowledgePrompts(server); err != nil {
+		logger.Fatal("Failed to register knowledge prompts", zap.Error(err))
+	}
+
+	// Register coordination prompts
+	if err := coordinationPromptHandler.RegisterCoordinationPrompts(server); err != nil {
+		logger.Fatal("Failed to register coordination prompts", zap.Error(err))
+	}
+
 	logger.Info("All handlers registered successfully",
-		zap.Int("tools", 9),
-		zap.Int("resources", 2))
+		zap.Int("tools", 11), // 9 coordinator + 2 qdrant
+		zap.Int("resources", 12), // 2 task + 3 doc + 3 workflow + 2 knowledge + 2 metrics
+		zap.Int("prompts", 6))    // 2 planning + 2 knowledge + 2 coordination
 
 	// Get transport mode from environment (default: stdio)
 	transportMode := os.Getenv("TRANSPORT_MODE")

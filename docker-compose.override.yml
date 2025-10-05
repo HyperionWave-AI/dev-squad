@@ -5,10 +5,15 @@
 version: '3.8'
 
 services:
-  # HTTP Bridge - Override host port
+  # MCP Server - Override host port (for Claude CLI)
+  hyperion-mcp-server:
+    ports:
+      - "7778:7778"  # host:container (container port must stay 7778)
+
+  # HTTP Bridge - Override host port (for Web UI)
   hyperion-http-bridge:
     ports:
-      - "9095:8095"  # host:container (container port must stay 8095)
+      - "8095:8095"  # host:container (container port must stay 8095)
 
   # React UI - Override host port
   hyperion-ui:
