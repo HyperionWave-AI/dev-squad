@@ -10,13 +10,13 @@ The Hyperion Coordinator MCP server is now installed and configured:
 
 ### What Was Set Up
 
-1. **Docker Container**: `hyperion-coordinator-mcp`
+1. **Docker Container**: `hyper-mcp`
    - Running MCP server in isolated container
    - Connected to MongoDB Atlas (coordinator_db_max)
    - Automatically restarts on failure
 
 2. **Claude Code Configuration**: `~/.claude/settings.json`
-   - MCP server: `hyperion-coordinator`
+   - MCP server: `hyper`
    - Communication: Docker exec stdin/stdout
    - Environment: MongoDB URI and database configured
 
@@ -39,12 +39,12 @@ docker-compose -f docker-compose.mcp-only.yml up -d
 ### 2. Verify Container is Running
 
 ```bash
-docker ps | grep hyperion-coordinator-mcp
+docker ps | grep hyper-mcp
 ```
 
 **Expected output:**
 ```
-hyperion-coordinator-mcp   ... Up X seconds
+hyper-mcp   ... Up X seconds
 ```
 
 ### 3. Restart Claude Code
@@ -62,10 +62,10 @@ After restarting Claude Code, test the coordinator:
 
 ```typescript
 // List human tasks
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 
 // Create a test task
-mcp__hyperion-coordinator__coordinator_create_human_task({
+mcp__hyper__coordinator_create_human_task({
   prompt: "Test task for Docker installation"
 })
 ```
@@ -77,25 +77,25 @@ mcp__hyperion-coordinator__coordinator_create_human_task({
 ### View Container Logs
 
 ```bash
-docker logs hyperion-coordinator-mcp --tail 50 -f
+docker logs hyper-mcp --tail 50 -f
 ```
 
 ### Restart Container
 
 ```bash
-docker restart hyperion-coordinator-mcp
+docker restart hyper-mcp
 ```
 
 ### Stop Container
 
 ```bash
-docker stop hyperion-coordinator-mcp
+docker stop hyper-mcp
 ```
 
 ### Start Container
 
 ```bash
-docker start hyperion-coordinator-mcp
+docker start hyper-mcp
 ```
 
 ### Rebuild After Code Changes
@@ -144,19 +144,19 @@ Once Claude Code is restarted, you'll have access to **9 MCP tools**:
 
 ```bash
 # Check container status
-docker ps -a | grep hyperion-coordinator-mcp
+docker ps -a | grep hyper-mcp
 
 # Check logs for errors
-docker logs hyperion-coordinator-mcp
+docker logs hyper-mcp
 
 # Restart container
-docker restart hyperion-coordinator-mcp
+docker restart hyper-mcp
 ```
 
 ### MCP Server Not Appearing in Claude Code
 
 **Solution:**
-1. Verify container is running: `docker ps | grep hyperion-coordinator-mcp`
+1. Verify container is running: `docker ps | grep hyper-mcp`
 2. Check settings.json syntax is valid
 3. **RESTART Claude Code** (this is critical!)
 4. Check Claude Code logs for MCP connection errors
@@ -165,7 +165,7 @@ docker restart hyperion-coordinator-mcp
 
 **Check logs:**
 ```bash
-docker logs hyperion-coordinator-mcp | grep -i mongo
+docker logs hyper-mcp | grep -i mongo
 ```
 
 **Expected output:**
@@ -233,7 +233,7 @@ docker-compose -f coordinator/docker-compose.mcp-only.yml up -d --build
                 │ docker exec -i
                 ▼
 ┌─────────────────────────────────────┐
-│  Container: hyperion-coordinator-mcp│
+│  Container: hyper-mcp│
 │  ┌───────────────────────────────┐  │
 │  │ MCP Server (stdio)            │  │
 │  │ - 9 tools                     │  │

@@ -14,7 +14,7 @@ The Hyperion Coordinator MCP now includes two specialized prompts to help Workfl
 
 **Example Usage:**
 ```typescript
-const prompt = await mcp__hyperion-coordinator__prompts_get({
+const prompt = await mcp__hyper__prompts_get({
   name: "plan_task_breakdown",
   arguments: {
     taskDescription: "Implement JWT authentication middleware for the API gateway",
@@ -54,7 +54,7 @@ const prompt = await mcp__hyperion-coordinator__prompts_get({
 
 **Example Usage:**
 ```typescript
-const prompt = await mcp__hyperion-coordinator__prompts_get({
+const prompt = await mcp__hyper__prompts_get({
   name: "suggest_context_offload",
   arguments: {
     taskScope: "Build a new MCP tool for task management with MongoDB storage, comprehensive error handling, and WebSocket notifications",
@@ -132,7 +132,7 @@ Use Qdrant for patterns that apply across multiple tasks:
 
 2. **Break down the task:**
    ```typescript
-   const breakdownPrompt = await mcp__hyperion-coordinator__prompts_get({
+   const breakdownPrompt = await mcp__hyper__prompts_get({
      name: "plan_task_breakdown",
      arguments: {
        taskDescription: humanTask.prompt,
@@ -145,7 +145,7 @@ Use Qdrant for patterns that apply across multiple tasks:
 
 3. **Determine context strategy:**
    ```typescript
-   const contextPrompt = await mcp__hyperion-coordinator__prompts_get({
+   const contextPrompt = await mcp__hyper__prompts_get({
      name: "suggest_context_offload",
      arguments: {
        taskScope: humanTask.prompt,

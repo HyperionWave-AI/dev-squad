@@ -2,18 +2,18 @@
 
 **Version:** 1.0
 **Last Updated:** 2025-10-01
-**Purpose:** Authoritative reference for all agents on how to interact with hyperion-coordinator MCP
+**Purpose:** Authoritative reference for all agents on how to interact with hyper MCP
 
 ---
 
 ## 🚨 CRITICAL: Tool Naming Convention
 
-**ALL coordinator MCP tools use the prefix:** `mcp__hyperion-coordinator__`
+**ALL coordinator MCP tools use the prefix:** `mcp__hyper__`
 
 **Example:**
 ```typescript
 // ✅ CORRECT
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 
 // ❌ WRONG - Missing mcp__ prefix
 coordinator_list_human_tasks({})
@@ -28,7 +28,7 @@ mcp__coordinator__coordinator_list_human_tasks({})
 
 ### 1. List Human Tasks
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_list_human_tasks`
+**Tool Name:** `mcp__hyper__coordinator_list_human_tasks`
 
 **Description:** Retrieve all human tasks from MongoDB (real-time, always fresh data)
 
@@ -36,7 +36,7 @@ mcp__coordinator__coordinator_list_human_tasks({})
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 ```
 
 **Returns:**
@@ -58,7 +58,7 @@ mcp__hyperion-coordinator__coordinator_list_human_tasks({})
 
 ### 2. List Agent Tasks
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_list_agent_tasks`
+**Tool Name:** `mcp__hyper__coordinator_list_agent_tasks`
 
 **Description:** Retrieve agent tasks, optionally filtered by agent name or human task
 
@@ -69,15 +69,15 @@ mcp__hyperion-coordinator__coordinator_list_human_tasks({})
 **Examples:**
 ```typescript
 // List all agent tasks
-mcp__hyperion-coordinator__coordinator_list_agent_tasks({})
+mcp__hyper__coordinator_list_agent_tasks({})
 
 // List tasks for specific agent
-mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+mcp__hyper__coordinator_list_agent_tasks({
   agentName: "Backend Services Specialist"
 })
 
 // List tasks for specific human task
-mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+mcp__hyper__coordinator_list_agent_tasks({
   humanTaskId: "4361dcdb-3781-4686-88d3-3feb20c6948e"
 })
 ```
@@ -112,7 +112,7 @@ mcp__hyperion-coordinator__coordinator_list_agent_tasks({
 
 ### 3. Create Human Task
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_create_human_task`
+**Tool Name:** `mcp__hyper__coordinator_create_human_task`
 
 **Description:** Create a new human task (user request/prompt)
 
@@ -121,7 +121,7 @@ mcp__hyperion-coordinator__coordinator_list_agent_tasks({
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_create_human_task({
+mcp__hyper__coordinator_create_human_task({
   prompt: "Build a feature to export data to CSV format"
 })
 ```
@@ -139,7 +139,7 @@ mcp__hyperion-coordinator__coordinator_create_human_task({
 
 ### 4. Create Agent Task
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_create_agent_task`
+**Tool Name:** `mcp__hyper__coordinator_create_agent_task`
 
 **Description:** Create a new agent task with TODOs under a human task. **Supports context-rich task creation** to minimize agent context window usage by embedding business context, file paths, pattern references, and implementation hints directly in the task.
 
@@ -166,7 +166,7 @@ mcp__hyperion-coordinator__coordinator_create_human_task({
 
 **Example 1: Legacy Format (String Array - Still Supported)**
 ```typescript
-mcp__hyperion-coordinator__coordinator_create_agent_task({
+mcp__hyper__coordinator_create_agent_task({
   humanTaskId: "4361dcdb-3781-4686-88d3-3feb20c6948e",
   agentName: "Backend Services Specialist",
   role: "Build REST API endpoints for data export",
@@ -181,7 +181,7 @@ mcp__hyperion-coordinator__coordinator_create_agent_task({
 
 **Example 2: Context-Rich Format (Recommended - Prevents Context Exhaustion)**
 ```typescript
-mcp__hyperion-coordinator__coordinator_create_agent_task({
+mcp__hyper__coordinator_create_agent_task({
   humanTaskId: "4361dcdb-3781-4686-88d3-3feb20c6948e",
   agentName: "Backend Services Specialist",
 
@@ -267,7 +267,7 @@ Workflow Coordinators should ALWAYS use the context-rich format to prevent agent
 
 ### 5. Update Task Status
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_update_task_status`
+**Tool Name:** `mcp__hyper__coordinator_update_task_status`
 
 **Description:** Update the status of a human task or agent task
 
@@ -279,21 +279,21 @@ Workflow Coordinators should ALWAYS use the context-rich format to prevent agent
 **Example:**
 ```typescript
 // Mark agent task as in progress
-mcp__hyperion-coordinator__coordinator_update_task_status({
+mcp__hyper__coordinator_update_task_status({
   taskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   status: "in_progress",
   notes: "Started implementation of backend API"
 })
 
 // Mark as completed
-mcp__hyperion-coordinator__coordinator_update_task_status({
+mcp__hyper__coordinator_update_task_status({
   taskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   status: "completed",
   notes: "All endpoints implemented and tested"
 })
 
 // Mark as blocked
-mcp__hyperion-coordinator__coordinator_update_task_status({
+mcp__hyper__coordinator_update_task_status({
   taskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   status: "blocked",
   notes: "Waiting for database schema approval from Data Platform Specialist"
@@ -313,7 +313,7 @@ mcp__hyperion-coordinator__coordinator_update_task_status({
 
 ### 6. Update TODO Status
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_update_todo_status`
+**Tool Name:** `mcp__hyper__coordinator_update_todo_status`
 
 **Description:** Update the status of an individual TODO item within an agent task
 
@@ -326,14 +326,14 @@ mcp__hyperion-coordinator__coordinator_update_task_status({
 **❌ COMMON MISTAKES:**
 ```typescript
 // WRONG - using taskId instead of agentTaskId
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   taskId: "...",  // ❌ WRONG PARAMETER NAME
   todoId: "...",
   status: "completed"
 })
 
 // WRONG - using todoIndex instead of todoId
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "...",
   todoIndex: 0,  // ❌ WRONG - doesn't exist
   status: "completed"
@@ -342,7 +342,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_status({
 
 **✅ CORRECT USAGE:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",  // ✅ Agent task UUID
   todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440",      // ✅ TODO item UUID
   status: "completed",
@@ -353,7 +353,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_status({
 **How to get TODO IDs:**
 ```typescript
 // First, list your agent tasks to see TODO items with their IDs
-const result = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+const result = await mcp__hyper__coordinator_list_agent_tasks({
   agentName: "Backend Services Specialist"
 })
 
@@ -370,7 +370,7 @@ const result = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({
 // }
 
 // Then update specific TODO by its ID
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440",
   status: "completed"
@@ -394,7 +394,7 @@ When ALL TODOs in an agent task are marked as `completed`, the agent task status
 
 ### 7. Clear Task Board
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_clear_task_board`
+**Tool Name:** `mcp__hyper__coordinator_clear_task_board`
 
 **Description:** Delete ALL human tasks and agent tasks (destructive operation)
 
@@ -403,7 +403,7 @@ When ALL TODOs in an agent task are marked as `completed`, the agent task status
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_clear_task_board({
+mcp__hyper__coordinator_clear_task_board({
   confirm: true
 })
 ```
@@ -423,7 +423,7 @@ mcp__hyperion-coordinator__coordinator_clear_task_board({
 
 ### 8. Upsert Knowledge
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_upsert_knowledge`
+**Tool Name:** `mcp__hyper__coordinator_upsert_knowledge`
 
 **Description:** Store knowledge in the coordinator's Qdrant knowledge base
 
@@ -434,7 +434,7 @@ mcp__hyperion-coordinator__coordinator_clear_task_board({
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_upsert_knowledge({
+mcp__hyper__coordinator_upsert_knowledge({
   collection: "task:hyperion://task/human/4361dcdb-3781-4686-88d3-3feb20c6948e",
   text: "Implemented CSV export feature using streaming to handle large datasets. Key gotcha: must set Content-Type header to text/csv and Content-Disposition to attachment.",
   metadata: {
@@ -458,7 +458,7 @@ mcp__hyperion-coordinator__coordinator_upsert_knowledge({
 
 ### 9. Query Knowledge
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_query_knowledge`
+**Tool Name:** `mcp__hyper__coordinator_query_knowledge`
 
 **Description:** Search the coordinator's knowledge base using semantic similarity
 
@@ -469,7 +469,7 @@ mcp__hyperion-coordinator__coordinator_upsert_knowledge({
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_query_knowledge({
+mcp__hyper__coordinator_query_knowledge({
   collection: "task:hyperion://task/human/4361dcdb-3781-4686-88d3-3feb20c6948e",
   query: "How to implement CSV export with streaming",
   limit: 3
@@ -499,7 +499,7 @@ Enable humans to add guidance notes to agent tasks and TODOs after planning. The
 
 ### 10. Add Task Prompt Notes
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_add_task_prompt_notes`
+**Tool Name:** `mcp__hyper__coordinator_add_task_prompt_notes`
 
 **Description:** Add human guidance notes to an agent task. Notes support markdown formatting.
 
@@ -509,7 +509,7 @@ Enable humans to add guidance notes to agent tasks and TODOs after planning. The
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_add_task_prompt_notes({
+mcp__hyper__coordinator_add_task_prompt_notes({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   promptNotes: "Use streaming API for large exports. See docs/patterns.md for example. Performance target: <2s for 10K rows."
 })
@@ -544,7 +544,7 @@ curl -X POST http://hyperion:9999/coordinator/mcp/call \
 
 ### 11. Update Task Prompt Notes
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_update_task_prompt_notes`
+**Tool Name:** `mcp__hyper__coordinator_update_task_prompt_notes`
 
 **Description:** Update existing human guidance notes on an agent task.
 
@@ -554,7 +554,7 @@ curl -X POST http://hyperion:9999/coordinator/mcp/call \
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_task_prompt_notes({
+mcp__hyper__coordinator_update_task_prompt_notes({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   promptNotes: "Updated: Use batch API instead of streaming. Target: <1s for 10K rows."
 })
@@ -573,7 +573,7 @@ mcp__hyperion-coordinator__coordinator_update_task_prompt_notes({
 
 ### 12. Clear Task Prompt Notes
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes`
+**Tool Name:** `mcp__hyper__coordinator_clear_task_prompt_notes`
 
 **Description:** Clear/remove human guidance notes from an agent task.
 
@@ -582,7 +582,7 @@ mcp__hyperion-coordinator__coordinator_update_task_prompt_notes({
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes({
+mcp__hyper__coordinator_clear_task_prompt_notes({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b"
 })
 ```
@@ -600,7 +600,7 @@ mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes({
 
 ### 13. Add TODO Prompt Notes
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes`
+**Tool Name:** `mcp__hyper__coordinator_add_todo_prompt_notes`
 
 **Description:** Add human guidance notes to a specific TODO item.
 
@@ -611,7 +611,7 @@ mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes({
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes({
+mcp__hyper__coordinator_add_todo_prompt_notes({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440",
   promptNotes: "For this TODO: ensure transaction rollback on error. Use defer pattern."
@@ -632,7 +632,7 @@ mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes({
 
 ### 14. Update TODO Prompt Notes
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes`
+**Tool Name:** `mcp__hyper__coordinator_update_todo_prompt_notes`
 
 **Description:** Update existing human guidance notes on a specific TODO item.
 
@@ -643,7 +643,7 @@ mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes({
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes({
+mcp__hyper__coordinator_update_todo_prompt_notes({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440",
   promptNotes: "Updated: Use context.WithTimeout instead of defer for better error handling."
@@ -664,7 +664,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes({
 
 ### 15. Clear TODO Prompt Notes
 
-**Tool Name:** `mcp__hyperion-coordinator__coordinator_clear_todo_prompt_notes`
+**Tool Name:** `mcp__hyper__coordinator_clear_todo_prompt_notes`
 
 **Description:** Clear/remove human guidance notes from a specific TODO item. Removes all 3 fields (notes, addedAt, updatedAt) from the TODO.
 
@@ -674,7 +674,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes({
 
 **Example:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_clear_todo_prompt_notes({
+mcp__hyper__coordinator_clear_todo_prompt_notes({
   agentTaskId: "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
   todoId: "fab8f464-a42a-4fd4-adbe-ca30825e4440"
 })
@@ -730,7 +730,7 @@ Input is sanitized using bluemonday's UGCPolicy to prevent XSS attacks. Dangerou
 
 ```typescript
 // Step 1: List your assigned tasks
-const myTasks = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+const myTasks = await mcp__hyper__coordinator_list_agent_tasks({
   agentName: "Backend Services Specialist"
 })
 
@@ -740,7 +740,7 @@ const agentTaskId = myTask.id
 const todos = myTask.todos
 
 // Step 2: Mark task as in progress
-await mcp__hyperion-coordinator__coordinator_update_task_status({
+await mcp__hyper__coordinator_update_task_status({
   taskId: agentTaskId,
   status: "in_progress",
   notes: "Starting backend implementation"
@@ -748,7 +748,7 @@ await mcp__hyperion-coordinator__coordinator_update_task_status({
 
 // Step 3: Work through TODOs one by one
 // TODO 1: Start
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,
   todoId: todos[0].id,
   status: "in_progress",
@@ -756,7 +756,7 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 })
 
 // TODO 1: Complete
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,
   todoId: todos[0].id,
   status: "completed",
@@ -764,13 +764,13 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 })
 
 // TODO 2: Start and complete
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,
   todoId: todos[1].id,
   status: "in_progress"
 })
 
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,
   todoId: todos[1].id,
   status: "completed",
@@ -778,13 +778,13 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 })
 
 // TODO 3: Complete
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,
   todoId: todos[2].id,
   status: "in_progress"
 })
 
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,
   todoId: todos[2].id,
   status: "completed",
@@ -795,7 +795,7 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 // No need to manually update task status
 
 // Step 5: Store knowledge for future reference
-await mcp__hyperion-coordinator__coordinator_upsert_knowledge({
+await mcp__hyper__coordinator_upsert_knowledge({
   collection: "task:hyperion://task/human/" + myTask.humanTaskId,
   text: "CSV Export Implementation: Used streaming approach with io.Pipe() to handle large datasets efficiently. Set headers: Content-Type: text/csv, Content-Disposition: attachment.",
   metadata: {
@@ -819,7 +819,7 @@ await mcp__hyperion-coordinator__coordinator_upsert_knowledge({
 coordinator_update_todo_status({ taskId: "...", todoId: "...", status: "completed" })
 
 // ✅ CORRECT
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "...",
   todoId: "...",
   status: "completed"
@@ -827,14 +827,14 @@ mcp__hyperion-coordinator__coordinator_update_todo_status({
 ```
 
 ### Error: "Tool not found: coordinator_list_human_tasks"
-**Cause:** Missing `mcp__hyperion-coordinator__` prefix
+**Cause:** Missing `mcp__hyper__` prefix
 **Solution:** Always include full tool name:
 ```typescript
 // ❌ WRONG
 coordinator_list_human_tasks({})
 
 // ✅ CORRECT
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 ```
 
 ### Error: "Parameter 'todoId' must be a non-empty string"
@@ -842,11 +842,11 @@ mcp__hyperion-coordinator__coordinator_list_human_tasks({})
 **Solution:** Get TODO ID from agent task listing:
 ```typescript
 // First get the TODO IDs
-const tasks = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({ agentName: "..." })
+const tasks = await mcp__hyper__coordinator_list_agent_tasks({ agentName: "..." })
 const todoId = tasks.tasks[0].todos[0].id  // Get UUID
 
 // Then use the UUID
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "...",
   todoId: todoId,  // ✅ Use UUID, not index
   status: "completed"
@@ -974,7 +974,7 @@ The coordinator MCP server provides **real-time workflow visibility resources** 
 ## 📞 Support
 
 If you encounter issues with coordinator MCP tools:
-1. Verify tool name includes `mcp__hyperion-coordinator__` prefix
+1. Verify tool name includes `mcp__hyper__` prefix
 2. Check parameter names match exactly (camelCase, no typos)
 3. Ensure you're using UUIDs, not indices or integers
 4. Review this reference document for correct usage
