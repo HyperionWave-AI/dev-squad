@@ -10,7 +10,7 @@ RUN go mod download
 COPY mcp-server/*.go ./
 COPY mcp-server/handlers ./handlers
 COPY mcp-server/storage ./storage
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o hyperion-coordinator-mcp .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o hyper-mcp .
 
 # Build HTTP Bridge
 WORKDIR /build/http-bridge
@@ -27,7 +27,7 @@ RUN apk --no-cache add ca-certificates wget
 WORKDIR /app
 
 # Copy both binaries from builder
-COPY --from=builder /build/mcp-server/hyperion-coordinator-mcp ./
+COPY --from=builder /build/mcp-server/hyper-mcp ./
 COPY --from=builder /build/http-bridge/hyperion-http-bridge ./
 
 # Expose HTTP bridge port

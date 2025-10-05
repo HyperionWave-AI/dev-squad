@@ -26,7 +26,7 @@ Perfect for multi-agent systems, autonomous coding agents, and AI workflow orche
 ```bash
 # 1. Clone and install
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 ./install.sh
 
 # 2. Start all services (HTTP Bridge + UI)
@@ -134,7 +134,7 @@ docker-compose up -d
                      │ stdio (JSON-RPC)
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│           MCP Server (hyperion-coordinator)             │
+│           MCP Server (hyper)             │
 │  ┌───────────────────────────────────────────────────┐  │
 │  │ Tools (9)                                         │  │
 │  │ • coordinator_create_human_task                   │  │
@@ -177,14 +177,14 @@ docker-compose up -d
 ```bash
 # Clone repository
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 
 # Install and start
 ./install.sh
 docker-compose up -d
 
 # Verify
-docker-compose logs -f hyperion-coordinator-mcp
+docker-compose logs -f hyper-mcp
 
 # Restart Claude Code
 # MCP server is now available!
@@ -446,7 +446,7 @@ coordinator/
 ```bash
 # MCP Server
 cd coordinator/mcp-server
-go build -o hyperion-coordinator-mcp
+go build -o hyper-mcp
 
 # HTTP Bridge
 cd ../mcp-http-bridge
@@ -513,7 +513,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 1. **Clone repository on server:**
    ```bash
    git clone <repository-url>
-   cd hyperion-coordinator-mcp
+   cd hyper-mcp
    ```
 
 2. **Configure production environment:**
@@ -541,7 +541,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 
 5. **Enable monitoring:**
    ```bash
-   docker-compose logs -f hyperion-coordinator-mcp
+   docker-compose logs -f hyper-mcp
    ```
 
 ### Production Checklist
@@ -631,7 +631,7 @@ npm run test:ui         # Interactive UI
 ```bash
 # On production server
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 cp .env.example .env
 # Edit .env with production MongoDB URI
 docker-compose up -d
@@ -676,4 +676,4 @@ Part of the Hyperion AI Platform. See LICENSE file for details.
 
 **Built with ❤️ for AI agent coordination**
 
-*Need help? Check [DOCKER.md](./DOCKER.md) for troubleshooting or open an [issue](https://github.com/your-org/hyperion-coordinator/issues)*
+*Need help? Check [DOCKER.md](./DOCKER.md) for troubleshooting or open an [issue](https://github.com/your-org/hyper/issues)*

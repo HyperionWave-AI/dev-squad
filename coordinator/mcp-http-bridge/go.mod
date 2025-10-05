@@ -1,4 +1,4 @@
-module hyperion-coordinator-http-bridge
+module hyper-http-bridge
 
 go 1.25
 
