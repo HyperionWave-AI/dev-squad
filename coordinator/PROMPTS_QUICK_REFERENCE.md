@@ -5,7 +5,7 @@
 ### 1. Break Down Task into TODOs
 
 ```typescript
-const breakdownPrompt = await mcp__hyperion-coordinator__prompts_get({
+const breakdownPrompt = await mcp__hyper__prompts_get({
   name: "plan_task_breakdown",
   arguments: {
     taskDescription: "Your high-level task description",
@@ -19,7 +19,7 @@ const breakdownPrompt = await mcp__hyperion-coordinator__prompts_get({
 ### 2. Determine Context Strategy
 
 ```typescript
-const contextPrompt = await mcp__hyperion-coordinator__prompts_get({
+const contextPrompt = await mcp__hyper__prompts_get({
   name: "suggest_context_offload",
   arguments: {
     taskScope: "Detailed task scope with requirements and constraints",
@@ -127,7 +127,7 @@ const humanTask = await coordinator_create_human_task({
 
 ### Step 2: Plan Task Breakdown
 ```typescript
-const breakdown = await mcp__hyperion-coordinator__prompts_get({
+const breakdown = await mcp__hyper__prompts_get({
   name: "plan_task_breakdown",
   arguments: {
     taskDescription: humanTask.prompt,
@@ -140,7 +140,7 @@ const breakdown = await mcp__hyperion-coordinator__prompts_get({
 
 ### Step 3: Analyze Context Strategy
 ```typescript
-const contextStrategy = await mcp__hyperion-coordinator__prompts_get({
+const contextStrategy = await mcp__hyper__prompts_get({
   name: "suggest_context_offload",
   arguments: {
     taskScope: humanTask.prompt,

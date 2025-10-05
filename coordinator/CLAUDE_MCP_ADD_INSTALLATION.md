@@ -37,7 +37,7 @@ docker-compose -f docker-compose.mcp-only.yml up -d
 
 ```bash
 # Check container status
-docker ps | grep hyperion-coordinator-mcp
+docker ps | grep hyper-mcp
 
 # Test health endpoint
 curl http://localhost:7778/health
@@ -48,12 +48,12 @@ curl http://localhost:7778/health
 ### Step 3: Add to Claude Code
 
 ```bash
-claude mcp add --transport http hyperion-coordinator http://localhost:7778/mcp
+claude mcp add --transport http hyper http://localhost:7778/mcp
 ```
 
 **What this does**:
 - `--transport http` - Uses HTTP transport instead of stdio
-- `hyperion-coordinator` - Server name (will appear in `/mcp` list)
+- `hyper` - Server name (will appear in `/mcp` list)
 - `http://localhost:7778/mcp` - MCP server endpoint URL
 
 ### Step 4: Restart Claude Code
@@ -72,14 +72,14 @@ After restarting Claude Code:
 /mcp
 ```
 
-**Expected**: `hyperion-coordinator` appears in the list with 9 tools
+**Expected**: `hyper` appears in the list with 9 tools
 
 ---
 
 ## 📋 Command Breakdown
 
 ```bash
-claude mcp add --transport http hyperion-coordinator http://localhost:7778/mcp
+claude mcp add --transport http hyper http://localhost:7778/mcp
 │              │              │                      │
 │              │              │                      └─ MCP endpoint URL
 │              │              └─ Server name (identifier)
@@ -92,7 +92,7 @@ claude mcp add --transport http hyperion-coordinator http://localhost:7778/mcp
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | `--transport` | `http` | Use HTTP streaming transport (required for Docker) |
-| Server name | `hyperion-coordinator` | Identifier for the MCP server |
+| Server name | `hyper` | Identifier for the MCP server |
 | URL | `http://localhost:7778/mcp` | HTTP endpoint for MCP protocol |
 
 ---
@@ -117,7 +117,7 @@ claude mcp add --transport http hyperion-coordinator http://localhost:7778/mcp
 ## 📊 What Gets Installed
 
 ### MCP Server Details
-- **Name**: `hyperion-coordinator`
+- **Name**: `hyper`
 - **Transport**: HTTP
 - **Endpoint**: http://localhost:7778/mcp
 - **Health Check**: http://localhost:7778/health
@@ -150,12 +150,12 @@ claude mcp add --transport http hyperion-coordinator http://localhost:7778/mcp
 
 After installation, verify each step:
 
-- [ ] Docker container running: `docker ps | grep hyperion-coordinator-mcp`
+- [ ] Docker container running: `docker ps | grep hyper-mcp`
 - [ ] Health check works: `curl http://localhost:7778/health` → `OK`
 - [ ] MCP endpoint responds: `curl http://localhost:7778/mcp` (should return MCP response)
 - [ ] Claude Code restarted
-- [ ] `/mcp` shows `hyperion-coordinator`
-- [ ] Test tool works: `mcp__hyperion-coordinator__coordinator_list_human_tasks({})`
+- [ ] `/mcp` shows `hyper`
+- [ ] Test tool works: `mcp__hyper__coordinator_list_human_tasks({})`
 
 ---
 
@@ -166,18 +166,18 @@ After installation, verify each step:
 claude mcp list
 ```
 
-Shows all configured MCP servers including `hyperion-coordinator`
+Shows all configured MCP servers including `hyper`
 
 ### Get Server Details
 ```bash
-claude mcp get hyperion-coordinator
+claude mcp get hyper
 ```
 
 Shows configuration details for the server
 
 ### Remove Server
 ```bash
-claude mcp remove hyperion-coordinator
+claude mcp remove hyper
 ```
 
 Removes the server from Claude Code configuration
@@ -185,10 +185,10 @@ Removes the server from Claude Code configuration
 ### Update Server Configuration
 ```bash
 # Remove old configuration
-claude mcp remove hyperion-coordinator
+claude mcp remove hyper
 
 # Add with new settings
-claude mcp add --transport http hyperion-coordinator http://localhost:7778/mcp
+claude mcp add --transport http hyper http://localhost:7778/mcp
 ```
 
 ---
@@ -197,12 +197,12 @@ claude mcp add --transport http hyperion-coordinator http://localhost:7778/mcp
 
 ### View Container Logs
 ```bash
-docker logs hyperion-coordinator-mcp -f
+docker logs hyper-mcp -f
 ```
 
 ### Check HTTP Server Started
 ```bash
-docker logs hyperion-coordinator-mcp | grep "HTTP server listening"
+docker logs hyper-mcp | grep "HTTP server listening"
 ```
 
 **Expected output**:
@@ -212,7 +212,7 @@ INFO	HTTP server listening	{"address": ":7778", "mcp_endpoint": "/mcp", "health_
 
 ### Restart Container
 ```bash
-docker restart hyperion-coordinator-mcp
+docker restart hyper-mcp
 ```
 
 ### Stop Container
@@ -252,7 +252,7 @@ source ~/.zshrc
 
 **Check status**:
 ```bash
-docker ps -a | grep hyperion-coordinator-mcp
+docker ps -a | grep hyper-mcp
 ```
 
 **Start container**:
@@ -263,7 +263,7 @@ docker-compose -f docker-compose.mcp-only.yml up -d
 
 **Check logs for errors**:
 ```bash
-docker logs hyperion-coordinator-mcp
+docker logs hyper-mcp
 ```
 
 ### Health Check Fails
@@ -274,22 +274,22 @@ curl -v http://localhost:7778/health
 ```
 
 **If connection refused**:
-- Container might not be running: `docker start hyperion-coordinator-mcp`
+- Container might not be running: `docker start hyper-mcp`
 - Port might be in use: `lsof -i :7778`
-- Check logs: `docker logs hyperion-coordinator-mcp`
+- Check logs: `docker logs hyper-mcp`
 
 ### Server Not in `/mcp` List
 
 **Common causes**:
 1. ❌ Forgot to restart Claude Code → **Restart now**
-2. ❌ Container not running → `docker start hyperion-coordinator-mcp`
+2. ❌ Container not running → `docker start hyper-mcp`
 3. ❌ Wrong URL in command → Check URL is `http://localhost:7778/mcp`
 4. ❌ Health check failing → Test with curl
 
 **Debug steps**:
 ```bash
 # 1. Verify container is running
-docker ps | grep hyperion-coordinator-mcp
+docker ps | grep hyper-mcp
 
 # 2. Test health endpoint
 curl http://localhost:7778/health
@@ -310,7 +310,7 @@ claude mcp list
 
 **Check logs**:
 ```bash
-docker logs hyperion-coordinator-mcp | grep MongoDB
+docker logs hyper-mcp | grep MongoDB
 ```
 
 **Expected**:
@@ -351,7 +351,7 @@ LOG_LEVEL=info
 MONGODB_DATABASE=your_database_name
 
 # 2. Restart container
-docker restart hyperion-coordinator-mcp
+docker restart hyper-mcp
 
 # 3. No need to re-add to Claude Code
 ```
@@ -369,8 +369,8 @@ environment:
 docker-compose -f coordinator/docker-compose.mcp-only.yml up -d --build
 
 # 3. Remove and re-add to Claude Code
-claude mcp remove hyperion-coordinator
-claude mcp add --transport http hyperion-coordinator http://localhost:7779/mcp
+claude mcp remove hyper
+claude mcp add --transport http hyper http://localhost:7779/mcp
 
 # 4. Restart Claude Code
 ```
@@ -391,7 +391,7 @@ claude mcp add --transport http hyperion-coordinator http://localhost:7779/mcp
 ### Create a Human Task
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_create_human_task({
+mcp__hyper__coordinator_create_human_task({
   prompt: "Review codebase for security vulnerabilities"
 })
 ```
@@ -400,10 +400,10 @@ mcp__hyperion-coordinator__coordinator_create_human_task({
 
 ```typescript
 // List all human tasks
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 
 // List agent tasks for specific agent
-mcp__hyperion-coordinator__coordinator_list_agent_tasks({
+mcp__hyper__coordinator_list_agent_tasks({
   agentName: "backend-services-specialist"
 })
 ```
@@ -411,7 +411,7 @@ mcp__hyperion-coordinator__coordinator_list_agent_tasks({
 ### Update Task Status
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_task_status({
+mcp__hyper__coordinator_update_task_status({
   taskId: "task-uuid-here",
   status: "in_progress",
   notes: "Started working on security review"
@@ -421,7 +421,7 @@ mcp__hyperion-coordinator__coordinator_update_task_status({
 ### Store Knowledge
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_upsert_knowledge({
+mcp__hyper__coordinator_upsert_knowledge({
   collection: "technical-knowledge",
   text: "JWT tokens should use HS256 algorithm with 512-bit keys",
   metadata: {
@@ -434,7 +434,7 @@ mcp__hyperion-coordinator__coordinator_upsert_knowledge({
 ### Query Knowledge
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_query_knowledge({
+mcp__hyper__coordinator_query_knowledge({
   collection: "technical-knowledge",
   query: "JWT security best practices",
   limit: 5
@@ -447,9 +447,9 @@ mcp__hyperion-coordinator__coordinator_query_knowledge({
 
 Installation is successful when:
 
-1. ✅ `docker ps` shows `hyperion-coordinator-mcp` running
+1. ✅ `docker ps` shows `hyper-mcp` running
 2. ✅ `curl http://localhost:7778/health` returns `OK`
-3. ✅ `claude mcp list` shows `hyperion-coordinator`
+3. ✅ `claude mcp list` shows `hyper`
 4. ✅ `/mcp` in Claude Code shows the server
 5. ✅ `coordinator_list_human_tasks({})` returns response (may be empty)
 
@@ -468,11 +468,11 @@ cd /Users/maxmednikov/MaxSpace/dev-squad/coordinator
 /mcp
 
 # 4. Test
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 ```
 
 ---
 
 **Installation complete!** 🎉
 
-The `hyperion-coordinator` MCP server is now available in Claude Code with 9 tools for task coordination and knowledge management.
+The `hyper` MCP server is now available in Claude Code with 9 tools for task coordination and knowledge management.
