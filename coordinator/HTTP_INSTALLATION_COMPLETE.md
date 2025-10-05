@@ -7,7 +7,7 @@ The Hyperion Coordinator MCP server is now running in **HTTP streaming mode** an
 ## What Was Set Up
 
 ### 1. Docker Container (HTTP Mode)
-- **Container**: `hyperion-coordinator-mcp`
+- **Container**: `hyper-mcp`
 - **Transport**: HTTP Streamable (not stdio)
 - **Port**: 7778 (exposed to host)
 - **Endpoint**: http://localhost:7778/mcp
@@ -16,7 +16,7 @@ The Hyperion Coordinator MCP server is now running in **HTTP streaming mode** an
 
 ### 2. Claude Code Configuration
 - **Location**: `~/.claude/settings.json`
-- **Server Name**: `hyperion-coordinator`
+- **Server Name**: `hyper`
 - **Connection**: HTTP URL (not command/args)
 - **URL**: `http://localhost:7778/mcp`
 
@@ -38,7 +38,7 @@ The Hyperion Coordinator MCP server is now running in **HTTP streaming mode** an
 # Then restart it
 ```
 
-After restart, run `/mcp` to verify `hyperion-coordinator` appears in the list.
+After restart, run `/mcp` to verify `hyper` appears in the list.
 
 ---
 
@@ -46,7 +46,7 @@ After restart, run `/mcp` to verify `hyperion-coordinator` appears in the list.
 
 ### 1. Check Container is Running
 ```bash
-docker ps | grep hyperion-coordinator-mcp
+docker ps | grep hyper-mcp
 ```
 
 **Expected**: Container status shows `Up X minutes` with port `7778:7778`
@@ -72,7 +72,7 @@ curl -X POST http://localhost:7778/mcp \
   "id":1,
   "result":{
     "serverInfo":{
-      "name":"hyperion-coordinator-mcp",
+      "name":"hyper-mcp",
       "version":"1.0.0"
     },
     ...
@@ -86,11 +86,11 @@ Run in Claude Code:
 /mcp
 ```
 
-**Expected**: `hyperion-coordinator` appears in the list
+**Expected**: `hyper` appears in the list
 
 ### 5. Test MCP Tool
 ```typescript
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 ```
 
 **Expected**: Returns list of tasks (may be empty)
@@ -101,12 +101,12 @@ mcp__hyperion-coordinator__coordinator_list_human_tasks({})
 
 ### View Container Logs
 ```bash
-docker logs hyperion-coordinator-mcp -f
+docker logs hyper-mcp -f
 ```
 
 ### Check HTTP Server Status
 ```bash
-docker logs hyperion-coordinator-mcp | grep "HTTP server listening"
+docker logs hyper-mcp | grep "HTTP server listening"
 ```
 
 **Expected**:
@@ -182,8 +182,8 @@ Once Claude Code is restarted, you'll have access to:
 
 ### Container Not Running
 ```bash
-docker ps -a | grep hyperion-coordinator-mcp
-docker logs hyperion-coordinator-mcp
+docker ps -a | grep hyper-mcp
+docker logs hyper-mcp
 ```
 
 If container exited, check logs for MongoDB connection errors.
@@ -212,10 +212,10 @@ ports:
 ### MongoDB Connection Errors
 ```bash
 # Check logs
-docker logs hyperion-coordinator-mcp | grep MongoDB
+docker logs hyper-mcp | grep MongoDB
 
 # Test MongoDB connection from container
-docker exec -it hyperion-coordinator-mcp wget -O- http://localhost:7778/health
+docker exec -it hyper-mcp wget -O- http://localhost:7778/health
 ```
 
 If MongoDB connection fails:
@@ -226,7 +226,7 @@ If MongoDB connection fails:
 ### HTTP Connection Refused
 ```bash
 # Verify port is exposed
-docker port hyperion-coordinator-mcp
+docker port hyper-mcp
 
 # Expected output:
 7778/tcp -> 0.0.0.0:7778
@@ -293,7 +293,7 @@ docker-compose -f docker-compose.mcp-only.yml up -d --build
                 │ URL: http://localhost:7778/mcp
                 ▼
 ┌─────────────────────────────────────┐
-│  Container: hyperion-coordinator-mcp│
+│  Container: hyper-mcp│
 │  ┌───────────────────────────────┐  │
 │  │ HTTP Server (port 7778)       │  │
 │  │ ├─ /mcp (MCP endpoint)        │  │
@@ -385,7 +385,7 @@ Access web UI: http://localhost:5173
 - [x] Claude Code settings.json updated with HTTP URL
 - [x] MongoDB connection successful
 - [ ] **Claude Code restarted** ← DO THIS NOW!
-- [ ] `/mcp` shows hyperion-coordinator
+- [ ] `/mcp` shows hyper
 - [ ] Test tool works
 
 ---
@@ -394,4 +394,4 @@ Access web UI: http://localhost:5173
 
 **REMEMBER**: You must **restart Claude Code** for the server to appear in `/mcp` list.
 
-After restart, the `hyperion-coordinator` MCP server will be available with 9 tools for task coordination and knowledge management.
+After restart, the `hyper` MCP server will be available with 9 tools for task coordination and knowledge management.

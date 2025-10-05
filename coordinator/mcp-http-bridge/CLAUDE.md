@@ -136,7 +136,7 @@ Reads specific MCP resource content.
 
 ### Environment Variables
 
-- `MCP_SERVER_PATH`: Path to MCP server binary (default: `../mcp-server/hyperion-coordinator-mcp`)
+- `MCP_SERVER_PATH`: Path to MCP server binary (default: `../mcp-server/hyper-mcp`)
 - `PORT`: HTTP server port (default: `8095`)
 
 ### CORS Configuration
@@ -203,7 +203,7 @@ go build -o mcp-http-bridge
 
 ```bash
 # Ensure MCP server binary exists
-ls ../mcp-server/hyperion-coordinator-mcp
+ls ../mcp-server/hyper-mcp
 
 # Start bridge
 ./mcp-http-bridge
