@@ -1,7 +1,7 @@
 # MCP Configuration for Agent Access to Hyperion Coordinator
 
 ## Problem
-Sub-agents launched via the Task tool cannot access the hyperion-coordinator MCP server, preventing them from updating task statuses in real-time.
+Sub-agents launched via the Task tool cannot access the hyper MCP server, preventing them from updating task statuses in real-time.
 
 ## Required Configuration
 
@@ -11,7 +11,7 @@ All agents working on the AI Band Manager project (and any Hyperion project) nee
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
+    "hyper": {
       "command": "node",
       "args": [
         "/Users/alcwynparker/Documents/2025/2025-09-30-dev-ex-mcp/coordinator/mcp-http-bridge/dist/index.js"
@@ -49,7 +49,7 @@ All agents working on the AI Band Manager project (and any Hyperion project) nee
 According to CLAUDE.md, each agent type should have access to:
 
 ### Backend Services Specialist
-- ✅ hyperion-coordinator (MANDATORY)
+- ✅ hyper (MANDATORY)
 - ✅ qdrant-mcp (MANDATORY)
 - ✅ @modelcontextprotocol/server-filesystem
 - ✅ @modelcontextprotocol/server-github
@@ -57,7 +57,7 @@ According to CLAUDE.md, each agent type should have access to:
 - ✅ mcp-server-mongodb
 
 ### Frontend Experience Specialist
-- ✅ hyperion-coordinator (MANDATORY)
+- ✅ hyper (MANDATORY)
 - ✅ qdrant-mcp (MANDATORY)
 - ✅ @modelcontextprotocol/server-filesystem
 - ✅ @modelcontextprotocol/server-github
@@ -65,7 +65,7 @@ According to CLAUDE.md, each agent type should have access to:
 - ✅ @modelcontextprotocol/server-fetch
 
 ### ui-dev
-- ✅ hyperion-coordinator (MANDATORY)
+- ✅ hyper (MANDATORY)
 - ✅ qdrant-mcp (MANDATORY)
 - ✅ @modelcontextprotocol/server-filesystem
 - ✅ @modelcontextprotocol/server-github
@@ -73,14 +73,14 @@ According to CLAUDE.md, each agent type should have access to:
 - ✅ playwright-mcp
 
 ### Event Systems Specialist
-- ✅ hyperion-coordinator (MANDATORY)
+- ✅ hyper (MANDATORY)
 - ✅ qdrant-mcp (MANDATORY)
 - ✅ @modelcontextprotocol/server-filesystem
 - ✅ @modelcontextprotocol/server-github
 - ✅ @modelcontextprotocol/server-fetch
 
 ### Data Platform Specialist
-- ✅ hyperion-coordinator (MANDATORY)
+- ✅ hyper (MANDATORY)
 - ✅ qdrant-mcp (MANDATORY)
 - ✅ @modelcontextprotocol/server-filesystem
 - ✅ @modelcontextprotocol/server-github
@@ -91,7 +91,7 @@ According to CLAUDE.md, each agent type should have access to:
 
 The Task tool in Claude Code does not automatically pass MCP server configurations to sub-agents. This means:
 
-1. Main Claude Code process ✅ Can access hyperion-coordinator and qdrant
+1. Main Claude Code process ✅ Can access hyper and qdrant
 2. Sub-agents via Task tool ❌ Cannot access these MCPs
 
 ## Workaround Options
@@ -133,7 +133,7 @@ Create a shared MCP configuration that all agent processes can reference.
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
+    "hyper": {
       "command": "node",
       "args": ["/path/to/mcp-http-bridge/dist/index.js"],
       "env": {

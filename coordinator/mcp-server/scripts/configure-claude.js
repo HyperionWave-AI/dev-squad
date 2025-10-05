@@ -36,14 +36,14 @@ try {
   // Try to get npm global bin directory
   const npmBin = execSync('npm bin -g', { encoding: 'utf-8' }).trim();
   const binaryName = platform === 'win32'
-    ? 'hyperion-coordinator-mcp.exe'
-    : 'hyperion-coordinator-mcp';
+    ? 'hyper-mcp.exe'
+    : 'hyper-mcp';
   binaryPath = path.join(npmBin, binaryName);
 } catch (error) {
   // Fallback: use the bin directory in the package itself
   const binaryName = platform === 'win32'
-    ? 'hyperion-coordinator-mcp.exe'
-    : 'hyperion-coordinator-mcp';
+    ? 'hyper-mcp.exe'
+    : 'hyper-mcp';
   binaryPath = path.join(__dirname, '..', 'bin', binaryName);
   console.log('⚠️  Using local binary path:', binaryPath);
 }
@@ -70,8 +70,8 @@ if (fs.existsSync(configFile)) {
   }
 }
 
-// Add or update hyperion-coordinator server
-config.mcpServers['hyperion-coordinator'] = {
+// Add or update hyper server
+config.mcpServers['hyper'] = {
   command: binaryPath,
   env: {
     MONGODB_URI: process.env.MONGODB_URI || 'mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB',
@@ -91,9 +91,9 @@ try {
   console.log('Next steps:');
   console.log('1. Restart Claude Code to load the MCP server');
   console.log('2. Verify it appears in Claude Code\'s MCP servers list');
-  console.log('3. Test with: mcp__hyperion-coordinator__coordinator_list_human_tasks({})');
+  console.log('3. Test with: mcp__hyper__coordinator_list_human_tasks({})');
   console.log('');
-  console.log('For more information, see: https://github.com/yourorg/hyperion-coordinator-mcp');
+  console.log('For more information, see: https://github.com/yourorg/hyper-mcp');
 } catch (error) {
   console.error('❌ Failed to write config file:', error.message);
   console.error('');
@@ -102,7 +102,7 @@ try {
   console.error('');
   console.error(JSON.stringify({
     mcpServers: {
-      'hyperion-coordinator': {
+      'hyper': {
         command: binaryPath
       }
     }

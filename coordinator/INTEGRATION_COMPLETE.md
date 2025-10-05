@@ -9,7 +9,7 @@
 
 ### 1. **MCP Server** (Go) ✅
 - **Location:** `development/coordinator/mcp-server/`
-- **Binary:** `hyperion-coordinator-mcp`
+- **Binary:** `hyper-mcp`
 - **Storage:** MongoDB Atlas (coordinator_db)
 - **Collections:**
   - `human_tasks` - Top-level tasks from user prompts
@@ -27,7 +27,7 @@
 
 ### 2. **HTTP Bridge** (Go) ✅
 - **Location:** `development/coordinator/mcp-http-bridge/`
-- **Binary:** `hyperion-coordinator-bridge`
+- **Binary:** `hyper-bridge`
 - **Port:** 8095
 - **Purpose:** Exposes MCP server to browser via HTTP/REST
 - **CORS:** Enabled for localhost:5173, localhost:3000
@@ -92,7 +92,7 @@ This automatically:
 **Terminal 1 - HTTP Bridge:**
 ```bash
 cd development/coordinator/mcp-http-bridge
-./hyperion-coordinator-bridge
+./hyper-bridge
 ```
 
 **Terminal 2 - React UI:**
@@ -115,7 +115,7 @@ curl http://localhost:8095/health
 ```json
 {
   "status": "healthy",
-  "service": "hyperion-coordinator-http-bridge",
+  "service": "hyper-http-bridge",
   "version": "1.0.0"
 }
 ```
@@ -233,7 +233,7 @@ development/coordinator/
 │   ├── main.go                        # HTTP bridge server
 │   ├── go.mod                         # Go dependencies
 │   ├── go.sum                         # Dependency checksums
-│   └── hyperion-coordinator-bridge    # Binary (built)
+│   └── hyper-bridge    # Binary (built)
 │
 ├── start-coordinator.sh               # Quick start script
 ├── FULL_STACK_SETUP.md               # Complete setup guide
@@ -316,7 +316,7 @@ CLAUDE.md                              # Updated with dual-MCP workflow
 
 ### HTTP Bridge won't start
 - **Error:** "MCP server not found"
-- **Fix:** Build MCP server: `cd mcp-server && go build -o hyperion-coordinator-mcp`
+- **Fix:** Build MCP server: `cd mcp-server && go build -o hyper-mcp`
 
 ### UI shows no tasks
 - **Cause:** No tasks in database yet
