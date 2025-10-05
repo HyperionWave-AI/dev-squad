@@ -35,15 +35,19 @@ type KnowledgeStorage interface {
 	ListCollections() []string
 }
 
-// MongoKnowledgeStorage implements KnowledgeStorage using MongoDB
+// MongoKnowledgeStorage implements KnowledgeStorage using MongoDB + Qdrant
 type MongoKnowledgeStorage struct {
 	knowledgeCollection *mongo.Collection
+	qdrantClient        QdrantClientInterface
+	vectorDimension     int
 }
 
-// NewMongoKnowledgeStorage creates a new MongoDB-backed knowledge storage
-func NewMongoKnowledgeStorage(db *mongo.Database) (*MongoKnowledgeStorage, error) {
+// NewMongoKnowledgeStorage creates a new MongoDB + Qdrant knowledge storage
+func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInterface) (*MongoKnowledgeStorage, error) {
 	storage := &MongoKnowledgeStorage{
 		knowledgeCollection: db.Collection("knowledge_entries"),
+		qdrantClient:        qdrantClient,
+		vectorDimension:     1536, // OpenAI text-embedding-3-small dimension
 	}
 
 	// Create indexes
@@ -77,7 +81,7 @@ func NewMongoKnowledgeStorage(db *mongo.Database) (*MongoKnowledgeStorage, error
 	return storage, nil
 }
 
-// Upsert stores or updates a knowledge entry
+// Upsert stores or updates a knowledge entry in both MongoDB and Qdrant
 func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}) (*KnowledgeEntry, error) {
 	ctx := context.Background()
 
@@ -89,25 +93,60 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 		CreatedAt:  time.Now().UTC(),
 	}
 
+	// Store in MongoDB for metadata and audit trail
 	_, err := s.knowledgeCollection.InsertOne(ctx, entry)
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert knowledge entry: %w", err)
+		return nil, fmt.Errorf("failed to insert knowledge entry in MongoDB: %w", err)
+	}
+
+	// Store in Qdrant for vector search
+	if s.qdrantClient != nil {
+		// Ensure collection exists
+		if err := s.qdrantClient.EnsureCollection(collection, s.vectorDimension); err != nil {
+			// Log error but don't fail - MongoDB has the data
+			fmt.Printf("Warning: failed to ensure Qdrant collection: %v\n", err)
+		} else {
+			// Store vector point
+			if err := s.qdrantClient.StorePoint(collection, entry.ID, text, metadata); err != nil {
+				// Log error but don't fail - MongoDB has the data
+				fmt.Printf("Warning: failed to store in Qdrant: %v\n", err)
+			}
+		}
 	}
 
 	return entry, nil
 }
 
-// Query searches for knowledge entries matching the query text
+// Query searches for knowledge entries using Qdrant vector search
 func (s *MongoKnowledgeStorage) Query(collection, query string, limit int) ([]*QueryResult, error) {
 	ctx := context.Background()
 
-	// Use MongoDB text search for better performance
+	// Use Qdrant for semantic vector search if available
+	if s.qdrantClient != nil {
+		results, err := s.qdrantClient.SearchSimilar(collection, query, limit)
+		if err == nil && len(results) > 0 {
+			// Convert QdrantQueryResult to QueryResult
+			queryResults := make([]*QueryResult, len(results))
+			for i, r := range results {
+				queryResults[i] = &QueryResult{
+					Entry: r.Entry,
+					Score: r.Score,
+				}
+			}
+			return queryResults, nil
+		}
+		// Log error but continue to MongoDB fallback
+		if err != nil {
+			fmt.Printf("Warning: Qdrant search failed, falling back to MongoDB: %v\n", err)
+		}
+	}
+
+	// Fallback to MongoDB text search
 	filter := bson.M{
 		"collection": collection,
 		"$text":      bson.M{"$search": query},
 	}
 
-	// Add text score for sorting
 	opts := options.Find().
 		SetProjection(bson.D{{Key: "score", Value: bson.D{{Key: "$meta", Value: "textScore"}}}}).
 		SetSort(bson.D{{Key: "score", Value: bson.D{{Key: "$meta", Value: "textScore"}}}})
@@ -118,7 +157,7 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int) ([]*Q
 
 	cursor, err := s.knowledgeCollection.Find(ctx, filter, opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query knowledge: %w", err)
+		return nil, fmt.Errorf("failed to query knowledge in MongoDB: %w", err)
 	}
 	defer cursor.Close(ctx)
 
@@ -132,14 +171,12 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int) ([]*Q
 		return s.fallbackQuery(ctx, collection, query, limit)
 	}
 
-	// Convert to QueryResult format with normalized scores
+	// Convert to QueryResult format
 	results := make([]*QueryResult, len(entries))
 	for i, entry := range entries {
-		// Normalize text search score to 0-1 range (text scores are typically 0.75-1.5)
-		score := 0.7 // Default score for text matches
 		results[i] = &QueryResult{
 			Entry: entry,
-			Score: score,
+			Score: 0.7, // Default score for MongoDB text matches
 		}
 	}
 

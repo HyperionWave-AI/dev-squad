@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,8 +23,13 @@ type QdrantClientInterface interface {
 
 // QdrantClient provides direct access to Qdrant vector database
 type QdrantClient struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL         string
+	httpClient      *http.Client
+	embeddingFunc   func(string) ([]float64, error)
+	openAIAPIKey    string
+	openAIBaseURL   string
+	embeddingModel  string
+	vectorDimension int
 }
 
 // QdrantPoint represents a point to store in Qdrant
@@ -46,10 +52,40 @@ type QdrantQueryResult struct {
 	Score float64
 }
 
-// NewQdrantClient creates a new Qdrant client
+// NewQdrantClient creates a new Qdrant client with OpenAI embeddings
 func NewQdrantClient(baseURL string) *QdrantClient {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+
+	client := &QdrantClient{
+		baseURL:         baseURL,
+		openAIAPIKey:    apiKey,
+		openAIBaseURL:   "https://api.openai.com/v1",
+		embeddingModel:  "text-embedding-3-small",
+		vectorDimension: 1536,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+
+	// Set embedding function based on API key availability
+	if apiKey != "" {
+		client.embeddingFunc = client.generateOpenAIEmbedding
+	} else {
+		// Fallback to simple embedding for testing
+		client.embeddingFunc = func(text string) ([]float64, error) {
+			return generateSimpleEmbedding(text, client.vectorDimension), nil
+		}
+	}
+
+	return client
+}
+
+// NewQdrantClientWithEmbedding creates a Qdrant client with custom embedding function (for testing)
+func NewQdrantClientWithEmbedding(baseURL string, embeddingFunc func(string) ([]float64, error), vectorDim int) *QdrantClient {
 	return &QdrantClient{
-		baseURL: baseURL,
+		baseURL:         baseURL,
+		embeddingFunc:   embeddingFunc,
+		vectorDimension: vectorDim,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -107,8 +143,11 @@ func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) e
 
 // StorePoint stores a point in Qdrant with text embedding
 func (c *QdrantClient) StorePoint(collectionName string, id string, text string, metadata map[string]interface{}) error {
-	// Generate embedding (placeholder - in production this would use OpenAI/similar)
-	vector := generateSimpleEmbedding(text, 1536)
+	// Generate embedding using configured function
+	vector, err := c.embeddingFunc(text)
+	if err != nil {
+		return fmt.Errorf("failed to generate embedding: %w", err)
+	}
 
 	// Create payload with text and metadata
 	payload := make(map[string]interface{})
@@ -163,8 +202,11 @@ func (c *QdrantClient) StorePoint(collectionName string, id string, text string,
 
 // SearchSimilar searches for similar points in Qdrant
 func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit int) ([]*QdrantQueryResult, error) {
-	// Generate query embedding
-	queryVector := generateSimpleEmbedding(query, 1536)
+	// Generate query embedding using configured function
+	queryVector, err := c.embeddingFunc(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+	}
 
 	// Create search request
 	searchPayload := map[string]interface{}{
