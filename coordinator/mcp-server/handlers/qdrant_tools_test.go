@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -17,6 +18,7 @@ type MockQdrantClient struct {
 	points      map[string]map[string]*storage.QdrantQueryResult
 	shouldError bool
 	errorMsg    string
+	pingError   error
 }
 
 func NewMockQdrantClient() *MockQdrantClient {
@@ -73,6 +75,13 @@ func (m *MockQdrantClient) SearchSimilar(collectionName string, query string, li
 	}
 
 	return results, nil
+}
+
+func (m *MockQdrantClient) Ping(ctx context.Context) error {
+	if m.pingError != nil {
+		return m.pingError
+	}
+	return nil
 }
 
 type mockError struct {
