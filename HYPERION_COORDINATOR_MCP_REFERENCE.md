@@ -855,6 +855,109 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 
 ---
 
+## 📚 Workflow Resources
+
+The coordinator MCP server provides **real-time workflow visibility resources** for monitoring active work and preventing duplicate effort.
+
+### Resource: hyperion://workflow/active-agents
+
+**Purpose:** Real-time status of all agents (working, blocked, idle)
+
+**Response:**
+```json
+{
+  "agents": [
+    {
+      "agentName": "go-mcp-dev",
+      "status": "working",  // "working" | "blocked" | "idle"
+      "currentTask": { /* task details */ },
+      "taskCount": 5,
+      "completedCount": 3,
+      "blockedCount": 1,
+      "lastUpdated": "2025-10-04T12:00:00Z"
+    }
+  ],
+  "totalCount": 8,
+  "timestamp": "2025-10-04T12:00:00Z"
+}
+```
+
+**Use Cases:**
+- Check if an agent is available before assigning work
+- Identify blocked agents that need help
+- Monitor overall system utilization
+
+---
+
+### Resource: hyperion://workflow/task-queue
+
+**Purpose:** Pending tasks ordered by priority and creation time
+
+**Response:**
+```json
+{
+  "queue": [
+    {
+      "taskId": "uuid",
+      "agentName": "go-mcp-dev",
+      "role": "Task description",
+      "priority": 180,  // Calculated priority score
+      "createdAt": "2025-10-04T10:00:00Z",
+      "todoCount": 5,
+      "humanTaskId": "uuid"
+    }
+  ],
+  "totalCount": 12,
+  "timestamp": "2025-10-04T12:00:00Z"
+}
+```
+
+**Priority Calculation:**
+- TODO count: +10 per TODO
+- Context summary: +50 (ready to work)
+- Files specified: +30 (well-defined)
+- Prior work: +40 (continuation)
+- Age: +5 per day
+
+**Use Cases:**
+- Workflow coordinator prioritizes assignments
+- Agents pick highest priority work
+- Identify stale tasks needing attention
+
+---
+
+### Resource: hyperion://workflow/dependencies
+
+**Purpose:** Task dependency graph showing blocking relationships
+
+**Response:**
+```json
+{
+  "dependencies": [
+    {
+      "taskId": "uuid",
+      "agentName": "go-mcp-dev",
+      "role": "Foundation API",
+      "status": "completed",
+      "dependsOn": [],
+      "blockedBy": [],
+      "blocks": ["uuid-2"]  // Tasks this one blocks
+    }
+  ],
+  "totalCount": 15,
+  "timestamp": "2025-10-04T12:00:00Z"
+}
+```
+
+**Use Cases:**
+- Identify prerequisites before starting work
+- Find root causes of blocked tasks
+- Optimize parallel work via dependency analysis
+
+**📖 Full Resource Documentation:** See `coordinator/WORKFLOW_RESOURCES.md`
+
+---
+
 ## ✅ Best Practices
 
 1. **Always get fresh task data** - Call `coordinator_list_agent_tasks` to get current TODO IDs before updating
@@ -863,6 +966,8 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 4. **Store knowledge after completion** - Document learnings for future tasks
 5. **Use exact agent names** - Must match your identity exactly (case-sensitive)
 6. **Check for blocking dependencies** - Use `blocked` status when waiting on other squads
+7. **Check workflow resources** - Review `active-agents` before starting work to avoid duplication
+8. **Consult task queue** - Pick highest priority available work from `task-queue` resource
 
 ---
 
@@ -874,5 +979,5 @@ If you encounter issues with coordinator MCP tools:
 3. Ensure you're using UUIDs, not indices or integers
 4. Review this reference document for correct usage
 
-**Last Updated:** 2025-10-01
+**Last Updated:** 2025-10-04
 **Maintained By:** Platform Team
