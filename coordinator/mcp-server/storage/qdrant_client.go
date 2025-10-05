@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ type QdrantClientInterface interface {
 	EnsureCollection(collectionName string, vectorSize int) error
 	StorePoint(collectionName string, id string, text string, metadata map[string]interface{}) error
 	SearchSimilar(collectionName string, query string, limit int) ([]*QdrantQueryResult, error)
+	Ping(ctx context.Context) error
 }
 
 // QdrantClient provides direct access to Qdrant vector database
@@ -270,4 +272,24 @@ func parseTimeFromPayload(payload map[string]interface{}, key string) time.Time 
 // GenerateID generates a new UUID for Qdrant points
 func GenerateID() string {
 	return uuid.New().String()
+}
+
+// Ping checks Qdrant connectivity
+func (c *QdrantClient) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/", c.baseURL), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create ping request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to ping Qdrant: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Qdrant ping failed with status: %d", resp.StatusCode)
+	}
+
+	return nil
 }

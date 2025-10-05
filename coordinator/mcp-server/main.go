@@ -113,6 +113,7 @@ func main() {
 	planningPromptHandler := handlers.NewPlanningPromptHandler()
 	knowledgePromptHandler := handlers.NewKnowledgePromptHandler()
 	coordinationPromptHandler := handlers.NewCoordinationPromptHandler()
+	healthCheckHandler := handlers.NewHealthCheckHandler(mongoClient, qdrantClient, logger)
 
 	// Register resource handlers
 	if err := resourceHandler.RegisterResourceHandlers(server); err != nil {
@@ -202,11 +203,8 @@ func main() {
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", handler)
 
-		// Add health check endpoint
-		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("OK"))
-		})
+		// Add comprehensive health check endpoint
+		mux.Handle("/health", healthCheckHandler)
 
 		httpServer := &http.Server{
 			Addr:    fmt.Sprintf(":%s", mcpPort),
