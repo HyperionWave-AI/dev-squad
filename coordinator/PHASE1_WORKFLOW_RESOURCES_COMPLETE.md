@@ -123,7 +123,7 @@ go test ./handlers -run TestWorkflow -v
 === RUN   TestWorkflowResourceHandler_Dependencies
 --- PASS: TestWorkflowResourceHandler_Dependencies (0.00s)
 PASS
-ok      hyperion-coordinator-mcp/handlers    0.185s
+ok      hyper-mcp/handlers    0.185s
 ```
 
 ### Test Scenarios

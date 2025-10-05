@@ -10,45 +10,45 @@
 3. **AI-BAND-MANAGER-SPEC.md** - Project specification
 
 **Core MCP Tools (9 tools):**
-- `mcp__hyperion-coordinator__coordinator_list_agent_tasks({ agentName: "..." })` - Get assignments
-- `mcp__hyperion-coordinator__coordinator_update_task_status(...)` - Update progress
-- `mcp__hyperion-coordinator__coordinator_update_todo_status(...)` - Update TODOs (uses todoId UUID, not index)
-- `mcp__hyperion-coordinator__coordinator_upsert_knowledge(...)` - Store task knowledge
-- `mcp__hyperion-coordinator__coordinator_query_knowledge(...)` - Query task context
+- `mcp__hyper__coordinator_list_agent_tasks({ agentName: "..." })` - Get assignments
+- `mcp__hyper__coordinator_update_task_status(...)` - Update progress
+- `mcp__hyper__coordinator_update_todo_status(...)` - Update TODOs (uses todoId UUID, not index)
+- `mcp__hyper__coordinator_upsert_knowledge(...)` - Store task knowledge
+- `mcp__hyper__coordinator_query_knowledge(...)` - Query task context
 - `mcp__qdrant__qdrant-find({ collection_name: "...", query: "..." })` - Search knowledge
 - `mcp__qdrant__qdrant-store({ collection_name: "...", information: "...", metadata: {...} })` - Store knowledge
 
 **MCP Resources (12 resources) - NEW!:**
 
 **Documentation Resources (instant access, no queries):**
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://docs/standards" })` - Engineering standards
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://docs/architecture" })` - System architecture
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://docs/squad-guide" })` - Squad coordination guide
+- `mcp__hyper__resources_read({ uri: "hyperion://docs/standards" })` - Engineering standards
+- `mcp__hyper__resources_read({ uri: "hyperion://docs/architecture" })` - System architecture
+- `mcp__hyper__resources_read({ uri: "hyperion://docs/squad-guide" })` - Squad coordination guide
 
 **Workflow Resources (real-time status):**
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://workflow/active-agents" })` - Who's working on what
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://workflow/task-queue" })` - Pending tasks
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://workflow/dependencies" })` - Task dependencies
+- `mcp__hyper__resources_read({ uri: "hyperion://workflow/active-agents" })` - Who's working on what
+- `mcp__hyper__resources_read({ uri: "hyperion://workflow/task-queue" })` - Pending tasks
+- `mcp__hyper__resources_read({ uri: "hyperion://workflow/dependencies" })` - Task dependencies
 
 **Knowledge Resources (discovery):**
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://knowledge/collections" })` - Qdrant collections
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://knowledge/recent-learnings" })` - Last 24h knowledge
+- `mcp__hyper__resources_read({ uri: "hyperion://knowledge/collections" })` - Qdrant collections
+- `mcp__hyper__resources_read({ uri: "hyperion://knowledge/recent-learnings" })` - Last 24h knowledge
 
 **Metrics Resources (performance):**
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://metrics/squad-velocity" })` - Completion rates
-- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://metrics/context-efficiency" })` - Efficiency stats
+- `mcp__hyper__resources_read({ uri: "hyperion://metrics/squad-velocity" })` - Completion rates
+- `mcp__hyper__resources_read({ uri: "hyperion://metrics/context-efficiency" })` - Efficiency stats
 
 **MCP Prompts (6 prompts) - AI Assistance! NEW!:**
 
 **For Workflow Coordinators:**
-- `mcp__hyperion-coordinator__prompts_get({ name: "plan_task_breakdown", arguments: {...} })` - Break down tasks
-- `mcp__hyperion-coordinator__prompts_get({ name: "detect_cross_squad_impact", arguments: {...} })` - Impact analysis
-- `mcp__hyperion-coordinator__prompts_get({ name: "suggest_handoff_strategy", arguments: {...} })` - Handoff planning
+- `mcp__hyper__prompts_get({ name: "plan_task_breakdown", arguments: {...} })` - Break down tasks
+- `mcp__hyper__prompts_get({ name: "detect_cross_squad_impact", arguments: {...} })` - Impact analysis
+- `mcp__hyper__prompts_get({ name: "suggest_handoff_strategy", arguments: {...} })` - Handoff planning
 
 **For Implementation Agents:**
-- `mcp__hyperion-coordinator__prompts_get({ name: "recommend_qdrant_query", arguments: {...} })` - Optimize queries
-- `mcp__hyperion-coordinator__prompts_get({ name: "diagnose_blocked_task", arguments: {...} })` - Unblock help
-- `mcp__hyperion-coordinator__prompts_get({ name: "suggest_knowledge_structure", arguments: {...} })` - Structure learnings
+- `mcp__hyper__prompts_get({ name: "recommend_qdrant_query", arguments: {...} })` - Optimize queries
+- `mcp__hyper__prompts_get({ name: "diagnose_blocked_task", arguments: {...} })` - Unblock help
+- `mcp__hyper__prompts_get({ name: "suggest_knowledge_structure", arguments: {...} })` - Structure learnings
 
 ---
 
@@ -84,7 +84,7 @@ systemIdentity := &models.Identity{Type: "service", CompanyId: "system"}
 
 **Golden Rules:**
 - Work ONLY within your domain
-- Tasks assigned via hyperion-coordinator MCP
+- Tasks assigned via hyper MCP
 - Knowledge shared via Qdrant MCP
 - Every task uses dual-MCP workflow (coordinator=tracking, Qdrant=context)
 
@@ -131,16 +131,16 @@ coordinator_update_todo_status({ notes: "Progress: X. Context exhausted. Next ag
 **Common Mistakes:**
 - ❌ Using `todoIndex` → ✅ Use `todoId` (UUID)
 - ❌ Using `taskId` in TODO updates → ✅ Use `agentTaskId`
-- ❌ Missing `mcp__hyperion-coordinator__` prefix
+- ❌ Missing `mcp__hyper__` prefix
 - ❌ Wrong parameter types
 
 **Correct Pattern:**
 ```typescript
-const myTasks = await mcp__hyperion-coordinator__coordinator_list_agent_tasks({ agentName: "..." })
+const myTasks = await mcp__hyper__coordinator_list_agent_tasks({ agentName: "..." })
 const agentTaskId = myTasks.tasks[0].id
 const todoId = myTasks.tasks[0].todos[0].id  // UUID, not index
 
-await mcp__hyperion-coordinator__coordinator_update_todo_status({
+await mcp__hyper__coordinator_update_todo_status({
   agentTaskId: agentTaskId,  // Not "taskId"
   todoId: todoId,            // UUID from listing
   status: "completed",
@@ -157,22 +157,22 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 **Priority 0: MCP Resources (FREE - instant access, no context cost)**
 ```typescript
 // Check what others are working on (avoid duplicate work)
-const activeAgents = await mcp__hyperion-coordinator__resources_read({
+const activeAgents = await mcp__hyper__resources_read({
   uri: "hyperion://workflow/active-agents"
 })
 
 // Get engineering standards (quality gates, file size limits)
-const standards = await mcp__hyperion-coordinator__resources_read({
+const standards = await mcp__hyper__resources_read({
   uri: "hyperion://docs/standards"
 })
 
 // See what was learned recently (check before implementing)
-const recentLearnings = await mcp__hyperion-coordinator__resources_read({
+const recentLearnings = await mcp__hyper__resources_read({
   uri: "hyperion://knowledge/recent-learnings"
 })
 
 // Find which Qdrant collections to query
-const collections = await mcp__hyperion-coordinator__resources_read({
+const collections = await mcp__hyper__resources_read({
   uri: "hyperion://knowledge/collections"
 })
 ```
@@ -187,7 +187,7 @@ const myTask = (await coordinator_list_agent_tasks({ agentName: "..." })).tasks[
 **Priority 2: Use MCP Prompts for Guidance (FREE - AI assistance)**
 ```typescript
 // If you need help with Qdrant queries
-const queryHelp = await mcp__hyperion-coordinator__prompts_get({
+const queryHelp = await mcp__hyper__prompts_get({
   name: "recommend_qdrant_query",
   arguments: {
     agentQuestion: "How to implement JWT validation?",
@@ -197,7 +197,7 @@ const queryHelp = await mcp__hyperion-coordinator__prompts_get({
 })
 
 // If you're blocked
-const unblockHelp = await mcp__hyperion-coordinator__prompts_get({
+const unblockHelp = await mcp__hyper__prompts_get({
   name: "diagnose_blocked_task",
   arguments: {
     taskId: myTask.id,
@@ -403,12 +403,12 @@ coordinator_update_task_status({ taskId, status: "completed", notes: "..." })
 
 ## 🛠️ **MCP Tools by Squad**
 
-**ALL AGENTS:** hyperion-coordinator + qdrant-mcp (MANDATORY)
+**ALL AGENTS:** hyper + qdrant-mcp (MANDATORY)
 
 **Backend Infrastructure:** + filesystem, github, fetch, mongodb
 **Frontend & Experience:** + filesystem, github, fetch, playwright-mcp
 **Platform & Security:** + kubernetes, github, filesystem, fetch
-**Workflow Coordinator:** Primarily hyperion-coordinator for task orchestration, qdrant-mcp for context
+**Workflow Coordinator:** Primarily hyper for task orchestration, qdrant-mcp for context
 
 ---
 

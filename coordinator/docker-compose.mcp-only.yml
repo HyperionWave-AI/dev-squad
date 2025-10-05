@@ -3,11 +3,11 @@ version: '3.8'
 # Standalone MCP Server for Claude Code CLI
 # This runs ONLY the MCP server in a container for use with Claude Code
 services:
-  hyperion-coordinator-mcp:
+  hyper-mcp:
     build:
       context: ./mcp-server
       dockerfile: Dockerfile
-    container_name: hyperion-coordinator-mcp
+    container_name: hyper-mcp
     ports:
       - "7778:7778"
     environment:

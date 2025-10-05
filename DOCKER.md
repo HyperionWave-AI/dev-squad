@@ -6,8 +6,8 @@
 
 The Docker deployment uses a **combined container approach**:
 - **Container name:** `hyperion-http-bridge`
-- **Contains:** Both the HTTP Bridge (port 8095) and the MCP Server binary (`/app/hyperion-coordinator-mcp`)
-- **MCP Clients:** Connect via `docker exec -i hyperion-http-bridge /app/hyperion-coordinator-mcp`
+- **Contains:** Both the HTTP Bridge (port 8095) and the MCP Server binary (`/app/hyper-mcp`)
+- **MCP Clients:** Connect via `docker exec -i hyperion-http-bridge /app/hyper-mcp`
 
 This single container serves both HTTP requests (for the UI) and stdio MCP connections (for Claude Code and other MCP clients).
 
@@ -18,7 +18,7 @@ This single container serves both HTTP requests (for the UI) and stdio MCP conne
 ```bash
 # 1. Clone the repository
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 
 # 2. Run the installation script
 ./install.sh
@@ -60,7 +60,7 @@ That's it! All services are now running:
 
 ```bash
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 ```
 
 ### Step 2: Run Installation Script
@@ -186,14 +186,14 @@ Add this to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
+    "hyper": {
       "type": "stdio",
       "command": "/usr/local/bin/docker",
       "args": [
         "exec",
         "-i",
         "hyperion-http-bridge",
-        "/app/hyperion-coordinator-mcp"
+        "/app/hyper-mcp"
       ],
       "env": {}
     }
@@ -492,7 +492,7 @@ Create `docker-compose.override.yml` for local customizations:
 version: '3.8'
 
 services:
-  hyperion-coordinator-mcp:
+  hyper-mcp:
     environment:
       - LOG_LEVEL=debug
     volumes:
@@ -510,7 +510,7 @@ Add additional services to `docker-compose.yml`:
 
 ```yaml
 services:
-  hyperion-coordinator-mcp:
+  hyper-mcp:
     # ... existing config ...
 
   mongodb:
@@ -538,7 +538,7 @@ Monitor container health:
 
 ```bash
 # Check health status
-docker inspect hyperion-coordinator-mcp | grep -A 10 Health
+docker inspect hyper-mcp | grep -A 10 Health
 
 # Auto-restart on failure (already configured)
 # See docker-compose.yml: restart: unless-stopped
@@ -565,11 +565,11 @@ docker inspect hyperion-coordinator-mcp | grep -A 10 Health
 version: '3.8'
 
 services:
-  hyperion-coordinator-mcp:
+  hyper-mcp:
     build:
       context: ./coordinator/mcp-server
       dockerfile: Dockerfile
-    container_name: hyperion-coordinator-mcp-prod
+    container_name: hyper-mcp-prod
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - MONGODB_DATABASE=${MONGODB_DATABASE}
@@ -583,7 +583,7 @@ services:
     networks:
       - hyperion-prod-network
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "hyperion-coordinator-mcp"]
+      test: ["CMD", "pgrep", "-f", "hyper-mcp"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -597,12 +597,12 @@ networks:
 
 **View resource usage:**
 ```bash
-docker stats hyperion-coordinator-mcp
+docker stats hyper-mcp
 ```
 
 **Export logs:**
 ```bash
-docker-compose logs --no-color hyperion-coordinator-mcp > logs.txt
+docker-compose logs --no-color hyper-mcp > logs.txt
 ```
 
 ---
@@ -615,7 +615,7 @@ docker-compose logs --no-color hyperion-coordinator-mcp > logs.txt
 docker-compose down
 
 # Remove image
-docker rmi hyperion-coordinator-mcp
+docker rmi hyper-mcp
 ```
 
 ### Full Cleanup
@@ -624,7 +624,7 @@ docker rmi hyperion-coordinator-mcp
 docker-compose down -v
 
 # Remove images
-docker rmi $(docker images -q hyperion-coordinator-mcp)
+docker rmi $(docker images -q hyper-mcp)
 
 # Prune system (careful!)
 docker system prune -a --volumes

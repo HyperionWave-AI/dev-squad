@@ -115,7 +115,7 @@ Complete user guide including:
 === RUN   TestEfficiencyAnalysis
 --- PASS: TestEfficiencyAnalysis (0.00s)
 PASS
-ok  	hyperion-coordinator-mcp/handlers	0.193s
+ok  	hyper-mcp/handlers	0.193s
 ```
 
 ### Build Verification ✅
