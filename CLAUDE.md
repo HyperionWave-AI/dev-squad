@@ -9,12 +9,46 @@
 2. **This document** - Squad coordination & workflows
 3. **AI-BAND-MANAGER-SPEC.md** - Project specification
 
-**Core MCP Tools:**
+**Core MCP Tools (9 tools):**
 - `mcp__hyperion-coordinator__coordinator_list_agent_tasks({ agentName: "..." })` - Get assignments
 - `mcp__hyperion-coordinator__coordinator_update_task_status(...)` - Update progress
 - `mcp__hyperion-coordinator__coordinator_update_todo_status(...)` - Update TODOs (uses todoId UUID, not index)
+- `mcp__hyperion-coordinator__coordinator_upsert_knowledge(...)` - Store task knowledge
+- `mcp__hyperion-coordinator__coordinator_query_knowledge(...)` - Query task context
 - `mcp__qdrant__qdrant-find({ collection_name: "...", query: "..." })` - Search knowledge
 - `mcp__qdrant__qdrant-store({ collection_name: "...", information: "...", metadata: {...} })` - Store knowledge
+
+**MCP Resources (12 resources) - NEW!:**
+
+**Documentation Resources (instant access, no queries):**
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://docs/standards" })` - Engineering standards
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://docs/architecture" })` - System architecture
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://docs/squad-guide" })` - Squad coordination guide
+
+**Workflow Resources (real-time status):**
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://workflow/active-agents" })` - Who's working on what
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://workflow/task-queue" })` - Pending tasks
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://workflow/dependencies" })` - Task dependencies
+
+**Knowledge Resources (discovery):**
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://knowledge/collections" })` - Qdrant collections
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://knowledge/recent-learnings" })` - Last 24h knowledge
+
+**Metrics Resources (performance):**
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://metrics/squad-velocity" })` - Completion rates
+- `mcp__hyperion-coordinator__resources_read({ uri: "hyperion://metrics/context-efficiency" })` - Efficiency stats
+
+**MCP Prompts (6 prompts) - AI Assistance! NEW!:**
+
+**For Workflow Coordinators:**
+- `mcp__hyperion-coordinator__prompts_get({ name: "plan_task_breakdown", arguments: {...} })` - Break down tasks
+- `mcp__hyperion-coordinator__prompts_get({ name: "detect_cross_squad_impact", arguments: {...} })` - Impact analysis
+- `mcp__hyperion-coordinator__prompts_get({ name: "suggest_handoff_strategy", arguments: {...} })` - Handoff planning
+
+**For Implementation Agents:**
+- `mcp__hyperion-coordinator__prompts_get({ name: "recommend_qdrant_query", arguments: {...} })` - Optimize queries
+- `mcp__hyperion-coordinator__prompts_get({ name: "diagnose_blocked_task", arguments: {...} })` - Unblock help
+- `mcp__hyperion-coordinator__prompts_get({ name: "suggest_knowledge_structure", arguments: {...} })` - Structure learnings
 
 ---
 
@@ -118,16 +152,62 @@ await mcp__hyperion-coordinator__coordinator_update_todo_status({
 
 ### **Context Retrieval Strategy (Priority Order)**
 
-**Task context contains 80% of what you need. Read FIRST before any queries.**
+**Task context contains 80% of what you need. Resources are FREE. Read FIRST before any queries.**
+
+**Priority 0: MCP Resources (FREE - instant access, no context cost)**
+```typescript
+// Check what others are working on (avoid duplicate work)
+const activeAgents = await mcp__hyperion-coordinator__resources_read({
+  uri: "hyperion://workflow/active-agents"
+})
+
+// Get engineering standards (quality gates, file size limits)
+const standards = await mcp__hyperion-coordinator__resources_read({
+  uri: "hyperion://docs/standards"
+})
+
+// See what was learned recently (check before implementing)
+const recentLearnings = await mcp__hyperion-coordinator__resources_read({
+  uri: "hyperion://knowledge/recent-learnings"
+})
+
+// Find which Qdrant collections to query
+const collections = await mcp__hyperion-coordinator__resources_read({
+  uri: "hyperion://knowledge/collections"
+})
+```
 
 **Priority 1: Read Task Context (FREE - 0 queries)**
 ```typescript
 const myTask = (await coordinator_list_agent_tasks({ agentName: "..." })).tasks[0]
-// Read: task.role, task.todos, task.notes, task.qdrantCollections
+// Read: task.role, task.todos, task.notes, task.qdrantCollections, task.filesModified
 // Provides: requirements, files to modify, patterns to follow, constraints
 ```
 
-**Priority 2: Coordinator Knowledge (1 query MAX, only if incomplete)**
+**Priority 2: Use MCP Prompts for Guidance (FREE - AI assistance)**
+```typescript
+// If you need help with Qdrant queries
+const queryHelp = await mcp__hyperion-coordinator__prompts_get({
+  name: "recommend_qdrant_query",
+  arguments: {
+    agentQuestion: "How to implement JWT validation?",
+    taskContext: JSON.stringify(myTask),
+    availableCollections: "technical-knowledge,code-patterns"
+  }
+})
+
+// If you're blocked
+const unblockHelp = await mcp__hyperion-coordinator__prompts_get({
+  name: "diagnose_blocked_task",
+  arguments: {
+    taskId: myTask.id,
+    blockReason: "Missing API documentation",
+    attemptedSteps: JSON.stringify(["searched Qdrant", "read existing code"])
+  }
+})
+```
+
+**Priority 3: Coordinator Knowledge (1 query MAX, only if incomplete)**
 ```typescript
 coordinator_query_knowledge({
   collection: `task:hyperion://task/human/${myTask.humanTaskId}`,
@@ -136,7 +216,7 @@ coordinator_query_knowledge({
 // Use ONLY if task notes reference specific coordinator knowledge
 ```
 
-**Priority 3: Qdrant Technical Patterns (1 query MAX)**
+**Priority 4: Qdrant Technical Patterns (1 query MAX)**
 ```typescript
 mcp__qdrant__qdrant-find({
   collection_name: myTask.qdrantCollections?.[0] || "technical-knowledge",
@@ -153,6 +233,111 @@ Read({ file_path: "service/handlers/export.go" })
 ```
 
 **Context Budget: <4000 tokens (15%) vs OLD 23000 tokens (80%)**
+
+---
+
+### **Using MCP Resources & Prompts Effectively**
+
+**🎯 When to Use Resources (FREE context):**
+
+**BEFORE starting any task:**
+```typescript
+// 1. Check if someone else is already working on similar task
+const activeAgents = await resources_read({ uri: "hyperion://workflow/active-agents" })
+// Avoid duplicate work!
+
+// 2. Check recent learnings (last 24h)
+const recentLearnings = await resources_read({ uri: "hyperion://knowledge/recent-learnings" })
+// Someone may have just solved your problem!
+
+// 3. Review engineering standards
+const standards = await resources_read({ uri: "hyperion://docs/standards" })
+// Know the quality gates and file size limits
+```
+
+**IF you're blocked or inefficient:**
+```typescript
+// Get Qdrant query suggestions
+const queryHelp = await prompts_get({
+  name: "recommend_qdrant_query",
+  arguments: {
+    agentQuestion: "your specific question",
+    taskContext: JSON.stringify(myTask)
+  }
+})
+// Follow the recommended query instead of guessing
+
+// Diagnose why you're blocked
+const unblockHelp = await prompts_get({
+  name: "diagnose_blocked_task",
+  arguments: {
+    taskId: myTask.id,
+    blockReason: "specific reason",
+    attemptedSteps: JSON.stringify(["what you tried"])
+  }
+})
+// Get specific unblocking actions
+```
+
+**AFTER completing work:**
+```typescript
+// Structure your learnings properly
+const structureHelp = await prompts_get({
+  name: "suggest_knowledge_structure",
+  arguments: {
+    rawLearning: "what I learned",
+    context: JSON.stringify({ squad: "...", files: [...] })
+  }
+})
+// Store knowledge in a reusable format
+```
+
+**FOR Workflow Coordinators:**
+```typescript
+// Break down complex tasks
+const breakdown = await prompts_get({
+  name: "plan_task_breakdown",
+  arguments: {
+    taskDescription: "high-level task",
+    targetSquad: "go-mcp-dev"
+  }
+})
+// Create context-rich tasks with embedded guidance
+
+// Detect cross-squad impacts
+const impact = await prompts_get({
+  name: "detect_cross_squad_impact",
+  arguments: {
+    taskDescription: "what's changing",
+    filesModified: "file1.go,file2.ts"
+  }
+})
+// Prevent conflicts before they happen
+
+// Plan multi-phase handoffs
+const handoff = await prompts_get({
+  name: "suggest_handoff_strategy",
+  arguments: {
+    phase1Work: JSON.stringify({ completed: "..." }),
+    phase2Scope: "what's next",
+    knowledgeGap: "what phase2 needs"
+  }
+})
+// Smooth handoffs in <2 minutes
+```
+
+**🚫 DON'T:**
+- Skip resource checks (they're FREE context!)
+- Ignore prompt suggestions (they're AI-optimized!)
+- Query Qdrant blindly (use `recommend_qdrant_query` first)
+- Implement without checking `recent-learnings` (reuse > rebuild)
+
+**✅ DO:**
+- Check `active-agents` before starting (avoid duplicates)
+- Check `recent-learnings` before coding (reuse solutions)
+- Use `recommend_qdrant_query` before querying (optimize queries)
+- Use `diagnose_blocked_task` when stuck (unblock faster)
+- Use prompts for guidance (they know the patterns)
 
 ---
 
@@ -666,5 +851,53 @@ After completing a task, verify you used context efficiently:
 
 ---
 
-**Version:** v1.2 Context-in-Tasks Architecture | **Updated:** 2025-10-01
-**Mantra:** *Context First, Domain Focus, Parallel Always, Knowledge Shared, Quality Enforced*
+## 📖 **MCP Quick Reference**
+
+### **Resources (12 total - FREE context, instant access)**
+
+| URI | Purpose | When to Use |
+|-----|---------|-------------|
+| `hyperion://docs/standards` | Engineering standards, quality gates | Before coding (know the rules) |
+| `hyperion://docs/architecture` | System architecture, dual-MCP | Understanding system design |
+| `hyperion://docs/squad-guide` | Squad coordination patterns | Learning workflows |
+| `hyperion://workflow/active-agents` | Live agent status | Before starting (avoid duplicates) |
+| `hyperion://workflow/task-queue` | Pending tasks with priority | Coordinators: task assignment |
+| `hyperion://workflow/dependencies` | Task dependency graph | Understanding blocking relationships |
+| `hyperion://knowledge/collections` | Qdrant collection directory | Finding where to search |
+| `hyperion://knowledge/recent-learnings` | Last 24h knowledge | Before implementing (reuse!) |
+| `hyperion://metrics/squad-velocity` | Task completion rates | Monitoring performance |
+| `hyperion://metrics/context-efficiency` | Context usage stats | Optimizing efficiency |
+| `hyperion://task/human/{id}` | Human task details | Dynamic (auto-registered) |
+| `hyperion://task/agent/{agent}/{id}` | Agent task details | Dynamic (auto-registered) |
+
+### **Prompts (6 total - AI assistance for complex decisions)**
+
+| Prompt | Purpose | Required Arguments | Who Uses It |
+|--------|---------|-------------------|-------------|
+| `plan_task_breakdown` | Break down complex tasks into TODOs | `taskDescription`, `targetSquad` | Coordinators |
+| `suggest_context_offload` | Determine what goes in task vs Qdrant | `taskScope`, `existingKnowledge` | Coordinators |
+| `detect_cross_squad_impact` | Detect multi-squad impacts | `taskDescription`, `filesModified` | Coordinators |
+| `suggest_handoff_strategy` | Plan multi-phase handoffs | `phase1Work`, `phase2Scope`, `knowledgeGap` | Coordinators |
+| `recommend_qdrant_query` | Optimize Qdrant queries | `agentQuestion`, `taskContext` | Agents |
+| `diagnose_blocked_task` | Unblock stuck agents | `taskId`, `blockReason`, `attemptedSteps` | Agents |
+| `suggest_knowledge_structure` | Structure learnings for storage | `rawLearning`, `context` | Agents |
+
+### **Tools (9 total - Core operations)**
+
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `coordinator_list_agent_tasks` | Get your assigned tasks | Start of work session |
+| `coordinator_create_agent_task` | Create task for agent | Coordinators only |
+| `coordinator_update_task_status` | Update task progress | During/after work |
+| `coordinator_update_todo_status` | Mark TODO complete | After each TODO |
+| `coordinator_upsert_knowledge` | Store task knowledge | After completing task |
+| `coordinator_query_knowledge` | Query task context | Only if task notes reference it |
+| `qdrant-find` | Search technical knowledge | Max 1 query per task |
+| `qdrant-store` | Store reusable patterns | After creating new pattern |
+| `qdrant-search` | Advanced vector search | Complex semantic queries |
+
+---
+
+**Version:** v1.3 Full MCP Capabilities | **Updated:** 2025-10-04
+**Capabilities:** 9 tools, 12 resources, 6 prompts | **Status:** Production Ready
+**Mantra:** *Context First, Resources Free, Prompts Guide, Domain Focus, Parallel Always, Knowledge Shared, Quality Enforced*

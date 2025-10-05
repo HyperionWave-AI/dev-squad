@@ -1,13 +1,13 @@
 version: '3.8'
 
-# 4 Containers
+# Development override with Air hot-reload
 services:
-  # MCP Server (HTTP mode for Claude CLI)
+  # MCP Server with Air hot-reload (development only)
   hyperion-mcp-server:
     build:
       context: ./coordinator/mcp-server
-      dockerfile: Dockerfile
-    container_name: hyperion-mcp-server
+      dockerfile: Dockerfile.dev
+    container_name: hyperion-mcp-server-dev
     ports:
       - "7778:7778"
     environment:
@@ -15,7 +15,10 @@ services:
       - MCP_PORT=7778
       - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db_max}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+    volumes:
+      - ./coordinator/mcp-server:/app
+      - mcp-server-cache:/go/pkg/mod
     restart: unless-stopped
     networks:
       - hyperion-network
@@ -26,20 +29,24 @@ services:
       retries: 3
       start_period: 10s
 
-  # HTTP Bridge (connects MCP server to UI via HTTP)
+  # HTTP Bridge with Air hot-reload (development only)
   hyperion-http-bridge:
     build:
-      context: ./coordinator
-      dockerfile: mcp-http-bridge/Dockerfile.combined
-    container_name: hyperion-http-bridge
+      context: ./coordinator/mcp-http-bridge
+      dockerfile: Dockerfile.dev
+    container_name: hyperion-http-bridge-dev
     ports:
-      - "8095:8095"
+      - "7779:8095"
     environment:
-      - MCP_SERVER_PATH=/app/hyperion-coordinator-mcp
+      - MCP_SERVER_PATH=/app/mcp-server/hyperion-coordinator-mcp
       - PORT=8095
       - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db_max}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+    volumes:
+      - ./coordinator/mcp-http-bridge:/app
+      - ./coordinator/mcp-server:/app/mcp-server:ro
+      - http-bridge-cache:/go/pkg/mod
     restart: unless-stopped
     networks:
       - hyperion-network
@@ -50,29 +57,31 @@ services:
       retries: 3
       start_period: 10s
 
-  # React UI
+  # React UI with hot-reload (development only)
   hyperion-ui:
     build:
       context: ./coordinator/ui
-      dockerfile: Dockerfile
-      args:
-        - VITE_MCP_BRIDGE_URL=http://localhost:8095
-    container_name: hyperion-ui
+      dockerfile: Dockerfile.dev
+    container_name: hyperion-ui-dev
     ports:
-      - "5173:80"
+      - "7777:5173"
+    environment:
+      - VITE_MCP_BRIDGE_URL=http://localhost:7779
+    volumes:
+      - ./coordinator/ui:/app
+      - /app/node_modules
     depends_on:
       hyperion-http-bridge:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - hyperion-network
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
 networks:
   hyperion-network:
     driver: bridge
     name: hyperion-network
+
+volumes:
+  mcp-server-cache:
+  http-bridge-cache:
