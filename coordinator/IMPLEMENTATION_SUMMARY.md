@@ -62,7 +62,7 @@ type PromptArgument struct {
 
 ```
 1. User calls prompt via MCP:
-   mcp__hyperion-coordinator__prompts_get({ name: "plan_task_breakdown", arguments: {...} })
+   mcp__hyper__prompts_get({ name: "plan_task_breakdown", arguments: {...} })
 
 2. SDK routes to registered handler:
    handler(ctx, *GetPromptRequest) → *GetPromptResult

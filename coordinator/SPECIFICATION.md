@@ -38,7 +38,7 @@ The Hyperion Coordinator is an MCP (Model Context Protocol) server that manages 
                      │ stdio
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│           MCP Server (hyperion-coordinator)             │
+│           MCP Server (hyper)             │
 │  ┌───────────────────────────────────────────────────┐  │
 │  │ Tools (9 total)                                   │  │
 │  │ - coordinator_create_human_task                   │  │
@@ -803,7 +803,7 @@ server.NotifyResourceChanged("hyperion://task/human/123")
 **Response**:
 ```json
 {
-  "service": "hyperion-coordinator-http-bridge",
+  "service": "hyper-http-bridge",
   "status": "healthy",
   "version": "1.0.0"
 }

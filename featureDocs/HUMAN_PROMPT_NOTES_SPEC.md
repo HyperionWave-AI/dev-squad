@@ -108,7 +108,7 @@ type TodoItem struct {
 **1. Add Task Prompt Notes**
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_add_task_prompt_notes({
+mcp__hyper__coordinator_add_task_prompt_notes({
   agentTaskId: string,        // REQUIRED: Agent task ID
   promptNotes: string         // REQUIRED: Human's guidance (markdown supported)
 })
@@ -126,7 +126,7 @@ mcp__hyperion-coordinator__coordinator_add_task_prompt_notes({
 **2. Add TODO Prompt Notes**
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes({
+mcp__hyper__coordinator_add_todo_prompt_notes({
   agentTaskId: string,        // REQUIRED: Agent task ID
   todoId: string,             // REQUIRED: TODO UUID
   promptNotes: string         // REQUIRED: Human's guidance (markdown supported)
@@ -146,7 +146,7 @@ mcp__hyperion-coordinator__coordinator_add_todo_prompt_notes({
 **3. Update Task Prompt Notes**
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_task_prompt_notes({
+mcp__hyper__coordinator_update_task_prompt_notes({
   agentTaskId: string,        // REQUIRED: Agent task ID
   promptNotes: string         // REQUIRED: Updated guidance
 })
@@ -155,7 +155,7 @@ mcp__hyperion-coordinator__coordinator_update_task_prompt_notes({
 **4. Update TODO Prompt Notes**
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes({
+mcp__hyper__coordinator_update_todo_prompt_notes({
   agentTaskId: string,        // REQUIRED: Agent task ID
   todoId: string,             // REQUIRED: TODO UUID
   promptNotes: string         // REQUIRED: Updated guidance
@@ -165,7 +165,7 @@ mcp__hyperion-coordinator__coordinator_update_todo_prompt_notes({
 **5. Clear Task Prompt Notes**
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes({
+mcp__hyper__coordinator_clear_task_prompt_notes({
   agentTaskId: string         // REQUIRED: Agent task ID
 })
 ```
@@ -173,7 +173,7 @@ mcp__hyperion-coordinator__coordinator_clear_task_prompt_notes({
 **6. Clear TODO Prompt Notes**
 
 ```typescript
-mcp__hyperion-coordinator__coordinator_clear_todo_prompt_notes({
+mcp__hyper__coordinator_clear_todo_prompt_notes({
   agentTaskId: string,        // REQUIRED: Agent task ID
   todoId: string              // REQUIRED: TODO UUID
 })
