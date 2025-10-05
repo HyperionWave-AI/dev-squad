@@ -67,6 +67,14 @@ func main() {
 	// Get database
 	db := mongoClient.Database(mongoDatabase)
 
+	// Initialize Qdrant client first (needed for knowledge storage)
+	qdrantURL := os.Getenv("QDRANT_URL")
+	if qdrantURL == "" {
+		qdrantURL = "http://qdrant:6333"
+	}
+	qdrantClient := storage.NewQdrantClient(qdrantURL)
+	logger.Info("Qdrant client initialized", zap.String("url", qdrantURL))
+
 	// Initialize storage with MongoDB
 	taskStorage, err := storage.NewMongoTaskStorage(db)
 	if err != nil {
@@ -74,11 +82,12 @@ func main() {
 	}
 	logger.Info("Task storage initialized with MongoDB")
 
-	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db)
+	// Initialize knowledge storage with MongoDB + Qdrant
+	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db, qdrantClient)
 	if err != nil {
 		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
 	}
-	logger.Info("Knowledge storage initialized with MongoDB")
+	logger.Info("Knowledge storage initialized with MongoDB + Qdrant vector search")
 
 	// Create MCP server with capabilities
 	impl := &mcp.Implementation{
@@ -93,14 +102,6 @@ func main() {
 	}
 
 	server := mcp.NewServer(impl, opts)
-
-	// Initialize Qdrant client
-	qdrantURL := os.Getenv("QDRANT_URL")
-	if qdrantURL == "" {
-		qdrantURL = "http://qdrant:6333"
-	}
-	qdrantClient := storage.NewQdrantClient(qdrantURL)
-	logger.Info("Qdrant client initialized", zap.String("url", qdrantURL))
 
 	// Initialize handlers
 	resourceHandler := handlers.NewResourceHandler(taskStorage, knowledgeStorage)
