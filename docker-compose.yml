@@ -15,7 +15,12 @@ services:
       - MCP_PORT=7778
       - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db_max}
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      qdrant:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - hyperion-network
@@ -39,7 +44,12 @@ services:
       - PORT=8095
       - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db_max}
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      qdrant:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - hyperion-network
@@ -71,6 +81,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: hyperion-qdrant
+    ports:
+      - "6333:6333"  # HTTP API
+      - "6334:6334"  # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  qdrant_data:
+    driver: local
 
 networks:
   hyperion-network:
