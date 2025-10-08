@@ -1,0 +1,32 @@
+version: '3.8'
+
+# Standalone MCP Server for Claude Code CLI
+# This runs ONLY the MCP server in a container for use with Claude Code
+services:
+  hyper-mcp:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: hyper-mcp
+    ports:
+      - "7778:7778"
+    environment:
+      - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TRANSPORT_MODE=http
+      - MCP_PORT=7778
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7778/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - hyperion-network
+
+networks:
+  hyperion-network:
+    driver: bridge
+    name: hyperion-mcp-network

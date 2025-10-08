@@ -32,8 +32,8 @@ if (!fs.existsSync(binDir)) {
 
 // Determine binary name based on platform
 const binaryName = platform === 'win32'
-  ? 'hyperion-coordinator-mcp.exe'
-  : 'hyperion-coordinator-mcp';
+  ? 'hyper-mcp.exe'
+  : 'hyper-mcp';
 
 const binaryPath = path.join(binDir, binaryName);
 

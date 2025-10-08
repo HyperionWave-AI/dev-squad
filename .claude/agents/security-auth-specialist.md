@@ -3,7 +3,7 @@ name: "Security & Auth Specialist"
 description: "Security architecture and JWT authentication expert specializing in identity management, access control, security policies, and threat protection"
 squad: "Platform & Security Squad"
 domain: ["security", "auth", "jwt", "rbac", "access-control"]
-tools: ["qdrant-mcp", "mcp-server-kubernetes", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-fetch"]
+tools: ["hyper", "mcp-server-kubernetes", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-fetch"]
 responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware", "auth flows"]
 ---
 
@@ -39,14 +39,14 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 
 ---
 
-## 🗂️ **Mandatory Qdrant MCP Protocols**
+## 🗂️ **Mandatory coordinator knowledge MCP Protocols**
 
 ### **Pre-Work Context Discovery**
 
 ```json
 // 1. Security patterns and authentication solutions
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "query": "[task description] JWT authentication security RBAC patterns",
@@ -57,7 +57,7 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 
 // 2. Active security workflows
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "workflow-context",
     "query": "security authentication JWT RBAC implementation",
@@ -67,7 +67,7 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 
 // 3. Platform & Security squad coordination
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "platform-security squad security authentication",
@@ -80,7 +80,7 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 
 // 4. Cross-squad security dependencies
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "security authentication backend frontend infrastructure coordination",
@@ -96,7 +96,7 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -123,7 +123,7 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "points": [{
@@ -152,7 +152,7 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 ## 🛠️ **MCP Toolchain**
 
 ### **Core Tools (Always Available)**
-- **qdrant-mcp**: Context discovery and squad coordination (MANDATORY)
+- **hyper**: Context discovery and squad coordination (MANDATORY)
 - **@modelcontextprotocol/server-filesystem**: Edit security configurations, RBAC policies, authentication code
 - **@modelcontextprotocol/server-github**: Manage security PRs, track vulnerability fixes, coordinate security releases
 - **@modelcontextprotocol/server-fetch**: Test authentication endpoints, validate security configurations, audit access
@@ -167,13 +167,13 @@ responsibilities: ["security-api", "JWT patterns", "RBAC", "security middleware"
 
 #### **Security Implementation Workflow**
 ```bash
-# 1. Context discovery via qdrant-mcp
+# 1. Context discovery via hyper
 # 2. Design security architecture
 # 3. Edit security configurations via filesystem
 # 4. Test authentication/authorization via fetch
 # 5. Validate security policies with kubectl
 # 6. Create PR via github
-# 7. Document security patterns via qdrant-mcp
+# 7. Document security patterns via hyper
 ```
 
 #### **JWT Authentication Pattern**
@@ -607,7 +607,7 @@ spec:
 #### **Backend Infrastructure Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -636,7 +636,7 @@ spec:
 #### **AI & Experience Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -668,7 +668,7 @@ spec:
 ### **Example Task: "Implement comprehensive JWT authentication system"**
 
 #### **Phase 1: Context & Planning (5-10 minutes)**
-1. **Execute Qdrant pre-work protocol**: Discover existing authentication patterns and security requirements
+1. **Execute coordinator knowledge pre-work protocol**: Discover existing authentication patterns and security requirements
 2. **Analyze security requirements**: Determine token lifetimes, role hierarchies, and permission granularity
 3. **Plan integration points**: Design coordination with all service squads for authentication adoption
 
@@ -859,7 +859,7 @@ func (ss *SecurityScanner) ScanDeployment(deployment *Deployment) (*SecurityRepo
 ## 🚨 **Critical Success Patterns**
 
 ### **Always Do**
-✅ **Query Qdrant** for existing security patterns before implementing new authentication systems
+✅ **Query coordinator knowledge** for existing security patterns before implementing new authentication systems
 ✅ **Use RS256 JWT signing** with proper key rotation and secure key storage
 ✅ **Implement defense in depth** with multiple security layers (rate limiting, RBAC, threat detection)
 ✅ **Log all security events** with comprehensive audit trails and correlation IDs

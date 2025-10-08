@@ -1,0 +1,143 @@
+version: '3.8'
+
+# Development override with Air hot-reload
+services:
+  # MCP Server with Air hot-reload (development only)
+  hyperion-mcp-server:
+    build:
+      context: ./coordinator/mcp-server
+      dockerfile: Dockerfile.dev
+    container_name: hyperion-mcp-server-dev
+    ports:
+      - "${MCP_PORT:-7778}:7778"
+    environment:
+      - TRANSPORT_MODE=http
+      - MCP_PORT=7778
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+    volumes:
+      - ./coordinator/mcp-server:/app
+      - mcp-server-cache:/go/pkg/mod
+    depends_on:
+      - mongodb
+      - qdrant
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:7778/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # HTTP Bridge with Air hot-reload (development only)
+  hyperion-http-bridge:
+    build:
+      context: ./coordinator/mcp-http-bridge
+      dockerfile: Dockerfile.dev
+    container_name: hyperion-http-bridge-dev
+    ports:
+      - "${BRIDGE_PORT:-7779}:7095"
+    environment:
+      - MCP_SERVER_PATH=/app/mcp-server/hyperion-coordinator-mcp
+      - PORT=7095
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+    volumes:
+      - ./coordinator/mcp-http-bridge:/app
+      - ./coordinator/mcp-server:/app/mcp-server:ro
+      - http-bridge-cache:/go/pkg/mod
+    depends_on:
+      - mongodb
+      - qdrant
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:7095/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # React UI with hot-reload (development only)
+  hyperion-ui:
+    build:
+      context: ./coordinator/ui
+      dockerfile: Dockerfile.dev
+    container_name: hyperion-ui-dev
+    ports:
+      - "${WEB_PORT:-7777}:5173"
+    environment:
+      - VITE_MCP_BRIDGE_URL=http://hyperion-http-bridge:7095
+    volumes:
+      - ./coordinator/ui:/app
+      - /app/node_modules
+    depends_on:
+      - hyperion-http-bridge
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+
+  # MongoDB Database (local development)
+  mongodb:
+    image: mongo:7.0
+    container_name: hyperion-mongodb-dev
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-admin123}
+      - MONGO_INITDB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+    volumes:
+      - mongodb_data_dev:/data/db
+      - mongodb_config_dev:/data/configdb
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Qdrant Vector Database (local development)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: hyperion-qdrant-dev
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data_dev:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  hyperion-network:
+    driver: bridge
+    name: hyperion-network
+
+volumes:
+  mcp-server-cache:
+  http-bridge-cache:
+  mongodb_data_dev:
+  mongodb_config_dev:
+  qdrant_data_dev:
