@@ -16,12 +16,11 @@ services:
       - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     depends_on:
       mongodb:
-        condition: service_healthy
-      qdrant:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -40,25 +39,24 @@ services:
       dockerfile: mcp-http-bridge/Dockerfile.combined
     container_name: hyperion-http-bridge
     ports:
-      - "8095:8095"
+      - "7095:7095"
     environment:
-      - MCP_SERVER_PATH=/app/hyperion-coordinator-mcp
-      - PORT=8095
+      - MCP_SERVER_PATH=/app/hyper-mcp
+      - PORT=7095
       - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     depends_on:
       mongodb:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - hyperion-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8095/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:7095/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -70,7 +68,7 @@ services:
       context: ./coordinator/ui
       dockerfile: Dockerfile
       args:
-        - VITE_MCP_BRIDGE_URL=http://localhost:8095
+        - VITE_MCP_BRIDGE_URL=http://localhost:7095
     container_name: hyperion-ui
     ports:
       - "5173:80"
@@ -109,10 +107,12 @@ services:
       retries: 3
       start_period: 10s
 
-  # Qdrant Vector Database
+  # Qdrant Vector Database (Optional - only for local development)
   qdrant:
     image: qdrant/qdrant:latest
     container_name: hyperion-qdrant
+    profiles:
+      - local-qdrant  # Only starts with --profile local-qdrant
     ports:
       - "6333:6333"  # HTTP API
       - "6334:6334"  # gRPC API

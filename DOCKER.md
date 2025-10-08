@@ -6,7 +6,7 @@
 
 The Docker deployment uses a **combined container approach**:
 - **Container name:** `hyperion-http-bridge`
-- **Contains:** Both the HTTP Bridge (port 8095) and the MCP Server binary (`/app/hyper-mcp`)
+- **Contains:** Both the HTTP Bridge (port 7095) and the MCP Server binary (`/app/hyper-mcp`)
 - **MCP Clients:** Connect via `docker exec -i hyperion-http-bridge /app/hyper-mcp`
 
 This single container serves both HTTP requests (for the UI) and stdio MCP connections (for Claude Code and other MCP clients).
@@ -28,14 +28,14 @@ docker-compose up -d
 
 # 4. Access services
 # - UI Dashboard: http://localhost:5173
-# - HTTP API: http://localhost:8095/health
+# - HTTP API: http://localhost:7095/health
 
 # 5. View logs
 docker-compose logs -f
 ```
 
 That's it! All services are now running:
-- **HTTP Bridge + MCP Server** (port 8095) - API backend
+- **HTTP Bridge + MCP Server** (port 7095) - API backend
 - **React UI** (port 5173) - Kanban dashboard
 
 ---
@@ -145,7 +145,7 @@ hyperion-http-bridge  | Task storage initialized with MongoDB
 hyperion-http-bridge  | Knowledge storage initialized with MongoDB
 hyperion-http-bridge  | All handlers registered successfully tools=9 resources=2
 hyperion-http-bridge  | MCP connection initialized successfully
-hyperion-http-bridge  | HTTP bridge listening on port 8095
+hyperion-http-bridge  | HTTP bridge listening on port 7095
 ```
 
 **Check container status:**
@@ -156,14 +156,14 @@ docker-compose ps
 **Expected output:**
 ```
 NAME                    STATUS                    PORTS
-hyperion-http-bridge    Up 2 minutes (healthy)    0.0.0.0:8095->8095/tcp
+hyperion-http-bridge    Up 2 minutes (healthy)    0.0.0.0:7095->7095/tcp
 hyperion-ui             Up 2 minutes (healthy)    0.0.0.0:5173->80/tcp
 ```
 
 **Test services:**
 ```bash
 # Test HTTP API
-curl http://localhost:8095/health
+curl http://localhost:7095/health
 
 # Test UI (should return HTML)
 curl -I http://localhost:5173
@@ -312,13 +312,13 @@ docker-compose build --no-cache
 
 ```bash
 # Test health endpoint
-curl http://localhost:8095/health
+curl http://localhost:7095/health
 
 # List available tools
-curl http://localhost:8095/api/mcp/tools
+curl http://localhost:7095/api/mcp/tools
 
 # Call a tool
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-1" \
   -d '{
@@ -327,12 +327,12 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
   }'
 
 # List resources
-curl http://localhost:8095/api/mcp/resources
+curl http://localhost:7095/api/mcp/resources
 
 # Test CORS
 curl -v -H "Origin: http://localhost:5173" \
   -H "Access-Control-Request-Method: POST" \
-  -X OPTIONS http://localhost:8095/api/mcp/tools/call
+  -X OPTIONS http://localhost:7095/api/mcp/tools/call
 ```
 
 ### Run Integration Tests
@@ -357,7 +357,7 @@ docker-compose logs hyperion-ui
 
 **Common issues:**
 - MongoDB connection failed → Check `MONGODB_URI` in `.env`
-- Port 8095 already in use → Stop other services using the port
+- Port 7095 already in use → Stop other services using the port
 - Port 5173 already in use → Stop other services or change port mapping
 - Image build failed → Run `docker-compose build --no-cache`
 - Health check failing → Check logs for startup errors
@@ -442,7 +442,7 @@ docker-compose build --no-cache
 # Test CORS headers
 curl -v -H "Origin: http://localhost:5173" \
   -H "Access-Control-Request-Method: POST" \
-  -X OPTIONS http://localhost:8095/api/mcp/tools/call
+  -X OPTIONS http://localhost:7095/api/mcp/tools/call
 ```
 
 2. **Check allowed origins in main.go:**

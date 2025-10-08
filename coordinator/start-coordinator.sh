@@ -41,7 +41,7 @@ echo ""
 echo "🎬 Starting services..."
 echo ""
 echo "📍 Service URLs:"
-echo "  - HTTP Bridge:  http://localhost:8095"
+echo "  - HTTP Bridge:  http://localhost:7095"
 echo "  - React UI:     http://localhost:5173"
 echo "  - MongoDB:      MongoDB Atlas (coordinator_db)"
 echo ""
@@ -72,7 +72,7 @@ cd ..
 sleep 2
 
 # Check if bridge is healthy
-if curl -s http://localhost:8095/health > /dev/null 2>&1; then
+if curl -s http://localhost:7095/health > /dev/null 2>&1; then
   echo "✅ HTTP Bridge running (PID: $BRIDGE_PID)"
 else
   echo "❌ HTTP Bridge failed to start"
@@ -96,10 +96,10 @@ echo ""
 echo "📖 Open your browser to: http://localhost:5173"
 echo ""
 echo "🔍 Test the HTTP bridge:"
-echo "   curl http://localhost:8095/health"
+echo "   curl http://localhost:7095/health"
 echo ""
 echo "💡 Create a test task:"
-echo "   curl -X POST http://localhost:8095/api/mcp/tools/call \\"
+echo "   curl -X POST http://localhost:7095/api/mcp/tools/call \\"
 echo "     -H 'Content-Type: application/json' \\"
 echo "     -H 'X-Request-ID: test-1' \\"
 echo "     -d '{\"name\":\"coordinator_create_human_task\",\"arguments\":{\"prompt\":\"Test task\"}}'"
