@@ -24,7 +24,7 @@ WORKDIR /app
 COPY --from=builder /build/hyperion-http-bridge .
 
 # Expose port
-EXPOSE 8095
+EXPOSE 7095
 
 # Run the bridge
 CMD ["./hyperion-http-bridge"]

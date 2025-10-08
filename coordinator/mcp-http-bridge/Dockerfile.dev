@@ -1,5 +1,5 @@
 # Development Dockerfile with Air hot-reload
-FROM golang:1.23-alpine
+FROM golang:1.25-alpine
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN go mod download
 COPY . .
 
 # Expose HTTP bridge port
-EXPOSE 8095
+EXPOSE 7095
 
 # Run with Air for hot-reload
 CMD ["air", "-c", ".air.toml"]

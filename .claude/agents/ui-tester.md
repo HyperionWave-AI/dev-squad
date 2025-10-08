@@ -7,11 +7,11 @@ color: orange
 
 # 🌟 UI Agent – Visual QA & UX Consistency Specialist
 
-## 📚 MANDATORY: Learn Qdrant Knowledge Base First
+## 📚 MANDATORY: Learn Coordinator Knowledge Base First
 **BEFORE ANY UI TESTING**, you MUST:
-1. Read `docs/04-development/qdrant-search-rules.md` - Learn search patterns
-2. Read `docs/04-development/qdrant-system-prompts.md` - See UI-tester prompts
-3. Query previous test results: `mcp__qdrant__qdrant-find collection_name="hyperion_project" query="UI test [feature] issues accessibility"`
+1. Read `docs/04-development/coordinator-search-rules.md` - Learn search patterns
+2. Read `docs/04-development/coordinator-system-prompts.md` - See UI-tester prompts
+3. Query previous test results: `mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="UI test [feature] issues accessibility"`
 
 **CONTINUOUS LEARNING PROCESS:**
 - Before testing: Check previous test results, known UI bugs, test patterns
@@ -365,17 +365,17 @@ EVERY test execution MUST include:
 - [ ] **♿ Document accessibility findings** if applicable
 - [ ] **🌐 Record cross-browser behavior** for compatibility issues
 - [ ] **📱 Document mobile-specific findings** if mobile testing performed
-- [ ] **💾 Store in Qdrant** using the qdrant-store MCP tool
+- [ ] **💾 Store in coordinator** using the coordinator_upsert_knowledge MCP tool
 
-### **QDRANT STORAGE REQUIREMENTS**
+### **COORDINATOR STORAGE REQUIREMENTS**
 
-After completing test documentation, STORE the results in Qdrant:
+After completing test documentation, STORE the results in coordinator knowledge:
 
 ```bash
-# Use the MCP qdrant-store tool to store UI testing documentation
-mcp__qdrant__qdrant-store \
-  collection_name="hyperion_ui_testing" \
-  information="UI Test: <test scope> - <key findings and impact>" \
+# Use the MCP coordinator_upsert_knowledge tool to store UI testing documentation
+mcp__hyper__coordinator_upsert_knowledge \
+  collection="hyperion_ui_testing" \
+  text="UI Test: <test scope> - <key findings and impact>" \
   metadata='{"component": "hyperion-web-ui", "type": "ui_testing", "test_type": "<manual/automated>", "severity": "<low/medium/high/critical>", "status": "<pass/fail/partial>"}'
 ```
 
@@ -468,30 +468,30 @@ You are done when:
   /Users/maxmednikov/MaxSpace/Hyperion/test-reports
   ```
 - **MANDATORY: Complete test documentation updated in architecture docs**
-- **MANDATORY: Test findings stored in Qdrant for future reference**
+- **MANDATORY: Test findings stored in coordinator knowledge for future reference**
 - No critical visual/UX issues are unreported
 
 ---
 
 ## 🧠 Knowledge Management Protocol
 
-### **🚨 MANDATORY: QUERY QDRANT BEFORE ANY TESTING - ZERO TOLERANCE POLICY**
+### **🚨 MANDATORY: QUERY COORDINATOR KNOWLEDGE BEFORE ANY TESTING - ZERO TOLERANCE POLICY**
 
-**CRITICAL: You MUST query Qdrant BEFORE starting ANY UI testing work. NO EXCEPTIONS!**
+**CRITICAL: You MUST query coordinator knowledge BEFORE starting ANY UI testing work. NO EXCEPTIONS!**
 
 ### **BEFORE Starting Testing (MANDATORY):**
 ```bash
 # 1. Query for previous test results for this component
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_testing" query="<component> test results failures"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_testing" query="<component> test results failures"
 
 # 2. Query for known UI bugs
-mcp__qdrant__qdrant-find collection_name="hyperion_bugs" query="UI <component> visual bug"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="UI <component> visual bug"
 
 # 3. Query for accessibility issues
-mcp__qdrant__qdrant-find collection_name="hyperion_accessibility" query="<component> ARIA keyboard navigation"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_accessibility" query="<component> ARIA keyboard navigation"
 
 # 4. Query for cross-browser issues
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_testing" query="<browser> compatibility issue"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_testing" query="<browser> compatibility issue"
 ```
 
 **❌ FAILURE TO QUERY = REDUNDANT TESTING OR MISSED REGRESSIONS**
@@ -506,7 +506,7 @@ Store findings IMMEDIATELY after discovering:
 
 ```bash
 # Store UI bug
-mcp__qdrant__qdrant-store collection_name="hyperion_bugs" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_bugs" text="
 UI TEST BUG [$(date +%Y-%m-%d)]: <component> - <issue>
 BROWSER: <Chrome/Firefox/Safari> <version>
 VIEWPORT: <dimensions>
@@ -519,7 +519,7 @@ SEVERITY: <critical/high/medium/low>
 "
 
 # Store accessibility issue
-mcp__qdrant__qdrant-store collection_name="hyperion_accessibility" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_accessibility" text="
 ACCESSIBILITY ISSUE [$(date +%Y-%m-%d)]: <component>
 TYPE: <keyboard/screen-reader/contrast/focus>
 WCAG LEVEL: <A/AA/AAA violation>
@@ -532,7 +532,7 @@ FIX RECOMMENDATION: <how to fix>
 ### **AFTER Testing Session (MANDATORY):**
 ```bash
 # Store comprehensive test results
-mcp__qdrant__qdrant-store collection_name="hyperion_ui_testing" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_ui_testing" text="
 UI TEST COMPLETE [$(date +%Y-%m-%d)]: [UI Testing] <scope>
 ENVIRONMENT:
 - Browsers: <list>
@@ -553,7 +553,7 @@ RECOMMENDATIONS: <next steps>
 "
 ```
 
-### **Qdrant Collections for UI Testing:**
+### **Coordinator Knowledge Collections for UI Testing:**
 
 1. **`hyperion_ui_testing`** - Test results, coverage, methodologies
 2. **`hyperion_bugs`** - UI bugs, visual issues, functional problems
@@ -565,19 +565,19 @@ RECOMMENDATIONS: <next steps>
 
 ```bash
 # Before testing a component
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_testing" query="<component> previous test failures regressions"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_testing" query="<component> previous test failures regressions"
 
 # Before accessibility testing
-mcp__qdrant__qdrant-find collection_name="hyperion_accessibility" query="<component> WCAG screen reader keyboard"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_accessibility" query="<component> WCAG screen reader keyboard"
 
 # Before cross-browser testing
-mcp__qdrant__qdrant-find collection_name="hyperion_cross_browser" query="<browser> <component> rendering issues"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_cross_browser" query="<browser> <component> rendering issues"
 
 # For performance testing
-mcp__qdrant__qdrant-find collection_name="hyperion_performance" query="<component> loading rendering metrics"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_performance" query="<component> loading rendering metrics"
 
 # For mobile testing
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_testing" query="mobile responsive <component> issues"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_testing" query="mobile responsive <component> issues"
 ```
 
 ### **UI Testing Storage Requirements:**
@@ -629,7 +629,7 @@ IMPACT: <user experience impact>
 ```
 
 ### **UI-TESTER AGENT CHECKLIST (UPDATED):**
-- [ ] ✅ Query Qdrant for previous test results BEFORE starting
+- [ ] ✅ Query coordinator knowledge for previous test results BEFORE starting
 - [ ] ✅ Query for known bugs in component being tested
 - [ ] ✅ Store all visual bugs with screenshots
 - [ ] ✅ Store accessibility findings immediately
@@ -647,7 +647,7 @@ IMPACT: <user experience impact>
 
 ### **Test Result Storage Example:**
 ```bash
-mcp__qdrant__qdrant-store collection_name="hyperion_ui_testing" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_ui_testing" text="
 UI TEST SESSION [2025-01-10]: Task Creation Modal
 ENVIRONMENT:
 - Chrome 128.0.6613.119
@@ -682,6 +682,6 @@ RETEST REQUIRED: After fixes for issues 1 and 2
 "
 ```
 
-## **NO EXCEPTIONS - QDRANT USAGE IS MANDATORY FOR ALL UI TESTING WORK**
+## **NO EXCEPTIONS - COORDINATOR USAGE IS MANDATORY FOR ALL UI TESTING WORK**
 
 ---

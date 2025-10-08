@@ -111,5 +111,5 @@ docker-compose ps
 | Qdrant HTTP | 6333 | http://localhost:6333 |
 | Qdrant gRPC | 6334 | `localhost:6334` |
 | MCP Server | 7778 | http://localhost:7778 |
-| HTTP Bridge | 8095 | http://localhost:8095 |
+| HTTP Bridge | 7095 | http://localhost:7095 |
 | UI | 5173 | http://localhost:5173 |

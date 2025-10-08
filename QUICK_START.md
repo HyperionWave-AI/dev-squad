@@ -29,7 +29,7 @@ If you see errors like "port already in use", you can easily change to different
 cp docker-compose.override.yml.example docker-compose.override.yml
 
 # 2. Edit docker-compose.override.yml and change the ports:
-#    - Change "9095:8095" to "YOUR_PORT:8095"
+#    - Change "9095:7095" to "YOUR_PORT:7095"
 #    - Change "9173:80" to "YOUR_PORT:80"
 
 # 3. Restart
@@ -41,13 +41,13 @@ docker-compose up -d
 ```
 
 ### Example
-If ports 5173 and 8095 are taken, use 9173 and 9095:
+If ports 5173 and 7095 are taken, use 9173 and 9095:
 ```yaml
 # docker-compose.override.yml
 services:
   hyperion-http-bridge:
     ports:
-      - "9095:8095"
+      - "9095:7095"
   hyperion-ui:
     ports:
       - "9173:80"
