@@ -25,7 +25,7 @@ npm pack
 
 **Output:**
 ```
-hyperion-coordinator-mcp-1.0.0.tgz
+hyper-mcp-1.0.0.tgz
 Package size: 19.5 kB
 Unpacked size: 75.2 kB
 Total files: 11
@@ -44,7 +44,7 @@ Total files: 11
 
 **Command:**
 ```bash
-npm install -g ./hyperion-coordinator-mcp-1.0.0.tgz
+npm install -g ./hyper-mcp-1.0.0.tgz
 ```
 
 **Result:** ✅ **PASSED**
@@ -64,19 +64,19 @@ npm install -g ./hyperion-coordinator-mcp-1.0.0.tgz
 
 **Command:**
 ```bash
-which hyperion-coordinator-mcp
+which hyper-mcp
 ```
 
 **Result:** ✅ **PASSED**
 
 **Binary location:**
 ```
-/Users/alcwynparker/.nvm/versions/node/v22.17.1/bin/hyperion-coordinator-mcp
+/Users/alcwynparker/.nvm/versions/node/v22.17.1/bin/hyper-mcp
 ```
 
 **Binary details:**
 - Type: Mach-O 64-bit executable x86_64
-- Symlink: Points to `../lib/node_modules/@hyperion/coordinator-mcp/bin/hyperion-coordinator-mcp`
+- Symlink: Points to `../lib/node_modules/@hyperion/coordinator-mcp/bin/hyper-mcp`
 - Executable: ✅ Yes (755 permissions)
 
 ---
@@ -91,8 +91,8 @@ which hyperion-coordinator-mcp
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
-      "command": "/Users/alcwynparker/.nvm/versions/node/v22.17.1/lib/node_modules/@hyperion/coordinator-mcp/bin/hyperion-coordinator-mcp",
+    "hyper": {
+      "command": "/Users/alcwynparker/.nvm/versions/node/v22.17.1/lib/node_modules/@hyperion/coordinator-mcp/bin/hyper-mcp",
       "env": {
         "MONGODB_URI": "mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB",
         "MONGODB_DATABASE": "coordinator_db"
@@ -114,7 +114,7 @@ which hyperion-coordinator-mcp
 
 **Command:**
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | hyperion-coordinator-mcp
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | hyper-mcp
 ```
 
 **Result:** ✅ **PASSED** (with expected MCP handshake requirement)
@@ -185,7 +185,7 @@ None! All tests passed.
 1. **Restart Claude Code** to load the new MCP server
 2. **Test MCP tools** in Claude Code:
    ```typescript
-   mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+   mcp__hyper__coordinator_list_human_tasks({})
    ```
 3. **Test on other platforms** (Linux, Windows)
 4. **Publish to npm** if all tests pass
@@ -255,7 +255,7 @@ npm uninstall -g @hyperion/coordinator-mcp
 rm "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 
 # Remove test tarball
-rm hyperion-coordinator-mcp-1.0.0.tgz
+rm hyper-mcp-1.0.0.tgz
 ```
 
 ---

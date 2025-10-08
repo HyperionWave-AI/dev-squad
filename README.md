@@ -26,7 +26,7 @@ Perfect for multi-agent systems, autonomous coding agents, and AI workflow orche
 ```bash
 # 1. Clone and install
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 ./install.sh
 
 # 2. Start all services (HTTP Bridge + UI)
@@ -34,7 +34,7 @@ docker-compose up -d
 
 # 3. Access services
 # - UI Dashboard: http://localhost:5173
-# - HTTP API: http://localhost:8095/health
+# - HTTP API: http://localhost:7095/health
 
 # 4. For Claude Code integration
 # Restart Claude Code - The MCP server is now available!
@@ -107,7 +107,7 @@ docker-compose up -d
 
 ### Infrastructure
 
-- **HTTP Bridge**: Go-based MCP-to-HTTP adapter (Port 8095)
+- **HTTP Bridge**: Go-based MCP-to-HTTP adapter (Port 7095)
 - **MCP Server**: Stdio-based protocol server
 - **Development**: Single-script startup for full stack
 
@@ -125,7 +125,7 @@ docker-compose up -d
                      │ HTTP/REST
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│              MCP HTTP Bridge (Port 8095)                │
+│              MCP HTTP Bridge (Port 7095)                │
 │  • CORS handling for web clients                        │
 │  • HTTP → stdio request translation                     │
 │  • Concurrent request routing                           │
@@ -134,7 +134,7 @@ docker-compose up -d
                      │ stdio (JSON-RPC)
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│           MCP Server (hyperion-coordinator)             │
+│           MCP Server (hyper)             │
 │  ┌───────────────────────────────────────────────────┐  │
 │  │ Tools (9)                                         │  │
 │  │ • coordinator_create_human_task                   │  │
@@ -177,14 +177,14 @@ docker-compose up -d
 ```bash
 # Clone repository
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 
 # Install and start
 ./install.sh
 docker-compose up -d
 
 # Verify
-docker-compose logs -f hyperion-coordinator-mcp
+docker-compose logs -f hyper-mcp
 
 # Restart Claude Code
 # MCP server is now available!
@@ -208,7 +208,7 @@ docker-compose build                          # Rebuild images
 ```
 
 **Services running:**
-- `hyperion-http-bridge` - HTTP API + MCP Server (port 8095)
+- `hyperion-http-bridge` - HTTP API + MCP Server (port 7095)
 - `hyperion-ui` - React dashboard (port 5173)
 
 ### Option 2: Native (Development)
@@ -227,7 +227,7 @@ export MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/coordinator_db"
 
 **Service URLs:**
 - MCP Server: stdio (for MCP clients)
-- HTTP Bridge: http://localhost:8095
+- HTTP Bridge: http://localhost:7095
 - React UI: http://localhost:5173
 
 ## ⚙️ Configuration
@@ -293,14 +293,14 @@ coordinator_update_task_status({
 
 ### Using the HTTP API
 
-The HTTP bridge (port 8095) provides REST access:
+The HTTP bridge (port 7095) provides REST access:
 
 ```bash
 # List tools
-curl http://localhost:8095/api/mcp/tools
+curl http://localhost:7095/api/mcp/tools
 
 # Call tool
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: req-1" \
   -d '{
@@ -309,7 +309,7 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
   }'
 
 # Read resource
-curl "http://localhost:8095/api/mcp/resources/read?uri=hyperion://task/human/abc-123"
+curl "http://localhost:7095/api/mcp/resources/read?uri=hyperion://task/human/abc-123"
 ```
 
 ### Using the Kanban UI
@@ -446,7 +446,7 @@ coordinator/
 ```bash
 # MCP Server
 cd coordinator/mcp-server
-go build -o hyperion-coordinator-mcp
+go build -o hyper-mcp
 
 # HTTP Bridge
 cd ../mcp-http-bridge
@@ -513,7 +513,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 1. **Clone repository on server:**
    ```bash
    git clone <repository-url>
-   cd hyperion-coordinator-mcp
+   cd hyper-mcp
    ```
 
 2. **Configure production environment:**
@@ -530,7 +530,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 4. **Set up reverse proxy** (nginx example):
    ```nginx
    location /mcp {
-       proxy_pass http://localhost:8095;
+       proxy_pass http://localhost:7095;
        proxy_http_version 1.1;
        proxy_set_header Upgrade $http_upgrade;
        proxy_set_header Connection 'upgrade';
@@ -541,7 +541,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 
 5. **Enable monitoring:**
    ```bash
-   docker-compose logs -f hyperion-coordinator-mcp
+   docker-compose logs -f hyper-mcp
    ```
 
 ### Production Checklist
@@ -550,7 +550,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 - [ ] Set `QDRANT_URL` and `QDRANT_API_KEY` (if using knowledge features)
 - [ ] Configure CORS origins in docker-compose.yml if needed
 - [ ] Set up reverse proxy (nginx/Caddy) for HTTPS
-- [ ] Configure firewall rules (port 8095 internal only)
+- [ ] Configure firewall rules (port 7095 internal only)
 - [ ] Set up monitoring and logging (Docker logs)
 - [ ] Configure backup strategy for MongoDB
 - [ ] Set up automatic restarts: `restart: unless-stopped` (already in docker-compose.yml)
@@ -631,7 +631,7 @@ npm run test:ui         # Interactive UI
 ```bash
 # On production server
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 cp .env.example .env
 # Edit .env with production MongoDB URI
 docker-compose up -d
@@ -676,4 +676,4 @@ Part of the Hyperion AI Platform. See LICENSE file for details.
 
 **Built with ❤️ for AI agent coordination**
 
-*Need help? Check [DOCKER.md](./DOCKER.md) for troubleshooting or open an [issue](https://github.com/your-org/hyperion-coordinator/issues)*
+*Need help? Check [DOCKER.md](./DOCKER.md) for troubleshooting or open an [issue](https://github.com/your-org/hyper/issues)*

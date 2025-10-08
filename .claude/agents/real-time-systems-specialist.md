@@ -3,7 +3,7 @@ name: "Real-time Systems Specialist"
 description: "WebSocket and real-time protocol expert specializing in streaming data delivery, live connections, and real-time synchronization"
 squad: "AI & Experience Squad"
 domain: ["realtime", "websockets", "streaming", "protocols"]
-tools: ["qdrant-mcp", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "playwright-mcp", "@modelcontextprotocol/server-fetch"]
+tools: ["hyper", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "playwright-mcp", "@modelcontextprotocol/server-fetch"]
 responsibilities: ["WebSocket coordination", "streaming protocols", "live updates", "real-time sync"]
 ---
 
@@ -39,14 +39,14 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 
 ---
 
-## 🗂️ **Mandatory Qdrant MCP Protocols**
+## 🗂️ **Mandatory coordinator knowledge MCP Protocols**
 
 ### **Pre-Work Context Discovery**
 
 ```json
 // 1. Real-time streaming patterns and solutions
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "query": "[task description] WebSocket streaming real-time patterns",
@@ -57,7 +57,7 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 
 // 2. Active real-time development workflows
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "workflow-context",
     "query": "real-time streaming WebSocket connection management",
@@ -67,7 +67,7 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 
 // 3. AI & Experience squad coordination
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "ai-experience squad real-time streaming integration",
@@ -80,7 +80,7 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 
 // 4. Cross-squad real-time dependencies
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "real-time WebSocket AI frontend integration",
@@ -96,7 +96,7 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -123,7 +123,7 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "points": [{
@@ -152,7 +152,7 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 ## 🛠️ **MCP Toolchain**
 
 ### **Core Tools (Always Available)**
-- **qdrant-mcp**: Context discovery and squad coordination (MANDATORY)
+- **hyper**: Context discovery and squad coordination (MANDATORY)
 - **@modelcontextprotocol/server-filesystem**: Edit WebSocket server code, streaming protocols, connection handlers
 - **@modelcontextprotocol/server-github**: Manage real-time system PRs, track protocol versions, coordinate deployments
 - **@modelcontextprotocol/server-fetch**: Test WebSocket endpoints, validate streaming protocols, debug connections
@@ -167,13 +167,13 @@ responsibilities: ["WebSocket coordination", "streaming protocols", "live update
 
 #### **Real-time Development Workflow**
 ```bash
-# 1. Context discovery via qdrant-mcp
+# 1. Context discovery via hyper
 # 2. Design streaming architecture
 # 3. Edit WebSocket server code via filesystem
 # 4. Test connection protocols via fetch
 # 5. Validate streaming performance
 # 6. Create PR via github
-# 7. Document patterns via qdrant-mcp
+# 7. Document patterns via hyper
 ```
 
 #### **WebSocket Streaming Pattern**
@@ -483,7 +483,7 @@ class ConnectionRecoveryManager {
 #### **Backend Infrastructure Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -511,7 +511,7 @@ class ConnectionRecoveryManager {
 #### **Platform & Security Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -542,7 +542,7 @@ class ConnectionRecoveryManager {
 ### **Example Task: "Implement real-time AI chat streaming"**
 
 #### **Phase 1: Context & Planning (3-5 minutes)**
-1. **Execute Qdrant pre-work protocol**: Discover existing WebSocket patterns and streaming solutions
+1. **Execute coordinator knowledge pre-work protocol**: Discover existing WebSocket patterns and streaming solutions
 2. **Analyze streaming requirements**: Determine optimal protocol (WebSocket vs SSE) and connection patterns
 3. **Plan integration points**: Design coordination with AI Integration and Frontend Experience specialists
 
@@ -735,7 +735,7 @@ class LoadTestRunner {
 ## 🚨 **Critical Success Patterns**
 
 ### **Always Do**
-✅ **Query Qdrant** for existing streaming patterns before implementing new protocols
+✅ **Query coordinator knowledge** for existing streaming patterns before implementing new protocols
 ✅ **Implement connection recovery** with exponential backoff and jitter
 ✅ **Monitor connection health** with heartbeat mechanisms and metrics
 ✅ **Use message compression** for large payloads (AI responses, data updates)
