@@ -67,6 +67,11 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 		return fmt.Errorf("failed to register list_agent_tasks tool: %w", err)
 	}
 
+	// Register coordinator_get_agent_task
+	if err := h.registerGetAgentTask(server); err != nil {
+		return fmt.Errorf("failed to register get_agent_task tool: %w", err)
+	}
+
 	// Register coordinator_clear_task_board
 	if err := h.registerClearTaskBoard(server); err != nil {
 		return fmt.Errorf("failed to register clear_task_board tool: %w", err)
@@ -724,7 +729,7 @@ func (h *ToolHandler) registerListHumanTasks(server *mcp.Server) error {
 func (h *ToolHandler) registerListAgentTasks(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "coordinator_list_agent_tasks",
-		Description: "List all agent tasks from the coordinator database. Returns array of tasks with all fields.",
+		Description: "List agent tasks from the coordinator database with pagination (max 50 per request). Large fields (>500 bytes) are truncated - use coordinator_get_agent_task to get full details. Returns total count and offset/limit for navigation.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -735,6 +740,14 @@ func (h *ToolHandler) registerListAgentTasks(server *mcp.Server) error {
 				"agentName": {
 					Type:        "string",
 					Description: "Optional: Filter by agent name",
+				},
+				"offset": {
+					Type:        "number",
+					Description: "Optional: Number of tasks to skip (default: 0). Use for pagination.",
+				},
+				"limit": {
+					Type:        "number",
+					Description: "Optional: Maximum number of tasks to return (default: 50, max: 50)",
 				},
 			},
 		},
@@ -773,10 +786,24 @@ func (h *ToolHandler) handleListHumanTasks(ctx context.Context) (*mcp.CallToolRe
 	}, nil
 }
 
-// handleListAgentTasks retrieves all agent tasks with optional filters
+// handleListAgentTasks retrieves all agent tasks with optional filters and pagination
 func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, map[string]interface{}, error) {
 	humanTaskID, _ := args["humanTaskId"].(string)
 	agentName, _ := args["agentName"].(string)
+
+	// Pagination parameters
+	offset := 0
+	if o, ok := args["offset"].(float64); ok && o >= 0 {
+		offset = int(o)
+	}
+
+	limit := 50
+	if l, ok := args["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+		if limit > 50 {
+			limit = 50 // Enforce max limit
+		}
+	}
 
 	allTasks := h.taskStorage.ListAllAgentTasks()
 
@@ -792,18 +819,110 @@ func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]
 		filteredTasks = append(filteredTasks, task)
 	}
 
-	tasksJSON, err := json.MarshalIndent(filteredTasks, "", "  ")
+	totalCount := len(filteredTasks)
+
+	// Apply pagination
+	endIndex := offset + limit
+	if offset > totalCount {
+		offset = totalCount
+	}
+	if endIndex > totalCount {
+		endIndex = totalCount
+	}
+
+	paginatedTasks := filteredTasks[offset:endIndex]
+
+	// Truncate large fields (>500 bytes)
+	truncatedTasks := make([]map[string]interface{}, len(paginatedTasks))
+	for i, task := range paginatedTasks {
+		taskMap := make(map[string]interface{})
+		taskMap["id"] = task.ID
+		taskMap["humanTaskId"] = task.HumanTaskID
+		taskMap["agentName"] = task.AgentName
+		taskMap["role"] = task.Role
+		taskMap["status"] = task.Status
+		taskMap["createdAt"] = task.CreatedAt
+		taskMap["updatedAt"] = task.UpdatedAt
+
+		// Truncate large fields
+		if len(task.ContextSummary) > 500 {
+			taskMap["contextSummary"] = task.ContextSummary[:500] + "... [TRUNCATED - use coordinator_get_agent_task for full content]"
+		} else {
+			taskMap["contextSummary"] = task.ContextSummary
+		}
+
+		if len(task.PriorWorkSummary) > 500 {
+			taskMap["priorWorkSummary"] = task.PriorWorkSummary[:500] + "... [TRUNCATED - use coordinator_get_agent_task for full content]"
+		} else {
+			taskMap["priorWorkSummary"] = task.PriorWorkSummary
+		}
+
+		if len(task.Notes) > 500 {
+			taskMap["notes"] = task.Notes[:500] + "... [TRUNCATED - use coordinator_get_agent_task for full content]"
+		} else {
+			taskMap["notes"] = task.Notes
+		}
+
+		if len(task.HumanPromptNotes) > 500 {
+			taskMap["humanPromptNotes"] = task.HumanPromptNotes[:500] + "... [TRUNCATED - use coordinator_get_agent_task for full content]"
+		} else {
+			taskMap["humanPromptNotes"] = task.HumanPromptNotes
+		}
+
+		taskMap["filesModified"] = task.FilesModified
+		taskMap["qdrantCollections"] = task.QdrantCollections
+		taskMap["humanPromptNotesAddedAt"] = task.HumanPromptNotesAddedAt
+
+		// Truncate TODO items
+		truncatedTodos := make([]map[string]interface{}, len(task.Todos))
+		for j, todo := range task.Todos {
+			todoMap := make(map[string]interface{})
+			todoMap["id"] = todo.ID
+			todoMap["description"] = todo.Description
+			todoMap["status"] = todo.Status
+			todoMap["filePath"] = todo.FilePath
+			todoMap["functionName"] = todo.FunctionName
+
+			if len(todo.ContextHint) > 500 {
+				todoMap["contextHint"] = todo.ContextHint[:500] + "... [TRUNCATED]"
+			} else {
+				todoMap["contextHint"] = todo.ContextHint
+			}
+
+			if len(todo.Notes) > 500 {
+				todoMap["notes"] = todo.Notes[:500] + "... [TRUNCATED]"
+			} else {
+				todoMap["notes"] = todo.Notes
+			}
+
+			if len(todo.HumanPromptNotes) > 500 {
+				todoMap["humanPromptNotes"] = todo.HumanPromptNotes[:500] + "... [TRUNCATED]"
+			} else {
+				todoMap["humanPromptNotes"] = todo.HumanPromptNotes
+			}
+
+			todoMap["humanPromptNotesAddedAt"] = todo.HumanPromptNotesAddedAt
+			truncatedTodos[j] = todoMap
+		}
+		taskMap["todos"] = truncatedTodos
+
+		truncatedTasks[i] = taskMap
+	}
+
+	tasksJSON, err := json.MarshalIndent(truncatedTasks, "", "  ")
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to marshal tasks: %s", err.Error())), nil, nil
 	}
 
-	resultText := fmt.Sprintf("✓ Retrieved %d agent tasks", len(filteredTasks))
+	resultText := fmt.Sprintf("✓ Retrieved %d agent tasks (showing %d-%d of %d total)",
+		len(paginatedTasks), offset+1, offset+len(paginatedTasks), totalCount)
 	if humanTaskID != "" {
-		resultText += fmt.Sprintf(" (filtered by humanTaskId: %s)", humanTaskID)
+		resultText += fmt.Sprintf("\nFiltered by humanTaskId: %s", humanTaskID)
 	}
 	if agentName != "" {
-		resultText += fmt.Sprintf(" (filtered by agentName: %s)", agentName)
+		resultText += fmt.Sprintf("\nFiltered by agentName: %s", agentName)
 	}
+	resultText += fmt.Sprintf("\n\nℹ️  Note: Fields >500 bytes are truncated. Use coordinator_get_agent_task(taskId) for full details.")
 	resultText += fmt.Sprintf("\n\nTasks:\n%s", string(tasksJSON))
 
 	return &mcp.CallToolResult{
@@ -811,8 +930,68 @@ func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]
 			&mcp.TextContent{Text: resultText},
 		},
 	}, map[string]interface{}{
-		"tasks": filteredTasks,
-		"count": len(filteredTasks),
+		"tasks":      truncatedTasks,
+		"count":      len(paginatedTasks),
+		"totalCount": totalCount,
+		"offset":     offset,
+		"limit":      limit,
+	}, nil
+}
+
+// registerGetAgentTask registers the coordinator_get_agent_task tool
+func (h *ToolHandler) registerGetAgentTask(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_get_agent_task",
+		Description: "Get a single agent task by ID with full, untruncated content. Use this to retrieve complete task details when coordinator_list_agent_tasks shows truncated fields.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"taskId": {
+					Type:        "string",
+					Description: "Agent task ID (UUID)",
+				},
+			},
+			Required: []string{"taskId"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleGetAgentTask(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleGetAgentTask retrieves a single agent task by ID
+func (h *ToolHandler) handleGetAgentTask(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	taskID, ok := args["taskId"].(string)
+	if !ok || taskID == "" {
+		return createErrorResult("taskId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	task, err := h.taskStorage.GetAgentTask(taskID)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to get agent task: %s", err.Error())), nil, nil
+	}
+
+	taskJSON, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to marshal task: %s", err.Error())), nil, nil
+	}
+
+	resultText := fmt.Sprintf("✓ Retrieved agent task\n\nTask:\n%s", string(taskJSON))
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultText},
+		},
+	}, map[string]interface{}{
+		"task": task,
 	}, nil
 }
 

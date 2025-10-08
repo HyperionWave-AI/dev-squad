@@ -28,7 +28,7 @@
 ### 2. **HTTP Bridge** (Go) ✅
 - **Location:** `development/coordinator/mcp-http-bridge/`
 - **Binary:** `hyper-bridge`
-- **Port:** 8095
+- **Port:** 7095
 - **Purpose:** Exposes MCP server to browser via HTTP/REST
 - **CORS:** Enabled for localhost:5173, localhost:3000
 - **Endpoints:**
@@ -60,7 +60,7 @@ User Browser (localhost:5173)
          ↓ HTTP
 React UI (Vite Dev Server)
          ↓ HTTP REST API
-HTTP Bridge (Go - Port 8095)
+HTTP Bridge (Go - Port 7095)
          ↓ stdio (JSON-RPC)
 MCP Server (Go)
          ↓ MongoDB Driver
@@ -108,7 +108,7 @@ npm run dev
 ### 1. Health Check
 
 ```bash
-curl http://localhost:8095/health
+curl http://localhost:7095/health
 ```
 
 **Expected:**
@@ -123,7 +123,7 @@ curl http://localhost:8095/health
 ### 2. Create a Human Task
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-1" \
   -d '{
@@ -143,7 +143,7 @@ Open http://localhost:5173 - the new task should appear in the dashboard within 
 ### 4. Create an Agent Task
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-2" \
   -d '{
@@ -165,7 +165,7 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
 ### 5. Update Task Status
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-3" \
   -d '{

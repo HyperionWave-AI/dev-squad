@@ -21,7 +21,7 @@ make dev-down
 ✅ **MCP Server** - Code changes auto-rebuild and restart (1-2 sec)
 ✅ **HTTP Bridge** - Code changes auto-rebuild and restart (1-2 sec)
 ✅ **React UI** - Instant hot module replacement (<100ms)
-✅ **All running** - MCP: http://localhost:7778, Bridge: http://localhost:8095, UI: http://localhost:5173
+✅ **All running** - MCP: http://localhost:7778, Bridge: http://localhost:7095, UI: http://localhost:5173
 
 ## Make Commands
 

@@ -30,8 +30,7 @@ func main() {
 	// Get MongoDB configuration from environment
 	mongoURI := os.Getenv("MONGODB_URI")
 	if mongoURI == "" {
-		mongoURI = "mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB"
-		logger.Info("Using default MongoDB Atlas URI")
+		logger.Fatal("MONGODB_URI environment variable is required")
 	}
 
 	mongoDatabase := os.Getenv("MONGODB_DATABASE")
@@ -167,7 +166,7 @@ func main() {
 	}
 
 	logger.Info("All handlers registered successfully",
-		zap.Int("tools", 11), // 9 coordinator + 2 qdrant
+		zap.Int("tools", 12), // 10 coordinator + 2 qdrant
 		zap.Int("resources", 12), // 2 task + 3 doc + 3 workflow + 2 knowledge + 2 metrics
 		zap.Int("prompts", 6))    // 2 planning + 2 knowledge + 2 coordination
 

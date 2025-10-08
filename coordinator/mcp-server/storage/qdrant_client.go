@@ -26,6 +26,7 @@ type QdrantClient struct {
 	baseURL         string
 	httpClient      *http.Client
 	embeddingFunc   func(string) ([]float64, error)
+	qdrantAPIKey    string
 	openAIAPIKey    string
 	openAIBaseURL   string
 	embeddingModel  string
@@ -54,11 +55,13 @@ type QdrantQueryResult struct {
 
 // NewQdrantClient creates a new Qdrant client with OpenAI embeddings
 func NewQdrantClient(baseURL string) *QdrantClient {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	openAIKey := os.Getenv("OPENAI_API_KEY")
+	qdrantKey := os.Getenv("QDRANT_API_KEY")
 
 	client := &QdrantClient{
 		baseURL:         baseURL,
-		openAIAPIKey:    apiKey,
+		qdrantAPIKey:    qdrantKey,
+		openAIAPIKey:    openAIKey,
 		openAIBaseURL:   "https://api.openai.com/v1",
 		embeddingModel:  "text-embedding-3-small",
 		vectorDimension: 1536,
@@ -68,7 +71,7 @@ func NewQdrantClient(baseURL string) *QdrantClient {
 	}
 
 	// Set embedding function based on API key availability
-	if apiKey != "" {
+	if openAIKey != "" {
 		client.embeddingFunc = client.generateOpenAIEmbedding
 	} else {
 		// Fallback to simple embedding for testing
@@ -92,11 +95,24 @@ func NewQdrantClientWithEmbedding(baseURL string, embeddingFunc func(string) ([]
 	}
 }
 
+// addAuthHeader adds the Qdrant API key header if available
+func (c *QdrantClient) addAuthHeader(req *http.Request) {
+	if c.qdrantAPIKey != "" {
+		req.Header.Set("api-key", c.qdrantAPIKey)
+	}
+}
+
 // EnsureCollection ensures a Qdrant collection exists
 func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) error {
 	// Check if collection exists
 	checkURL := fmt.Sprintf("%s/collections/%s", c.baseURL, collectionName)
-	resp, err := c.httpClient.Get(checkURL)
+	req, err := http.NewRequest("GET", checkURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create check request: %w", err)
+	}
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to check collection: %w", err)
 	}
@@ -121,11 +137,12 @@ func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) e
 	}
 
 	createURL := fmt.Sprintf("%s/collections/%s", c.baseURL, collectionName)
-	req, err := http.NewRequest("PUT", createURL, bytes.NewReader(payloadBytes))
+	req, err = http.NewRequest("PUT", createURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
 
 	resp, err = c.httpClient.Do(req)
 	if err != nil {
@@ -185,6 +202,7 @@ func (c *QdrantClient) StorePoint(collectionName string, id string, text string,
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -226,6 +244,7 @@ func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit 
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -321,6 +340,11 @@ func (c *QdrantClient) Ping(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/", c.baseURL), nil)
 	if err != nil {
 		return fmt.Errorf("failed to create ping request: %w", err)
+	}
+
+	// Add API key header if available
+	if c.qdrantAPIKey != "" {
+		req.Header.Set("api-key", c.qdrantAPIKey)
 	}
 
 	resp, err := c.httpClient.Do(req)

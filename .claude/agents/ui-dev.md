@@ -7,11 +7,11 @@ color: green
 
 # Hyperion Web UI Development Guidelines
 
-## 📚 MANDATORY: Learn Qdrant Knowledge Base First
+## 📚 MANDATORY: Learn Coordinator Knowledge Base First
 **BEFORE ANY UI DEVELOPMENT**, you MUST:
-1. Read `docs/04-development/qdrant-search-rules.md` - Learn search patterns
-2. Read `docs/04-development/qdrant-system-prompts.md` - See UI-specific prompts
-3. Query component patterns: `mcp__qdrant__qdrant-find collection_name="hyperion_project" query="React component TypeScript [feature]"`
+1. Read `docs/04-development/coordinator-search-rules.md` - Learn search patterns
+2. Read `docs/04-development/coordinator-system-prompts.md` - See UI-specific prompts
+3. Query component patterns: `mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="React component TypeScript [feature]"`
 
 **CONTINUOUS LEARNING PROCESS:**
 - Before UI work: Find component patterns, design decisions, API integrations
@@ -927,17 +927,17 @@ EVERY UI change MUST include:
 - [ ] **🎨 Update component catalog** if new UI components are added
 - [ ] **📊 Document state changes** if state management patterns change
 - [ ] **♿ Document accessibility features** for new interactive elements
-- [ ] **💾 Store in Qdrant** using the qdrant-store MCP tool
+- [ ] **💾 Store in coordinator** using the coordinator_upsert_knowledge MCP tool
 
-### **QDRANT STORAGE REQUIREMENTS**
+### **COORDINATOR STORAGE REQUIREMENTS**
 
-After documenting UI changes, STORE the documentation in Qdrant:
+After documenting UI changes, STORE the documentation in coordinator knowledge:
 
 ```bash
-# Use the MCP qdrant-store tool to store UI architecture documentation
-mcp__qdrant__qdrant-store \
-  collection_name="hyperion_ui_architecture" \
-  information="UI: <change description with user experience impact>" \
+# Use the MCP coordinator_upsert_knowledge tool to store UI architecture documentation
+mcp__hyper__coordinator_upsert_knowledge \
+  collection="hyperion_ui_architecture" \
+  text="UI: <change description with user experience impact>" \
   metadata='{"component": "hyperion-web-ui", "type": "ui_architecture", "feature": "<feature>", "impact": "<user_impact>"}'
 ```
 
@@ -947,9 +947,9 @@ mcp__qdrant__qdrant-store \
 
 ```bash
 # Store design system component usage
-mcp__qdrant__qdrant-store \
-  collection_name="hyperion_ui_architecture" \
-  information="DESIGN SYSTEM [$(date +%Y-%m-%d)]: <component> implementation
+mcp__hyper__coordinator_upsert_knowledge \
+  collection="hyperion_ui_architecture" \
+  text="DESIGN SYSTEM [$(date +%Y-%m-%d)]: <component> implementation
 COMPONENT: <GlassCard|MetricCard|PageHeader|StatusBadge>
 USE CASE: <when and why this component was chosen>
 IMPLEMENTATION:
@@ -964,9 +964,9 @@ MIGRATION: <what it replaced and why>
 "
 
 # Store design system patterns
-mcp__qdrant__qdrant-store \
-  collection_name="hyperion_ui_architecture" \
-  information="UI PATTERN [$(date +%Y-%m-%d)]: <pattern name> with Design System
+mcp__hyper__coordinator_upsert_knowledge \
+  collection="hyperion_ui_architecture" \
+  text="UI PATTERN [$(date +%Y-%m-%d)]: <pattern name> with Design System
 BEFORE: <legacy implementation>
 AFTER: <design system implementation>
 BENEFITS: <consistency, accessibility, maintainability>
@@ -1072,23 +1072,23 @@ This guide ensures all AI-generated code matches the established patterns and ma
 
 ## 🧠 Knowledge Management Protocol
 
-### **🚨 MANDATORY: QUERY QDRANT BEFORE ANY WORK - ZERO TOLERANCE POLICY**
+### **🚨 MANDATORY: QUERY COORDINATOR KNOWLEDGE BEFORE ANY WORK - ZERO TOLERANCE POLICY**
 
-**CRITICAL: You MUST query Qdrant BEFORE starting ANY UI development work. NO EXCEPTIONS!**
+**CRITICAL: You MUST query coordinator knowledge BEFORE starting ANY UI development work. NO EXCEPTIONS!**
 
 ### **BEFORE Starting Work (MANDATORY):**
 ```bash
 # 1. Query for existing UI patterns
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_architecture" query="<component> pattern implementation"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_architecture" query="<component> pattern implementation"
 
 # 2. Query for UI bugs and fixes
-mcp__qdrant__qdrant-find collection_name="hyperion_bugs" query="UI <error or issue>"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="UI <error or issue>"
 
 # 3. Query for component implementations
-mcp__qdrant__qdrant-find collection_name="hyperion_project" query="React <feature> component example"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="React <feature> component example"
 
 # 4. Query for API integration patterns
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_architecture" query="<service> API integration React Query"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_architecture" query="<service> API integration React Query"
 ```
 
 **❌ FAILURE TO QUERY = DUPLICATED WORK OR INCONSISTENT UI**
@@ -1103,7 +1103,7 @@ Store information IMMEDIATELY after discovering:
 
 ```bash
 # Store UI bug fix
-mcp__qdrant__qdrant-store collection_name="hyperion_bugs" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_bugs" text="
 UI BUG FIX [$(date +%Y-%m-%d)]: <component> - <issue>
 SYMPTOM: <what was broken in UI>
 ROOT CAUSE: <why it was broken>
@@ -1116,7 +1116,7 @@ TESTING: <how to verify in browser>
 "
 
 # Store UI pattern
-mcp__qdrant__qdrant-store collection_name="hyperion_ui_architecture" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_ui_architecture" text="
 UI PATTERN [$(date +%Y-%m-%d)]: <pattern name>
 USE CASE: <when to use this pattern>
 IMPLEMENTATION:
@@ -1131,7 +1131,7 @@ EXAMPLES: <where it's used in codebase>
 ### **AFTER Completing Work (MANDATORY):**
 ```bash
 # Store comprehensive UI solution
-mcp__qdrant__qdrant-store collection_name="hyperion_project" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_project" text="
 UI COMPLETED [$(date +%Y-%m-%d)]: [UI Development] <feature description>
 COMPONENTS CREATED/MODIFIED:
 - <component1>: <what it does>
@@ -1149,7 +1149,7 @@ TESTING: <how to test in browser>
 "
 ```
 
-### **Qdrant Collections for UI Development:**
+### **Coordinator Knowledge Collections for UI Development:**
 
 1. **`hyperion_ui_architecture`** - UI patterns, component designs, React patterns
 2. **`hyperion_bugs`** - UI bugs, rendering issues, browser compatibility
@@ -1161,19 +1161,19 @@ TESTING: <how to test in browser>
 
 ```bash
 # Before creating new component
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_architecture" query="React <component type> Radix UI pattern"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_architecture" query="React <component type> Radix UI pattern"
 
 # Before fixing UI bug
-mcp__qdrant__qdrant-find collection_name="hyperion_bugs" query="React <exact error> console error"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="React <exact error> console error"
 
 # Before API integration
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_architecture" query="React Query <service> API hooks"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_architecture" query="React Query <service> API hooks"
 
 # Before styling work
-mcp__qdrant__qdrant-find collection_name="hyperion_ui_architecture" query="Tailwind <component> styling CVA variants"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_ui_architecture" query="Tailwind <component> styling CVA variants"
 
 # For accessibility
-mcp__qdrant__qdrant-find collection_name="hyperion_accessibility" query="ARIA <component type> keyboard navigation"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_accessibility" query="ARIA <component type> keyboard navigation"
 ```
 
 ### **UI Development Storage Requirements:**
@@ -1224,7 +1224,7 @@ PREVENTION: <how to avoid similar issues>
 ```
 
 ### **UI-DEV AGENT CHECKLIST (UPDATED):**
-- [ ] ✅ Query Qdrant for existing UI patterns BEFORE starting
+- [ ] ✅ Query coordinator knowledge for existing UI patterns BEFORE starting
 - [ ] ✅ Query for similar components already built
 - [ ] ✅ Store new component patterns with examples
 - [ ] ✅ Store failed UI approaches with reasons
@@ -1242,7 +1242,7 @@ PREVENTION: <how to avoid similar issues>
 
 ### **Component Pattern Storage Example:**
 ```bash
-mcp__qdrant__qdrant-store collection_name="hyperion_ui_architecture" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_ui_architecture" text="
 UI COMPONENT PATTERN [2025-01-10]: Modal Dialog with Form
 USE CASE: Creating/editing entities with validation
 IMPLEMENTATION:
@@ -1286,4 +1286,4 @@ LOCATION: Used in TaskModal, PersonModal, DocumentModal
 "
 ```
 
-## **NO EXCEPTIONS - QDRANT USAGE IS MANDATORY FOR ALL UI DEVELOPMENT WORK**
+## **NO EXCEPTIONS - COORDINATOR USAGE IS MANDATORY FOR ALL UI DEVELOPMENT WORK**

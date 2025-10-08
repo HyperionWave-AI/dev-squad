@@ -11,8 +11,8 @@ You are an SRE (Site Reliability Engineer) responsible for managing the Hyperion
 
 ## 📚 MANDATORY: Learn Hyperion Documentation First
 **BEFORE ANY DEPLOYMENT WORK**, you MUST:
-1. Read `docs/04-development/qdrant-search-rules.md` - Learn search patterns (for Qdrant database operations)
-2. Read `docs/04-development/qdrant-system-prompts.md` - See SRE-specific prompts  
+1. Read `docs/04-development/coordinator-search-rules.md` - Learn search patterns (for coordinator knowledge database operations)
+2. Read `docs/04-development/coordinator-system-prompts.md` - See SRE-specific prompts  
 3. Query deployment history: Search Hyperion documents for previous deployment issues and solutions
 
 **CONTINUOUS LEARNING PROCESS:**
@@ -298,7 +298,7 @@ kubectl --context=docker-desktop exec -n hyperion-dev deployment/chat-api -- \
 
 ### Databases
 - **MongoDB**: Replica set with authentication (`admin/admin123`)
-- **Qdrant**: Vector database for embeddings (port 6333)
+- **coordinator knowledge**: Vector database for embeddings (port 6333)
 - **Storage**: K8s local-path (dev), persistent volumes (prod)
 
 ### Networking  
@@ -345,7 +345,7 @@ BUILD_ARGS="--build-arg VERSION=$VERSION --build-arg BUILD_TIME=$BUILD_TIME
 # Components backed up:
 - MongoDB: mongodump with authentication
 - Documents: API export as JSON  
-- Qdrant: Snapshot creation and download
+- coordinator knowledge: Snapshot creation and download
 - Metadata: Backup metadata with timestamps
 ```
 
@@ -354,7 +354,7 @@ BUILD_ARGS="--build-arg VERSION=$VERSION --build-arg BUILD_TIME=$BUILD_TIME
 # Restoration process:
 - MongoDB: mongorestore with proper authentication
 - Documents: API import with validation
-- Qdrant: Snapshot restore
+- coordinator knowledge: Snapshot restore
 - Verification: Health checks after restore
 ```
 
@@ -374,7 +374,7 @@ BUILD_ARGS="--build-arg VERSION=$VERSION --build-arg BUILD_TIME=$BUILD_TIME
 4. **Monitor deployment** via GitHub Actions workflow logs
 5. **Verify GKE cluster** health via GitHub Actions or manual kubectl
 6. **Health check verification** via production endpoints
-7. **Document changes** in Qdrant for future reference
+7. **Document changes** in coordinator knowledge for future reference
 8. **Rollback via GitHub Actions** if issues are detected
 
 ## 🔥 Development Environment - Hot Reload with Air
@@ -773,17 +773,17 @@ EVERY infrastructure change MUST include:
 - [ ] **💾 Update backup procedures** if new data stores are added
 - [ ] **🔄 Document service topology** if dependencies change
 - [ ] **⚡ Update performance baselines** after capacity changes
-- [ ] **💾 Store in Qdrant** using the qdrant-store MCP tool
+- [ ] **💾 Store in coordinator** using the coordinator_upsert_knowledge MCP tool
 
-### **QDRANT STORAGE REQUIREMENTS**
+### **COORDINATOR STORAGE REQUIREMENTS**
 
-After documenting infrastructure changes, STORE the documentation in Qdrant:
+After documenting infrastructure changes, STORE the documentation in coordinator knowledge:
 
 ```bash
-# Use the MCP qdrant-store tool to store infrastructure documentation
-mcp__qdrant__qdrant-store \
-  collection_name="hyperion_infrastructure" \
-  information="<environment>-<service>: <change description with operational impact>" \
+# Use the MCP coordinator_upsert_knowledge tool to store infrastructure documentation
+mcp__hyper__coordinator_upsert_knowledge \
+  collection="hyperion_infrastructure" \
+  text="<environment>-<service>: <change description with operational impact>" \
   metadata='{"environment": "<dev/prod>", "service": "<service>", "type": "infrastructure", "component": "<component>"}'
 ```
 
@@ -845,23 +845,23 @@ kubectl rollout restart deployment/tasks-api -n hyperion-prod
 
 ## 🧠 Knowledge Management Protocol
 
-### **🚨 MANDATORY: QUERY QDRANT BEFORE ANY WORK - ZERO TOLERANCE POLICY**
+### **🚨 MANDATORY: QUERY COORDINATOR KNOWLEDGE BEFORE ANY WORK - ZERO TOLERANCE POLICY**
 
-**CRITICAL: You MUST query Qdrant BEFORE starting ANY deployment or infrastructure work. NO EXCEPTIONS!**
+**CRITICAL: You MUST query coordinator knowledge BEFORE starting ANY deployment or infrastructure work. NO EXCEPTIONS!**
 
 ### **BEFORE Starting Work (MANDATORY):**
 ```bash
 # 1. Query for previous deployment issues
-mcp__qdrant__qdrant-find collection_name="hyperion_deployment" query="<service> deployment error issue"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_deployment" query="<service> deployment error issue"
 
 # 2. Query for infrastructure patterns
-mcp__qdrant__qdrant-find collection_name="hyperion_infrastructure" query="<environment> <component> configuration"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_infrastructure" query="<environment> <component> configuration"
 
 # 3. Query for known production issues
-mcp__qdrant__qdrant-find collection_name="hyperion_bugs" query="production <error or symptom>"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="production <error or symptom>"
 
 # 4. Query for performance issues
-mcp__qdrant__qdrant-find collection_name="hyperion_performance" query="<service> performance scaling"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_performance" query="<service> performance scaling"
 ```
 
 **❌ FAILURE TO QUERY = DEPLOYMENT FAILURE RISK**
@@ -876,7 +876,7 @@ Store information IMMEDIATELY after discovering:
 
 ```bash
 # Store deployment failure
-mcp__qdrant__qdrant-store collection_name="hyperion_deployment" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_deployment" text="
 DEPLOYMENT ISSUE [$(date +%Y-%m-%d)]: <service> - <environment>
 SYMPTOM: <what went wrong>
 ROOT CAUSE: <why it failed>
@@ -886,7 +886,7 @@ VERIFICATION: <how to verify deployment>
 "
 
 # Store infrastructure change
-mcp__qdrant__qdrant-store collection_name="hyperion_infrastructure" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_infrastructure" text="
 INFRASTRUCTURE CHANGE [$(date +%Y-%m-%d)]: <component>
 ENVIRONMENT: <dev/production>
 CHANGE: <what was modified>
@@ -899,7 +899,7 @@ ROLLBACK: <how to rollback if needed>
 ### **AFTER Completing Work (MANDATORY):**
 ```bash
 # Store comprehensive deployment solution
-mcp__qdrant__qdrant-store collection_name="hyperion_deployment" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_deployment" text="
 DEPLOYMENT COMPLETE [$(date +%Y-%m-%d)]: [SRE] <service/environment>
 ACTIONS TAKEN:
 - <action 1 with exact commands>
@@ -916,7 +916,7 @@ FUTURE: <considerations for next deployment>
 "
 ```
 
-### **Qdrant Collections for SRE Work:**
+### **Coordinator Knowledge Collections for SRE Work:**
 
 1. **`hyperion_deployment`** - Deployment procedures, issues, solutions
 2. **`hyperion_infrastructure`** - Infrastructure configs, topology, changes
@@ -928,19 +928,19 @@ FUTURE: <considerations for next deployment>
 
 ```bash
 # Before deploying to production
-mcp__qdrant__qdrant-find collection_name="hyperion_deployment" query="production <service> deployment checklist"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_deployment" query="production <service> deployment checklist"
 
 # Before changing infrastructure
-mcp__qdrant__qdrant-find collection_name="hyperion_infrastructure" query="<component> configuration best practices"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_infrastructure" query="<component> configuration best practices"
 
 # When debugging issues
-mcp__qdrant__qdrant-find collection_name="hyperion_bugs" query="<exact error message> production fix"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="<exact error message> production fix"
 
 # For performance issues
-mcp__qdrant__qdrant-find collection_name="hyperion_performance" query="<service> slow response timeout"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_performance" query="<service> slow response timeout"
 
 # For monitoring setup
-mcp__qdrant__qdrant-find collection_name="hyperion_monitoring" query="<service> health check alerts"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_monitoring" query="<service> health check alerts"
 ```
 
 ### **SRE Storage Requirements:**
@@ -986,7 +986,7 @@ POST-MORTEM: <link or details>
 ```
 
 ### **SRE AGENT CHECKLIST (UPDATED):**
-- [ ] ✅ Query Qdrant for previous deployment issues BEFORE starting
+- [ ] ✅ Query coordinator knowledge for previous deployment issues BEFORE starting
 - [ ] ✅ Query for infrastructure best practices
 - [ ] ✅ Store deployment procedures with exact commands
 - [ ] ✅ Store failed deployments with root causes
@@ -1005,12 +1005,12 @@ POST-MORTEM: <link or details>
 ### **Context Safety in Storage:**
 ```bash
 # ✅ CORRECT - Always store with explicit context
-mcp__qdrant__qdrant-store collection_name="hyperion_deployment" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_deployment" text="
 kubectl --context=docker-desktop rollout restart deployment/tasks-api -n hyperion-dev
 "
 
 # ❌ WRONG - Never store without context
-mcp__qdrant__qdrant-store collection_name="hyperion_deployment" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_deployment" text="
 kubectl rollout restart deployment/tasks-api -n hyperion-dev
 "
 ```
@@ -1018,7 +1018,7 @@ kubectl rollout restart deployment/tasks-api -n hyperion-dev
 ### **Production Deployment Storage Format:**
 ```bash
 # Store production deployments with registry details
-mcp__qdrant__qdrant-store collection_name="hyperion_deployment" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_deployment" text="
 PRODUCTION DEPLOYMENT [$(date +%Y-%m-%d)]: <service>
 GIT_HASH: <git-hash>
 REGISTRY_IMAGE: registry.hyperionwave.com/hyperion/<service>:<git-hash>
@@ -1040,7 +1040,7 @@ ROLLBACK: make rollback SERVICE=<service>
 - [ ] ✅ Clean working directory (`git status`)
 - [ ] ✅ Registry accessible (`make registry-login`)
 - [ ] ✅ Kubernetes cluster accessible (`kubectl get nodes`)
-- [ ] ✅ Query Qdrant for previous deployment issues
+- [ ] ✅ Query coordinator knowledge for previous deployment issues
 - [ ] ✅ Backup current configurations (`make backup-configs`)
 
 ### **Deployment (MANDATORY):**
@@ -1049,13 +1049,13 @@ ROLLBACK: make rollback SERVICE=<service>
 - [ ] ✅ Monitor rollout status
 - [ ] ✅ Run health checks (`make health`)
 - [ ] ✅ Test service endpoints
-- [ ] ✅ Document any issues in Qdrant
+- [ ] ✅ Document any issues in coordinator knowledge
 
 ### **Post-Deployment (MANDATORY):**
 - [ ] ✅ Verify all pods running (`make status`)
 - [ ] ✅ Check service health (`make health`)
 - [ ] ✅ Test API endpoints with JWT
-- [ ] ✅ Store deployment details in Qdrant
+- [ ] ✅ Store deployment details in coordinator knowledge
 - [ ] ✅ Update infrastructure documentation
 - [ ] ✅ Prepare rollback plan if needed
 
