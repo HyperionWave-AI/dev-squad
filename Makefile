@@ -76,7 +76,7 @@ configure-claude: ## Configure Claude Code MCP for HTTP transport (Docker)
 	@claude mcp remove hyperion-coordinator --scope project 2>/dev/null || true
 	@echo ""
 	@echo "Adding hyperion-coordinator with HTTP transport (user scope - available globally)..."
-	@claude mcp add hyperion-coordinator http://localhost:7778/mcp --transport http --scope user
+	@claude mcp add hyper http://localhost:7778/mcp --transport http --scope user
 	@echo ""
 	@echo "✅ Configuration complete!"
 	@echo "⚠️  Make sure docker-compose is running: docker-compose up -d"
@@ -114,7 +114,7 @@ configure-claude-local: ## Configure Claude CLI to use local MCP server (not Doc
 	@claude mcp remove hyperion-coordinator --scope project 2>/dev/null || true
 	@echo ""
 	@echo "Adding hyperion-coordinator with local HTTP transport (user scope)..."
-	@claude mcp add hyperion-coordinator http://localhost:7778/mcp --transport http --scope user
+	@claude mcp add hyper http://localhost:7778/mcp --transport http --scope user
 	@echo ""
 	@echo "✅ Configuration complete!"
 	@echo "⚠️  Make sure local MCP server is running: make run-mcp-local"

@@ -314,18 +314,44 @@ class MCPCoordinatorClient {
     limit?: number;
   }): Promise<KnowledgeEntry[]> {
     try {
-      const result = await this.callTool('coordinator_query_knowledge', {
-        collection: params.collection,
+      const result = await this.callTool('qdrant_find', {
+        collectionName: params.collection,
         query: params.query,
         limit: params.limit || 5
       });
 
-      // Parse results from content
+      // Parse results from MCP text response
       const entries: KnowledgeEntry[] = [];
-      // Note: The actual parsing would depend on the MCP response format
-      // For now, return empty array as we'd need to parse the text content
-      console.log('Knowledge query result:', result);
 
+      if (result.content && result.content[0] && result.content[0].text) {
+        const text = result.content[0].text;
+
+        // Parse "Result N (Score: X.XX)" entries
+        const resultRegex = /Result \d+ \(Score: ([\d.]+)\)\nText: (.*?)\nMetadata: ({[\s\S]*?})\n\n---/g;
+        let match;
+
+        while ((match = resultRegex.exec(text)) !== null) {
+          const score = parseFloat(match[1]);
+          const textContent = match[2];
+          const metadataStr = match[3];
+
+          try {
+            const metadata = JSON.parse(metadataStr);
+            entries.push({
+              id: metadata.id || 'unknown',
+              collection: params.collection,
+              text: metadata.text || textContent,
+              score,
+              metadata,
+              createdAt: metadata.createdAt || new Date().toISOString()
+            });
+          } catch (e) {
+            console.warn('Failed to parse metadata:', e);
+          }
+        }
+      }
+
+      console.log('Knowledge query result:', entries.length, 'entries found');
       return entries;
     } catch (error) {
       console.error('Failed to query knowledge:', error);
@@ -339,9 +365,9 @@ class MCPCoordinatorClient {
     metadata?: Record<string, any>;
   }): Promise<{ success: boolean; id: string }> {
     try {
-      const result = await this.callTool('coordinator_upsert_knowledge', {
-        collection: params.collection,
-        text: params.text,
+      const result = await this.callTool('qdrant_store', {
+        collectionName: params.collection,
+        information: params.text,
         metadata: params.metadata || {}
       });
 

@@ -367,7 +367,7 @@ docker-compose up -d
 
 This starts:
 - MCP Server (HTTP mode on port 7778)
-- HTTP Bridge (port 8095 - for web UI)
+- HTTP Bridge (port 7095 - for web UI)
 - React UI (port 5173)
 
 Access web UI: http://localhost:5173

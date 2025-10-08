@@ -32,7 +32,7 @@ docker-compose -f docker-compose.dev.yml up hyperion-ui
 
 ### HTTP Bridge (Go with Air)
 - **Hot-reload**: Code changes automatically rebuild and restart the bridge
-- **Port**: 8095
+- **Port**: 7095
 - **Volumes**: `./coordinator/mcp-http-bridge` mounted to `/app`
 - **Config**: `.air.toml` for Air configuration
 
@@ -101,7 +101,7 @@ LOG_LEVEL=debug             # Verbose logging for development
 
 ### HTTP Bridge
 ```bash
-PORT=8095                   # HTTP bridge port
+PORT=7095                   # HTTP bridge port
 MONGODB_URI=mongodb+srv://... # MongoDB connection string
 MONGODB_DATABASE=coordinator_db
 LOG_LEVEL=debug
@@ -109,7 +109,7 @@ LOG_LEVEL=debug
 
 ### React UI
 ```bash
-VITE_MCP_BRIDGE_URL=http://localhost:8095  # HTTP bridge URL
+VITE_MCP_BRIDGE_URL=http://localhost:7095  # HTTP bridge URL
 ```
 
 ## Air Configuration
@@ -241,7 +241,7 @@ docker-compose -f docker-compose.dev.yml restart hyperion-ui
 ```bash
 # Check what's using the port
 lsof -i :7778  # MCP server
-lsof -i :8095  # HTTP bridge
+lsof -i :7095  # HTTP bridge
 lsof -i :5173  # React UI
 
 # Kill the process or change port in docker-compose.dev.yml
