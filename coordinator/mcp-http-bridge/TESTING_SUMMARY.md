@@ -98,17 +98,17 @@ Enables code reuse between unit tests and benchmarks.
 ### Coverage Report
 
 ```
-hyperion-coordinator-http-bridge/main.go:53:   NewHTTPBridge       75.0%
-hyperion-coordinator-http-bridge/main.go:67:   start               72.2%
-hyperion-coordinator-http-bridge/main.go:106:  initialize          80.0%
-hyperion-coordinator-http-bridge/main.go:142:  handleResponses     81.0%
-hyperion-coordinator-http-bridge/main.go:182:  sendRequest         75.0%
-hyperion-coordinator-http-bridge/main.go:238:  stop                83.3%
-hyperion-coordinator-http-bridge/main.go:251:  handleListTools     66.7%
-hyperion-coordinator-http-bridge/main.go:267:  handleCallTool      80.0%
-hyperion-coordinator-http-bridge/main.go:297:  handleListResources 66.7%
-hyperion-coordinator-http-bridge/main.go:313:  handleReadResource  80.0%
-hyperion-coordinator-http-bridge/main.go:338:  main                0.0%
+hyper-http-bridge/main.go:53:   NewHTTPBridge       75.0%
+hyper-http-bridge/main.go:67:   start               72.2%
+hyper-http-bridge/main.go:106:  initialize          80.0%
+hyper-http-bridge/main.go:142:  handleResponses     81.0%
+hyper-http-bridge/main.go:182:  sendRequest         75.0%
+hyper-http-bridge/main.go:238:  stop                83.3%
+hyper-http-bridge/main.go:251:  handleListTools     66.7%
+hyper-http-bridge/main.go:267:  handleCallTool      80.0%
+hyper-http-bridge/main.go:297:  handleListResources 66.7%
+hyper-http-bridge/main.go:313:  handleReadResource  80.0%
+hyper-http-bridge/main.go:338:  main                0.0%
 total:                                         (statements)        60.3%
 ```
 
@@ -150,7 +150,7 @@ $ go test -v -timeout=120s
 --- PASS: TestPendingRequestCleanup (0.62s)
 
 PASS
-ok      hyperion-coordinator-http-bridge    6.011s
+ok      hyper-http-bridge    6.011s
 ```
 
 **Result: 9 PASS, 1 SKIP (documented), 0 FAIL**

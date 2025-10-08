@@ -78,11 +78,11 @@ func handleTaskList(...) (interface{}, error) {
 
 **This applies to ALL code changes - no exceptions!**
 
-## 📚 MANDATORY: Learn Qdrant Knowledge Base First
+## 📚 MANDATORY: Learn Coordinator Knowledge Base First
 **BEFORE ANY GO DEVELOPMENT**, you MUST:
-1. Read `docs/04-development/qdrant-search-rules.md` - Learn search patterns
-2. Read `docs/04-development/qdrant-system-prompts.md` - See Go-specific prompts
-3. Query existing code patterns: `mcp__qdrant__qdrant-find collection_name="hyperion_project" query="golang [feature] implementation"`
+1. Read `docs/04-development/coordinator-search-rules.md` - Learn search patterns
+2. Read `docs/04-development/coordinator-system-prompts.md` - See Go-specific prompts
+3. Query existing code patterns: `mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="golang [feature] implementation"`
 
 **CONTINUOUS LEARNING PROCESS:**
 - Before coding: Search for similar implementations, patterns, and known issues
@@ -851,17 +851,17 @@ EVERY code change MUST include:
 - [ ] **🛠️ Update MCP contracts** if MCP tools change
 - [ ] **📊 Update data models** if database schemas change
 - [ ] **🔗 Document cross-service impacts** if calling other services
-- [ ] **💾 Store in Qdrant** using the qdrant-store MCP tool
+- [ ] **💾 Store in coordinator** using the coordinator_upsert_knowledge MCP tool
 
-### **QDRANT STORAGE REQUIREMENTS**
+### **COORDINATOR STORAGE REQUIREMENTS**
 
-After documenting architectural changes, STORE the documentation in Qdrant:
+After documenting architectural changes, STORE the documentation in coordinator knowledge:
 
 ```bash
-# Use the MCP qdrant-store tool to store architecture documentation
-mcp__qdrant__qdrant-store \
-  collection_name="hyperion_architecture" \
-  information="<service>: <change description with architectural impact>" \
+# Use the MCP coordinator_upsert_knowledge tool to store architecture documentation
+mcp__hyper__coordinator_upsert_knowledge \
+  collection="hyperion_architecture" \
+  text="<service>: <change description with architectural impact>" \
   metadata='{"service": "<service>", "type": "architecture", "component": "<component>"}'
 ```
 
@@ -994,23 +994,23 @@ This creates a complete Gold Standard compliant service structure.
 
 ## 🧠 Knowledge Management Protocol
 
-### **🚨 MANDATORY: QUERY QDRANT BEFORE ANY WORK - ZERO TOLERANCE POLICY**
+### **🚨 MANDATORY: QUERY COORDINATOR KNOWLEDGE BEFORE ANY WORK - ZERO TOLERANCE POLICY**
 
-**CRITICAL: You MUST query Qdrant BEFORE starting ANY work. NO EXCEPTIONS!**
+**CRITICAL: You MUST query coordinator knowledge BEFORE starting ANY work. NO EXCEPTIONS!**
 
 ### **BEFORE Starting Work (MANDATORY):**
 ```bash
 # 1. Query for previous work on this exact issue
-mcp__qdrant__qdrant-find collection_name="hyperion_bugs" query="<exact error or issue>"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="<exact error or issue>"
 
 # 2. Query for related component knowledge  
-mcp__qdrant__qdrant-find collection_name="hyperion_project" query="<service> <component>"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="<service> <component>"
 
 # 3. Query for architectural patterns
-mcp__qdrant__qdrant-find collection_name="hyperion_architecture" query="<pattern or approach>"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_architecture" query="<pattern or approach>"
 
 # 4. Query for known solutions
-mcp__qdrant__qdrant-find collection_name="hyperion_project" query="<feature> implementation pattern"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="<feature> implementation pattern"
 ```
 
 **❌ FAILURE TO QUERY = WORK INCOMPLETE**
@@ -1025,7 +1025,7 @@ Store information IMMEDIATELY after discovering:
 
 ```bash
 # Store failed attempt
-mcp__qdrant__qdrant-store collection_name="hyperion_bugs" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_bugs" text="
 FAILED ATTEMPT [$(date +%Y-%m-%d)]: <description>
 Approach: <what was tried>
 Failure Reason: <why it failed>
@@ -1033,7 +1033,7 @@ Learning: <what to avoid>
 "
 
 # Store successful fix
-mcp__qdrant__qdrant-store collection_name="hyperion_bugs" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_bugs" text="
 BUG FIX [$(date +%Y-%m-%d)]: <issue description>
 ROOT CAUSE: <root cause analysis>
 SOLUTION: <exact solution with code>
@@ -1045,7 +1045,7 @@ TESTING: <how to verify fix>
 ### **AFTER Completing Work (MANDATORY):**
 ```bash
 # Store comprehensive solution
-mcp__qdrant__qdrant-store collection_name="hyperion_project" information="
+mcp__hyper__coordinator_upsert_knowledge collection="hyperion_project" text="
 COMPLETED [$(date +%Y-%m-%d)]: [Go Development] <task description>
 SOLUTION: <what was implemented>
 KEY FILES: 
@@ -1061,7 +1061,7 @@ FUTURE: <considerations for future work>
 "
 ```
 
-### **Qdrant Collections for Go Development:**
+### **Coordinator Knowledge Collections for Go Development:**
 
 1. **`hyperion_project`** - General Go patterns, implementations, configurations
 2. **`hyperion_bugs`** - Go compilation errors, runtime bugs, test failures
@@ -1073,16 +1073,16 @@ FUTURE: <considerations for future work>
 
 ```bash
 # Before implementing new feature
-mcp__qdrant__qdrant-find collection_name="hyperion_project" query="golang <feature> implementation pattern example"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="golang <feature> implementation pattern example"
 
 # Before fixing compilation error
-mcp__qdrant__qdrant-find collection_name="hyperion_bugs" query="go compilation error <exact error message>"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="go compilation error <exact error message>"
 
 # Before writing tests
-mcp__qdrant__qdrant-find collection_name="hyperion_project" query="golang test patterns mock <component>"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="golang test patterns mock <component>"
 
 # Before refactoring
-mcp__qdrant__qdrant-find collection_name="hyperion_architecture" query="golang refactor <pattern> best practices"
+mcp__hyper__coordinator_query_knowledge collection="hyperion_architecture" query="golang refactor <pattern> best practices"
 ```
 
 ### **Go Development Storage Requirements:**
@@ -1112,7 +1112,7 @@ PREVENTION: <how to avoid in future>
 ```
 
 ### **GO-DEV AGENT CHECKLIST (UPDATED):**
-- [ ] ✅ Query Qdrant for existing solutions BEFORE starting
+- [ ] ✅ Query coordinator knowledge for existing solutions BEFORE starting
 - [ ] ✅ Query for known bugs with exact error messages
 - [ ] ✅ Store failed attempts with reasons
 - [ ] ✅ Store successful solutions with code
@@ -1127,4 +1127,4 @@ PREVENTION: <how to avoid in future>
 4. **Add timestamps** - Include date in all stored information
 5. **Cross-reference** - Link related bugs and solutions
 
-## **NO EXCEPTIONS - QDRANT USAGE IS MANDATORY FOR ALL GO DEVELOPMENT WORK**
+## **NO EXCEPTIONS - COORDINATOR USAGE IS MANDATORY FOR ALL GO DEVELOPMENT WORK**

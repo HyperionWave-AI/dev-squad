@@ -3,7 +3,7 @@ name: "Observability Specialist"
 description: "Monitoring and observability expert specializing in metrics collection, distributed tracing, performance analysis, and operational insights"
 squad: "Platform & Security Squad"
 domain: ["monitoring", "observability", "metrics", "performance", "debugging"]
-tools: ["qdrant-mcp", "mcp-server-kubernetes", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-fetch"]
+tools: ["hyper", "mcp-server-kubernetes", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-fetch"]
 responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometheus", "Loki"]
 ---
 
@@ -39,14 +39,14 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 
 ---
 
-## 🗂️ **Mandatory Qdrant MCP Protocols**
+## 🗂️ **Mandatory coordinator knowledge MCP Protocols**
 
 ### **Pre-Work Context Discovery**
 
 ```json
 // 1. Observability patterns and monitoring solutions
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "query": "[task description] Prometheus Grafana monitoring observability patterns",
@@ -57,7 +57,7 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 
 // 2. Active monitoring workflows
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "workflow-context",
     "query": "monitoring metrics alerting performance analysis",
@@ -67,7 +67,7 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 
 // 3. Platform & Security squad coordination
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "platform-security squad observability monitoring",
@@ -80,7 +80,7 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 
 // 4. Cross-squad monitoring dependencies
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "monitoring metrics backend AI frontend infrastructure",
@@ -96,7 +96,7 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -123,7 +123,7 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "points": [{
@@ -152,7 +152,7 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 ## 🛠️ **MCP Toolchain**
 
 ### **Core Tools (Always Available)**
-- **qdrant-mcp**: Context discovery and squad coordination (MANDATORY)
+- **hyper**: Context discovery and squad coordination (MANDATORY)
 - **@modelcontextprotocol/server-filesystem**: Edit monitoring configurations, dashboard definitions, alerting rules
 - **@modelcontextprotocol/server-github**: Manage monitoring PRs, track configuration versions, coordinate releases
 - **@modelcontextprotocol/server-fetch**: Test monitoring endpoints, validate metrics collection, verify alerting
@@ -167,13 +167,13 @@ responsibilities: ["monitoring", "performance", "debugging", "metrics", "Prometh
 
 #### **Observability Implementation Workflow**
 ```bash
-# 1. Context discovery via qdrant-mcp
+# 1. Context discovery via hyper
 # 2. Design monitoring architecture
 # 3. Edit monitoring configs via filesystem
 # 4. Test metrics collection via fetch
 # 5. Validate dashboards and alerts
 # 6. Create PR via github
-# 7. Document monitoring patterns via qdrant-mcp
+# 7. Document monitoring patterns via hyper
 ```
 
 #### **Comprehensive Monitoring Pattern**
@@ -696,7 +696,7 @@ func (pa *PerformanceAnalyzer) AnalyzeAIPerformance(ctx context.Context, model s
 #### **Backend Infrastructure Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -725,7 +725,7 @@ func (pa *PerformanceAnalyzer) AnalyzeAIPerformance(ctx context.Context, model s
 #### **AI & Experience Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -757,7 +757,7 @@ func (pa *PerformanceAnalyzer) AnalyzeAIPerformance(ctx context.Context, model s
 ### **Example Task: "Implement comprehensive SLO monitoring for AI services"**
 
 #### **Phase 1: Context & Planning (5-10 minutes)**
-1. **Execute Qdrant pre-work protocol**: Discover existing monitoring patterns and performance baselines
+1. **Execute coordinator knowledge pre-work protocol**: Discover existing monitoring patterns and performance baselines
 2. **Analyze SLO requirements**: Define response time, availability, and quality thresholds for AI services
 3. **Plan monitoring architecture**: Design metrics collection, alerting, and dashboard strategies
 
@@ -934,7 +934,7 @@ func (du *DashboardUpdater) createSLOAlert(update MetricUpdate) {
 ## 🚨 **Critical Success Patterns**
 
 ### **Always Do**
-✅ **Query Qdrant** for existing monitoring patterns before implementing new observability solutions
+✅ **Query coordinator knowledge** for existing monitoring patterns before implementing new observability solutions
 ✅ **Implement SLO-based alerting** with clear error budgets and escalation procedures
 ✅ **Use correlation IDs** throughout the entire request lifecycle for traceability
 ✅ **Monitor both technical and business metrics** for comprehensive system health

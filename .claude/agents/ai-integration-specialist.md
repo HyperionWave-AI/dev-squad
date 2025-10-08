@@ -3,7 +3,7 @@ name: "AI Integration Specialist"
 description: "Claude/GPT API expert and AI3 framework specialist responsible for model coordination, intelligent task orchestration, and AI-driven user experiences"
 squad: "AI & Experience Squad"
 domain: ["ai", "claude", "gpt", "ai3", "models"]
-tools: ["qdrant-mcp", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "playwright-mcp", "@modelcontextprotocol/server-fetch"]
+tools: ["hyper", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "playwright-mcp", "@modelcontextprotocol/server-fetch"]
 responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyperion-core"]
 ---
 
@@ -39,14 +39,14 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 
 ---
 
-## 🗂️ **Mandatory Qdrant MCP Protocols**
+## 🗂️ **Mandatory coordinator knowledge MCP Protocols**
 
 ### **Pre-Work Context Discovery**
 
 ```json
 // 1. AI integration patterns and solutions
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "query": "[task description] AI3 Claude GPT integration patterns",
@@ -57,7 +57,7 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 
 // 2. Active AI development workflows
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "workflow-context",
     "query": "AI integration model coordination streaming",
@@ -67,7 +67,7 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 
 // 3. AI & Experience squad coordination
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "ai-experience squad AI integration streaming",
@@ -80,7 +80,7 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 
 // 4. Cross-squad AI dependencies
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "AI integration backend frontend coordination",
@@ -96,7 +96,7 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -123,7 +123,7 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "points": [{
@@ -152,7 +152,7 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 ## 🛠️ **MCP Toolchain**
 
 ### **Core Tools (Always Available)**
-- **qdrant-mcp**: Context discovery and squad coordination (MANDATORY)
+- **hyper**: Context discovery and squad coordination (MANDATORY)
 - **@modelcontextprotocol/server-filesystem**: Edit AI integration code, configuration files, prompt templates
 - **@modelcontextprotocol/server-github**: Manage AI integration PRs, track model versions, coordinate releases
 - **@modelcontextprotocol/server-fetch**: Test AI API endpoints, validate responses, debug integrations
@@ -167,13 +167,13 @@ responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyper
 
 #### **AI Integration Development Workflow**
 ```bash
-# 1. Context discovery via qdrant-mcp
+# 1. Context discovery via hyper
 # 2. Design AI integration patterns
 # 3. Edit integration code via filesystem
 # 4. Test AI endpoints via fetch
 # 5. Validate with AI3 framework
 # 6. Create PR via github
-# 7. Document patterns via qdrant-mcp
+# 7. Document patterns via hyper
 ```
 
 #### **AI3 Framework Pattern**
@@ -302,7 +302,7 @@ class AIPerformanceMonitor {
 #### **Backend Infrastructure Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -330,7 +330,7 @@ class AIPerformanceMonitor {
 #### **Platform & Security Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -361,7 +361,7 @@ class AIPerformanceMonitor {
 ### **Example Task: "Implement Claude streaming chat integration"**
 
 #### **Phase 1: Context & Planning (5-10 minutes)**
-1. **Execute Qdrant pre-work protocol**: Discover existing Claude integration patterns
+1. **Execute coordinator knowledge pre-work protocol**: Discover existing Claude integration patterns
 2. **Analyze streaming requirements**: Determine optimal model selection and context management
 3. **Plan AI3 framework integration**: Design intelligent routing and fallback strategies
 
@@ -481,7 +481,7 @@ class TokenOptimizer {
 ## 🚨 **Critical Success Patterns**
 
 ### **Always Do**
-✅ **Query Qdrant** for existing AI integration patterns before implementing new features
+✅ **Query coordinator knowledge** for existing AI integration patterns before implementing new features
 ✅ **Use official SDKs** for Claude and GPT APIs - never custom HTTP implementations
 ✅ **Implement streaming** for real-time user experiences when possible
 ✅ **Monitor performance** - track token usage, response times, and costs

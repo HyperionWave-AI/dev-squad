@@ -29,7 +29,7 @@ Available commands:
 
 ### 3. Claude Code Integration
 ✅ MCP server added to Claude Code configuration
-- Binary: `/Users/maxmednikov/MaxSpace/dev-squad/coordinator/mcp-server/hyperion-coordinator-mcp`
+- Binary: `/Users/maxmednikov/MaxSpace/dev-squad/coordinator/mcp-server/hyper-mcp`
 - Configuration: `~/.claude.json`
 - Environment variables automatically loaded
 
@@ -42,7 +42,7 @@ Available commands:
 ✅ MCP server binary built (14MB)
 ✅ Environment variables configured
 ✅ Makefile ready to use
-✅ Claude Code configured with hyperion-coordinator
+✅ Claude Code configured with hyper
 ✅ Environment variables loaded into Claude Code config
 
 ## Next Steps
@@ -120,12 +120,12 @@ make run-web   # Web UI on port 7777
 ### MCP tools not appearing in Claude Code
 1. Verify the config was added:
    ```bash
-   grep -A 10 "hyperion-coordinator" ~/.claude.json
+   grep -A 10 "hyper" ~/.claude.json
    ```
 2. Restart Claude Code completely
 3. Check the binary exists:
    ```bash
-   ls -lh coordinator/mcp-server/hyperion-coordinator-mcp
+   ls -lh coordinator/mcp-server/hyper-mcp
    ```
 
 ### Connection issues
@@ -152,7 +152,7 @@ make build
 ### Modified
 - `.env` - Added WEB_PORT and MCP_PORT configuration
 - `coordinator/mcp-server/add-to-claude-code.sh` - Updated to load environment variables
-- `~/.claude.json` - Added hyperion-coordinator MCP server
+- `~/.claude.json` - Added hyper MCP server
 
 ### Created
 - `Makefile` - Build and run automation
@@ -170,4 +170,4 @@ make build
 
 **Setup completed successfully! 🎉**
 
-Restart Claude Code and start using the hyperion-coordinator MCP tools.
+Restart Claude Code and start using the hyper MCP tools.
