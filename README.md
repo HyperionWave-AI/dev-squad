@@ -34,7 +34,7 @@ docker-compose up -d
 
 # 3. Access services
 # - UI Dashboard: http://localhost:5173
-# - HTTP API: http://localhost:8095/health
+# - HTTP API: http://localhost:7095/health
 
 # 4. For Claude Code integration
 # Restart Claude Code - The MCP server is now available!
@@ -107,7 +107,7 @@ docker-compose up -d
 
 ### Infrastructure
 
-- **HTTP Bridge**: Go-based MCP-to-HTTP adapter (Port 8095)
+- **HTTP Bridge**: Go-based MCP-to-HTTP adapter (Port 7095)
 - **MCP Server**: Stdio-based protocol server
 - **Development**: Single-script startup for full stack
 
@@ -125,7 +125,7 @@ docker-compose up -d
                      │ HTTP/REST
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│              MCP HTTP Bridge (Port 8095)                │
+│              MCP HTTP Bridge (Port 7095)                │
 │  • CORS handling for web clients                        │
 │  • HTTP → stdio request translation                     │
 │  • Concurrent request routing                           │
@@ -208,7 +208,7 @@ docker-compose build                          # Rebuild images
 ```
 
 **Services running:**
-- `hyperion-http-bridge` - HTTP API + MCP Server (port 8095)
+- `hyperion-http-bridge` - HTTP API + MCP Server (port 7095)
 - `hyperion-ui` - React dashboard (port 5173)
 
 ### Option 2: Native (Development)
@@ -227,7 +227,7 @@ export MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/coordinator_db"
 
 **Service URLs:**
 - MCP Server: stdio (for MCP clients)
-- HTTP Bridge: http://localhost:8095
+- HTTP Bridge: http://localhost:7095
 - React UI: http://localhost:5173
 
 ## ⚙️ Configuration
@@ -293,14 +293,14 @@ coordinator_update_task_status({
 
 ### Using the HTTP API
 
-The HTTP bridge (port 8095) provides REST access:
+The HTTP bridge (port 7095) provides REST access:
 
 ```bash
 # List tools
-curl http://localhost:8095/api/mcp/tools
+curl http://localhost:7095/api/mcp/tools
 
 # Call tool
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: req-1" \
   -d '{
@@ -309,7 +309,7 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
   }'
 
 # Read resource
-curl "http://localhost:8095/api/mcp/resources/read?uri=hyperion://task/human/abc-123"
+curl "http://localhost:7095/api/mcp/resources/read?uri=hyperion://task/human/abc-123"
 ```
 
 ### Using the Kanban UI
@@ -530,7 +530,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 4. **Set up reverse proxy** (nginx example):
    ```nginx
    location /mcp {
-       proxy_pass http://localhost:8095;
+       proxy_pass http://localhost:7095;
        proxy_http_version 1.1;
        proxy_set_header Upgrade $http_upgrade;
        proxy_set_header Connection 'upgrade';
@@ -550,7 +550,7 @@ BenchmarkStressTest-8              50   22.1 ms/op
 - [ ] Set `QDRANT_URL` and `QDRANT_API_KEY` (if using knowledge features)
 - [ ] Configure CORS origins in docker-compose.yml if needed
 - [ ] Set up reverse proxy (nginx/Caddy) for HTTPS
-- [ ] Configure firewall rules (port 8095 internal only)
+- [ ] Configure firewall rules (port 7095 internal only)
 - [ ] Set up monitoring and logging (Docker logs)
 - [ ] Configure backup strategy for MongoDB
 - [ ] Set up automatic restarts: `restart: unless-stopped` (already in docker-compose.yml)

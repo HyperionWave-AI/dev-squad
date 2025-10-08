@@ -6,7 +6,7 @@ The Hyperion Coordinator runs as a multi-container Docker setup with three main 
 
 ### Services
 
-1. **hyperion-http-bridge** (Port 8095)
+1. **hyperion-http-bridge** (Port 7095)
    - Combines MCP Server + HTTP Bridge in one container
    - Built from `coordinator/mcp-http-bridge/Dockerfile.combined`
    - Spawns MCP server as subprocess
@@ -28,7 +28,7 @@ docker-compose up -d
 
 # Access services
 open http://localhost:5173              # UI Dashboard
-curl http://localhost:8095/health       # API Health
+curl http://localhost:7095/health       # API Health
 
 # View logs
 docker-compose logs -f
@@ -39,8 +39,8 @@ docker-compose logs -f
 ```yaml
 services:
   hyperion-http-bridge:
-    ports: ["8095:8095"]
-    healthcheck: wget http://localhost:8095/health
+    ports: ["7095:7095"]
+    healthcheck: wget http://localhost:7095/health
 
   hyperion-ui:
     ports: ["5173:80"]
@@ -75,20 +75,20 @@ Edit `.env` to configure:
 MONGODB_URI=mongodb+srv://...           # MongoDB connection
 MONGODB_DATABASE=coordinator_db         # Database name
 LOG_LEVEL=info                          # Logging level
-VITE_MCP_BRIDGE_URL=http://localhost:8095  # UI API endpoint
+VITE_MCP_BRIDGE_URL=http://localhost:7095  # UI API endpoint
 ```
 
 ## Port Mapping
 
 | Service | Container Port | Host Port | Purpose |
 |---------|---------------|-----------|---------|
-| HTTP Bridge | 8095 | 8095 | REST API |
+| HTTP Bridge | 7095 | 7095 | REST API |
 | UI | 80 | 5173 | Web Dashboard |
 
 ## Health Checks
 
 Both containers have health checks:
-- **HTTP Bridge**: `wget http://localhost:8095/health`
+- **HTTP Bridge**: `wget http://localhost:7095/health`
 - **UI**: `wget http://localhost/health`
 
 Status visible via: `docker-compose ps`
@@ -117,8 +117,8 @@ docker-compose ps
 docker-compose exec hyperion-http-bridge /bin/sh
 
 # Test API
-curl http://localhost:8095/api/mcp/tools
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl http://localhost:7095/api/mcp/tools
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-1" \
   -d '{"name":"coordinator_list_human_tasks","arguments":{}}'
@@ -134,7 +134,7 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
 # Test CORS
 curl -v -H "Origin: http://localhost:5173" \
   -H "Access-Control-Request-Method: POST" \
-  -X OPTIONS http://localhost:8095/api/mcp/tools/call
+  -X OPTIONS http://localhost:7095/api/mcp/tools/call
 
 # Should see: Access-Control-Allow-Origin: http://localhost:5173
 ```
@@ -145,7 +145,7 @@ curl -v -H "Origin: http://localhost:5173" \
 **Solution**:
 ```bash
 # Check what's using the port
-lsof -i :8095
+lsof -i :7095
 lsof -i :5173
 
 # Stop conflicting service or change port in docker-compose.yml
@@ -173,7 +173,7 @@ docker-compose logs hyperion-http-bridge
 docker-compose ps
 
 # Test API directly
-curl http://localhost:8095/health
+curl http://localhost:7095/health
 
 # Check browser console for CORS errors
 # Rebuild if CORS config changed:
@@ -216,7 +216,7 @@ cd coordinator
 ```
 
 This runs:
-- HTTP Bridge: http://localhost:8095
+- HTTP Bridge: http://localhost:7095
 - UI: http://localhost:5173 (Vite dev server with hot reload)
 
 ## File Structure
@@ -256,7 +256,7 @@ See `DOCKER.md` for full production deployment guide.
 ## Next Steps
 
 - **View UI**: http://localhost:5173
-- **Test API**: http://localhost:8095/health
+- **Test API**: http://localhost:7095/health
 - **Read Docs**: [DOCKER.md](./DOCKER.md)
 - **MCP Tools**: [HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)
 
