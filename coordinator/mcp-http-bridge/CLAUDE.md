@@ -136,8 +136,8 @@ Reads specific MCP resource content.
 
 ### Environment Variables
 
-- `MCP_SERVER_PATH`: Path to MCP server binary (default: `../mcp-server/hyperion-coordinator-mcp`)
-- `PORT`: HTTP server port (default: `8095`)
+- `MCP_SERVER_PATH`: Path to MCP server binary (default: `../mcp-server/hyper-mcp`)
+- `PORT`: HTTP server port (default: `7095`)
 
 ### CORS Configuration
 
@@ -203,7 +203,7 @@ go build -o mcp-http-bridge
 
 ```bash
 # Ensure MCP server binary exists
-ls ../mcp-server/hyperion-coordinator-mcp
+ls ../mcp-server/hyper-mcp
 
 # Start bridge
 ./mcp-http-bridge
@@ -288,10 +288,10 @@ The bridge is typically deployed alongside the coordinator dashboard UI:
 **Debugging:**
 ```bash
 # Check goroutine count
-go tool pprof http://localhost:8095/debug/pprof/goroutine
+go tool pprof http://localhost:7095/debug/pprof/goroutine
 
 # Check heap allocations
-go tool pprof http://localhost:8095/debug/pprof/heap
+go tool pprof http://localhost:7095/debug/pprof/heap
 ```
 
 ## Future Enhancements

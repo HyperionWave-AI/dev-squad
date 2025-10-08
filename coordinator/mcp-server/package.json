@@ -2,16 +2,16 @@
   "name": "@hyperion/coordinator-mcp",
   "version": "1.0.0",
   "description": "MCP server for coordinating tasks and knowledge across AI agents",
-  "main": "bin/hyperion-coordinator-mcp",
+  "main": "bin/hyper-mcp",
   "bin": {
-    "hyperion-coordinator-mcp": "./bin/hyperion-coordinator-mcp"
+    "hyper-mcp": "./bin/hyper-mcp"
   },
   "scripts": {
     "preinstall": "node scripts/build-binary.js",
     "postinstall": "node scripts/configure-claude.js || echo 'Skipping auto-configuration - you can run it manually later'",
     "configure": "node scripts/configure-claude.js",
     "test": "go test ./...",
-    "build": "go build -o bin/hyperion-coordinator-mcp main.go"
+    "build": "go build -o bin/hyper-mcp main.go"
   },
   "files": [
     "bin/",
@@ -32,7 +32,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourorg/hyperion-coordinator-mcp"
+    "url": "https://github.com/yourorg/hyper-mcp"
   },
   "author": "Hyperion Team",
   "license": "MIT",

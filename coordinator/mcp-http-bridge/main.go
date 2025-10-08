@@ -335,6 +335,93 @@ func (b *HTTPBridge) handleReadResource(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (b *HTTPBridge) handleListCollections(c *gin.Context) {
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.GetHeader("X-Request-ID"),
+		Method:  "resources/read",
+		Params: map[string]interface{}{
+			"uri": "hyperion://knowledge/collections",
+		},
+	}
+
+	result, err := b.sendRequest(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (b *HTTPBridge) handleSearchKnowledge(c *gin.Context) {
+	collectionName := c.Query("collectionName")
+	query := c.Query("query")
+	limit := c.DefaultQuery("limit", "10")
+
+	if collectionName == "" || query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "collectionName and query parameters required"})
+		return
+	}
+
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.GetHeader("X-Request-ID"),
+		Method:  "tools/call",
+		Params: map[string]interface{}{
+			"name": "coordinator_query_knowledge",
+			"arguments": map[string]interface{}{
+				"collection": collectionName,
+				"query":      query,
+				"limit":      limit,
+			},
+		},
+	}
+
+	result, err := b.sendRequest(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (b *HTTPBridge) handleCreateKnowledge(c *gin.Context) {
+	var body struct {
+		CollectionName string                 `json:"collectionName" binding:"required"`
+		Information    string                 `json:"information" binding:"required"`
+		Metadata       map[string]interface{} `json:"metadata"`
+	}
+
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: collectionName and information required"})
+		return
+	}
+
+	req := MCPRequest{
+		JSONRPC: "2.0",
+		ID:      c.GetHeader("X-Request-ID"),
+		Method:  "tools/call",
+		Params: map[string]interface{}{
+			"name": "coordinator_upsert_knowledge",
+			"arguments": map[string]interface{}{
+				"collection": body.CollectionName,
+				"text":       body.Information,
+				"metadata":   body.Metadata,
+			},
+		},
+	}
+
+	result, err := b.sendRequest(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 func main() {
 	// Get MCP server path from environment or use default
 	mcpServerPath := os.Getenv("MCP_SERVER_PATH")
@@ -364,6 +451,7 @@ func main() {
 		"http://localhost:5173",     // Vite dev server (host)
 		"http://localhost:5177",     // Alt Vite port
 		"http://localhost:5178",     // Alt Vite port
+		"http://localhost:7777",     // Coordinator UI (make run-all)
 		"http://localhost:9173",     // Custom UI port (via docker-compose.override.yml)
 		"http://localhost:3000",     // React dev server
 		"http://localhost",          // Docker UI (mapped to host)
@@ -393,10 +481,18 @@ func main() {
 		api.GET("/resources/read", bridge.handleReadResource)
 	}
 
+	// Knowledge API endpoints (proxied to MCP tools)
+	knowledge := r.Group("/api/knowledge")
+	{
+		knowledge.GET("/collections", bridge.handleListCollections)
+		knowledge.GET("/search", bridge.handleSearchKnowledge)
+		knowledge.POST("", bridge.handleCreateKnowledge)
+	}
+
 	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8095"
+		port = "7095"
 	}
 
 	log.Printf("HTTP bridge listening on port %s", port)
