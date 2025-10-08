@@ -1,21 +1,30 @@
 import React, { useState, useEffect } from 'react';
+import {
+  Box,
+  Typography,
+  Card,
+  CardActionArea,
+  CardContent,
+  Chip,
+  Tabs,
+  Tab,
+  Skeleton,
+  Alert,
+  Stack,
+} from '@mui/material';
+import { useKnowledge } from './KnowledgeLayout';
 import { knowledgeApi } from '../../services/knowledgeApi';
-import type { KnowledgeCollection } from '../../types/knowledge';
-
-interface CollectionBrowserProps {
-  onCollectionSelect?: (collectionName: string) => void;
-}
 
 const categoryIcons: Record<string, string> = {
   Tech: '🔧',
   Task: '📋',
   UI: '🎨',
   Ops: '⚙️',
-  Other: '📚'
+  Other: '📚',
 };
 
-export const CollectionBrowser: React.FC<CollectionBrowserProps> = ({ onCollectionSelect }) => {
-  const [collections, setCollections] = useState<KnowledgeCollection[]>([]);
+export const CollectionBrowser: React.FC = () => {
+  const { selectedCollection, setSelectedCollection, collections, setCollections } = useKnowledge();
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -37,120 +46,138 @@ export const CollectionBrowser: React.FC<CollectionBrowserProps> = ({ onCollecti
     };
 
     fetchCollections();
-  }, []);
+  }, [setCollections]);
 
-  const categories = ['All', ...Array.from(new Set(collections.map(c => c.category)))];
-  const filteredCollections = selectedCategory === 'All'
-    ? collections
-    : collections.filter(c => c.category === selectedCategory);
+  const categories = ['All', ...Array.from(new Set(collections.map((c) => c.category)))];
+  const filteredCollections =
+    selectedCategory === 'All'
+      ? collections
+      : collections.filter((c) => c.category === selectedCategory);
 
   const handleCollectionClick = (collectionName: string) => {
-    if (onCollectionSelect) {
-      onCollectionSelect(collectionName);
-    }
+    setSelectedCollection(collectionName);
+  };
+
+  const handleCategoryChange = (_event: React.SyntheticEvent, newValue: string) => {
+    setSelectedCategory(newValue);
   };
 
   if (loading) {
     return (
-      <div className="p-4 border-2 border-gray-200 rounded-lg bg-white">
-        <div className="flex items-center justify-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <span className="ml-3 text-gray-600">Loading collections...</span>
-        </div>
-      </div>
+      <Box>
+        <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+          Knowledge Collections
+        </Typography>
+        <Stack spacing={2}>
+          {[...Array(6)].map((_, index) => (
+            <Skeleton key={index} variant="rectangular" height={100} sx={{ borderRadius: 2 }} />
+          ))}
+        </Stack>
+      </Box>
     );
   }
 
   if (error) {
     return (
-      <div className="p-4 border-2 border-red-300 bg-red-50 rounded-lg">
-        <p className="text-red-800 font-semibold">Error: {error}</p>
-      </div>
+      <Alert severity="error" sx={{ mb: 2 }}>
+        {error}
+      </Alert>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold">Knowledge Collections</h2>
+    <Box>
+      <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+        Knowledge Collections
+      </Typography>
 
       {/* Category Tabs */}
-      <div
-        className="flex gap-2 border-b-2 border-gray-200 pb-2"
-        role="tablist"
-        aria-label="Collection categories"
+      <Tabs
+        value={selectedCategory}
+        onChange={handleCategoryChange}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}
       >
         {categories.map((category) => (
-          <button
-            key={category}
-            role="tab"
-            aria-selected={selectedCategory === category}
-            aria-controls={`panel-${category}`}
-            onClick={() => setSelectedCategory(category)}
-            className={`px-4 py-2 rounded-t font-semibold transition-colors ${
-              selectedCategory === category
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            {category}
-          </button>
+          <Tab key={category} label={category} value={category} />
         ))}
-      </div>
+      </Tabs>
 
       {/* Collection Grid */}
-      <div
-        role="tabpanel"
-        id={`panel-${selectedCategory}`}
-        aria-labelledby={`tab-${selectedCategory}`}
-        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
-      >
+      <Stack spacing={2}>
         {filteredCollections.length === 0 ? (
-          <div className="col-span-full p-8 text-center text-gray-600 bg-gray-50 rounded-lg border-2 border-gray-200">
-            No collections found in this category
-          </div>
+          <Alert severity="info">No collections found in this category</Alert>
         ) : (
           filteredCollections.map((collection) => (
-            <div
+            <Card
               key={collection.name}
-              onClick={() => handleCollectionClick(collection.name)}
-              className="p-4 border-2 border-gray-200 rounded-lg bg-white shadow-sm hover:shadow-md hover:border-blue-400 cursor-pointer transition-all"
-            >
-              {/* Collection Header */}
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl" role="img" aria-label={collection.category}>
-                    {categoryIcons[collection.category] || categoryIcons.Other}
-                  </span>
-                  <h3 className="font-bold text-base leading-tight">
-                    {collection.name}
-                  </h3>
-                </div>
-                <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded font-semibold text-sm">
-                  {collection.count}
-                </span>
-              </div>
+                sx={{
+                  border: 2,
+                  borderColor:
+                    selectedCollection === collection.name ? 'primary.main' : 'divider',
+                  transition: 'all 0.2s',
+                  '&:hover': {
+                    borderColor: 'primary.light',
+                  },
+                }}
+              >
+                <CardActionArea onClick={() => handleCollectionClick(collection.name)}>
+                  <CardContent>
+                    {/* Collection Header */}
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography sx={{ fontSize: '1.5rem' }} component="span">
+                          {categoryIcons[collection.category] || categoryIcons.Other}
+                        </Typography>
+                        <Typography variant="h6" component="div" sx={{ fontWeight: 600 }}>
+                          {collection.name}
+                        </Typography>
+                      </Box>
+                      <Chip
+                        label={collection.count}
+                        color="primary"
+                        size="small"
+                        sx={{ fontWeight: 600 }}
+                      />
+                    </Box>
 
-              {/* Collection Category */}
-              <div className="text-xs text-gray-600">
-                <span className="font-semibold">Category:</span> {collection.category}
-              </div>
-            </div>
+                    {/* Collection Category */}
+                    <Chip
+                      label={collection.category}
+                      size="small"
+                      variant="outlined"
+                      sx={{ fontSize: '0.75rem' }}
+                    />
+                  </CardContent>
+                </CardActionArea>
+            </Card>
           ))
         )}
-      </div>
+      </Stack>
 
       {/* Summary */}
       {filteredCollections.length > 0 && (
-        <div className="p-3 bg-gray-50 rounded border border-gray-200 text-sm text-gray-700">
-          <span className="font-semibold">
-            {filteredCollections.length} collection{filteredCollections.length !== 1 ? 's' : ''}
-          </span>
-          {' · '}
-          <span>
-            {filteredCollections.reduce((sum, c) => sum + c.count, 0)} total entries
-          </span>
-        </div>
+        <Box
+          sx={{
+            mt: 3,
+            p: 2,
+            bgcolor: 'background.default',
+            borderRadius: 1,
+            border: 1,
+            borderColor: 'divider',
+          }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            <strong>
+              {filteredCollections.length} collection
+              {filteredCollections.length !== 1 ? 's' : ''}
+            </strong>
+            {' · '}
+            <span>{filteredCollections.reduce((sum, c) => sum + c.count, 0)} total entries</span>
+          </Typography>
+        </Box>
       )}
-    </div>
+    </Box>
   );
 };

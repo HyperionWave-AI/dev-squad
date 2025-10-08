@@ -13,7 +13,7 @@ services:
   # HTTP Bridge - Override host port (for Web UI)
   hyperion-http-bridge:
     ports:
-      - "8095:8095"  # host:container (container port must stay 8095)
+      - "7095:7095"  # host:container (container port must stay 7095)
 
   # React UI - Override host port
   hyperion-ui:

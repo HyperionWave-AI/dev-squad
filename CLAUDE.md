@@ -2,6 +2,42 @@
 
 > **Mission:** Deliver 15x development efficiency through autonomous domain expertise and dual-MCP coordination.
 
+## 🚨 **CRITICAL RULES - MUST FOLLOW**
+
+### **RULE 1: MANDATORY HYPERION MCP USAGE**
+**ALL work MUST use Hyperion Coordinator MCP. Direct work is FORBIDDEN.**
+
+❌ **FORBIDDEN:**
+- Writing code directly in main conversation
+- Making changes without creating tasks
+- Bypassing task assignment system
+- Working without agent coordination
+
+✅ **REQUIRED:**
+- Create human task via `mcp__hyper__coordinator_create_human_task`
+- Create agent task via `mcp__hyper__coordinator_create_agent_task`
+- Assign to appropriate specialist agent
+- Track progress via coordinator
+
+### **RULE 2: ALWAYS USE SUB-AGENTS - NEVER WORK DIRECTLY**
+**You are a COORDINATOR, not an implementer. Delegate ALL work to specialist agents.**
+
+❌ **FORBIDDEN:**
+- Implementing code yourself
+- Making file changes directly
+- Running builds/tests yourself
+- Writing documentation directly
+
+✅ **REQUIRED:**
+- Use `Task` tool to launch specialist agents
+- Assign work based on agent expertise
+- Monitor agent progress via coordinator
+- Coordinate handoffs between agents
+
+**Exception:** ONLY coordinator operations (creating tasks, updating status) allowed directly.
+
+---
+
 ## 📚 **QUICK START**
 
 **Essential Documents:**
@@ -9,14 +45,19 @@
 2. **This document** - Squad coordination & workflows
 3. **AI-BAND-MANAGER-SPEC.md** - Project specification
 
-**Core MCP Tools (9 tools):**
+**Core MCP Tools (7 tools) - MANDATORY USAGE:**
+- `mcp__hyper__coordinator_create_human_task({ prompt: "..." })` - **START HERE** - Create user request
+- `mcp__hyper__coordinator_create_agent_task({ ... })` - **REQUIRED** - Assign to specialist
 - `mcp__hyper__coordinator_list_agent_tasks({ agentName: "..." })` - Get assignments
 - `mcp__hyper__coordinator_update_task_status(...)` - Update progress
 - `mcp__hyper__coordinator_update_todo_status(...)` - Update TODOs (uses todoId UUID, not index)
-- `mcp__hyper__coordinator_upsert_knowledge(...)` - Store task knowledge
-- `mcp__hyper__coordinator_query_knowledge(...)` - Query task context
-- `mcp__qdrant__qdrant-find({ collection_name: "...", query: "..." })` - Search knowledge
-- `mcp__qdrant__qdrant-store({ collection_name: "...", information: "...", metadata: {...} })` - Store knowledge
+- `mcp__hyper__coordinator_upsert_knowledge(...)` - Store task knowledge in coordinator
+- `mcp__hyper__coordinator_query_knowledge(...)` - Query task context from coordinator
+
+**Sub-Agent Delegation (MANDATORY):**
+- `Task` tool with `subagent_type` parameter - **REQUIRED for ALL implementation work**
+- Available agents: go-dev, ui-dev, ui-tester, k8s-deployment-expert, sre, etc.
+- Launch agents for: code changes, builds, tests, deployments, documentation
 
 **MCP Resources (12 resources) - NEW!:**
 
@@ -31,8 +72,8 @@
 - `mcp__hyper__resources_read({ uri: "hyperion://workflow/dependencies" })` - Task dependencies
 
 **Knowledge Resources (discovery):**
-- `mcp__hyper__resources_read({ uri: "hyperion://knowledge/collections" })` - Qdrant collections
-- `mcp__hyper__resources_read({ uri: "hyperion://knowledge/recent-learnings" })` - Last 24h knowledge
+- `mcp__hyper__resources_read({ uri: "hyperion://knowledge/collections" })` - Available knowledge collections
+- `mcp__hyper__resources_read({ uri: "hyperion://knowledge/recent-learnings" })` - Last 24h knowledge from coordinator
 
 **Metrics Resources (performance):**
 - `mcp__hyper__resources_read({ uri: "hyperion://metrics/squad-velocity" })` - Completion rates
@@ -46,9 +87,75 @@
 - `mcp__hyper__prompts_get({ name: "suggest_handoff_strategy", arguments: {...} })` - Handoff planning
 
 **For Implementation Agents:**
-- `mcp__hyper__prompts_get({ name: "recommend_qdrant_query", arguments: {...} })` - Optimize queries
+- `mcp__hyper__prompts_get({ name: "recommend_knowledge_query", arguments: {...} })` - Optimize knowledge queries
 - `mcp__hyper__prompts_get({ name: "diagnose_blocked_task", arguments: {...} })` - Unblock help
-- `mcp__hyper__prompts_get({ name: "suggest_knowledge_structure", arguments: {...} })` - Structure learnings
+- `mcp__hyper__prompts_get({ name: "suggest_knowledge_structure", arguments: {...} })` - Structure learnings for storage
+
+---
+
+## 🚨 **WORKFLOW ENFORCEMENT**
+
+### **MANDATORY WORKFLOW FOR ALL USER REQUESTS**
+
+**Step 1: Create Human Task (REQUIRED)**
+```typescript
+const humanTask = await mcp__hyper__coordinator_create_human_task({
+  prompt: "[User's original request verbatim]"
+})
+// Returns: { taskId: "uuid", status: "pending" }
+```
+
+**Step 2: Create Agent Task with Context (REQUIRED)**
+```typescript
+const agentTask = await mcp__hyper__coordinator_create_agent_task({
+  humanTaskId: humanTask.taskId,
+  agentName: "[Specialist Agent Name]", // See squad list below
+  role: "[What agent will accomplish]",
+  contextSummary: "[WHY/WHAT/HOW/CONSTRAINTS/TESTING - 150-250 words]",
+  filesModified: ["exact/file/paths.ts"],
+  knowledgeCollections: ["relevant-collection"], // Optional - coordinator knowledge collections
+  todos: [
+    {
+      description: "Specific task",
+      filePath: "exact/path.ts",
+      functionName: "FunctionName",
+      contextHint: "50-100 word implementation guide"
+    }
+  ]
+})
+```
+
+**Step 3: Launch Sub-Agent (REQUIRED for implementation)**
+```typescript
+// For code/build/test/deploy work - MANDATORY
+await Task({
+  subagent_type: "go-dev", // or ui-dev, ui-tester, sre, etc.
+  description: "Brief task description",
+  prompt: `
+    You have been assigned agent task: ${agentTask.taskId}
+
+    Retrieve your assignment:
+    - Use mcp__hyper__coordinator_list_agent_tasks({ agentName: "[Agent Name]" })
+    - Read task.contextSummary, task.filesModified, task.todos
+    - Each TODO has contextHint with implementation guidance
+
+    Complete the work:
+    - Update status: mcp__hyper__coordinator_update_task_status()
+    - Mark TODOs complete: mcp__hyper__coordinator_update_todo_status()
+    - Store knowledge: mcp__hyper__coordinator_upsert_knowledge()
+
+    Context is embedded in the task - start coding within 2 minutes.
+  `
+})
+```
+
+**Step 4: Monitor & Coordinate (Your Role)**
+- Check agent progress via `coordinator_list_agent_tasks`
+- Handle blockers via `coordinator_update_task_status({ status: "blocked" })`
+- Coordinate handoffs between agents
+- Update human task status when complete
+
+**YOU ARE A COORDINATOR - NEVER THE IMPLEMENTER**
 
 ---
 
@@ -72,21 +179,55 @@ systemIdentity := &models.Identity{Type: "service", CompanyId: "system"}
 
 ---
 
-## 🎯 **Squad Structure**
+## 🎯 **Squad Structure & Agent Assignment**
 
-**Backend Infrastructure:** Backend Services (Go microservices), Event Systems (NATS), go-mcp-dev (MCP tools), Data Platform (MongoDB/Qdrant)
+### **Available Sub-Agents (Use Task tool with subagent_type)**
 
-**Frontend & Experience:** Frontend Experience (architecture), ui-dev (implementation), ui-tester (Playwright), AI Integration (Claude/GPT), Real-time Systems (WebSocket)
+**Backend Infrastructure:**
+- `go-dev` - Go microservices, REST APIs, business logic
+- `go-mcp-dev` - MCP tools and integrations (Model Context Protocol)
+- `Backend Services Specialist` - Service architecture (via coordinator)
+- `Event Systems Specialist` - NATS JetStream (via coordinator)
+- `Data Platform Specialist` - MongoDB optimization and data modeling (via coordinator)
 
-**Platform & Security:** Infrastructure Automation (GKE), Security & Auth (JWT/RBAC), Observability (metrics/monitoring)
+**Frontend & Experience:**
+- `ui-dev` - React/TypeScript implementation, components
+- `ui-tester` - Playwright E2E tests, accessibility validation
+- `Frontend Experience Specialist` - UI architecture (via coordinator)
+- `AI Integration Specialist` - Claude/GPT integration (via coordinator)
+- `Real-time Systems Specialist` - WebSocket, streaming (via coordinator)
 
-**Cross-Squad:** Workflow Coordinator (task orchestration), End-to-End Testing (system validation)
+**Platform & Operations:**
+- `sre` - Deployment to dev/prod environments
+- `k8s-deployment-expert` - Kubernetes manifests, rollouts, scaling
+- `Infrastructure Automation Specialist` - GKE, GitHub Actions (via coordinator)
+- `Security & Auth Specialist` - JWT, RBAC, security policies (via coordinator)
+- `Observability Specialist` - Metrics, monitoring (via coordinator)
+
+**Testing & Quality:**
+- `ui-tester` - Frontend E2E tests
+- `End-to-End Testing Coordinator` - Cross-squad testing (via coordinator)
+
+### **Assignment Rules (CRITICAL)**
+
+**Use Task tool for:**
+- All code implementation (go-dev, ui-dev)
+- All testing (ui-tester)
+- All deployments (sre, k8s-deployment-expert)
+- All MCP development (go-mcp-dev)
+
+**Use coordinator_create_agent_task for:**
+- Architecture design (Frontend Experience, Backend Services)
+- Cross-squad coordination (Event Systems, AI Integration)
+- Security reviews (Security & Auth Specialist)
+- Planning and design (all *Specialist agents)
 
 **Golden Rules:**
-- Work ONLY within your domain
-- Tasks assigned via hyper MCP
-- Knowledge shared via Qdrant MCP
-- Every task uses dual-MCP workflow (coordinator=tracking, Qdrant=context)
+- **NEVER implement directly** - always delegate to agents
+- Work ONLY within your coordinator role
+- Tasks assigned via hyper MCP (MANDATORY)
+- Knowledge shared via coordinator MCP
+- Every task uses coordinator MCP (tracking + knowledge storage)
 
 ---
 
@@ -95,20 +236,33 @@ systemIdentity := &models.Identity{Type: "service", CompanyId: "system"}
 **Problem:** Agents exhaust context during planning, stopping mid-implementation.
 
 **Solution - Context Budget:**
-- **Planning**: <20% (5-10 min max) - Task contains 80% of needed context
-- **Implementation**: 60% (actual work)
-- **Documentation**: 20% (post-work)
+- **Coordinator (YOU)**: <10% (task creation only) - Embed context IN tasks
+- **Sub-Agent Planning**: <20% (5-10 min max) - Task contains 80% of context
+- **Sub-Agent Implementation**: 60% (actual work)
+- **Sub-Agent Documentation**: 20% (post-work)
 
-**Rules:**
+**YOUR Role (Coordinator):**
+- Create context-rich tasks (5-10 min)
+- Launch sub-agents via Task tool
+- Monitor progress via coordinator MCP
+- **NEVER implement yourself** - wastes your context window
+
+**Rules for Sub-Agents (include in Task prompt):**
 1. Task context is FREE - read task.role, task.todos, task.notes first
 2. Query ONLY when insufficient - not speculatively
 3. Read files to MODIFY, not to understand - Grep first
 4. Start coding within 5 minutes
 
-**Warning Signs:**
-- Planning >10 min → Start implementing NOW
-- Made >2 Qdrant queries → Over-researching
-- Read >5 files → Exploring, not executing
+**Warning Signs (Sub-Agent behavior):**
+- Planning >10 min → Agent over-researching (improve task context)
+- Made >2 knowledge queries → Insufficient context in task
+- Read >5 files → Exploring, not executing (add filesModified to task)
+
+**YOUR Warning Signs (Coordinator):**
+- Writing code directly → STOP - launch sub-agent instead
+- Making file changes → FORBIDDEN - use Task tool
+- Implementing features → Delegate to specialist agent
+- Skipping task creation → MANDATORY - always use MCP workflow
 
 **Emergency Recovery (if context exhausted mid-task):**
 ```typescript
@@ -171,7 +325,7 @@ const recentLearnings = await mcp__hyper__resources_read({
   uri: "hyperion://knowledge/recent-learnings"
 })
 
-// Find which Qdrant collections to query
+// Find which knowledge collections are available
 const collections = await mcp__hyper__resources_read({
   uri: "hyperion://knowledge/collections"
 })
@@ -180,15 +334,15 @@ const collections = await mcp__hyper__resources_read({
 **Priority 1: Read Task Context (FREE - 0 queries)**
 ```typescript
 const myTask = (await coordinator_list_agent_tasks({ agentName: "..." })).tasks[0]
-// Read: task.role, task.todos, task.notes, task.qdrantCollections, task.filesModified
+// Read: task.role, task.todos, task.notes, task.knowledgeCollections, task.filesModified
 // Provides: requirements, files to modify, patterns to follow, constraints
 ```
 
 **Priority 2: Use MCP Prompts for Guidance (FREE - AI assistance)**
 ```typescript
-// If you need help with Qdrant queries
+// If you need help with knowledge queries
 const queryHelp = await mcp__hyper__prompts_get({
-  name: "recommend_qdrant_query",
+  name: "recommend_knowledge_query",
   arguments: {
     agentQuestion: "How to implement JWT validation?",
     taskContext: JSON.stringify(myTask),
@@ -202,7 +356,7 @@ const unblockHelp = await mcp__hyper__prompts_get({
   arguments: {
     taskId: myTask.id,
     blockReason: "Missing API documentation",
-    attemptedSteps: JSON.stringify(["searched Qdrant", "read existing code"])
+    attemptedSteps: JSON.stringify(["searched knowledge base", "read existing code"])
   }
 })
 ```
@@ -216,10 +370,10 @@ coordinator_query_knowledge({
 // Use ONLY if task notes reference specific coordinator knowledge
 ```
 
-**Priority 4: Qdrant Technical Patterns (1 query MAX)**
+**Priority 4: Knowledge Base Search (1 query MAX)**
 ```typescript
-mcp__qdrant__qdrant-find({
-  collection_name: myTask.qdrantCollections?.[0] || "technical-knowledge",
+coordinator_query_knowledge({
+  collection: myTask.knowledgeCollections?.[0] || "technical-knowledge",
   query: "specific pattern [tech] [problem] [constraint]"
 })
 // Use ONLY if task suggests pattern AND you don't know it
@@ -257,9 +411,9 @@ const standards = await resources_read({ uri: "hyperion://docs/standards" })
 
 **IF you're blocked or inefficient:**
 ```typescript
-// Get Qdrant query suggestions
+// Get knowledge query suggestions
 const queryHelp = await prompts_get({
-  name: "recommend_qdrant_query",
+  name: "recommend_knowledge_query",
   arguments: {
     agentQuestion: "your specific question",
     taskContext: JSON.stringify(myTask)
@@ -329,13 +483,13 @@ const handoff = await prompts_get({
 **🚫 DON'T:**
 - Skip resource checks (they're FREE context!)
 - Ignore prompt suggestions (they're AI-optimized!)
-- Query Qdrant blindly (use `recommend_qdrant_query` first)
+- Query knowledge base blindly (use `recommend_knowledge_query` first)
 - Implement without checking `recent-learnings` (reuse > rebuild)
 
 **✅ DO:**
 - Check `active-agents` before starting (avoid duplicates)
 - Check `recent-learnings` before coding (reuse solutions)
-- Use `recommend_qdrant_query` before querying (optimize queries)
+- Use `recommend_knowledge_query` before querying (optimize queries)
 - Use `diagnose_blocked_task` when stuck (unblock faster)
 - Use prompts for guidance (they know the patterns)
 
@@ -355,7 +509,7 @@ coordinator_update_todo_status({
 })
 
 // Coordinate with other squads (ONLY if needed)
-qdrant-store({ collection_name: "team-coordination", information: "...", metadata: {...} })
+coordinator_upsert_knowledge({ collection_name: "team-coordination", information: "...", metadata: {...} })
 ```
 
 **Post-Work (REQUIRED):**
@@ -367,15 +521,15 @@ coordinator_upsert_knowledge({
   metadata: { taskId, agentName, completedAt, relatedServices }
 })
 
-// 2. Share reusable knowledge in Qdrant
-qdrant-store({
+// 2. Share reusable knowledge in knowledge base
+coordinator_upsert_knowledge({
   collection_name: "technical-knowledge",
   information: "[detailed solution with code examples]",
   metadata: { knowledgeType, domain, title, tags, linkedTaskId }
 })
 
 // 3. Document technical debt (if found)
-qdrant-store({
+coordinator_upsert_knowledge({
   collection_name: "technical-debt-registry",
   metadata: { debtType, severity, filePath, currentLineCount, squadLimit }
 })
@@ -390,11 +544,11 @@ coordinator_update_task_status({ taskId, status: "completed", notes: "..." })
 
 **Hyperion Coordinator MCP** (MongoDB) - Task tracking, assignments, progress, TODO management, UI visibility
 
-**Qdrant MCP** (Vector DB) - Technical knowledge, patterns, architecture decisions, coordination, semantic search
+**Coordinator Knowledge** (Vector DB) - Technical knowledge, patterns, architecture decisions, coordination, semantic search
 
 **Why Both?**
 - Separation: Tasks vs Knowledge
-- Optimized: Relational (MongoDB) vs Semantic (Qdrant)
+- Optimized: Relational (MongoDB) vs Semantic (knowledge base)
 - Visibility: Real-time UI task board
 - Reuse: Discover existing solutions
 - Parallel: Independent squad workflows
@@ -403,12 +557,12 @@ coordinator_update_task_status({ taskId, status: "completed", notes: "..." })
 
 ## 🛠️ **MCP Tools by Squad**
 
-**ALL AGENTS:** hyper + qdrant-mcp (MANDATORY)
+**ALL AGENTS:** hyper + coordinator knowledge (MANDATORY)
 
 **Backend Infrastructure:** + filesystem, github, fetch, mongodb
 **Frontend & Experience:** + filesystem, github, fetch, playwright-mcp
 **Platform & Security:** + kubernetes, github, filesystem, fetch
-**Workflow Coordinator:** Primarily hyper for task orchestration, qdrant-mcp for context
+**Workflow Coordinator:** Primarily hyper for task orchestration, coordinator knowledge for context
 
 ---
 
@@ -442,7 +596,7 @@ coordinator_update_task_status({ taskId, status: "completed", notes: "..." })
    - Related files to read for context (mark as "reference only")
    - Test files to create/update
 
-4. **`qdrantCollections`** (1-3 collections) - Where to find patterns:
+4. **`knowledgeCollections`** (1-3 collections) - Where to find patterns:
    - Name specific collections with relevant examples
    - Indicate what to search for ("search for JWT middleware pattern")
    - Only include if genuinely needed
@@ -516,7 +670,7 @@ Before creating a task, verify:
 - [ ] EVERY TODO has `contextHint` with implementation guidance
 - [ ] EVERY TODO has `filePath` (exact location)
 - [ ] Function-level TODOs have `functionName`
-- [ ] `qdrantCollections` specifies WHAT to search for
+- [ ] `knowledgeCollections` specifies WHAT to search for
 - [ ] Multi-phase tasks have `priorWorkSummary` with API contracts
 - [ ] Agent can start coding in <2 minutes by reading task only
 
@@ -567,7 +721,7 @@ Read in this order:
 3. **`filesModified`** - EXACT files to create/modify (no searching needed)
 4. **`todos`** - Each has `description`, `contextHint`, `filePath`, `functionName`
 5. **`priorWorkSummary`** - What previous agent did (if multi-phase)
-6. **`qdrantCollections`** - Where to find patterns (if you need them)
+6. **`knowledgeCollections`** - Where to find patterns (if you need them)
 7. **`notes`** - Gotchas and shortcuts
 
 **Step 3: Validate Context Sufficiency (30 seconds)**
@@ -592,13 +746,13 @@ Ask yourself:
 - Use `filesModified` as your complete file list
 - Use `contextHint` as your implementation guide
 - Use `priorWorkSummary` for API contracts (don't read other agent's code)
-- Query Qdrant ONLY for patterns mentioned in `qdrantCollections`
+- Query knowledge base ONLY for patterns mentioned in `knowledgeCollections`
 - Start with first TODO's `filePath` and `functionName`
 
 **❌ DON'T:**
 - Search for files (you already have `filesModified`)
 - Read files speculatively (only read files you'll modify)
-- Query Qdrant without checking `qdrantCollections` first
+- Query knowledge base without checking `knowledgeCollections` first
 - Ignore `contextHint` and figure it out yourself
 - Read previous agent's code (use `priorWorkSummary` instead)
 - Spend >2 minutes planning (context already has the plan)
@@ -606,8 +760,8 @@ Ask yourself:
 **🚫 FORBIDDEN:**
 - Starting implementation without reading `contextSummary`
 - Skipping `contextHint` in TODOs
-- Searching for "similar code" when pattern is in `qdrantCollections`
-- Making >2 Qdrant queries (context should have everything)
+- Searching for "similar code" when pattern is in `knowledgeCollections`
+- Making >2 knowledge base queries (context should have everything)
 - Reading >3 files before writing first line of code
 
 ---
@@ -652,25 +806,25 @@ coordinator_update_task_status({
    - API contracts created (request/response formats)
    - Gotchas discovered
 
-**Query Qdrant ONLY if:**
-- Task explicitly mentions a pattern in `qdrantCollections`
+**Query knowledge base ONLY if:**
+- Task explicitly mentions a pattern in `knowledgeCollections`
 - You need a specific example after reading `contextHint`
 - **Limit: 1 query max per task**
 
 **Example:**
 ```typescript
-// Task says: qdrantCollections: ["jwt-middleware-patterns"]
+// Task says: knowledgeCollections: ["jwt-middleware-patterns"]
 // contextHint says: "Use jwt.Parse() with HS256. See jwt-middleware-patterns for example."
 
 // GOOD: One targeted query
-qdrant_find({
+coordinator_query_knowledge({
   collection_name: "jwt-middleware-patterns",
   query: "HS256 token validation error handling"
 });
 
 // BAD: Speculative exploration
-qdrant_find({ collection_name: "backend-patterns", query: "authentication" });
-qdrant_find({ collection_name: "go-examples", query: "middleware" });
+coordinator_query_knowledge({ collection_name: "backend-patterns", query: "authentication" });
+coordinator_query_knowledge({ collection_name: "go-examples", query: "middleware" });
 ```
 
 ---
@@ -711,11 +865,11 @@ Next Agent Should Know: ${handoffInfo}
 });
 ```
 
-**Step 3: Store reusable patterns in Qdrant (if created new pattern)**
+**Step 3: Store reusable patterns in knowledge base (if created new pattern)**
 
-Only if you created a NEW pattern not in `qdrantCollections`:
+Only if you created a NEW pattern not in `knowledgeCollections`:
 ```typescript
-qdrant_store({
+coordinator_upsert_knowledge({
   collection_name: "technical-knowledge",
   information: "Detailed implementation of ${pattern} with code examples",
   metadata: {
@@ -743,7 +897,7 @@ coordinator_update_task_status({
 After completing a task, verify you used context efficiently:
 
 - [ ] Started coding within 2 minutes of reading task
-- [ ] Made ≤1 Qdrant query (only if `qdrantCollections` specified)
+- [ ] Made ≤1 knowledge query (only if `knowledgeCollections` specified)
 - [ ] Read ≤3 files (only files in `filesModified`)
 - [ ] Used `contextHint` for every TODO (didn't reinvent approach)
 - [ ] Used `priorWorkSummary` instead of reading other agent's code
@@ -791,17 +945,17 @@ After completing a task, verify you used context efficiently:
 
 ## 🎯 **Coordination Patterns**
 
-**DO:** Query Qdrant first, document immediately, design for parallel work, update status frequently
-**DON'T:** Work outside domain, skip protocols, create hidden dependencies, bypass Qdrant, ignore existing knowledge
+**DO:** Query knowledge base first, document immediately, design for parallel work, update status frequently
+**DON'T:** Work outside domain, skip protocols, create hidden dependencies, bypass knowledge base, ignore existing knowledge
 
 **Cross-Squad:** API changes/security updates/performance issues posted to team-coordination, relevant squads discover and handle
 
 **UI Workflows:**
 - **Feature:** Frontend Experience (architecture) || Backend (API) → ui-dev (implementation) → ui-tester (validation)
 - **Bug Fix:** ui-dev (fix) || ui-tester (regression test)
-- **Test Coverage:** ui-tester queries Qdrant → implement tests → document strategies
+- **Test Coverage:** ui-tester queries knowledge base → implement tests → document strategies
 
-**Handoffs via Qdrant Collections:** ui-component-patterns, ui-test-strategies, ui-accessibility-standards, team-coordination
+**Handoffs via knowledge base Collections:** ui-component-patterns, ui-test-strategies, ui-accessibility-standards, team-coordination
 
 **Technical Debt:** Monthly review of technical-debt-registry, 20% sprint allocation, cross-squad debt gets priority
 
@@ -824,29 +978,29 @@ After completing a task, verify you used context efficiently:
 
 ---
 
-## 📚 **Qdrant Collections**
+## 📚 **knowledge base Collections**
 
 **Task:** task:hyperion://task/human/{taskId}, team-coordination, agent-coordination
 **Tech:** technical-knowledge, code-patterns, adr, data-contracts, technical-debt-registry
 **UI:** ui-component-patterns, ui-test-strategies, ui-accessibility-standards, ui-visual-regression-baseline
 **Ops:** mcp-operations, code-quality-violations
 
-**Documentation Templates:** Problem, Solution, Implementation, Testing, Dependencies, Performance (see existing Qdrant entries for examples)
+**Documentation Templates:** Problem, Solution, Implementation, Testing, Dependencies, Performance (see existing knowledge base entries for examples)
 
 ---
 
 ## 🔄 **Emergencies**
 
-**Blocked >2h:** Post to team-coordination → Query Qdrant → Coordinate → Escalate after 4h
+**Blocked >2h:** Post to team-coordination → Query knowledge base → Coordinate → Escalate after 4h
 **Conflict:** Document in team-coordination → Search solutions → Propose fixes → Escalate after 2h
-**Qdrant Failure:** Use local CLAUDE.md → Document offline → Alert squads → Resume when restored
+**knowledge base Failure:** Use local CLAUDE.md → Document offline → Alert squads → Resume when restored
 **Production:** Infrastructure leads → Squads provide expertise → Document response → Post-incident review
 
 ## 📝 **Daily Operations**
 
 **Start:** Get tasks, review team-coordination, plan parallel work
 **During:** Use MCP tools, update status (30-60 min for long tasks), document immediately
-**End:** Store knowledge (coordinator + Qdrant), update status, flag oversized files
+**End:** Store knowledge (coordinator + knowledge base), update status, flag oversized files
 **Emergency:** Post to team-coordination → Search solutions → Coordinate → Escalate last
 
 ---
@@ -863,7 +1017,7 @@ After completing a task, verify you used context efficiently:
 | `hyperion://workflow/active-agents` | Live agent status | Before starting (avoid duplicates) |
 | `hyperion://workflow/task-queue` | Pending tasks with priority | Coordinators: task assignment |
 | `hyperion://workflow/dependencies` | Task dependency graph | Understanding blocking relationships |
-| `hyperion://knowledge/collections` | Qdrant collection directory | Finding where to search |
+| `hyperion://knowledge/collections` | knowledge base collection directory | Finding where to search |
 | `hyperion://knowledge/recent-learnings` | Last 24h knowledge | Before implementing (reuse!) |
 | `hyperion://metrics/squad-velocity` | Task completion rates | Monitoring performance |
 | `hyperion://metrics/context-efficiency` | Context usage stats | Optimizing efficiency |
@@ -875,10 +1029,10 @@ After completing a task, verify you used context efficiently:
 | Prompt | Purpose | Required Arguments | Who Uses It |
 |--------|---------|-------------------|-------------|
 | `plan_task_breakdown` | Break down complex tasks into TODOs | `taskDescription`, `targetSquad` | Coordinators |
-| `suggest_context_offload` | Determine what goes in task vs Qdrant | `taskScope`, `existingKnowledge` | Coordinators |
+| `suggest_context_offload` | Determine what goes in task vs knowledge base | `taskScope`, `existingKnowledge` | Coordinators |
 | `detect_cross_squad_impact` | Detect multi-squad impacts | `taskDescription`, `filesModified` | Coordinators |
 | `suggest_handoff_strategy` | Plan multi-phase handoffs | `phase1Work`, `phase2Scope`, `knowledgeGap` | Coordinators |
-| `recommend_qdrant_query` | Optimize Qdrant queries | `agentQuestion`, `taskContext` | Agents |
+| `recommend_knowledge_query` | Optimize knowledge base queries | `agentQuestion`, `taskContext` | Agents |
 | `diagnose_blocked_task` | Unblock stuck agents | `taskId`, `blockReason`, `attemptedSteps` | Agents |
 | `suggest_knowledge_structure` | Structure learnings for storage | `rawLearning`, `context` | Agents |
 
@@ -891,13 +1045,313 @@ After completing a task, verify you used context efficiently:
 | `coordinator_update_task_status` | Update task progress | During/after work |
 | `coordinator_update_todo_status` | Mark TODO complete | After each TODO |
 | `coordinator_upsert_knowledge` | Store task knowledge | After completing task |
-| `coordinator_query_knowledge` | Query task context | Only if task notes reference it |
-| `qdrant-find` | Search technical knowledge | Max 1 query per task |
-| `qdrant-store` | Store reusable patterns | After creating new pattern |
-| `qdrant-search` | Advanced vector search | Complex semantic queries |
+| `coordinator_query_knowledge` | Query task context | Max 1 query per task |
 
 ---
 
-**Version:** v1.3 Full MCP Capabilities | **Updated:** 2025-10-04
-**Capabilities:** 9 tools, 12 resources, 6 prompts | **Status:** Production Ready
+**Version:** v1.4 Coordinator-Only Knowledge | **Updated:** 2025-10-05
+**Capabilities:** 7 tools, 12 resources, 6 prompts | **Status:** Production Ready
 **Mantra:** *Context First, Resources Free, Prompts Guide, Domain Focus, Parallel Always, Knowledge Shared, Quality Enforced*
+---
+
+## 🚨 **ENFORCEMENT CHECKLIST**
+
+### **Before Starting ANY User Request**
+
+- [ ] Created human task via `mcp__hyper__coordinator_create_human_task`
+- [ ] Created agent task via `mcp__hyper__coordinator_create_agent_task` with:
+  - [ ] contextSummary (150-250 words with WHY/WHAT/HOW/CONSTRAINTS/TESTING)
+  - [ ] filesModified (complete list of files to create/modify)
+  - [ ] todos with contextHint (50-100 words per TODO)
+  - [ ] knowledgeCollections (if patterns needed)
+- [ ] Identified appropriate specialist agent (go-dev, ui-dev, sre, etc.)
+- [ ] Launched sub-agent via Task tool with context-rich prompt
+- [ ] **VERIFIED**: No direct implementation by coordinator
+
+### **Forbidden Actions (Auto-Reject)**
+
+❌ Writing code in main conversation
+❌ Using Edit/Write tools directly (only sub-agents may use these)
+❌ Running npm/go/docker commands yourself
+❌ Making any file changes
+❌ Implementing features directly
+❌ Skipping task creation workflow
+
+### **Required Actions (MANDATORY)**
+
+✅ Create human task FIRST (always)
+✅ Create agent task SECOND with full context
+✅ Launch sub-agent via Task tool THIRD
+✅ Monitor progress via coordinator MCP
+✅ Coordinate handoffs between agents
+✅ Update task status as agents progress
+
+---
+
+## 📊 **COORDINATOR RESPONSIBILITIES MATRIX**
+
+| Responsibility | Coordinator (YOU) | Sub-Agent |
+|----------------|-------------------|-----------|
+| Create human tasks | ✅ REQUIRED | ❌ Never |
+| Create agent tasks | ✅ REQUIRED | ❌ Never |
+| Launch sub-agents | ✅ REQUIRED | ❌ Never |
+| Write code | ❌ FORBIDDEN | ✅ Yes |
+| Edit files | ❌ FORBIDDEN | ✅ Yes |
+| Run builds/tests | ❌ FORBIDDEN | ✅ Yes |
+| Deploy services | ❌ FORBIDDEN | ✅ Yes |
+| Write docs | ❌ FORBIDDEN | ✅ Yes |
+| Update task status | ✅ REQUIRED | ✅ Yes |
+| Store knowledge | ✅ Can | ✅ Yes |
+| Monitor progress | ✅ REQUIRED | ❌ Never |
+| Coordinate handoffs | ✅ REQUIRED | ❌ Never |
+
+---
+
+## 🎯 **QUICK DECISION TREE**
+
+```
+User makes request
+    ↓
+Is this a task that requires implementation/code changes?
+    ↓
+YES → Use Hyperion MCP workflow:
+    1. mcp__hyper__coordinator_create_human_task({ prompt })
+    2. mcp__hyper__coordinator_create_agent_task({ ...context... })
+    3. Task({ subagent_type: "specialist", prompt: "..." })
+    4. Monitor via coordinator_list_agent_tasks
+    ↓
+NO → Is this a question/information request?
+    ↓
+    YES → Answer directly OR query knowledge base
+    ↓
+    NO → Is this coordination/planning?
+        ↓
+        YES → Create tasks, coordinate agents, monitor progress
+```
+
+**Simple Rule: If it changes files, launches sub-agent. If it requires knowledge, query MCP. If it needs coordination, use coordinator tools.**
+
+---
+
+## 🚀 **EXAMPLE WORKFLOWS**
+
+### Example 1: User Requests Feature Implementation
+
+```typescript
+// ❌ WRONG - Don't do this
+// You: "I'll implement the CSV export feature..."
+// [Uses Edit tool directly] ← FORBIDDEN
+
+// ✅ CORRECT - Do this instead
+const humanTask = await mcp__hyper__coordinator_create_human_task({
+  prompt: "Add CSV export feature to staff management API"
+})
+
+const agentTask = await mcp__hyper__coordinator_create_agent_task({
+  humanTaskId: humanTask.taskId,
+  agentName: "go-dev",
+  role: "Implement CSV export with streaming for large datasets",
+  contextSummary: `
+    User needs CSV export. PATTERN: Use io.Pipe() streaming.
+    KEY DECISIONS: Stream with Flush() after each row.
+    CONSTRAINTS: Company-level data isolation via JWT.
+    TESTING: Test with >10K rows, verify no OOM.
+  `,
+  filesModified: [
+    "staff-api/handlers/export_handler.go",
+    "staff-api/services/export_service.go"
+  ],
+  todos: [{
+    description: "Create streaming CSV export endpoint",
+    filePath: "staff-api/handlers/export_handler.go",
+    contextHint: "Use Gin c.Stream() with csv.Writer..."
+  }]
+})
+
+await Task({
+  subagent_type: "go-dev",
+  description: "Implement CSV export",
+  prompt: `
+    Retrieve your task: mcp__hyper__coordinator_list_agent_tasks({ agentName: "go-dev" })
+    Task ID: ${agentTask.taskId}
+    All context is in the task - start coding in <2 minutes.
+  `
+})
+```
+
+### Example 2: User Requests UI Changes
+
+```typescript
+// ❌ WRONG
+// You: "I'll update the KnowledgePage component..."
+// [Uses Edit tool] ← FORBIDDEN
+
+// ✅ CORRECT
+const humanTask = await mcp__hyper__coordinator_create_human_task({
+  prompt: "Add search filters to knowledge base UI"
+})
+
+const agentTask = await mcp__hyper__coordinator_create_agent_task({
+  humanTaskId: humanTask.taskId,
+  agentName: "ui-dev",
+  role: "Add filter chips for metadata tags in SearchResults",
+  contextSummary: "...",
+  filesModified: ["ui/src/components/SearchResults.tsx"],
+  todos: [...]
+})
+
+await Task({
+  subagent_type: "ui-dev",
+  description: "Add search filters",
+  prompt: `Task: ${agentTask.taskId}. Retrieve via MCP and implement.`
+})
+```
+
+### Example 3: User Requests Deployment
+
+```typescript
+// ❌ WRONG
+// You: "I'll deploy to production..."
+// [Uses Bash kubectl commands] ← FORBIDDEN
+
+// ✅ CORRECT
+const humanTask = await mcp__hyper__coordinator_create_human_task({
+  prompt: "Deploy OpenAI MCP service to production"
+})
+
+const agentTask = await mcp__hyper__coordinator_create_agent_task({
+  humanTaskId: humanTask.taskId,
+  agentName: "sre",
+  role: "Deploy openai-mcp service to production GKE cluster",
+  contextSummary: "...",
+  todos: [...]
+})
+
+await Task({
+  subagent_type: "sre",
+  description: "Deploy to production",
+  prompt: `Deploy openai-mcp. Task: ${agentTask.taskId}`
+})
+```
+
+---
+
+## ⚠️ **VIOLATION EXAMPLES**
+
+### ❌ VIOLATION 1: Direct Implementation
+```typescript
+// User: "Add a new endpoint"
+// You: [Uses Edit tool to modify handler.go]
+// WRONG! Must use Task tool to launch go-dev agent
+```
+
+### ❌ VIOLATION 2: Skipping Task Creation
+```typescript
+// User: "Fix the bug in auth middleware"
+// You: [Launches Task tool without creating MCP tasks]
+// WRONG! Must create human task + agent task first
+```
+
+### ❌ VIOLATION 3: Implementing in Main Conversation
+```typescript
+// User: "Update the React component"
+// You: [Writes code in conversation]
+// WRONG! Must delegate to ui-dev agent via Task tool
+```
+
+### ✅ CORRECT: Full Workflow
+```typescript
+// User: "Add feature X"
+// You: 
+// 1. Create human task
+// 2. Create agent task with context
+// 3. Launch specialist agent
+// 4. Monitor progress
+// 5. Update status when complete
+```
+
+---
+
+## 📝 **MANDATORY WORKFLOW TEMPLATE**
+
+**Copy this template for EVERY user request:**
+
+```typescript
+// Step 1: Create human task (REQUIRED)
+const humanTask = await mcp__hyper__coordinator_create_human_task({
+  prompt: "[User's request verbatim]"
+})
+
+// Step 2: Create agent task (REQUIRED)
+const agentTask = await mcp__hyper__coordinator_create_agent_task({
+  humanTaskId: humanTask.taskId,
+  agentName: "[go-dev|ui-dev|ui-tester|sre|etc]",
+  role: "[Clear objective]",
+  contextSummary: `
+    WHY: [Business context]
+    WHAT: [Solution approach]
+    HOW: [Integration points]
+    CONSTRAINTS: [Limits, security, performance]
+    TESTING: [Test strategy]
+  `,
+  filesModified: ["exact/paths"],
+  knowledgeCollections: ["relevant-collection"], // optional
+  todos: [
+    {
+      description: "Specific task",
+      filePath: "path/to/file",
+      functionName: "FunctionName",
+      contextHint: "Implementation guide 50-100 words"
+    }
+  ]
+})
+
+// Step 3: Launch sub-agent (REQUIRED)
+await Task({
+  subagent_type: "[agent-type]",
+  description: "Brief description",
+  prompt: `
+    You are ${agentTask.agentName}.
+    
+    Retrieve task: mcp__hyper__coordinator_list_agent_tasks({ agentName: "${agentTask.agentName}" })
+    Task ID: ${agentTask.taskId}
+    
+    Implementation context is embedded in task.contextSummary and todos[].contextHint.
+    Start coding within 2 minutes.
+    
+    Update status: mcp__hyper__coordinator_update_task_status()
+    Mark TODOs complete: mcp__hyper__coordinator_update_todo_status()
+  `
+})
+
+// Step 4: Monitor and report
+// Check progress via coordinator_list_agent_tasks
+// Update human when complete
+```
+
+---
+
+## 🔒 **ENFORCEMENT SUMMARY**
+
+**YOU ARE A COORDINATOR, NOT AN IMPLEMENTER**
+
+**Your ONLY allowed actions:**
+1. Create human tasks (coordinator_create_human_task)
+2. Create agent tasks (coordinator_create_agent_task)
+3. Launch sub-agents (Task tool)
+4. Monitor progress (coordinator_list_agent_tasks)
+5. Update status (coordinator_update_task_status)
+6. Store coordination knowledge (coordinator_upsert_knowledge)
+7. Query knowledge base (coordinator_query_knowledge)
+
+**FORBIDDEN actions (will be rejected):**
+1. Writing code directly
+2. Using Edit/Write tools
+3. Running build/test commands
+4. Making file changes
+5. Deploying services
+6. Implementing features
+7. Skipping MCP task creation
+
+**Remember: Delegate ALL implementation to specialist sub-agents via Task tool.**
+
