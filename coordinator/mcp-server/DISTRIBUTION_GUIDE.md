@@ -42,10 +42,10 @@ cd coordinator/mcp-server
 
 # Test local installation
 npm pack
-npm install -g ./hyperion-coordinator-mcp-1.0.0.tgz
+npm install -g ./hyper-mcp-1.0.0.tgz
 
 # Verify it works
-hyperion-coordinator-mcp --version
+hyper-mcp --version
 
 # Test in Claude Code
 # (restart Claude Code and test MCP tools)
@@ -103,13 +103,13 @@ For users who prefer not to use npm.
 
 ```bash
 # Give users this one command
-curl -fsSL https://raw.githubusercontent.com/yourorg/hyperion-coordinator-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/yourorg/hyper-mcp/main/install.sh | bash
 ```
 
 Or download and run:
 
 ```bash
-wget https://raw.githubusercontent.com/yourorg/hyperion-coordinator-mcp/main/install.sh
+wget https://raw.githubusercontent.com/yourorg/hyper-mcp/main/install.sh
 chmod +x install.sh
 ./install.sh
 ```
@@ -160,7 +160,7 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
         run: |
-          go build -o hyperion-coordinator-mcp-${{ matrix.os }}-${{ matrix.arch }} main.go
+          go build -o hyper-mcp-${{ matrix.os }}-${{ matrix.arch }} main.go
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
@@ -168,8 +168,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hyperion-coordinator-mcp-${{ matrix.os }}-${{ matrix.arch }}
-          asset_name: hyperion-coordinator-mcp-${{ matrix.os }}-${{ matrix.arch }}
+          asset_path: ./hyper-mcp-${{ matrix.os }}-${{ matrix.arch }}
+          asset_name: hyper-mcp-${{ matrix.os }}-${{ matrix.arch }}
           asset_content_type: application/octet-stream
 ```
 
@@ -177,9 +177,9 @@ jobs:
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/yourorg/hyperion-coordinator-mcp/releases/latest/download/hyperion-coordinator-mcp-darwin-arm64 -o hyperion-coordinator-mcp
-chmod +x hyperion-coordinator-mcp
-sudo mv hyperion-coordinator-mcp /usr/local/bin/
+curl -L https://github.com/yourorg/hyper-mcp/releases/latest/download/hyper-mcp-darwin-arm64 -o hyper-mcp
+chmod +x hyper-mcp
+sudo mv hyper-mcp /usr/local/bin/
 ```
 
 ---
@@ -207,7 +207,7 @@ docker push ghcr.io/yourorg/coordinator-mcp:latest
 
 ```bash
 docker run -d \
-  --name hyperion-coordinator-mcp \
+  --name hyper-mcp \
   -e MONGODB_URI="your_uri" \
   ghcr.io/yourorg/coordinator-mcp:latest
 ```

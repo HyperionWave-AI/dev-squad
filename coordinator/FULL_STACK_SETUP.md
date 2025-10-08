@@ -14,7 +14,7 @@ Complete guide to running the Hyperion Coordinator with MongoDB backend, MCP ser
            │ HTTP
            ↓
 ┌─────────────────────┐
-│  HTTP Bridge        │  Port 8095
+│  HTTP Bridge        │  Port 7095
 │  (Go Server)        │
 └──────────┬──────────┘
            │ stdio
@@ -46,12 +46,12 @@ Complete guide to running the Hyperion Coordinator with MongoDB backend, MCP ser
 ```bash
 cd development/coordinator/mcp-server
 go mod download
-go build -o hyperion-coordinator-mcp
+go build -o hyper-mcp
 ```
 
 **Test the MCP server:**
 ```bash
-./hyperion-coordinator-mcp
+./hyper-mcp
 # Should output initialization logs and wait for stdin
 # Press Ctrl+C to exit
 ```
@@ -63,7 +63,7 @@ go build -o hyperion-coordinator-mcp
 ```bash
 cd ../mcp-http-bridge
 go mod download
-go build -o hyperion-coordinator-bridge
+go build -o hyper-bridge
 ```
 
 ---
@@ -85,15 +85,15 @@ The HTTP bridge will automatically start the MCP server as a child process:
 
 ```bash
 cd development/coordinator/mcp-http-bridge
-./hyperion-coordinator-bridge
+./hyper-bridge
 ```
 
 **Expected output:**
 ```
 MCP server started with PID: 12345
 MCP connection initialized successfully
-HTTP bridge listening on port 8095
-MCP server path: ../mcp-server/hyperion-coordinator-mcp
+HTTP bridge listening on port 7095
+MCP server path: ../mcp-server/hyper-mcp
 Frontend CORS enabled for: http://localhost:5173, http://localhost:3000
 ```
 
@@ -132,7 +132,7 @@ You should see the Coordinator UI with:
 You can test the MCP server directly using the HTTP bridge:
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-1" \
   -d '{
@@ -162,7 +162,7 @@ Refresh the UI at http://localhost:5173 - you should see the new task appear in 
 ### 3. Create an Agent Task
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-2" \
   -d '{
@@ -184,7 +184,7 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
 ### 4. Update Task Status
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-3" \
   -d '{
@@ -212,10 +212,10 @@ You can also check the data directly in MongoDB Atlas:
 ### HTTP Bridge (Optional)
 
 ```bash
-# Override MCP server path (default: ../mcp-server/hyperion-coordinator-mcp)
-export MCP_SERVER_PATH="/path/to/hyperion-coordinator-mcp"
+# Override MCP server path (default: ../mcp-server/hyper-mcp)
+export MCP_SERVER_PATH="/path/to/hyper-mcp"
 
-# Override port (default: 8095)
+# Override port (default: 7095)
 export PORT=9000
 ```
 
@@ -234,7 +234,7 @@ export MONGODB_DATABASE="my_custom_db"
 Create `.env.local` in `development/coordinator/ui/`:
 
 ```bash
-# Override bridge URL (default: http://localhost:8095)
+# Override bridge URL (default: http://localhost:7095)
 VITE_MCP_BRIDGE_URL=http://localhost:9000
 ```
 
@@ -260,7 +260,7 @@ VITE_MCP_BRIDGE_URL=http://localhost:9000
 **Solution:** Build the MCP server first:
 ```bash
 cd development/coordinator/mcp-server
-go build -o hyperion-coordinator-mcp
+go build -o hyper-mcp
 ```
 
 **Error:** `failed to initialize MCP connection`
@@ -274,7 +274,7 @@ go build -o hyperion-coordinator-mcp
 **Error:** `Failed to connect to MCP HTTP bridge`
 
 **Solution:**
-1. Verify the bridge is running: `curl http://localhost:8095/health`
+1. Verify the bridge is running: `curl http://localhost:7095/health`
 2. Check browser console for CORS errors
 3. Ensure the bridge URL matches in UI env vars
 
@@ -282,7 +282,7 @@ go build -o hyperion-coordinator-mcp
 ```json
 {
   "status": "healthy",
-  "service": "hyperion-coordinator-http-bridge",
+  "service": "hyper-http-bridge",
   "version": "1.0.0"
 }
 ```
@@ -301,7 +301,7 @@ go build -o hyperion-coordinator-mcp
 # Check bridge logs (Terminal 1)
 # Check UI console (Browser DevTools)
 # List all resources via bridge
-curl http://localhost:8095/api/mcp/resources
+curl http://localhost:7095/api/mcp/resources
 ```
 
 ---
@@ -317,15 +317,15 @@ For Go code changes, you need to restart the services:
 **MCP Server changes:**
 ```bash
 cd development/coordinator/mcp-server
-go build -o hyperion-coordinator-mcp
+go build -o hyper-mcp
 # Then restart HTTP bridge (which will restart MCP server)
 ```
 
 **HTTP Bridge changes:**
 ```bash
 cd development/coordinator/mcp-http-bridge
-go build -o hyperion-coordinator-bridge
-./hyperion-coordinator-bridge
+go build -o hyper-bridge
+./hyper-bridge
 ```
 
 ---
@@ -337,11 +337,11 @@ go build -o hyperion-coordinator-bridge
 ```bash
 # MCP Server
 cd development/coordinator/mcp-server
-go build -o hyperion-coordinator-mcp
+go build -o hyper-mcp
 
 # HTTP Bridge
 cd ../mcp-http-bridge
-go build -o hyperion-coordinator-bridge
+go build -o hyper-bridge
 
 # UI
 cd ../ui
@@ -383,7 +383,7 @@ Health check endpoint.
 ```json
 {
   "status": "healthy",
-  "service": "hyperion-coordinator-http-bridge",
+  "service": "hyper-http-bridge",
   "version": "1.0.0"
 }
 ```

@@ -11,7 +11,7 @@ echo ""
 
 # Get absolute path to the binary
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-BINARY_PATH="$SCRIPT_DIR/hyperion-coordinator-mcp"
+BINARY_PATH="$SCRIPT_DIR/hyper-mcp"
 
 # Check if binary exists
 if [ ! -f "$BINARY_PATH" ]; then
@@ -19,7 +19,7 @@ if [ ! -f "$BINARY_PATH" ]; then
     echo ""
     echo "Building the binary first..."
     cd "$SCRIPT_DIR"
-    go build -o hyperion-coordinator-mcp || {
+    go build -o hyper-mcp || {
         echo "❌ Build failed"
         exit 1
     }
@@ -34,12 +34,12 @@ echo ""
 echo "Adding to Claude Code MCP configuration..."
 echo ""
 
-claude mcp add hyperion-coordinator "$BINARY_PATH" || {
+claude mcp add hyper "$BINARY_PATH" || {
     echo ""
     echo "❌ Failed to add MCP server to Claude Code"
     echo ""
     echo "Manual setup:"
-    echo "1. Run: claude mcp add hyperion-coordinator \"$BINARY_PATH\""
+    echo "1. Run: claude mcp add hyper \"$BINARY_PATH\""
     echo "2. Or edit your Claude Code config manually"
     exit 1
 }

@@ -1,7 +1,37 @@
 version: '3.8'
 
-# 3 Containers
+# 6 Containers: MCP Server, HTTP Bridge, UI, MongoDB, Qdrant, (optional: Mongo Express)
 services:
+  # MCP Server (HTTP mode for Claude CLI)
+  hyperion-mcp-server:
+    build:
+      context: ./coordinator/mcp-server
+      dockerfile: Dockerfile
+    container_name: hyperion-mcp-server
+    ports:
+      - "7778:7778"
+    environment:
+      - TRANSPORT_MODE=http
+      - MCP_PORT=7778
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:7778/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # HTTP Bridge (connects MCP server to UI via HTTP)
   hyperion-http-bridge:
     build:
@@ -9,18 +39,24 @@ services:
       dockerfile: mcp-http-bridge/Dockerfile.combined
     container_name: hyperion-http-bridge
     ports:
-      - "8095:8095"
+      - "7095:7095"
     environment:
-      - MCP_SERVER_PATH=/app/hyperion-coordinator-mcp
-      - PORT=8095
-      - MONGODB_URI=${MONGODB_URI:-mongodb+srv://dev:fvOKzv9enD8CSVwD@devdb.yqf8f8r.mongodb.net/?retryWrites=true&w=majority&appName=devDB}
+      - MCP_SERVER_PATH=/app/hyper-mcp
+      - PORT=7095
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      mongodb:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - hyperion-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8095/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:7095/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -32,7 +68,7 @@ services:
       context: ./coordinator/ui
       dockerfile: Dockerfile
       args:
-        - VITE_MCP_BRIDGE_URL=http://localhost:8095
+        - VITE_MCP_BRIDGE_URL=http://localhost:7095
     container_name: hyperion-ui
     ports:
       - "5173:80"
@@ -47,6 +83,58 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: hyperion-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin123
+      - MONGO_INITDB_DATABASE=coordinator_db
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Qdrant Vector Database (Optional - only for local development)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: hyperion-qdrant
+    profiles:
+      - local-qdrant  # Only starts with --profile local-qdrant
+    ports:
+      - "6333:6333"  # HTTP API
+      - "6334:6334"  # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  qdrant_data:
+    driver: local
 
 networks:
   hyperion-network:
