@@ -190,10 +190,10 @@ MONGODB_DATABASE=coordinator_db
 LOG_LEVEL=debug
 
 # HTTP Bridge
-PORT=8095
+PORT=7095
 
 # React UI
-VITE_MCP_BRIDGE_URL=http://localhost:8095
+VITE_MCP_BRIDGE_URL=http://localhost:7095
 ```
 
 ## Performance Optimizations
@@ -323,7 +323,7 @@ make dev-up
 
 # Test all three services
 curl http://localhost:7778/health    # MCP Server
-curl http://localhost:8095/health    # HTTP Bridge
+curl http://localhost:7095/health    # HTTP Bridge
 open http://localhost:5173           # React UI
 
 # Make changes and test hot-reload
