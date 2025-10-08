@@ -177,7 +177,7 @@ Testing MCP server crash recovery requires advanced subprocess control. Test doc
    - Test health check endpoint
 
 2. **Add integration tests with real MCP server**
-   - Use coordinator/mcp-server/hyperion-coordinator-mcp
+   - Use coordinator/mcp-server/hyper-mcp
    - Test against real MongoDB
    - Validate end-to-end flows
 
