@@ -22,7 +22,7 @@ The npm package is fully functional in Claude Code. All 9 MCP coordinator tools 
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_list_human_tasks({})
+mcp__hyper__coordinator_list_human_tasks({})
 ```
 
 **Result:** ✅ **PASSED**
@@ -38,7 +38,7 @@ mcp__hyperion-coordinator__coordinator_list_human_tasks({})
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_list_agent_tasks({})
+mcp__hyper__coordinator_list_agent_tasks({})
 ```
 
 **Result:** ✅ **PASSED**
@@ -55,7 +55,7 @@ mcp__hyperion-coordinator__coordinator_list_agent_tasks({})
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_create_human_task({
+mcp__hyper__coordinator_create_human_task({
   prompt: "Test task to verify npm package MCP tools work correctly"
 })
 ```
@@ -76,7 +76,7 @@ Status: pending
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_create_agent_task({
+mcp__hyper__coordinator_create_agent_task({
   humanTaskId: "f96d6e75-7dc5-4da4-b440-1454eb2d275a",
   agentName: "Test Agent",
   role: "Verify all MCP coordinator tools work after npm installation",
@@ -113,7 +113,7 @@ TODOs: 5 items created with UUIDs
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_todo_status({
+mcp__hyper__coordinator_update_todo_status({
   agentTaskId: "a0ec2267-8881-4acc-b5aa-c6611924545a",
   todoId: "4d86a684-ba0e-4e0f-9192-f709b5f5ddf7",
   status: "completed",
@@ -142,7 +142,7 @@ New Status: completed
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_update_task_status({
+mcp__hyper__coordinator_update_task_status({
   taskId: "a0ec2267-8881-4acc-b5aa-c6611924545a",
   status: "completed",
   notes: "All 5 MCP coordinator tools tested successfully via npm package installation"
@@ -164,7 +164,7 @@ New Status: completed
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_upsert_knowledge({
+mcp__hyper__coordinator_upsert_knowledge({
   collection: "npm-package-testing",
   text: "Successfully tested npm package installation for @hyperion/coordinator-mcp...",
   metadata: {
@@ -194,7 +194,7 @@ Created: 2025-10-01 11:27:17 UTC
 
 **Test:**
 ```typescript
-mcp__hyperion-coordinator__coordinator_query_knowledge({
+mcp__hyper__coordinator_query_knowledge({
   collection: "npm-package-testing",
   query: "npm package installation test results",
   limit: 3
@@ -400,7 +400,7 @@ To clean up test data:
 
 ```typescript
 // Optional: Remove test task (or leave for reference)
-mcp__hyperion-coordinator__coordinator_clear_task_board({ confirm: true })
+mcp__hyper__coordinator_clear_task_board({ confirm: true })
 ```
 
 ---

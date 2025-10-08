@@ -161,7 +161,7 @@ go mod download
 
 3. Build the server:
 ```bash
-go build -o hyperion-coordinator-mcp
+go build -o hyper-mcp
 ```
 
 ### Configuration
@@ -183,7 +183,7 @@ export MONGODB_DATABASE="coordinator_db"
 The server uses stdio transport for MCP communication:
 
 ```bash
-./hyperion-coordinator-mcp
+./hyper-mcp
 ```
 
 On startup, you'll see:
@@ -216,8 +216,8 @@ Add to your MCP client configuration (e.g., Claude Desktop):
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
-      "command": "/Users/maxmednikov/MaxSpace/Hyperion/development/coordinator/mcp-server/hyperion-coordinator-mcp"
+    "hyper": {
+      "command": "/Users/maxmednikov/MaxSpace/Hyperion/development/coordinator/mcp-server/hyper-mcp"
     }
   }
 }
@@ -350,7 +350,7 @@ Test the server using an MCP client or by sending JSON-RPC requests via stdio:
 
 ```bash
 # Example JSON-RPC request (via stdin)
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./hyperion-coordinator-mcp
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./hyper-mcp
 ```
 
 ## Limitations

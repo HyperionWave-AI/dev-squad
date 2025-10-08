@@ -6,8 +6,8 @@
 
 The Docker deployment uses a **combined container approach**:
 - **Container name:** `hyperion-http-bridge`
-- **Contains:** Both the HTTP Bridge (port 8095) and the MCP Server binary (`/app/hyperion-coordinator-mcp`)
-- **MCP Clients:** Connect via `docker exec -i hyperion-http-bridge /app/hyperion-coordinator-mcp`
+- **Contains:** Both the HTTP Bridge (port 7095) and the MCP Server binary (`/app/hyper-mcp`)
+- **MCP Clients:** Connect via `docker exec -i hyperion-http-bridge /app/hyper-mcp`
 
 This single container serves both HTTP requests (for the UI) and stdio MCP connections (for Claude Code and other MCP clients).
 
@@ -18,7 +18,7 @@ This single container serves both HTTP requests (for the UI) and stdio MCP conne
 ```bash
 # 1. Clone the repository
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 
 # 2. Run the installation script
 ./install.sh
@@ -28,14 +28,14 @@ docker-compose up -d
 
 # 4. Access services
 # - UI Dashboard: http://localhost:5173
-# - HTTP API: http://localhost:8095/health
+# - HTTP API: http://localhost:7095/health
 
 # 5. View logs
 docker-compose logs -f
 ```
 
 That's it! All services are now running:
-- **HTTP Bridge + MCP Server** (port 8095) - API backend
+- **HTTP Bridge + MCP Server** (port 7095) - API backend
 - **React UI** (port 5173) - Kanban dashboard
 
 ---
@@ -60,7 +60,7 @@ That's it! All services are now running:
 
 ```bash
 git clone <repository-url>
-cd hyperion-coordinator-mcp
+cd hyper-mcp
 ```
 
 ### Step 2: Run Installation Script
@@ -145,7 +145,7 @@ hyperion-http-bridge  | Task storage initialized with MongoDB
 hyperion-http-bridge  | Knowledge storage initialized with MongoDB
 hyperion-http-bridge  | All handlers registered successfully tools=9 resources=2
 hyperion-http-bridge  | MCP connection initialized successfully
-hyperion-http-bridge  | HTTP bridge listening on port 8095
+hyperion-http-bridge  | HTTP bridge listening on port 7095
 ```
 
 **Check container status:**
@@ -156,14 +156,14 @@ docker-compose ps
 **Expected output:**
 ```
 NAME                    STATUS                    PORTS
-hyperion-http-bridge    Up 2 minutes (healthy)    0.0.0.0:8095->8095/tcp
+hyperion-http-bridge    Up 2 minutes (healthy)    0.0.0.0:7095->7095/tcp
 hyperion-ui             Up 2 minutes (healthy)    0.0.0.0:5173->80/tcp
 ```
 
 **Test services:**
 ```bash
 # Test HTTP API
-curl http://localhost:8095/health
+curl http://localhost:7095/health
 
 # Test UI (should return HTML)
 curl -I http://localhost:5173
@@ -186,14 +186,14 @@ Add this to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "hyperion-coordinator": {
+    "hyper": {
       "type": "stdio",
       "command": "/usr/local/bin/docker",
       "args": [
         "exec",
         "-i",
         "hyperion-http-bridge",
-        "/app/hyperion-coordinator-mcp"
+        "/app/hyper-mcp"
       ],
       "env": {}
     }
@@ -312,13 +312,13 @@ docker-compose build --no-cache
 
 ```bash
 # Test health endpoint
-curl http://localhost:8095/health
+curl http://localhost:7095/health
 
 # List available tools
-curl http://localhost:8095/api/mcp/tools
+curl http://localhost:7095/api/mcp/tools
 
 # Call a tool
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-1" \
   -d '{
@@ -327,12 +327,12 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
   }'
 
 # List resources
-curl http://localhost:8095/api/mcp/resources
+curl http://localhost:7095/api/mcp/resources
 
 # Test CORS
 curl -v -H "Origin: http://localhost:5173" \
   -H "Access-Control-Request-Method: POST" \
-  -X OPTIONS http://localhost:8095/api/mcp/tools/call
+  -X OPTIONS http://localhost:7095/api/mcp/tools/call
 ```
 
 ### Run Integration Tests
@@ -357,7 +357,7 @@ docker-compose logs hyperion-ui
 
 **Common issues:**
 - MongoDB connection failed → Check `MONGODB_URI` in `.env`
-- Port 8095 already in use → Stop other services using the port
+- Port 7095 already in use → Stop other services using the port
 - Port 5173 already in use → Stop other services or change port mapping
 - Image build failed → Run `docker-compose build --no-cache`
 - Health check failing → Check logs for startup errors
@@ -442,7 +442,7 @@ docker-compose build --no-cache
 # Test CORS headers
 curl -v -H "Origin: http://localhost:5173" \
   -H "Access-Control-Request-Method: POST" \
-  -X OPTIONS http://localhost:8095/api/mcp/tools/call
+  -X OPTIONS http://localhost:7095/api/mcp/tools/call
 ```
 
 2. **Check allowed origins in main.go:**
@@ -492,7 +492,7 @@ Create `docker-compose.override.yml` for local customizations:
 version: '3.8'
 
 services:
-  hyperion-coordinator-mcp:
+  hyper-mcp:
     environment:
       - LOG_LEVEL=debug
     volumes:
@@ -510,7 +510,7 @@ Add additional services to `docker-compose.yml`:
 
 ```yaml
 services:
-  hyperion-coordinator-mcp:
+  hyper-mcp:
     # ... existing config ...
 
   mongodb:
@@ -538,7 +538,7 @@ Monitor container health:
 
 ```bash
 # Check health status
-docker inspect hyperion-coordinator-mcp | grep -A 10 Health
+docker inspect hyper-mcp | grep -A 10 Health
 
 # Auto-restart on failure (already configured)
 # See docker-compose.yml: restart: unless-stopped
@@ -565,11 +565,11 @@ docker inspect hyperion-coordinator-mcp | grep -A 10 Health
 version: '3.8'
 
 services:
-  hyperion-coordinator-mcp:
+  hyper-mcp:
     build:
       context: ./coordinator/mcp-server
       dockerfile: Dockerfile
-    container_name: hyperion-coordinator-mcp-prod
+    container_name: hyper-mcp-prod
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - MONGODB_DATABASE=${MONGODB_DATABASE}
@@ -583,7 +583,7 @@ services:
     networks:
       - hyperion-prod-network
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "hyperion-coordinator-mcp"]
+      test: ["CMD", "pgrep", "-f", "hyper-mcp"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -597,12 +597,12 @@ networks:
 
 **View resource usage:**
 ```bash
-docker stats hyperion-coordinator-mcp
+docker stats hyper-mcp
 ```
 
 **Export logs:**
 ```bash
-docker-compose logs --no-color hyperion-coordinator-mcp > logs.txt
+docker-compose logs --no-color hyper-mcp > logs.txt
 ```
 
 ---
@@ -615,7 +615,7 @@ docker-compose logs --no-color hyperion-coordinator-mcp > logs.txt
 docker-compose down
 
 # Remove image
-docker rmi hyperion-coordinator-mcp
+docker rmi hyper-mcp
 ```
 
 ### Full Cleanup
@@ -624,7 +624,7 @@ docker rmi hyperion-coordinator-mcp
 docker-compose down -v
 
 # Remove images
-docker rmi $(docker images -q hyperion-coordinator-mcp)
+docker rmi $(docker images -q hyper-mcp)
 
 # Prune system (careful!)
 docker system prune -a --volumes
