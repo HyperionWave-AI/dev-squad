@@ -30,7 +30,7 @@ The Hyperion Coordinator is an MCP (Model Context Protocol) server that manages 
                      │ HTTP/MCP
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│              MCP HTTP Bridge (Port 8095)                │
+│              MCP HTTP Bridge (Port 7095)                │
 │  - CORS handling                                        │
 │  - Request proxying                                     │
 │  - Health checks                                        │
@@ -38,7 +38,7 @@ The Hyperion Coordinator is an MCP (Model Context Protocol) server that manages 
                      │ stdio
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│           MCP Server (hyperion-coordinator)             │
+│           MCP Server (hyper)             │
 │  ┌───────────────────────────────────────────────────┐  │
 │  │ Tools (9 total)                                   │  │
 │  │ - coordinator_create_human_task                   │  │
@@ -72,7 +72,7 @@ The Hyperion Coordinator is an MCP (Model Context Protocol) server that manages 
 - **MCP SDK**: `github.com/modelcontextprotocol/go-sdk v0.3.0`
 - **Database**: MongoDB Atlas (`coordinator_db`)
 - **Vector Store**: Qdrant (knowledge collections)
-- **Web Server**: Go HTTP stdlib (port 8095)
+- **Web Server**: Go HTTP stdlib (port 7095)
 - **Frontend**: React 18 + TypeScript (port 5173)
 
 ---
@@ -803,7 +803,7 @@ server.NotifyResourceChanged("hyperion://task/human/123")
 **Response**:
 ```json
 {
-  "service": "hyperion-coordinator-http-bridge",
+  "service": "hyper-http-bridge",
   "status": "healthy",
   "version": "1.0.0"
 }
@@ -1061,7 +1061,7 @@ func TestClearTaskBoard(t *testing.T) {
 ```
 
 **Services**:
-- HTTP Bridge: http://localhost:8095
+- HTTP Bridge: http://localhost:7095
 - React UI: http://localhost:5173
 
 ---
@@ -1079,7 +1079,7 @@ MONGODB_DATABASE=coordinator_db
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_API_KEY=your-key
-PORT=8095
+PORT=7095
 ```
 
 ---

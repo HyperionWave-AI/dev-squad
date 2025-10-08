@@ -9,7 +9,7 @@
 
 ### 1. **MCP Server** (Go) ✅
 - **Location:** `development/coordinator/mcp-server/`
-- **Binary:** `hyperion-coordinator-mcp`
+- **Binary:** `hyper-mcp`
 - **Storage:** MongoDB Atlas (coordinator_db)
 - **Collections:**
   - `human_tasks` - Top-level tasks from user prompts
@@ -27,8 +27,8 @@
 
 ### 2. **HTTP Bridge** (Go) ✅
 - **Location:** `development/coordinator/mcp-http-bridge/`
-- **Binary:** `hyperion-coordinator-bridge`
-- **Port:** 8095
+- **Binary:** `hyper-bridge`
+- **Port:** 7095
 - **Purpose:** Exposes MCP server to browser via HTTP/REST
 - **CORS:** Enabled for localhost:5173, localhost:3000
 - **Endpoints:**
@@ -60,7 +60,7 @@ User Browser (localhost:5173)
          ↓ HTTP
 React UI (Vite Dev Server)
          ↓ HTTP REST API
-HTTP Bridge (Go - Port 8095)
+HTTP Bridge (Go - Port 7095)
          ↓ stdio (JSON-RPC)
 MCP Server (Go)
          ↓ MongoDB Driver
@@ -92,7 +92,7 @@ This automatically:
 **Terminal 1 - HTTP Bridge:**
 ```bash
 cd development/coordinator/mcp-http-bridge
-./hyperion-coordinator-bridge
+./hyper-bridge
 ```
 
 **Terminal 2 - React UI:**
@@ -108,14 +108,14 @@ npm run dev
 ### 1. Health Check
 
 ```bash
-curl http://localhost:8095/health
+curl http://localhost:7095/health
 ```
 
 **Expected:**
 ```json
 {
   "status": "healthy",
-  "service": "hyperion-coordinator-http-bridge",
+  "service": "hyper-http-bridge",
   "version": "1.0.0"
 }
 ```
@@ -123,7 +123,7 @@ curl http://localhost:8095/health
 ### 2. Create a Human Task
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-1" \
   -d '{
@@ -143,7 +143,7 @@ Open http://localhost:5173 - the new task should appear in the dashboard within 
 ### 4. Create an Agent Task
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-2" \
   -d '{
@@ -165,7 +165,7 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
 ### 5. Update Task Status
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-3" \
   -d '{
@@ -233,7 +233,7 @@ development/coordinator/
 │   ├── main.go                        # HTTP bridge server
 │   ├── go.mod                         # Go dependencies
 │   ├── go.sum                         # Dependency checksums
-│   └── hyperion-coordinator-bridge    # Binary (built)
+│   └── hyper-bridge    # Binary (built)
 │
 ├── start-coordinator.sh               # Quick start script
 ├── FULL_STACK_SETUP.md               # Complete setup guide
@@ -316,7 +316,7 @@ CLAUDE.md                              # Updated with dual-MCP workflow
 
 ### HTTP Bridge won't start
 - **Error:** "MCP server not found"
-- **Fix:** Build MCP server: `cd mcp-server && go build -o hyperion-coordinator-mcp`
+- **Fix:** Build MCP server: `cd mcp-server && go build -o hyper-mcp`
 
 ### UI shows no tasks
 - **Cause:** No tasks in database yet
