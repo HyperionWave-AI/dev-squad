@@ -14,7 +14,7 @@ Complete guide to running the Hyperion Coordinator with MongoDB backend, MCP ser
            │ HTTP
            ↓
 ┌─────────────────────┐
-│  HTTP Bridge        │  Port 8095
+│  HTTP Bridge        │  Port 7095
 │  (Go Server)        │
 └──────────┬──────────┘
            │ stdio
@@ -92,7 +92,7 @@ cd development/coordinator/mcp-http-bridge
 ```
 MCP server started with PID: 12345
 MCP connection initialized successfully
-HTTP bridge listening on port 8095
+HTTP bridge listening on port 7095
 MCP server path: ../mcp-server/hyper-mcp
 Frontend CORS enabled for: http://localhost:5173, http://localhost:3000
 ```
@@ -132,7 +132,7 @@ You should see the Coordinator UI with:
 You can test the MCP server directly using the HTTP bridge:
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-1" \
   -d '{
@@ -162,7 +162,7 @@ Refresh the UI at http://localhost:5173 - you should see the new task appear in 
 ### 3. Create an Agent Task
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-2" \
   -d '{
@@ -184,7 +184,7 @@ curl -X POST http://localhost:8095/api/mcp/tools/call \
 ### 4. Update Task Status
 
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-3" \
   -d '{
@@ -215,7 +215,7 @@ You can also check the data directly in MongoDB Atlas:
 # Override MCP server path (default: ../mcp-server/hyper-mcp)
 export MCP_SERVER_PATH="/path/to/hyper-mcp"
 
-# Override port (default: 8095)
+# Override port (default: 7095)
 export PORT=9000
 ```
 
@@ -234,7 +234,7 @@ export MONGODB_DATABASE="my_custom_db"
 Create `.env.local` in `development/coordinator/ui/`:
 
 ```bash
-# Override bridge URL (default: http://localhost:8095)
+# Override bridge URL (default: http://localhost:7095)
 VITE_MCP_BRIDGE_URL=http://localhost:9000
 ```
 
@@ -274,7 +274,7 @@ go build -o hyper-mcp
 **Error:** `Failed to connect to MCP HTTP bridge`
 
 **Solution:**
-1. Verify the bridge is running: `curl http://localhost:8095/health`
+1. Verify the bridge is running: `curl http://localhost:7095/health`
 2. Check browser console for CORS errors
 3. Ensure the bridge URL matches in UI env vars
 
@@ -301,7 +301,7 @@ go build -o hyper-mcp
 # Check bridge logs (Terminal 1)
 # Check UI console (Browser DevTools)
 # List all resources via bridge
-curl http://localhost:8095/api/mcp/resources
+curl http://localhost:7095/api/mcp/resources
 ```
 
 ---

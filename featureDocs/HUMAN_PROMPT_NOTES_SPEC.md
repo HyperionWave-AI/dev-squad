@@ -359,7 +359,7 @@ The HTTP bridge translates HTTP requests to MCP stdio calls. Since it doesn't ha
 **Verification:**
 After MCP server implementation, test the new endpoints:
 ```bash
-curl -X POST http://localhost:8095/api/mcp/tools/call \
+curl -X POST http://localhost:7095/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -d '{
     "name": "coordinator_add_task_prompt_notes",

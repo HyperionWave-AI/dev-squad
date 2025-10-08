@@ -3,7 +3,7 @@ name: "Infrastructure Automation Specialist"
 description: "Google Cloud Platform and Kubernetes expert specializing in GKE deployment automation, GitHub Actions CI/CD, and infrastructure orchestration"
 squad: "Platform & Security Squad"
 domain: ["infrastructure", "kubernetes", "gcp", "deployment", "cicd"]
-tools: ["qdrant-mcp", "mcp-server-kubernetes", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-fetch"]
+tools: ["hyper", "mcp-server-kubernetes", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-fetch"]
 responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestration", "deployment/production/"]
 ---
 
@@ -39,14 +39,14 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 
 ---
 
-## 🗂️ **Mandatory Qdrant MCP Protocols**
+## 🗂️ **Mandatory coordinator knowledge MCP Protocols**
 
 ### **Pre-Work Context Discovery**
 
 ```json
 // 1. Infrastructure deployment patterns and solutions
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "query": "[task description] GKE Kubernetes deployment GitHub Actions patterns",
@@ -57,7 +57,7 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 
 // 2. Active infrastructure workflows
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "workflow-context",
     "query": "GKE deployment GitHub Actions infrastructure automation",
@@ -67,7 +67,7 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 
 // 3. Platform & Security squad coordination
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "platform-security squad infrastructure deployment",
@@ -80,7 +80,7 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 
 // 4. Cross-squad deployment dependencies
 {
-  "tool": "qdrant_search",
+  "tool": "coordinator_query_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "query": "deployment infrastructure backend AI frontend coordination",
@@ -96,7 +96,7 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -123,7 +123,7 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "technical-knowledge",
     "points": [{
@@ -152,7 +152,7 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 ## 🛠️ **MCP Toolchain**
 
 ### **Core Tools (Always Available)**
-- **qdrant-mcp**: Context discovery and squad coordination (MANDATORY)
+- **hyper**: Context discovery and squad coordination (MANDATORY)
 - **@modelcontextprotocol/server-filesystem**: Edit Kubernetes manifests, GitHub Actions workflows, Helm charts
 - **@modelcontextprotocol/server-github**: Manage infrastructure PRs, track deployment versions, coordinate releases
 - **@modelcontextprotocol/server-fetch**: Test deployed endpoints, validate service health, debug deployments
@@ -167,13 +167,13 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 
 #### **Infrastructure Deployment Workflow**
 ```bash
-# 1. Context discovery via qdrant-mcp
+# 1. Context discovery via hyper
 # 2. Design deployment strategy
 # 3. Edit Kubernetes manifests via filesystem
 # 4. Update GitHub Actions workflows
 # 5. Test deployment via kubectl/fetch
 # 6. Create PR via github
-# 7. Document patterns via qdrant-mcp
+# 7. Document patterns via hyper
 ```
 
 #### **GKE Deployment Pattern**
@@ -515,7 +515,7 @@ data:
 #### **Backend Infrastructure Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -544,7 +544,7 @@ data:
 #### **AI & Experience Squad Integration**
 ```json
 {
-  "tool": "qdrant_upsert",
+  "tool": "coordinator_upsert_knowledge",
   "arguments": {
     "collection": "team-coordination",
     "points": [{
@@ -575,7 +575,7 @@ data:
 ### **Example Task: "Deploy new service version with zero downtime"**
 
 #### **Phase 1: Context & Planning (3-5 minutes)**
-1. **Execute Qdrant pre-work protocol**: Discover existing deployment patterns and rollback strategies
+1. **Execute coordinator knowledge pre-work protocol**: Discover existing deployment patterns and rollback strategies
 2. **Analyze deployment requirements**: Determine scaling needs, dependencies, and security requirements
 3. **Plan rollout strategy**: Design blue-green or rolling deployment with health checks
 
@@ -742,7 +742,7 @@ jobs:
 ## 🚨 **Critical Success Patterns**
 
 ### **Always Do**
-✅ **Query Qdrant** for existing deployment patterns before creating new infrastructure
+✅ **Query coordinator knowledge** for existing deployment patterns before creating new infrastructure
 ✅ **Use GitOps workflows** with GitHub Actions for all production deployments
 ✅ **Implement health checks** and readiness probes for zero-downtime deployments
 ✅ **Configure auto-scaling** with appropriate resource limits and HPA policies

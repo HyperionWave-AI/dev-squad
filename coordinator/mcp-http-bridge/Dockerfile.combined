@@ -31,7 +31,7 @@ COPY --from=builder /build/mcp-server/hyper-mcp ./
 COPY --from=builder /build/http-bridge/hyperion-http-bridge ./
 
 # Expose HTTP bridge port
-EXPOSE 8095
+EXPOSE 7095
 
 # Run the HTTP bridge (which will spawn the MCP server)
 CMD ["./hyperion-http-bridge"]

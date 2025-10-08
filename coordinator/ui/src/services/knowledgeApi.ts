@@ -1,7 +1,9 @@
 // Knowledge API Client - uses existing MCP client patterns
 import type { SearchRequest, SearchResponse, CreateRequest, CreateResponse, KnowledgeCollection } from '../types/knowledge';
 
-const API_BASE = import.meta.env.VITE_COORDINATOR_API_URL || 'http://localhost:8081';
+// Use relative URL so Vite dev proxy handles routing (same pattern as mcpClient.ts)
+// In production, nginx will proxy /api/knowledge to the coordinator MCP server
+const API_BASE = '';
 
 async function fetchWithAuth(url: string, options: RequestInit = {}) {
   const token = localStorage.getItem('authToken');
