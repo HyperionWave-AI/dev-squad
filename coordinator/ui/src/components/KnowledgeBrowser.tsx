@@ -1,13 +1,33 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import {
+  Box,
+  Paper,
+  Typography,
+  Select,
+  MenuItem,
+  TextField,
+  Button,
+  CircularProgress,
+  Alert,
+  InputAdornment,
+  Card,
+  CardContent,
+  CardHeader,
+  Chip,
+  Divider,
+} from '@mui/material';
+import { Search } from '@mui/icons-material';
 import type { KnowledgeEntry } from '../types/coordinator';
 import { mcpClient } from '../services/mcpClient';
 
 export const KnowledgeBrowser: React.FC = () => {
   const [query, setQuery] = useState('');
-  const [collection, setCollection] = useState('');
   const [results, setResults] = useState<KnowledgeEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [collection, setCollection] = useState('All Collections');
+  const [lastSearch, setLastSearch] = useState<{ query: string; collection: string } | null>(null);
+  const [popularCollections, setPopularCollections] = useState<Array<{ collection: string; count: number }>>([]);
 
   const collections = [
     'All Collections',
@@ -16,8 +36,21 @@ export const KnowledgeBrowser: React.FC = () => {
     'data-contracts',
     'technical-knowledge',
     'workflow-context',
-    'team-coordination'
+    'team-coordination',
   ];
+
+  useEffect(() => {
+    const loadPopularCollections = async () => {
+      try {
+        const popular = await mcpClient.getPopularCollections(5);
+        setPopularCollections(popular.filter(c => !c.collection.startsWith('task:')));
+      } catch (err) {
+        console.error('Failed to load popular collections:', err);
+      }
+    };
+
+    loadPopularCollections();
+  }, []);
 
   const handleSearch = async () => {
     if (!query.trim()) return;
@@ -26,13 +59,52 @@ export const KnowledgeBrowser: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      const entries = await mcpClient.queryKnowledge({
-        collection: collection === 'All Collections' ? '' : collection,
-        query,
-        limit: 20
-      });
+      let allEntries: KnowledgeEntry[] = [];
 
-      setResults(entries);
+      if (collection === 'All Collections' || !collection) {
+        // Search all major collections and aggregate results
+        // Note: task:hyperion://... collections are per-task, too many to query individually
+        const collectionsToSearch = [
+          'adr',
+          'technical-knowledge',
+          'npm-package-testing',
+          'data-contracts',
+          'team-coordination',
+          'workflow-context'
+        ];
+
+        const searchPromises = collectionsToSearch.map(async (col) => {
+          try {
+            return await mcpClient.queryKnowledge({
+              collection: col,
+              query,
+              limit: 5, // Limit per collection to get diverse results
+            });
+          } catch (err) {
+            console.warn(`Failed to search collection ${col}:`, err);
+            return [];
+          }
+        });
+
+        const results = await Promise.all(searchPromises);
+        allEntries = results.flat();
+
+        // Sort by score (highest first)
+        allEntries.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+        // Limit total results
+        allEntries = allEntries.slice(0, 20);
+      } else {
+        // Search single collection
+        allEntries = await mcpClient.queryKnowledge({
+          collection,
+          query,
+          limit: 20,
+        });
+      }
+
+      setResults(allEntries);
+      setLastSearch({ query, collection: collection || 'All Collections' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Search failed');
       console.error('Search error:', err);
@@ -42,128 +114,327 @@ export const KnowledgeBrowser: React.FC = () => {
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleSearch();
-    }
+    if (e.key === 'Enter') handleSearch();
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-800 mb-2">Knowledge Browser</h2>
-        <p className="text-gray-600 text-sm">
+    <Box sx={{ width: '100%' }}>
+      {/* Header */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h5" sx={{ fontWeight: 600, mb: 0.5 }}>
+          Knowledge Browser
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
           Search across knowledge collections
-        </p>
-      </div>
+        </Typography>
+      </Box>
 
-      <div className="bg-white p-4 rounded-lg border shadow-sm space-y-4">
-        <div className="flex gap-2">
-          <select
+      {/* Search Section */}
+      <Paper
+        elevation={0}
+        sx={{
+          p: 3,
+          mb: 3,
+          border: '1px solid',
+          borderColor: 'divider',
+          borderRadius: 2,
+          backgroundColor: 'white',
+        }}
+      >
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <Select
             value={collection}
             onChange={(e) => setCollection(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            displayEmpty
+            size="small"
+            sx={{ minWidth: 200 }}
           >
             {collections.map((col) => (
-              <option key={col} value={col}>
+              <MenuItem key={col} value={col}>
                 {col}
-              </option>
+              </MenuItem>
             ))}
-          </select>
+          </Select>
 
-          <input
-            type="text"
+          <TextField
+            fullWidth
+            placeholder="Search knowledge base..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Search knowledge base..."
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search color="action" />
+                </InputAdornment>
+              ),
+            }}
           />
 
-          <button
+          <Button
+            variant="contained"
+            color="primary"
             onClick={handleSearch}
             disabled={loading || !query.trim()}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+            sx={{ px: 4 }}
           >
-            {loading ? '🔍 Searching...' : '🔍 Search'}
-          </button>
-        </div>
-      </div>
+            {loading ? <CircularProgress size={20} sx={{ color: 'white' }} /> : 'Search'}
+          </Button>
+        </Box>
+      </Paper>
 
+      {/* Error */}
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">❌</span>
-            <p className="text-red-600 text-sm">{error}</p>
-          </div>
-        </div>
+        <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
       )}
 
-      {results.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="font-semibold text-gray-700">
-            {results.length} result{results.length !== 1 ? 's' : ''} found
-          </h3>
+      {/* Results */}
+      {loading && (
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'center',
+            py: 6,
+          }}
+        >
+          <CircularProgress />
+        </Box>
+      )}
 
-          {results.map((entry) => (
-            <div
+      {!loading && results.length > 0 && (
+        <Box sx={{ mb: 4 }}>
+          <Box
+            sx={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              mb: 2,
+            }}
+          >
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              {results.length} result{results.length !== 1 ? 's' : ''} found
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              in {collection || 'technical-knowledge'}
+            </Typography>
+          </Box>
+
+          {results.map((entry, index) => (
+            <Card
               key={entry.id}
-              className="bg-white p-4 rounded-lg border shadow-sm hover:shadow-md transition-shadow"
+              variant="outlined"
+              sx={{
+                mb: 2,
+                borderRadius: 2,
+                transition: 'all 0.2s ease',
+                '&:hover': { boxShadow: 3, borderColor: 'primary.light' },
+              }}
             >
-              <div className="flex justify-between items-start mb-2">
-                <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-semibold">
-                  {entry.collection}
-                </span>
-                <span className="text-xs text-gray-500">
-                  {new Date(entry.createdAt).toLocaleDateString()}
-                </span>
-              </div>
+              <CardHeader
+                titleTypographyProps={{ variant: 'subtitle1', fontWeight: 500 }}
+                title={entry.collection}
+                subheader={`📅 ${new Date(entry.createdAt).toLocaleDateString()}`}
+                sx={{
+                  background: 'linear-gradient(to right, #eff6ff, #ffffff)',
+                  pb: 1,
+                }}
+                action={
+                  <Chip
+                    label={`#${index + 1}`}
+                    size="small"
+                    color="primary"
+                    sx={{ fontWeight: 600 }}
+                  />
+                }
+              />
+              <Divider />
+              <CardContent>
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: 'text.primary',
+                    mb: 2,
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  {entry.text}
+                </Typography>
 
-              <p className="text-sm text-gray-800 mb-2 whitespace-pre-wrap">
-                {entry.text}
-              </p>
-
-              <div className="flex items-center justify-between">
-                {entry.tags.length > 0 && (
-                  <div className="flex gap-1 flex-wrap">
-                    {entry.tags.map((tag) => (
-                      <span
+                {/* Tags from metadata or direct tags field */}
+                {((entry.metadata?.tags as string[]) || entry.tags || []).length > 0 && (
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+                    {((entry.metadata?.tags as string[]) || entry.tags || []).map((tag) => (
+                      <Chip
                         key={tag}
-                        className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs"
-                      >
-                        {tag}
-                      </span>
+                        label={tag}
+                        variant="outlined"
+                        size="small"
+                        sx={{ borderRadius: 1 }}
+                      />
                     ))}
-                  </div>
+                  </Box>
                 )}
 
-                <span className="text-xs text-gray-500">
-                  by {entry.createdBy}
-                </span>
-              </div>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    borderTop: '1px solid',
+                    borderColor: 'divider',
+                    pt: 1.5,
+                  }}
+                >
+                  {entry.score !== undefined && (
+                    <Typography variant="caption" color="text.secondary">
+                      🎯 Relevance:{' '}
+                      <Typography component="span" fontWeight={500}>
+                        {(entry.score * 100).toFixed(0)}%
+                      </Typography>
+                    </Typography>
+                  )}
 
-              {entry.metadata && Object.keys(entry.metadata).length > 0 && (
-                <div className="mt-2 pt-2 border-t border-gray-100">
-                  <details className="text-xs text-gray-600">
-                    <summary className="cursor-pointer hover:text-gray-800">
-                      Metadata
-                    </summary>
-                    <pre className="mt-1 p-2 bg-gray-50 rounded overflow-x-auto">
-                      {JSON.stringify(entry.metadata, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              )}
-            </div>
+                  {entry.createdBy && (
+                    <Typography variant="caption" color="text.secondary">
+                      👤 Created by{' '}
+                      <Typography component="span" fontWeight={500}>
+                        {entry.createdBy}
+                      </Typography>
+                    </Typography>
+                  )}
+
+                  {entry.metadata && Object.keys(entry.metadata).length > 0 && (
+                    <details>
+                      <summary className="cursor-pointer text-blue-600 text-xs">
+                        📋 View metadata
+                      </summary>
+                      <Box
+                        sx={{
+                          mt: 1,
+                          backgroundColor: 'grey.50',
+                          borderRadius: 1,
+                          p: 1,
+                        }}
+                      >
+                        <pre style={{ fontSize: 11, overflowX: 'auto' }}>
+                          {JSON.stringify(entry.metadata, null, 2)}
+                        </pre>
+                      </Box>
+                    </details>
+                  )}
+                </Box>
+              </CardContent>
+            </Card>
           ))}
-        </div>
+        </Box>
       )}
 
-      {!loading && results.length === 0 && query && (
-        <div className="text-center py-12 bg-gray-50 rounded-lg">
-          <div className="text-4xl mb-2">🔍</div>
-          <p className="text-gray-600">No results found for "{query}"</p>
-        </div>
+      {/* Empty States */}
+      {!loading && results.length === 0 && query && !error && (
+        <Paper
+          elevation={0}
+          sx={{
+            py: 10,
+            textAlign: 'center',
+            border: '2px dashed',
+            borderColor: 'divider',
+            borderRadius: 3,
+            backgroundColor: 'grey.50',
+          }}
+        >
+          <Typography variant="h3" sx={{ mb: 1 }}>
+            🔍
+          </Typography>
+          <Typography variant="h6" sx={{ mb: 0.5 }}>
+            No results found
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Try different keywords or another collection
+          </Typography>
+        </Paper>
       )}
-    </div>
+
+      {!loading && results.length === 0 && !query && !error && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 4,
+            background: 'linear-gradient(to bottom right, #eff6ff, #f0f9ff)',
+            borderRadius: 3,
+            border: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+            💡 Quick Start
+          </Typography>
+          <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
+            {popularCollections.length > 0
+              ? 'Browse popular collections:'
+              : 'Try these example searches:'}
+          </Typography>
+
+          <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+            {popularCollections.length > 0 ? (
+              popularCollections.map((popular) => (
+                <Button
+                  key={popular.collection}
+                  variant="outlined"
+                  color="primary"
+                  fullWidth
+                  onClick={() => {
+                    setCollection(popular.collection);
+                  }}
+                  sx={{
+                    justifyContent: 'space-between',
+                    textTransform: 'none',
+                    borderRadius: 2,
+                  }}
+                >
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {popular.collection}
+                  </Typography>
+                  <Chip
+                    label={`${popular.count} entries`}
+                    size="small"
+                    sx={{ height: 20, fontSize: 11 }}
+                  />
+                </Button>
+              ))
+            ) : (
+              [
+                { query: 'JWT authentication', collection: 'technical-knowledge' },
+                { query: 'React component', collection: 'technical-knowledge' },
+                { query: 'file upload', collection: 'technical-knowledge' },
+                { query: 'MongoDB', collection: 'adr' },
+              ].map((example) => (
+                <Button
+                  key={example.query}
+                  variant="outlined"
+                  color="primary"
+                  fullWidth
+                  onClick={() => {
+                    setQuery(example.query);
+                    setCollection(example.collection);
+                  }}
+                  sx={{
+                    justifyContent: 'flex-start',
+                    textTransform: 'none',
+                    borderRadius: 2,
+                  }}
+                >
+                  "{example.query}"{' '}
+                  <Typography variant="caption" sx={{ ml: 1 }}>
+                    in {example.collection}
+                  </Typography>
+                </Button>
+              ))
+            )}
+          </Box>
+        </Paper>
+      )}
+    </Box>
   );
 };
