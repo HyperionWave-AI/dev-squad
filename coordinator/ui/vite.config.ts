@@ -7,19 +7,19 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/mcp': {
-        // In Docker, use service name. Outside Docker, use localhost:7779
-        target: process.env.VITE_MCP_BRIDGE_URL || 'http://hyperion-http-bridge:7095',
+        // In Docker, use service name. Outside Docker, use localhost:7095
+        target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
         changeOrigin: true
         // Don't rewrite - bridge expects /api/mcp prefix
       },
       '/api/knowledge': {
         // Proxy knowledge API calls to the same MCP bridge (coordinator MCP server handles these)
-        target: process.env.VITE_MCP_BRIDGE_URL || 'http://hyperion-http-bridge:7095',
+        target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
         changeOrigin: true
         // Don't rewrite - coordinator expects /api/knowledge prefix
       },
       '/bridge-health': {
-        target: process.env.VITE_MCP_BRIDGE_URL || 'http://hyperion-http-bridge:7095',
+        target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
         changeOrigin: true,
         rewrite: () => '/health'
       }
