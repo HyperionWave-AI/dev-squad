@@ -115,7 +115,7 @@ function App() {
         >
           <Container maxWidth="xl">
             {currentView === 'dashboard' && <KanbanBoard key={refreshKey} />}
-            {currentView === 'knowledge' && <KnowledgeBrowser />}
+            {currentView === 'knowledge' && <KnowledgeBrowser key={refreshKey} />}
           </Container>
         </Box>
 
