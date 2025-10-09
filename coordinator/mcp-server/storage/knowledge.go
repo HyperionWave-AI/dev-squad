@@ -28,11 +28,18 @@ type QueryResult struct {
 	Score float64         `json:"score"`
 }
 
+// CollectionStats represents collection popularity statistics
+type CollectionStats struct {
+	Collection string `json:"collection"`
+	Count      int    `json:"count"`
+}
+
 // KnowledgeStorage provides storage interface for knowledge entries
 type KnowledgeStorage interface {
 	Upsert(collection, text string, metadata map[string]interface{}) (*KnowledgeEntry, error)
 	Query(collection, query string, limit int) ([]*QueryResult, error)
 	ListCollections() []string
+	GetPopularCollections(limit int) ([]*CollectionStats, error)
 }
 
 // MongoKnowledgeStorage implements KnowledgeStorage using MongoDB
@@ -208,6 +215,58 @@ func (s *MongoKnowledgeStorage) ListCollections() []string {
 
 	sort.Strings(result)
 	return result
+}
+
+// GetPopularCollections returns top N collections by entry count
+func (s *MongoKnowledgeStorage) GetPopularCollections(limit int) ([]*CollectionStats, error) {
+	ctx := context.Background()
+
+	// MongoDB aggregation pipeline:
+	// 1. Group by collection and count
+	// 2. Sort by count descending
+	// 3. Limit to top N
+	pipeline := []bson.M{
+		{
+			"$group": bson.M{
+				"_id":   "$collection",
+				"count": bson.M{"$sum": 1},
+			},
+		},
+		{
+			"$sort": bson.M{"count": -1},
+		},
+	}
+
+	if limit > 0 {
+		pipeline = append(pipeline, bson.M{"$limit": limit})
+	}
+
+	cursor, err := s.knowledgeCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("failed to aggregate collections: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var results []*CollectionStats
+	for cursor.Next(ctx) {
+		var result struct {
+			ID    string `bson:"_id"`
+			Count int    `bson:"count"`
+		}
+		if err := cursor.Decode(&result); err != nil {
+			continue
+		}
+		results = append(results, &CollectionStats{
+			Collection: result.ID,
+			Count:      result.Count,
+		})
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("cursor error: %w", err)
+	}
+
+	return results, nil
 }
 
 // calculateSimilarity provides simple text similarity scoring
