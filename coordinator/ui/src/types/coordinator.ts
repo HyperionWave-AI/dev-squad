@@ -104,12 +104,14 @@ export interface KnowledgeEntry {
   id: string;
   collection: string;
   text: string;
-  embedding?: number[];
   metadata: Record<string, any>;
   createdAt: string;
-  updatedAt: string;
-  createdBy: string;
-  tags: string[];
+  score?: number; // Similarity score from query results
+  // Optional legacy fields for backward compatibility
+  updatedAt?: string;
+  createdBy?: string;
+  tags?: string[];
+  embedding?: number[];
 }
 
 
