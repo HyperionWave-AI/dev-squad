@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"hyperion-coordinator-mcp/storage"
 
@@ -35,6 +36,11 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 	// Register coordinator_query_knowledge
 	if err := h.registerQueryKnowledge(server); err != nil {
 		return fmt.Errorf("failed to register query_knowledge tool: %w", err)
+	}
+
+	// Register coordinator_get_popular_collections
+	if err := h.registerGetPopularCollections(server); err != nil {
+		return fmt.Errorf("failed to register get_popular_collections tool: %w", err)
 	}
 
 	// Register coordinator_create_human_task
@@ -394,31 +400,38 @@ func (h *ToolHandler) handleQueryKnowledge(ctx context.Context, args map[string]
 		return createErrorResult(fmt.Sprintf("failed to query knowledge: %s", err.Error())), nil, nil
 	}
 
-	if len(results) == 0 {
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: fmt.Sprintf("No knowledge found in collection '%s' for query: %s", collection, query)},
-			},
-		}, results, nil
+	// Return JSON array of knowledge entries for frontend consumption
+	// Convert storage.QueryResult to a JSON-serializable format
+	type KnowledgeEntryResponse struct {
+		ID         string                 `json:"id"`
+		Collection string                 `json:"collection"`
+		Text       string                 `json:"text"`
+		Metadata   map[string]interface{} `json:"metadata,omitempty"`
+		CreatedAt  string                 `json:"createdAt"`
+		Score      float64                `json:"score"`
 	}
 
-	// Format results
-	resultText := fmt.Sprintf("Found %d knowledge entries:\n\n", len(results))
+	entries := make([]KnowledgeEntryResponse, len(results))
 	for i, result := range results {
-		resultText += fmt.Sprintf("Result %d (Score: %.2f)\n", i+1, result.Score)
-		resultText += fmt.Sprintf("ID: %s\n", result.Entry.ID)
-		resultText += fmt.Sprintf("Created: %s\n", result.Entry.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
-		resultText += fmt.Sprintf("Text: %s\n", result.Entry.Text)
-		if len(result.Entry.Metadata) > 0 {
-			metadataJSON, _ := json.MarshalIndent(result.Entry.Metadata, "", "  ")
-			resultText += fmt.Sprintf("Metadata: %s\n", string(metadataJSON))
+		entries[i] = KnowledgeEntryResponse{
+			ID:         result.Entry.ID,
+			Collection: result.Entry.Collection,
+			Text:       result.Entry.Text,
+			Metadata:   result.Entry.Metadata,
+			CreatedAt:  result.Entry.CreatedAt.Format(time.RFC3339),
+			Score:      result.Score,
 		}
-		resultText += "\n---\n\n"
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(entries)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to serialize results: %s", err.Error())), nil, nil
 	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: resultText},
+			&mcp.TextContent{Text: string(jsonData)},
 		},
 	}, results, nil
 }
@@ -1292,4 +1305,56 @@ func (h *ToolHandler) handleClearTodoPromptNotes(ctx context.Context, args map[s
 			},
 		},
 	}, nil, nil
+}
+// registerGetPopularCollections registers the coordinator_get_popular_collections tool
+func (h *ToolHandler) registerGetPopularCollections(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "coordinator_get_popular_collections",
+		Description: "Get top N knowledge collections by entry count for Quick Start suggestions",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"limit": {
+					Type:        "number",
+					Description: "Maximum number of collections to return (default: 5)",
+				},
+			},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleGetPopularCollections(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleGetPopularCollections handles the coordinator_get_popular_collections tool call
+func (h *ToolHandler) handleGetPopularCollections(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	limit := 5
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	stats, err := h.knowledgeStorage.GetPopularCollections(limit)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to get popular collections: %s", err.Error())), nil, nil
+	}
+
+	// Return JSON array directly
+	jsonData, err := json.Marshal(stats)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to serialize results: %s", err.Error())), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(jsonData)},
+		},
+	}, stats, nil
 }
