@@ -10,6 +10,9 @@ RUN go mod download
 COPY mcp-server/*.go ./
 COPY mcp-server/handlers ./handlers
 COPY mcp-server/storage ./storage
+COPY mcp-server/embeddings ./embeddings
+COPY mcp-server/scanner ./scanner
+COPY mcp-server/watcher ./watcher
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o hyper-mcp .
 
 # Build HTTP Bridge

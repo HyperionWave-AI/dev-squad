@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { HumanTask, AgentTask, TaskStatus } from '../types/coordinator';
-import { mcpClient } from '../services/mcpClient';
+import { restClient } from '../services/restClient';
 
 interface TaskDetailProps {
   taskId: string;
@@ -24,10 +24,15 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
       setError(null);
 
       if (taskType === 'human') {
-        const humanTask = await mcpClient.getHumanTask(taskId);
+        const humanTask = await restClient.getHumanTask(taskId);
         setTask(humanTask);
       } else {
-        const agentTask = await mcpClient.getAgentTask(taskId);
+        // For agent tasks, we need to list and find the specific one
+        const agentTasks = await restClient.listAgentTasks();
+        const agentTask = agentTasks.find(t => t.id === taskId);
+        if (!agentTask) {
+          throw new Error('Agent task not found');
+        }
         setTask(agentTask);
       }
     } catch (err) {
@@ -42,10 +47,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
 
     try {
       setUpdating(true);
-      await mcpClient.updateTaskStatus({
-        taskId: task.id,
-        status: newStatus
-      });
+      await restClient.updateTaskStatus(task.id, newStatus);
       await loadTask();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to update status');
