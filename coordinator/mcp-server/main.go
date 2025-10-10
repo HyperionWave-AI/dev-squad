@@ -7,8 +7,10 @@ import (
 	"os"
 	"time"
 
+	"hyperion-coordinator-mcp/embeddings"
 	"hyperion-coordinator-mcp/handlers"
 	"hyperion-coordinator-mcp/storage"
+	"hyperion-coordinator-mcp/watcher"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -102,6 +104,61 @@ func main() {
 
 	server := mcp.NewServer(impl, opts)
 
+	// Initialize code indexing components
+	logger.Info("Initializing code indexing components")
+
+	// Initialize code index storage
+	codeIndexStorage, err := storage.NewCodeIndexStorage(db)
+	if err != nil {
+		logger.Fatal("Failed to initialize code index storage", zap.Error(err))
+	}
+	logger.Info("Code index storage initialized with MongoDB")
+
+	// Ensure Qdrant code index collection exists
+	if err := qdrantClient.EnsureCodeIndexCollection(); err != nil {
+		logger.Fatal("Failed to ensure code index collection in Qdrant", zap.Error(err))
+	}
+	logger.Info("Qdrant code index collection ensured")
+
+	// Initialize OpenAI embedding client
+	openAIKey := os.Getenv("OPENAI_API_KEY")
+	if openAIKey == "" {
+		logger.Warn("OPENAI_API_KEY not set - code indexing features will be limited")
+	}
+	embeddingClient := embeddings.NewOpenAIClient(openAIKey)
+	logger.Info("OpenAI embedding client initialized")
+
+	// Initialize file watcher
+	fileWatcher, err := watcher.NewFileWatcher(codeIndexStorage, qdrantClient, embeddingClient, logger)
+	if err != nil {
+		logger.Fatal("Failed to create file watcher", zap.Error(err))
+	}
+	logger.Info("File watcher initialized")
+
+	// Load existing folders into file watcher
+	folders, err := codeIndexStorage.ListFolders()
+	if err != nil {
+		logger.Warn("Failed to load existing folders for file watcher", zap.Error(err))
+	} else {
+		for _, folder := range folders {
+			if folder.Status == "active" {
+				if err := fileWatcher.AddFolder(folder); err != nil {
+					logger.Warn("Failed to add folder to file watcher",
+						zap.String("path", folder.Path),
+						zap.Error(err))
+				}
+			}
+		}
+		logger.Info("Loaded existing folders into file watcher", zap.Int("count", len(folders)))
+	}
+
+	// Start file watcher
+	if err := fileWatcher.Start(); err != nil {
+		logger.Warn("Failed to start file watcher", zap.Error(err))
+	} else {
+		logger.Info("File watcher started successfully")
+	}
+
 	// Initialize handlers
 	resourceHandler := handlers.NewResourceHandler(taskStorage, knowledgeStorage)
 	docResourceHandler := handlers.NewDocResourceHandler()
@@ -110,9 +167,11 @@ func main() {
 	metricsResourceHandler := handlers.NewMetricsResourceHandler(taskStorage)
 	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage)
 	qdrantToolHandler := handlers.NewQdrantToolHandler(qdrantClient)
+	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, logger)
 	planningPromptHandler := handlers.NewPlanningPromptHandler()
 	knowledgePromptHandler := handlers.NewKnowledgePromptHandler()
 	coordinationPromptHandler := handlers.NewCoordinationPromptHandler()
+	documentationPromptHandler := handlers.NewDocumentationPromptHandler()
 	healthCheckHandler := handlers.NewHealthCheckHandler(mongoClient, qdrantClient, logger)
 
 	// Register resource handlers
@@ -150,6 +209,11 @@ func main() {
 		logger.Fatal("Failed to register Qdrant tool handlers", zap.Error(err))
 	}
 
+	// Register code indexing tool handlers
+	if err := codeToolsHandler.RegisterCodeIndexTools(server); err != nil {
+		logger.Fatal("Failed to register code indexing tool handlers", zap.Error(err))
+	}
+
 	// Register planning prompts
 	if err := planningPromptHandler.RegisterPlanningPrompts(server); err != nil {
 		logger.Fatal("Failed to register planning prompts", zap.Error(err))
@@ -165,10 +229,15 @@ func main() {
 		logger.Fatal("Failed to register coordination prompts", zap.Error(err))
 	}
 
+	// Register documentation prompts
+	if err := documentationPromptHandler.RegisterDocumentationPrompts(server); err != nil {
+		logger.Fatal("Failed to register documentation prompts", zap.Error(err))
+	}
+
 	logger.Info("All handlers registered successfully",
-		zap.Int("tools", 12), // 10 coordinator + 2 qdrant
+		zap.Int("tools", 24), // 17 coordinator + 2 qdrant + 5 code indexing
 		zap.Int("resources", 12), // 2 task + 3 doc + 3 workflow + 2 knowledge + 2 metrics
-		zap.Int("prompts", 6))    // 2 planning + 2 knowledge + 2 coordination
+		zap.Int("prompts", 7))    // 2 planning + 2 knowledge + 2 coordination + 1 documentation
 
 	// Get transport mode from environment (default: stdio)
 	transportMode := os.Getenv("TRANSPORT_MODE")
