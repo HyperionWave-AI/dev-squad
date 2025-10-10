@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"hyperion-coordinator-mcp/embeddings"
 	"hyperion-coordinator-mcp/scanner"
@@ -21,7 +22,7 @@ import (
 type CodeToolsHandler struct {
 	codeIndexStorage *storage.CodeIndexStorage
 	qdrantClient     *storage.QdrantClient
-	embeddingClient  *embeddings.OpenAIClient
+	embeddingClient  embeddings.EmbeddingClient
 	fileScanner      *scanner.FileScanner
 	fileWatcher      *watcher.FileWatcher
 	logger           *zap.Logger
@@ -31,7 +32,7 @@ type CodeToolsHandler struct {
 func NewCodeToolsHandler(
 	codeIndexStorage *storage.CodeIndexStorage,
 	qdrantClient *storage.QdrantClient,
-	embeddingClient *embeddings.OpenAIClient,
+	embeddingClient embeddings.EmbeddingClient,
 	fileWatcher *watcher.FileWatcher,
 	logger *zap.Logger,
 ) *CodeToolsHandler {
@@ -163,7 +164,7 @@ func (h *CodeToolsHandler) registerScan(server *mcp.Server) error {
 func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "code_index_search",
-		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers.",
+		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Content can be retrieved as chunks (default) or full files.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -178,6 +179,11 @@ func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 				"folderPath": {
 					Type:        "string",
 					Description: "Optional: filter results to a specific folder path",
+				},
+				"retrieve": {
+					Type:        "string",
+					Description: "Content retrieval mode: 'chunk' (default - return matching chunk only) or 'full' (return entire file content)",
+					Enum:        []interface{}{"chunk", "full"},
 				},
 			},
 			Required: []string{"query"},
@@ -511,6 +517,14 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		limit = 50
 	}
 
+	// Get retrieve mode (default: "chunk")
+	retrieveMode := "chunk"
+	if mode, ok := args["retrieve"].(string); ok {
+		if mode == "full" || mode == "chunk" {
+			retrieveMode = mode
+		}
+	}
+
 	// Generate embedding for query
 	queryEmbedding, err := h.embeddingClient.CreateEmbedding(query)
 	if err != nil {
@@ -557,8 +571,35 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		if endLine, ok := hit.Payload["endLine"].(float64); ok {
 			result.EndLine = int(endLine)
 		}
-		if content, ok := hit.Payload["content"].(string); ok {
-			result.Content = content
+
+		// Handle content based on retrieve mode
+		if retrieveMode == "chunk" {
+			// Default: return just the matching chunk content from Qdrant
+			if content, ok := hit.Payload["content"].(string); ok {
+				result.Content = content
+			}
+		} else if retrieveMode == "full" {
+			// Fetch entire file content from MongoDB
+			if result.FileID != "" {
+				allChunks, err := h.codeIndexStorage.GetChunksByFileID(result.FileID)
+				if err != nil {
+					h.logger.Warn("Failed to fetch full file content",
+						zap.String("fileID", result.FileID),
+						zap.Error(err))
+					// Fallback to chunk content
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				} else {
+					// Concatenate all chunks to build full file content
+					var fullContent strings.Builder
+					for _, chunk := range allChunks {
+						fullContent.WriteString(chunk.Content)
+					}
+					result.Content = fullContent.String()
+					result.FullFileRetrieved = true
+				}
+			}
 		}
 
 		results = append(results, result)
@@ -566,13 +607,15 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 
 	h.logger.Info("Code search completed",
 		zap.String("query", query),
+		zap.String("retrieveMode", retrieveMode),
 		zap.Int("results", len(results)))
 
 	jsonData, _ := json.Marshal(map[string]interface{}{
-		"success": true,
-		"query":   query,
-		"results": results,
-		"count":   len(results),
+		"success":      true,
+		"query":        query,
+		"retrieveMode": retrieveMode,
+		"results":      results,
+		"count":        len(results),
 	})
 
 	return &mcp.CallToolResult{
@@ -596,10 +639,38 @@ func (h *CodeToolsHandler) handleStatus(ctx context.Context) (*mcp.CallToolResul
 		return createCodeIndexErrorResult(fmt.Sprintf("failed to list folders: %s", err.Error())), nil
 	}
 
+	// Calculate total size from all files
+	totalSize := int64(0)
+	for _, folder := range folders {
+		files, _ := h.codeIndexStorage.ListFiles(folder.ID)
+		for _, file := range files {
+			totalSize += file.Size
+		}
+	}
+
+	// Determine watcher status (running if file watcher exists and has active folders)
+	watcherStatus := "stopped"
+	if h.fileWatcher != nil && status.ActiveFolders > 0 {
+		watcherStatus = "running"
+	}
+
+	// Transform folders to UI format
+	uiFolders := make([]map[string]interface{}, 0, len(folders))
+	for _, folder := range folders {
+		uiFolders = append(uiFolders, map[string]interface{}{
+			"folderPath": folder.Path,
+			"fileCount":  folder.FileCount,
+			"enabled":    folder.Status == "active",
+		})
+	}
+
+	// Return in UI-expected format
 	jsonData, _ := json.Marshal(map[string]interface{}{
-		"success": true,
-		"status":  status,
-		"folders": folders,
+		"totalFolders":  status.TotalFolders,
+		"totalFiles":    status.TotalFiles,
+		"totalSize":     totalSize,
+		"watcherStatus": watcherStatus,
+		"folders":       uiFolders,
 	})
 
 	return &mcp.CallToolResult{

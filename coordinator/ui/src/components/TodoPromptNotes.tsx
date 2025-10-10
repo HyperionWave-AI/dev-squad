@@ -18,7 +18,7 @@ import {
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import type { TodoItem } from '../types/coordinator';
-import { mcpClient } from '../services/mcpClient';
+import { restClient } from '../services/restClient';
 
 interface TodoPromptNotesProps {
   todo: TodoItem;
@@ -55,9 +55,9 @@ export function TodoPromptNotes({
     setIsSaving(true);
     try {
       if (todo.humanPromptNotes) {
-        await mcpClient.updateTodoPromptNotes(agentTaskId, todo.id, draftNotes);
+        await restClient.updateTodoPromptNotes(agentTaskId, todo.id, draftNotes);
       } else {
-        await mcpClient.addTodoPromptNotes(agentTaskId, todo.id, draftNotes);
+        await restClient.addTodoPromptNotes(agentTaskId, todo.id, draftNotes);
       }
       setIsEditing(false);
       onUpdate();

@@ -1,54 +1,32 @@
 version: '3.8'
 
-# 6 Containers: MCP Server, HTTP Bridge, UI, MongoDB, Qdrant, (optional: Mongo Express)
-services:
-  # MCP Server (HTTP mode for Claude CLI)
-  hyperion-mcp-server:
-    build:
-      context: ./coordinator/mcp-server
-      dockerfile: Dockerfile
-    container_name: hyperion-mcp-server
-    ports:
-      - "7778:7778"
-    environment:
-      - TRANSPORT_MODE=http
-      - MCP_PORT=7778
-      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
-      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
-      - QDRANT_API_KEY=${QDRANT_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-    depends_on:
-      mongodb:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - hyperion-network
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:7778/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+# Unified Coordinator Production Setup
+# Architecture: UI → REST API → Storage Layer (NO MCP proxying)
+#
+# Services:
+#   - hyperion-coordinator: Unified service (REST API + UI serving)
+#   - mongodb: Database for tasks, files, chunks
+#   - qdrant: Vector database (optional, can use cloud)
+#   - embedding-service: Text embeddings for code search
 
-  # HTTP Bridge (connects MCP server to UI via HTTP)
-  hyperion-http-bridge:
-    build:
-      context: ./coordinator
-      dockerfile: mcp-http-bridge/Dockerfile.combined
-    container_name: hyperion-http-bridge
+services:
+  # Unified Coordinator (replaces mcp-server + http-bridge)
+  hyperion-coordinator:
+    image: us-central1-docker.pkg.dev/production-471918/hyperion-public/hyperion-coordinator:latest
     ports:
-      - "7095:7095"
+      - "${HTTP_PORT:-7095}:7095"  # REST API + UI serving
     environment:
-      - MCP_SERVER_PATH=/app/hyper-mcp
-      - PORT=7095
+      - HTTP_PORT=7095
       - MONGODB_URI=${MONGODB_URI:-mongodb://admin:admin123@mongodb:27017/coordinator_db?authSource=admin}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - EMBEDDING=${EMBEDDING:-local}
+      - TEI_URL=${TEI_URL:-http://embedding-service:8080}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - CODE_INDEX_FOLDERS=${CODE_INDEX_FOLDERS:-}
+      - CODE_INDEX_AUTO_SCAN=${CODE_INDEX_AUTO_SCAN:-false}
     depends_on:
       mongodb:
         condition: service_healthy
@@ -62,38 +40,14 @@ services:
       retries: 3
       start_period: 10s
 
-  # React UI
-  hyperion-ui:
-    build:
-      context: ./coordinator/ui
-      dockerfile: Dockerfile
-      args:
-        - VITE_MCP_BRIDGE_URL=http://localhost:7095
-    container_name: hyperion-ui
-    ports:
-      - "5173:80"
-    depends_on:
-      hyperion-http-bridge:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - hyperion-network
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
   # MongoDB Database
   mongodb:
     image: mongo:7.0
-    container_name: hyperion-mongodb
-    ports:
-      - "27017:27017"
+    # No external port - internal communication only
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=admin
-      - MONGO_INITDB_ROOT_PASSWORD=admin123
-      - MONGO_INITDB_DATABASE=coordinator_db
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-admin123}
+      - MONGO_INITDB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
@@ -108,14 +62,12 @@ services:
       start_period: 10s
 
   # Qdrant Vector Database (Optional - only for local development)
+  # For production, use managed Qdrant Cloud instead
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: hyperion-qdrant
     profiles:
       - local-qdrant  # Only starts with --profile local-qdrant
-    ports:
-      - "6333:6333"  # HTTP API
-      - "6334:6334"  # gRPC API
+    # No external ports - internal communication only
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
@@ -128,15 +80,13 @@ services:
       retries: 3
       start_period: 10s
 
-  # Hugging Face Text Embeddings Inference (TEI) - Nomic Embed Code model
+  # Hugging Face Text Embeddings Inference (TEI) - Nomic Embed Text model
   # Note: TEI runs on CPU-only mode. On ARM64 (Apple Silicon), uses platform emulation.
   embedding-service:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
-    container_name: hyperion-embedding-service
     platform: linux/amd64
     command: --model-id nomic-ai/nomic-embed-text-v1.5 --port 8080
-    ports:
-      - "8080:8080"
+    # No external port - internal communication only
     environment:
       - HF_HUB_CACHE=/data
     volumes:
