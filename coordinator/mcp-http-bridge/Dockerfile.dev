@@ -16,16 +16,19 @@ COPY . .
 # Expose HTTP bridge port
 EXPOSE 7095
 
-# Entrypoint script that builds MCP server on startup
-# This allows hot-reload from mounted source volume
+# Entrypoint script that verifies MCP server binary exists
+# The MCP server binary should be pre-built in the mcp-binaries volume
 RUN echo '#!/bin/sh' > /entrypoint.sh && \
     echo 'set -e' >> /entrypoint.sh && \
-    echo 'echo "Building MCP server from source..."' >> /entrypoint.sh && \
-    echo 'cd /app/mcp-server-src' >> /entrypoint.sh && \
-    echo 'GOOS=linux GOARCH=amd64 go build -o /app/mcp-server/hyperion-coordinator-mcp .' >> /entrypoint.sh && \
-    echo 'echo "MCP server built successfully at /app/mcp-server/hyperion-coordinator-mcp"' >> /entrypoint.sh && \
+    echo 'echo "Checking for MCP server binary..."' >> /entrypoint.sh && \
+    echo 'if [ ! -f /app/mcp-server/hyperion-coordinator-mcp ]; then' >> /entrypoint.sh && \
+    echo '  echo "ERROR: MCP server binary not found at /app/mcp-server/hyperion-coordinator-mcp"' >> /entrypoint.sh && \
+    echo '  echo "The mcp-binaries volume should contain the pre-built MCP server"' >> /entrypoint.sh && \
+    echo '  exit 1' >> /entrypoint.sh && \
+    echo 'fi' >> /entrypoint.sh && \
+    echo 'echo "MCP server binary found:"' >> /entrypoint.sh && \
     echo 'ls -lh /app/mcp-server/hyperion-coordinator-mcp' >> /entrypoint.sh && \
-    echo 'echo "Starting Air hot-reload..."' >> /entrypoint.sh && \
+    echo 'echo "Starting Air hot-reload for HTTP bridge..."' >> /entrypoint.sh && \
     echo 'exec air -c .air.toml' >> /entrypoint.sh && \
     chmod +x /entrypoint.sh
 

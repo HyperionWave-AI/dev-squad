@@ -10,12 +10,13 @@ import {
   Box,
   IconButton,
 } from '@mui/material';
-import { Dashboard, Psychology, Refresh } from '@mui/icons-material';
+import { Dashboard, Psychology, Refresh, Code } from '@mui/icons-material';
 import { theme } from './theme';
 import { KanbanBoard } from './components/KanbanBoard';
 import { KnowledgeBrowser } from './components/KnowledgeBrowser';
+import { CodeSearchPage } from './pages/CodeSearchPage';
 
-type View = 'dashboard' | 'knowledge';
+type View = 'dashboard' | 'knowledge' | 'code-search';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
@@ -91,6 +92,17 @@ function App() {
               >
                 Knowledge
               </Button>
+              <Button
+                variant={currentView === 'code-search' ? 'contained' : 'outlined'}
+                startIcon={<Code />}
+                onClick={() => setCurrentView('code-search')}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 500,
+                }}
+              >
+                Code Search
+              </Button>
               <IconButton
                 onClick={handleRefresh}
                 color="primary"
@@ -116,6 +128,7 @@ function App() {
           <Container maxWidth="xl">
             {currentView === 'dashboard' && <KanbanBoard key={refreshKey} />}
             {currentView === 'knowledge' && <KnowledgeBrowser key={refreshKey} />}
+            {currentView === 'code-search' && <CodeSearchPage key={refreshKey} />}
           </Container>
         </Box>
 

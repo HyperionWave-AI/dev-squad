@@ -128,12 +128,37 @@ services:
       retries: 3
       start_period: 10s
 
+  # Hugging Face Text Embeddings Inference (TEI) - Nomic Embed Code model
+  # Note: TEI runs on CPU-only mode. On ARM64 (Apple Silicon), uses platform emulation.
+  embedding-service:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: hyperion-embedding-service
+    platform: linux/amd64
+    command: --model-id nomic-ai/nomic-embed-text-v1.5 --port 8080
+    ports:
+      - "8080:8080"
+    environment:
+      - HF_HUB_CACHE=/data
+    volumes:
+      - embedding_cache:/data
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
 volumes:
   mongodb_data:
     driver: local
   mongodb_config:
     driver: local
   qdrant_data:
+    driver: local
+  embedding_cache:
     driver: local
 
 networks:

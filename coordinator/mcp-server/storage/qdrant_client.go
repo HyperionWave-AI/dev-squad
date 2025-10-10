@@ -359,3 +359,236 @@ func (c *QdrantClient) Ping(ctx context.Context) error {
 
 	return nil
 }
+
+// Code Indexing specific methods (using float32 vectors)
+
+const (
+	CodeIndexCollection = "code_index"
+	CodeIndexVectorSize = 1536 // OpenAI text-embedding-3-small dimension
+)
+
+// CodeIndexPoint represents a code indexing point with float32 vectors
+type CodeIndexPoint struct {
+	ID      string                 `json:"id"`
+	Vector  []float32              `json:"vector"`
+	Payload map[string]interface{} `json:"payload"`
+}
+
+// CodeIndexSearchResponse represents a search response for code indexing
+type CodeIndexSearchResponse struct {
+	Result []struct {
+		ID      string                 `json:"id"`
+		Score   float32                `json:"score"`
+		Payload map[string]interface{} `json:"payload"`
+		Vector  []float32              `json:"vector,omitempty"`
+	} `json:"result"`
+}
+
+// EnsureCodeIndexCollection creates the code index collection if it doesn't exist
+func (c *QdrantClient) EnsureCodeIndexCollection() error {
+	// Check if collection exists
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/collections/%s", c.baseURL, CodeIndexCollection), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to check collection: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Collection exists
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	// Create collection
+	collectionConfig := map[string]interface{}{
+		"vectors": map[string]interface{}{
+			"size":     CodeIndexVectorSize,
+			"distance": "Cosine",
+		},
+	}
+
+	jsonBody, err := json.Marshal(collectionConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal collection config: %w", err)
+	}
+
+	req, err = http.NewRequest("PUT", fmt.Sprintf("%s/collections/%s", c.baseURL, CodeIndexCollection), bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err = c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create collection: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create collection (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// UpsertCodeIndexPoints upserts code indexing points into the collection
+func (c *QdrantClient) UpsertCodeIndexPoints(points []CodeIndexPoint) error {
+	requestBody := map[string]interface{}{
+		"points": points,
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal points: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points?wait=true", c.baseURL, CodeIndexCollection)
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upsert points: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to upsert points (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// SearchCodeIndex performs a vector similarity search for code
+func (c *QdrantClient) SearchCodeIndex(vector []float32, limit int) (*CodeIndexSearchResponse, error) {
+	searchReq := map[string]interface{}{
+		"vector":       vector,
+		"limit":        limit,
+		"with_payload": true,
+		"with_vector":  false,
+	}
+
+	jsonBody, err := json.Marshal(searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal search request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points/search", c.baseURL, CodeIndexCollection)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("search failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var searchResp CodeIndexSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+		return nil, fmt.Errorf("failed to decode search response: %w", err)
+	}
+
+	return &searchResp, nil
+}
+
+// DeleteCodeIndexByFilter deletes code index points matching a filter
+func (c *QdrantClient) DeleteCodeIndexByFilter(filter map[string]interface{}) error {
+	requestBody := map[string]interface{}{
+		"filter": filter,
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", c.baseURL, CodeIndexCollection)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete by filter: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete by filter (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// UpsertCodeIndexPoint upserts a single code index point (helper for file watcher)
+func (c *QdrantClient) UpsertCodeIndexPoint(id string, vector []float32, payload map[string]interface{}) error {
+	point := CodeIndexPoint{
+		ID:      id,
+		Vector:  vector,
+		Payload: payload,
+	}
+	return c.UpsertCodeIndexPoints([]CodeIndexPoint{point})
+}
+
+// DeleteCodeIndexPoint deletes a single code index point (helper for file watcher)
+func (c *QdrantClient) DeleteCodeIndexPoint(pointID string) error {
+	requestBody := map[string]interface{}{
+		"points": []string{pointID},
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", c.baseURL, CodeIndexCollection)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete point: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete point (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
