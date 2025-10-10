@@ -13,7 +13,7 @@ import { Search } from '@mui/icons-material';
 import { DragDropContext, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { KanbanTaskCard } from './KanbanTaskCard';
 import { TaskDetailDialog } from './TaskDetailDialog';
-import { mcpClient } from '../services/mcpClient';
+import { restClient } from '../services/restClient';
 import type { HumanTask, AgentTask, TaskStatus, FlattenedTask } from '../types/coordinator';
 
 interface KanbanColumn {
@@ -72,19 +72,18 @@ export function KanbanBoard() {
     console.log('[KanbanBoard] loadTasks called, selectedTask:', selectedTask?.id, 'dialogOpen:', dialogOpen);
     try {
       setError(null);
-      await mcpClient.connect();
-      const [humanTasks, agents] = await Promise.all([
-        mcpClient.listHumanTasks(),
-        mcpClient.listAgentTasks()
+      const [humanTasks, agentResponse] = await Promise.all([
+        restClient.listHumanTasks(),
+        restClient.listAgentTasks()
       ]);
-      console.log('[KanbanBoard] Tasks loaded, agents count:', agents.length);
+      console.log('[KanbanBoard] Tasks loaded, agents count:', agentResponse.length);
       setTasks(humanTasks);
-      setAgentTasks(agents);
+      setAgentTasks(agentResponse);
 
       // If dialog is open, refresh the selected task with fresh data
       if (selectedTask && dialogOpen) {
         console.log('[KanbanBoard] Refreshing selected task:', selectedTask.id);
-        refreshSelectedTask(selectedTask.id, humanTasks, agents);
+        refreshSelectedTask(selectedTask.id, humanTasks, agentResponse);
       } else {
         console.log('[KanbanBoard] Not refreshing - selectedTask:', !!selectedTask, 'dialogOpen:', dialogOpen);
       }
@@ -249,11 +248,11 @@ export function KanbanBoard() {
 
     // Update on server (only Human and Agent tasks can be dragged)
     try {
-      await mcpClient.updateTaskStatus({
-        taskId: draggableId,
-        status: newStatus,
-        notes: `Status changed from ${source.droppableId} to ${newStatus}`,
-      });
+      await restClient.updateTaskStatus(
+        draggableId,
+        newStatus,
+        `Status changed from ${source.droppableId} to ${newStatus}`
+      );
 
       // Optimistic update for human tasks
       setTasks((prevTasks) =>

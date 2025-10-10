@@ -8,7 +8,7 @@ import {
 } from '../components/code';
 import type { SearchResult } from '../types/codeIndex';
 import type { SearchOptions } from '../components/code/CodeSearch';
-import { codeClient } from '../services/codeClient';
+import { restCodeClient } from '../services/restCodeClient';
 
 export const CodeSearchPage: React.FC = () => {
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -17,9 +17,7 @@ export const CodeSearchPage: React.FC = () => {
   const handleSearch = async (query: string, options: SearchOptions) => {
     try {
       setLoading(true);
-      const searchResults = await codeClient.search(query, {
-        fileTypes: options.fileTypes,
-        minScore: options.minScore,
+      const searchResults = await restCodeClient.search(query, {
         limit: options.limit,
       });
       setResults(searchResults);

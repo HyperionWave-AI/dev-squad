@@ -364,7 +364,7 @@ func (c *QdrantClient) Ping(ctx context.Context) error {
 
 const (
 	CodeIndexCollection = "code_index"
-	CodeIndexVectorSize = 1536 // OpenAI text-embedding-3-small dimension
+	CodeIndexVectorSize = 768 // TEI nomic-embed-text-v1.5 dimension (default)
 )
 
 // CodeIndexPoint represents a code indexing point with float32 vectors

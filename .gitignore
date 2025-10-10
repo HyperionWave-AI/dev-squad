@@ -10,3 +10,7 @@
 .env
 coordinator/mcp-http-bridge/hyperion-coordinator-bridge
 /.playwright-mcp
+
+# Local Hyperion configuration
+.hyper
+docker-compose.*.yml
