@@ -1,3 +1,23 @@
+// ============================================================================
+// ⚠️  DEPRECATED: DO NOT USE THIS FILE - USE REST API INSTEAD
+// ============================================================================
+//
+// ARCHITECTURE VIOLATION: Direct MCP calls from UI are forbidden.
+//
+// The correct architecture is:
+//   UI → REST API → Storage Layer (NO MCP proxying)
+//
+// Use these REST clients instead:
+//   - restClient.ts → For tasks, todos, knowledge operations
+//   - restCodeClient.ts → For code index operations
+//   - knowledgeApi.ts → For knowledge base operations
+//
+// All REST endpoints are implemented in:
+//   - coordinator/internal/api/rest_handler.go (unified coordinator)
+//
+// This file exists only for legacy compatibility and will be removed.
+// ============================================================================
+
 // MCP Client for connecting to coordinator MCP server via HTTP bridge
 import type { HumanTask, AgentTask, KnowledgeEntry } from '../types/coordinator';
 
@@ -36,7 +56,7 @@ class MCPCoordinatorClient {
   private async callTool(name: string, args: Record<string, any>): Promise<any> {
     const requestId = `req-${++this.requestId}`;
 
-    const response = await fetch(`${this.bridgeUrl}/api/mcp/tools/call`, {
+    const response = await fetch(`${this.bridgeUrl}/mcp/tools/call`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -76,7 +96,7 @@ class MCPCoordinatorClient {
   private async readResource(uri: string): Promise<any> {
     const requestId = `req-${++this.requestId}`;
 
-    const response = await fetch(`${this.bridgeUrl}/api/mcp/resources/read?uri=${encodeURIComponent(uri)}`, {
+    const response = await fetch(`${this.bridgeUrl}/mcp/resources/read?uri=${encodeURIComponent(uri)}`, {
       method: 'GET',
       headers: {
         'X-Request-ID': requestId,

@@ -2,12 +2,12 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TodoPromptNotes } from '../TodoPromptNotes';
-import { mcpClient } from '../../services/mcpClient';
+import { restClient } from '../../services/restClient';
 import type { TodoItem } from '../../types/coordinator';
 
-// Mock MCP client
-jest.mock('../../services/mcpClient', () => ({
-  mcpClient: {
+// Mock REST client
+jest.mock('../../services/restClient', () => ({
+  restClient: {
     addTodoPromptNotes: jest.fn(),
     updateTodoPromptNotes: jest.fn(),
   },
@@ -114,7 +114,7 @@ describe('TodoPromptNotes', () => {
   test('should call addTodoPromptNotes when adding new note', async () => {
     const user = userEvent.setup();
     const todo = createTodoWithNotes(); // No notes initially
-    (mcpClient.addTodoPromptNotes as jest.Mock).mockResolvedValue(undefined);
+    (restClient.addTodoPromptNotes as jest.Mock).mockResolvedValue(undefined);
 
     render(
       <TodoPromptNotes
@@ -142,7 +142,7 @@ describe('TodoPromptNotes', () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mcpClient.addTodoPromptNotes).toHaveBeenCalledWith(
+      expect(restClient.addTodoPromptNotes).toHaveBeenCalledWith(
         agentTaskId,
         'todo-1',
         'New TODO note'
@@ -154,7 +154,7 @@ describe('TodoPromptNotes', () => {
   test('should call updateTodoPromptNotes when editing existing note', async () => {
     const user = userEvent.setup();
     const todo = createTodoWithNotes('Existing note');
-    (mcpClient.updateTodoPromptNotes as jest.Mock).mockResolvedValue(undefined);
+    (restClient.updateTodoPromptNotes as jest.Mock).mockResolvedValue(undefined);
 
     render(
       <TodoPromptNotes
@@ -182,7 +182,7 @@ describe('TodoPromptNotes', () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mcpClient.updateTodoPromptNotes).toHaveBeenCalledWith(
+      expect(restClient.updateTodoPromptNotes).toHaveBeenCalledWith(
         agentTaskId,
         'todo-1',
         'Updated note'
@@ -261,7 +261,7 @@ describe('TodoPromptNotes', () => {
     const todo = createTodoWithNotes();
 
     // Mock slow save operation
-    (mcpClient.addTodoPromptNotes as jest.Mock).mockImplementation(
+    (restClient.addTodoPromptNotes as jest.Mock).mockImplementation(
       () => new Promise(resolve => setTimeout(resolve, 100))
     );
 
@@ -296,7 +296,7 @@ describe('TodoPromptNotes', () => {
     const todo = createTodoWithNotes();
     const consoleError = jest.spyOn(console, 'error').mockImplementation();
 
-    (mcpClient.addTodoPromptNotes as jest.Mock).mockRejectedValue(
+    (restClient.addTodoPromptNotes as jest.Mock).mockRejectedValue(
       new Error('Network error')
     );
 

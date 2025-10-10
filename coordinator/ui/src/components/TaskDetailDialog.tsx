@@ -39,7 +39,7 @@ import {
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import type { HumanTask, AgentTask, FlattenedTask, Priority, TaskStatus, TodoStatus } from '../types/coordinator';
-import { mcpClient } from '../services/mcpClient';
+import { restClient } from '../services/restClient';
 import { PromptNotesEditor } from './PromptNotesEditor';
 import { TodoPromptNotes } from './TodoPromptNotes';
 
@@ -126,9 +126,8 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
 
     try {
       setLoading(true);
-      await mcpClient.connect();
-      const allAgentTasks = await mcpClient.listAgentTasks();
-      const relatedTasks = allAgentTasks.filter(at => at.humanTaskId === task.id);
+      const agentTasks = await restClient.listAgentTasks();
+      const relatedTasks = agentTasks.filter(at => at.humanTaskId === task.id);
       setAgentTasks(relatedTasks);
     } catch (error) {
       console.error('Failed to load agent tasks:', error);
@@ -142,8 +141,7 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
 
     try {
       setLoading(true);
-      await mcpClient.connect();
-      const parent = await mcpClient.getHumanTask(task.humanTaskId);
+      const parent = await restClient.getHumanTask(task.humanTaskId);
       setParentTask(parent);
     } catch (error) {
       console.error('Failed to load parent task:', error);
@@ -158,9 +156,8 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
 
     try {
       setLoading(true);
-      await mcpClient.connect();
-      const allAgentTasks = await mcpClient.listAgentTasks();
-      const updatedTask = allAgentTasks.find(at => at.id === task.id);
+      const agentTasks = await restClient.listAgentTasks();
+      const updatedTask = agentTasks.find(at => at.id === task.id);
 
       console.log('[TaskDetailDialog] Updated task found:', !!updatedTask, 'has notes:', updatedTask?.humanPromptNotes);
       if (updatedTask && onTaskUpdate) {
@@ -215,9 +212,9 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
 
     try {
       if (agentTask.humanPromptNotes) {
-        await mcpClient.updateTaskPromptNotes(agentTaskId, notes);
+        await restClient.updateTaskPromptNotes(agentTaskId, notes);
       } else {
-        await mcpClient.addTaskPromptNotes(agentTaskId, notes);
+        await restClient.addTaskPromptNotes(agentTaskId, notes);
       }
       handleRefresh();
     } catch (error) {
@@ -228,7 +225,7 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
 
   const handleClearTaskNotes = async (agentTaskId: string) => {
     try {
-      await mcpClient.clearTaskPromptNotes(agentTaskId);
+      await restClient.clearTaskPromptNotes(agentTaskId);
       handleRefresh();
     } catch (error) {
       console.error('Failed to clear task notes:', error);
@@ -464,17 +461,15 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
               notesAddedAt={task.humanPromptNotesAddedAt}
               isEditable={task.status === 'pending'}
               onSave={async (notes) => {
-                await mcpClient.connect();
                 if (task.humanPromptNotes) {
-                  await mcpClient.updateTaskPromptNotes(task.id, notes);
+                  await restClient.updateTaskPromptNotes(task.id, notes);
                 } else {
-                  await mcpClient.addTaskPromptNotes(task.id, notes);
+                  await restClient.addTaskPromptNotes(task.id, notes);
                 }
                 handleRefresh();
               }}
               onClear={async () => {
-                await mcpClient.connect();
-                await mcpClient.clearTaskPromptNotes(task.id);
+                await restClient.clearTaskPromptNotes(task.id);
                 handleRefresh();
               }}
               placeholder="Add human guidance notes to help the agent understand requirements, constraints, or context..."
