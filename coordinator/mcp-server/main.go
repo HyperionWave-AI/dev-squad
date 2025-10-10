@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"hyperion-coordinator-mcp/embeddings"
@@ -120,16 +121,59 @@ func main() {
 	}
 	logger.Info("Qdrant code index collection ensured")
 
-	// Initialize OpenAI embedding client
-	openAIKey := os.Getenv("OPENAI_API_KEY")
-	if openAIKey == "" {
-		logger.Warn("OPENAI_API_KEY not set - code indexing features will be limited")
+	// Initialize embedding client based on EMBEDDING environment variable
+	var embeddingClient embeddings.EmbeddingClient
+	embeddingMode := os.Getenv("EMBEDDING")
+	if embeddingMode == "" {
+		embeddingMode = "local" // Default to local TEI
 	}
-	embeddingClient := embeddings.NewOpenAIClient(openAIKey)
-	logger.Info("OpenAI embedding client initialized")
 
-	// Initialize file watcher
-	fileWatcher, err := watcher.NewFileWatcher(codeIndexStorage, qdrantClient, embeddingClient, logger)
+	switch embeddingMode {
+	case "local":
+		// Use local TEI service (Hugging Face Text Embeddings Inference)
+		teiURL := os.Getenv("TEI_URL")
+		if teiURL == "" {
+			teiURL = "http://embedding-service:8080" // Default TEI URL
+		}
+		embeddingClient = embeddings.NewTEIClient(teiURL)
+		logger.Info("Using local TEI embedding service",
+			zap.String("url", teiURL),
+			zap.String("model", "nomic-ai/nomic-embed-text-v1.5"),
+			zap.Int("dimensions", 768))
+
+	case "openai":
+		// Use OpenAI embeddings
+		openAIKey := os.Getenv("OPENAI_API_KEY")
+		if openAIKey == "" {
+			logger.Fatal("OPENAI_API_KEY is required when EMBEDDING=openai")
+		}
+		embeddingClient = embeddings.NewOpenAIClient(openAIKey)
+		logger.Info("Using OpenAI embedding service",
+			zap.String("model", "text-embedding-3-small"),
+			zap.Int("dimensions", 1536))
+
+	default:
+		logger.Fatal("Invalid EMBEDDING mode. Use 'local' or 'openai'",
+			zap.String("mode", embeddingMode))
+	}
+
+	// Initialize path mapper for Docker volume mapping
+	pathMappingsEnv := os.Getenv("CODE_INDEX_PATH_MAPPINGS")
+	pathMapper := watcher.NewPathMapper(pathMappingsEnv, logger)
+	if pathMapper.HasMappings() {
+		logger.Info("Path mapper configured",
+			zap.Int("mappings", len(pathMapper.GetMappings())))
+		for host, container := range pathMapper.GetMappings() {
+			logger.Info("Path mapping",
+				zap.String("host", host),
+				zap.String("container", container))
+		}
+	} else {
+		logger.Info("No path mappings configured - running on host")
+	}
+
+	// Initialize file watcher (always enabled)
+	fileWatcher, err := watcher.NewFileWatcher(codeIndexStorage, qdrantClient, embeddingClient, pathMapper, logger)
 	if err != nil {
 		logger.Fatal("Failed to create file watcher", zap.Error(err))
 	}
@@ -150,6 +194,100 @@ func main() {
 			}
 		}
 		logger.Info("Loaded existing folders into file watcher", zap.Int("count", len(folders)))
+	}
+
+	// Auto-register folders from CODE_INDEX_FOLDERS environment variable
+	codeIndexFolders := os.Getenv("CODE_INDEX_FOLDERS")
+	if codeIndexFolders != "" {
+		folderPaths := strings.Split(codeIndexFolders, ",")
+		logger.Info("Auto-registering folders from CODE_INDEX_FOLDERS", zap.Int("count", len(folderPaths)))
+
+		for _, folderPath := range folderPaths {
+			folderPath = strings.TrimSpace(folderPath)
+			if folderPath == "" {
+				continue
+			}
+
+			// Check if folder already exists
+			existingFolder, err := codeIndexStorage.GetFolderByPath(folderPath)
+			if err != nil {
+				logger.Warn("Failed to check existing folder",
+					zap.String("path", folderPath),
+					zap.Error(err))
+				continue
+			}
+
+			if existingFolder != nil {
+				logger.Info("Folder already registered, skipping",
+					zap.String("path", folderPath))
+				continue
+			}
+
+			// Add new folder
+			newFolder, err := codeIndexStorage.AddFolder(folderPath, "Auto-registered from CODE_INDEX_FOLDERS")
+			if err != nil {
+				logger.Warn("Failed to auto-register folder",
+					zap.String("path", folderPath),
+					zap.Error(err))
+				continue
+			}
+
+			// Add to file watcher
+			if err := fileWatcher.AddFolder(newFolder); err != nil {
+				logger.Warn("Failed to add auto-registered folder to file watcher",
+					zap.String("path", folderPath),
+					zap.Error(err))
+			}
+
+			logger.Info("Auto-registered folder",
+				zap.String("path", folderPath),
+				zap.String("folderID", newFolder.ID))
+
+			// Trigger initial scan if AUTO_SCAN is enabled
+			if os.Getenv("CODE_INDEX_AUTO_SCAN") != "false" {
+				go func(folder *storage.IndexedFolder) {
+					logger.Info("Starting initial scan for auto-registered folder",
+						zap.String("path", folder.Path),
+						zap.String("folderID", folder.ID))
+
+					if err := fileWatcher.ScanFolder(folder); err != nil {
+						logger.Warn("Failed to scan auto-registered folder",
+							zap.String("path", folder.Path),
+							zap.Error(err))
+					} else {
+						logger.Info("Completed initial scan",
+							zap.String("path", folder.Path),
+							zap.String("folderID", folder.ID))
+					}
+				}(newFolder)
+			}
+		}
+	}
+
+	// Trigger initial scan for existing folders if AUTO_SCAN is enabled
+	if os.Getenv("CODE_INDEX_AUTO_SCAN") != "false" {
+		existingFolders, err := codeIndexStorage.ListFolders()
+		if err == nil {
+			for _, folder := range existingFolders {
+				if folder.FileCount == 0 && folder.Status == "active" {
+					go func(f *storage.IndexedFolder) {
+						logger.Info("Starting initial scan for existing folder",
+							zap.String("path", f.Path),
+							zap.String("folderID", f.ID))
+
+						if err := fileWatcher.ScanFolder(f); err != nil {
+							logger.Warn("Failed to scan existing folder",
+								zap.String("path", f.Path),
+								zap.Error(err))
+						} else {
+							logger.Info("Completed initial scan",
+								zap.String("path", f.Path),
+								zap.String("folderID", f.ID))
+						}
+					}(folder)
+				}
+			}
+		}
 	}
 
 	// Start file watcher

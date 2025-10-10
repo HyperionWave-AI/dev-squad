@@ -21,7 +21,7 @@ import {
   CircularProgress,
 } from '@mui/material';
 import { Add, Delete, FolderOpen, Refresh } from '@mui/icons-material';
-import { codeClient } from '../../services/codeClient';
+import { restCodeClient } from '../../services/restCodeClient';
 import type { IndexStatus } from '../../types/codeIndex';
 
 export const CodeIndexConfig: React.FC = () => {
@@ -49,7 +49,7 @@ export const CodeIndexConfig: React.FC = () => {
   const loadStatus = async () => {
     try {
       setLoading(true);
-      const data = await codeClient.getStatus();
+      const data = await restCodeClient.getStatus();
       setStatus(data);
     } catch (err) {
       console.error('Failed to load status:', err);
@@ -70,19 +70,13 @@ export const CodeIndexConfig: React.FC = () => {
 
     try {
       setLoading(true);
-      const excludeArray = excludePatterns
-        .split(',')
-        .map((p) => p.trim())
-        .filter(Boolean);
 
-      await codeClient.addFolder({
+      await restCodeClient.addFolder({
         folderPath: folderPath.trim(),
-        filePatterns: selectedPatterns,
-        excludePatterns: excludeArray,
       });
 
       // Trigger scan for new folder
-      await codeClient.scan();
+      await restCodeClient.scan(folderPath.trim());
 
       // Refresh status
       await loadStatus();
@@ -107,7 +101,7 @@ export const CodeIndexConfig: React.FC = () => {
 
     try {
       setLoading(true);
-      await codeClient.removeFolder(configId);
+      await restCodeClient.removeFolder(configId);
       await loadStatus();
     } catch (err) {
       console.error('Failed to remove folder:', err);
@@ -125,17 +119,8 @@ export const CodeIndexConfig: React.FC = () => {
     );
   };
 
-  const handleScan = async () => {
-    try {
-      setLoading(true);
-      await codeClient.scan();
-      await loadStatus();
-    } catch (err) {
-      console.error('Failed to trigger scan:', err);
-      alert(err instanceof Error ? err.message : 'Failed to trigger scan');
-    } finally {
-      setLoading(false);
-    }
+  const handleRefresh = async () => {
+    await loadStatus();
   };
 
   return (
@@ -147,7 +132,7 @@ export const CodeIndexConfig: React.FC = () => {
               <FolderOpen />
               Folder Configuration
             </Typography>
-            <IconButton onClick={handleScan} disabled={loading} size="small">
+            <IconButton onClick={handleRefresh} disabled={loading} size="small">
               <Refresh />
             </IconButton>
           </Box>
@@ -173,7 +158,7 @@ export const CodeIndexConfig: React.FC = () => {
                       <ListItemSecondaryAction>
                         <IconButton
                           edge="end"
-                          onClick={() => handleRemoveFolder(folder.folderPath)}
+                          onClick={() => handleRemoveFolder(folder.configId)}
                           disabled={loading}
                           size="small"
                         >

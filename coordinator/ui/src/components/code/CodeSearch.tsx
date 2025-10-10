@@ -22,6 +22,8 @@ export interface SearchOptions {
   fileTypes: string[];
   minScore: number;
   limit: number;
+  folderPath?: string;  // Optional: filter results to specific folder
+  retrieve?: 'chunk' | 'full';  // Optional: content retrieval mode
 }
 
 const FILE_TYPE_OPTIONS = [
