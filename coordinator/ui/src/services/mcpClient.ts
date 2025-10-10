@@ -49,12 +49,28 @@ class MCPCoordinatorClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Tool call failed');
+      let errorMsg = 'Tool call failed';
+      try {
+        const error = await response.json();
+        errorMsg = error.error || errorMsg;
+      } catch (e) {
+        errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      throw new Error(errorMsg);
     }
 
-    const result = await response.json();
-    return result;
+    const text = await response.text();
+    if (!text) {
+      throw new Error('Empty response from server');
+    }
+
+    try {
+      const result = JSON.parse(text);
+      return result;
+    } catch (e) {
+      console.error('Failed to parse response:', text);
+      throw new Error(`Invalid JSON response: ${text.substring(0, 100)}`);
+    }
   }
 
   private async readResource(uri: string): Promise<any> {
@@ -320,39 +336,24 @@ class MCPCoordinatorClient {
         limit: params.limit || 5
       });
 
-      // Parse results from MCP text response
-      const entries: KnowledgeEntry[] = [];
-
+      // MCP server now returns JSON array directly in text content
       if (result.content && result.content[0] && result.content[0].text) {
-        const text = result.content[0].text;
+        const jsonText = result.content[0].text;
 
-        // Parse "Result N (Score: X.XX)" entries
-        const resultRegex = /Result \d+ \(Score: ([\d.]+)\)\nText: (.*?)\nMetadata: ({[\s\S]*?})\n\n---/g;
-        let match;
-
-        while ((match = resultRegex.exec(text)) !== null) {
-          const score = parseFloat(match[1]);
-          const textContent = match[2];
-          const metadataStr = match[3];
-
-          try {
-            const metadata = JSON.parse(metadataStr);
-            entries.push({
-              id: metadata.id || 'unknown',
-              collection: params.collection,
-              text: metadata.text || textContent,
-              score,
-              metadata,
-              createdAt: metadata.createdAt || new Date().toISOString()
-            });
-          } catch (e) {
-            console.warn('Failed to parse metadata:', e);
-          }
+        try {
+          const entries = JSON.parse(jsonText) as KnowledgeEntry[];
+          console.log('[mcpClient] Knowledge query result:', entries.length, 'entries');
+          console.log('[mcpClient] First entry sample:', entries[0]);
+          return entries;
+        } catch (parseError) {
+          console.error('[mcpClient] Failed to parse knowledge query JSON:', parseError);
+          console.error('[mcpClient] Raw response:', jsonText);
+          return [];
         }
       }
 
-      console.log('Knowledge query result:', entries.length, 'entries found');
-      return entries;
+      console.log('[mcpClient] No knowledge entries found in response');
+      return [];
     } catch (error) {
       console.error('Failed to query knowledge:', error);
       throw error;
@@ -457,6 +458,31 @@ class MCPCoordinatorClient {
       });
     } catch (error) {
       console.error('Failed to clear todo prompt notes:', error);
+      throw error;
+    }
+  }
+
+  async getPopularCollections(limit?: number): Promise<Array<{ collection: string; count: number }>> {
+    try {
+      const result = await this.callTool('coordinator_get_popular_collections', {
+        limit: limit || 5
+      });
+
+      if (result.content && result.content[0] && result.content[0].text) {
+        const jsonText = result.content[0].text;
+        try {
+          const collections = JSON.parse(jsonText) as Array<{ collection: string; count: number }>;
+          console.log('[mcpClient] Popular collections result:', collections);
+          return collections;
+        } catch (parseError) {
+          console.error('[mcpClient] Failed to parse popular collections JSON:', parseError);
+          return [];
+        }
+      }
+
+      return [];
+    } catch (error) {
+      console.error('Failed to get popular collections:', error);
       throw error;
     }
   }
