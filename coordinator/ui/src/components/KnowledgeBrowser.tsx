@@ -26,7 +26,6 @@ export const KnowledgeBrowser: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collection, setCollection] = useState('All Collections');
-  const [lastSearch, setLastSearch] = useState<{ query: string; collection: string } | null>(null);
   const [popularCollections, setPopularCollections] = useState<Array<{ collection: string; count: number }>>([]);
 
   const collections = [
@@ -104,7 +103,6 @@ export const KnowledgeBrowser: React.FC = () => {
       }
 
       setResults(allEntries);
-      setLastSearch({ query, collection: collection || 'All Collections' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Search failed');
       console.error('Search error:', err);
