@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -86,7 +87,12 @@ func (s *CodeIndexStorage) AddFolder(path, description string) (*IndexedFolder, 
 		return nil, fmt.Errorf("failed to insert folder: %w", err)
 	}
 
-	folder.ID = result.InsertedID.(string)
+	// Convert ObjectID to string
+	if oid, ok := result.InsertedID.(primitive.ObjectID); ok {
+		folder.ID = oid.Hex()
+	} else {
+		folder.ID = fmt.Sprintf("%v", result.InsertedID)
+	}
 	return folder, nil
 }
 
@@ -227,7 +233,32 @@ func (s *CodeIndexStorage) UpsertFile(file *IndexedFile) error {
 
 	opts := options.Update().SetUpsert(true)
 	filter := bson.M{"path": file.Path}
-	update := bson.M{"$set": file}
+
+	// Build update document without _id field to avoid immutable field error
+	update := bson.M{
+		"$set": bson.M{
+			"folderId":     file.FolderID,
+			"path":         file.Path,
+			"relativePath": file.RelativePath,
+			"language":     file.Language,
+			"sha256":       file.SHA256,
+			"size":         file.Size,
+			"lineCount":    file.LineCount,
+			"indexedAt":    file.IndexedAt,
+			"updatedAt":    file.UpdatedAt,
+			"chunkCount":   file.ChunkCount,
+		},
+	}
+
+	// Only set vectorId if it's not empty
+	if file.VectorID != "" {
+		update["$set"].(bson.M)["vectorId"] = file.VectorID
+	}
+
+	// If this is an insert (upsert creating new doc), set the ID only on insert
+	if file.ID != "" {
+		update["$setOnInsert"] = bson.M{"_id": file.ID}
+	}
 
 	_, err := s.filesCol.UpdateOne(context.Background(), filter, update, opts)
 	if err != nil {
@@ -346,6 +377,11 @@ func (s *CodeIndexStorage) DeleteFile(ctx context.Context, fileID string) error 
 	}
 
 	return nil
+}
+
+// GetChunksByFileID retrieves all chunks for a file (alias for ListChunks for clarity)
+func (s *CodeIndexStorage) GetChunksByFileID(fileID string) ([]*FileChunk, error) {
+	return s.ListChunks(fileID)
 }
 
 // GetIndexStatus returns the current status of the code index

@@ -98,7 +98,8 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
       </Typography>
 
       {results.map((result, index) => {
-        const language = result.language || getLanguageForFile(result.fileName);
+        const fileName = result.fileName || result.relativePath || result.filePath.split('/').pop() || 'unknown';
+        const language = result.language || getLanguageForFile(fileName);
         const scorePercentage = Math.round(result.score * 100);
 
         return (
@@ -107,7 +108,7 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
               {/* File Header */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 600, flexGrow: 1 }}>
-                  {result.fileName}
+                  {fileName}
                 </Typography>
                 <Chip
                   label={language.toUpperCase()}
@@ -115,11 +116,13 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
                   color="primary"
                   variant="outlined"
                 />
-                <Chip
-                  label={`${result.lines} lines`}
-                  size="small"
-                  variant="outlined"
-                />
+                {result.startLine && result.endLine && (
+                  <Chip
+                    label={`Lines ${result.startLine}-${result.endLine}`}
+                    size="small"
+                    variant="outlined"
+                  />
+                )}
               </Box>
 
               {/* Score Bar */}
@@ -164,11 +167,11 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
                 </Tooltip>
               </Box>
 
-              {/* Code Excerpt */}
-              {result.excerpt && (
+              {/* Code Content */}
+              {result.content && (
                 <Box sx={{ mt: 2 }}>
                   <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-                    Code Excerpt:
+                    {result.fullFileRetrieved ? 'Full File:' : 'Code Chunk:'}
                   </Typography>
                   <Suspense
                     fallback={
@@ -187,10 +190,11 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
                         fontSize: '0.875rem',
                         margin: 0,
                       }}
-                      showLineNumbers
+                      showLineNumbers={result.startLine !== undefined}
+                      startingLineNumber={result.startLine}
                       wrapLines
                     >
-                      {result.excerpt}
+                      {result.content}
                     </SyntaxHighlighter>
                   </Suspense>
                 </Box>

@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  base: '/ui/',  // Base path for assets when deployed to /ui/ subdirectory
   server: {
     proxy: {
       '/api/mcp': {
@@ -17,6 +18,18 @@ export default defineConfig({
         target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
         changeOrigin: true
         // Don't rewrite - coordinator expects /api/knowledge prefix
+      },
+      '/api/tasks': {
+        // Proxy task board API calls to the MCP bridge
+        target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
+        changeOrigin: true
+        // Don't rewrite - bridge expects /api/tasks prefix
+      },
+      '/api/agent-tasks': {
+        // Proxy agent tasks API calls to the MCP bridge
+        target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
+        changeOrigin: true
+        // Don't rewrite - bridge expects /api/agent-tasks prefix
       },
       '/bridge-health': {
         target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',

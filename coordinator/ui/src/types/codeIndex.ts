@@ -17,12 +17,22 @@ export interface CodeFile {
 }
 
 export interface SearchResult {
+  fileId: string;
   filePath: string;
-  fileName: string;
-  score: number;
-  excerpt: string;
-  lines: number;
+  relativePath: string;
   language: string;
+  chunkNum?: number;
+  startLine?: number;
+  endLine?: number;
+  content: string;
+  score: number;
+  folderId: string;
+  folderPath: string;
+  fullFileRetrieved?: boolean;
+  // Legacy fields for backward compatibility
+  fileName?: string;
+  excerpt?: string;
+  lines?: number;
 }
 
 export interface IndexStatus {
@@ -31,6 +41,7 @@ export interface IndexStatus {
   totalSize: number;
   watcherStatus: 'running' | 'stopped';
   folders: Array<{
+    configId: string;
     folderPath: string;
     fileCount: number;
     enabled: boolean;
@@ -41,4 +52,6 @@ export interface SearchOptions {
   fileTypes?: string[];
   minScore?: number;
   limit?: number;
+  folderPath?: string;  // Optional: filter results to specific folder
+  retrieve?: 'chunk' | 'full';  // Optional: content retrieval mode
 }
