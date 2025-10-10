@@ -8,6 +8,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Load environment variables from parent .env file
+if [ -f "../.env" ]; then
+  echo "📝 Loading environment variables from ../.env"
+  export $(grep -v '^#' ../.env | xargs)
+fi
+
 echo "🚀 Starting Hyperion Coordinator Full Stack..."
 echo ""
 
