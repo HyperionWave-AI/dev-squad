@@ -53,9 +53,17 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
     volumes:
+      # Mount bridge source code (excludes binaries via .dockerignore)
       - ./coordinator/mcp-http-bridge:/app
-      - ./coordinator/mcp-server:/app/mcp-server:ro
+      # Mount MCP server SOURCE CODE only (not binaries)
+      # Binary is built inside container during docker build
+      - ./coordinator/mcp-server:/app/mcp-server-src:ro
+      # Use named volume for Go module cache
       - http-bridge-cache:/go/pkg/mod
+      # Named volume for compiled binaries (prevents host binary mount)
+      - mcp-binaries:/app/mcp-server
+      # Named volume for Air build artifacts (fixes read-only tmp directory issue)
+      - http-bridge-tmp:/app/tmp
     depends_on:
       - mongodb
       - qdrant
@@ -138,6 +146,8 @@ networks:
 volumes:
   mcp-server-cache:
   http-bridge-cache:
+  mcp-binaries:
+  http-bridge-tmp:
   mongodb_data_dev:
   mongodb_config_dev:
   qdrant_data_dev:
