@@ -7,7 +7,6 @@ services:
     build:
       context: ./coordinator/mcp-server
       dockerfile: Dockerfile.dev
-    container_name: hyperion-mcp-server-dev
     ports:
       - "${MCP_PORT:-7778}:7778"
     environment:
@@ -17,11 +16,16 @@ services:
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - EMBEDDING=${EMBEDDING:-local}
+      - TEI_URL=${TEI_URL:-http://embedding-service:8080}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - CODE_INDEX_FOLDERS=${CODE_INDEX_FOLDERS:-/workspace}
+      - CODE_INDEX_AUTO_SCAN=${CODE_INDEX_AUTO_SCAN:-true}
     volumes:
       - ./coordinator/mcp-server:/app
       - mcp-server-cache:/go/pkg/mod
+      - .:/workspace
     depends_on:
       - mongodb
       - qdrant
@@ -40,7 +44,6 @@ services:
     build:
       context: ./coordinator/mcp-http-bridge
       dockerfile: Dockerfile.dev
-    container_name: hyperion-http-bridge-dev
     ports:
       - "${BRIDGE_PORT:-7779}:7095"
     environment:
@@ -50,6 +53,8 @@ services:
       - MONGODB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - EMBEDDING=${EMBEDDING:-local}
+      - TEI_URL=${TEI_URL:-http://embedding-service:8080}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
     volumes:
@@ -79,7 +84,6 @@ services:
     build:
       context: ./coordinator/ui
       dockerfile: Dockerfile.dev
-    container_name: hyperion-ui-dev
     ports:
       - "${WEB_PORT:-7777}:5173"
     environment:
@@ -96,7 +100,6 @@ services:
   # MongoDB Database (local development)
   mongodb:
     image: mongo:7.0
-    container_name: hyperion-mongodb-dev
     ports:
       - "${MONGODB_PORT:-27017}:27017"
     environment:
@@ -119,7 +122,6 @@ services:
   # Qdrant Vector Database (local development)
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: hyperion-qdrant-dev
     ports:
       - "${QDRANT_HTTP_PORT:-6333}:6333"
       - "${QDRANT_GRPC_PORT:-6334}:6334"
@@ -139,7 +141,6 @@ services:
   # Note: TEI runs on CPU-only mode. On ARM64 (Apple Silicon), uses platform emulation.
   embedding-service:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
-    container_name: hyperion-embedding-service-dev
     platform: linux/amd64
     command: --model-id nomic-ai/nomic-embed-text-v1.5 --port 8080
     ports:
