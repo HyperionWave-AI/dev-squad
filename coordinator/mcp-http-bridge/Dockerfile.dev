@@ -3,18 +3,31 @@ FROM golang:1.25-alpine
 
 WORKDIR /app
 
-# Install Air for hot-reload
+# Install Air for hot-reload and build dependencies
 RUN go install github.com/air-verse/air@latest
 
-# Copy go mod files
+# Copy bridge go mod files and download dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source code
+# Copy bridge source code
 COPY . .
 
 # Expose HTTP bridge port
 EXPOSE 7095
 
-# Run with Air for hot-reload
-CMD ["air", "-c", ".air.toml"]
+# Entrypoint script that builds MCP server on startup
+# This allows hot-reload from mounted source volume
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'set -e' >> /entrypoint.sh && \
+    echo 'echo "Building MCP server from source..."' >> /entrypoint.sh && \
+    echo 'cd /app/mcp-server-src' >> /entrypoint.sh && \
+    echo 'GOOS=linux GOARCH=amd64 go build -o /app/mcp-server/hyperion-coordinator-mcp .' >> /entrypoint.sh && \
+    echo 'echo "MCP server built successfully at /app/mcp-server/hyperion-coordinator-mcp"' >> /entrypoint.sh && \
+    echo 'ls -lh /app/mcp-server/hyperion-coordinator-mcp' >> /entrypoint.sh && \
+    echo 'echo "Starting Air hot-reload..."' >> /entrypoint.sh && \
+    echo 'exec air -c .air.toml' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# Run entrypoint that builds MCP server then starts Air
+CMD ["/entrypoint.sh"]
