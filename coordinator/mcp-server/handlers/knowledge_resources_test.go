@@ -51,6 +51,21 @@ func (m *MockKnowledgeStorage) ListCollections() []string {
 	return m.collections
 }
 
+func (m *MockKnowledgeStorage) GetPopularCollections(limit int) ([]*storage.CollectionStats, error) {
+	// Return mock collection stats for testing
+	result := make([]*storage.CollectionStats, 0)
+	for i, col := range m.collections {
+		if limit > 0 && i >= limit {
+			break
+		}
+		result = append(result, &storage.CollectionStats{
+			Collection: col,
+			Count:      len(m.entries),
+		})
+	}
+	return result, nil
+}
+
 func TestKnowledgeResourceHandler_CollectionsResource(t *testing.T) {
 	mockStorage := &MockKnowledgeStorage{
 		collections: []string{"technical-knowledge", "code-patterns", "team-coordination"},

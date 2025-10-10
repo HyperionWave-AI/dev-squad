@@ -55,12 +55,9 @@ services:
     volumes:
       # Mount bridge source code (excludes binaries via .dockerignore)
       - ./coordinator/mcp-http-bridge:/app
-      # Mount MCP server SOURCE CODE only (not binaries)
-      # Binary is built inside container during docker build
-      - ./coordinator/mcp-server:/app/mcp-server-src:ro
       # Use named volume for Go module cache
       - http-bridge-cache:/go/pkg/mod
-      # Named volume for compiled binaries (prevents host binary mount)
+      # Named volume for compiled MCP server binary (prevents host binary mount)
       - mcp-binaries:/app/mcp-server
       # Named volume for Air build artifacts (fixes read-only tmp directory issue)
       - http-bridge-tmp:/app/tmp
@@ -138,6 +135,29 @@ services:
       retries: 3
       start_period: 10s
 
+  # Hugging Face Text Embeddings Inference (TEI) - Nomic Embed Code model
+  # Note: TEI runs on CPU-only mode. On ARM64 (Apple Silicon), uses platform emulation.
+  embedding-service:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: hyperion-embedding-service-dev
+    platform: linux/amd64
+    command: --model-id nomic-ai/nomic-embed-text-v1.5 --port 8080
+    ports:
+      - "${EMBEDDING_PORT:-8080}:8080"
+    environment:
+      - HF_HUB_CACHE=/data
+    volumes:
+      - embedding_cache_dev:/data
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
 networks:
   hyperion-network:
     driver: bridge
@@ -151,3 +171,4 @@ volumes:
   mongodb_data_dev:
   mongodb_config_dev:
   qdrant_data_dev:
+  embedding_cache_dev:
