@@ -150,9 +150,11 @@ func (h *QdrantToolHandler) handleQdrantFind(args map[string]interface{}) (*mcp.
 	}
 
 	if len(results) == 0 {
+		// Return empty JSON array for UI compatibility
+		emptyArrayJSON, _ := json.Marshal([]interface{}{})
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				&mcp.TextContent{Text: fmt.Sprintf("No results found in collection '%s' for query: %s", collectionName, query)},
+				&mcp.TextContent{Text: string(emptyArrayJSON)},
 			},
 		}, results, nil
 	}
