@@ -46,17 +46,18 @@ type FileChunk struct {
 
 // SearchResult represents a search result from the code index
 type SearchResult struct {
-	FileID       string  `json:"fileId"`
-	FilePath     string  `json:"filePath"`
-	RelativePath string  `json:"relativePath"`
-	Language     string  `json:"language"`
-	ChunkNum     int     `json:"chunkNum,omitempty"`
-	StartLine    int     `json:"startLine,omitempty"`
-	EndLine      int     `json:"endLine,omitempty"`
-	Content      string  `json:"content"`
-	Score        float32 `json:"score"`        // Similarity score
-	FolderID     string  `json:"folderId"`
-	FolderPath   string  `json:"folderPath"`
+	FileID            string  `json:"fileId"`
+	FilePath          string  `json:"filePath"`
+	RelativePath      string  `json:"relativePath"`
+	Language          string  `json:"language"`
+	ChunkNum          int     `json:"chunkNum,omitempty"`
+	StartLine         int     `json:"startLine,omitempty"`
+	EndLine           int     `json:"endLine,omitempty"`
+	Content           string  `json:"content"`
+	Score             float32 `json:"score"`              // Similarity score
+	FolderID          string  `json:"folderId"`
+	FolderPath        string  `json:"folderPath"`
+	FullFileRetrieved bool    `json:"fullFileRetrieved"` // True when retrieve="full" mode
 }
 
 // IndexStatus represents the current status of the code index

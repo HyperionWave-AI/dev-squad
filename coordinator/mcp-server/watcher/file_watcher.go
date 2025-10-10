@@ -14,6 +14,7 @@ import (
 	"hyperion-coordinator-mcp/storage"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -22,7 +23,8 @@ type FileWatcher struct {
 	watcher         *fsnotify.Watcher
 	mongoStorage    *storage.CodeIndexStorage
 	qdrantClient    *storage.QdrantClient
-	embeddingClient *embeddings.OpenAIClient
+	embeddingClient embeddings.EmbeddingClient
+	pathMapper      *PathMapper
 	logger          *zap.Logger
 
 	// Debouncing
@@ -44,7 +46,8 @@ type FileWatcher struct {
 func NewFileWatcher(
 	mongoStorage *storage.CodeIndexStorage,
 	qdrantClient *storage.QdrantClient,
-	embeddingClient *embeddings.OpenAIClient,
+	embeddingClient embeddings.EmbeddingClient,
+	pathMapper *PathMapper,
 	logger *zap.Logger,
 ) (*FileWatcher, error) {
 	watcher, err := fsnotify.NewWatcher()
@@ -59,6 +62,7 @@ func NewFileWatcher(
 		mongoStorage:    mongoStorage,
 		qdrantClient:    qdrantClient,
 		embeddingClient: embeddingClient,
+		pathMapper:      pathMapper,
 		logger:          logger,
 		debounceTime:    500 * time.Millisecond,
 		debounceTimers:  make(map[string]*time.Timer),
@@ -123,8 +127,18 @@ func (fw *FileWatcher) AddFolder(folder *storage.IndexedFolder) error {
 		return nil
 	}
 
+	// Use the folder path directly (already in container path format)
+	watchPath := folder.Path
+
+	// Check if path exists - this is the real validation we need
+	if _, err := os.Stat(watchPath); os.IsNotExist(err) {
+		return fmt.Errorf("path does not exist: %s", watchPath)
+	}
+
+	fw.logger.Info("Watching path", zap.String("path", folder.Path))
+
 	// Add folder to watcher
-	if err := fw.watcher.Add(folder.Path); err != nil {
+	if err := fw.watcher.Add(watchPath); err != nil {
 		return fmt.Errorf("failed to watch folder: %w", err)
 	}
 
@@ -154,11 +168,12 @@ func (fw *FileWatcher) AddFolder(folder *storage.IndexedFolder) error {
 		return fmt.Errorf("failed to walk directory: %w", err)
 	}
 
-	fw.watchedFolders[folder.Path] = folder
+	fw.watchedFolders[watchPath] = folder
 
 	fw.logger.Info("Added folder to watch list",
-		zap.String("path", folder.Path),
-		zap.String("folderId", folder.ID))
+		zap.String("path", watchPath),
+		zap.String("folderId", folder.ID),
+		zap.Bool("pathMapped", fw.pathMapper.HasMappings()))
 
 	return nil
 }
@@ -423,21 +438,27 @@ func (fw *FileWatcher) indexFile(path string, folder *storage.IndexedFolder) {
 	}
 
 	// Create or update file record
-	fileID := ""
+	var file *storage.IndexedFile
 	if existingFile != nil {
-		fileID = existingFile.ID
-	}
-
-	file := &storage.IndexedFile{
-		ID:           fileID,
-		FolderID:     folder.ID,
-		Path:         fileInfo.Path,
-		RelativePath: fileInfo.RelativePath,
-		Language:     fileInfo.Language,
-		SHA256:       fileInfo.SHA256,
-		Size:         fileInfo.Size,
-		LineCount:    fileInfo.LineCount,
-		ChunkCount:   len(fileInfo.Chunks),
+		// Update existing file
+		existingFile.SHA256 = fileInfo.SHA256
+		existingFile.Size = fileInfo.Size
+		existingFile.LineCount = fileInfo.LineCount
+		existingFile.ChunkCount = len(fileInfo.Chunks)
+		file = existingFile
+	} else {
+		// Create new file with UUID
+		file = &storage.IndexedFile{
+			ID:           uuid.New().String(),
+			FolderID:     folder.ID,
+			Path:         fileInfo.Path,
+			RelativePath: fileInfo.RelativePath,
+			Language:     fileInfo.Language,
+			SHA256:       fileInfo.SHA256,
+			Size:         fileInfo.Size,
+			LineCount:    fileInfo.LineCount,
+			ChunkCount:   len(fileInfo.Chunks),
+		}
 	}
 
 	if err := fw.mongoStorage.UpsertFile(file); err != nil {
@@ -459,7 +480,10 @@ func (fw *FileWatcher) indexFile(path string, folder *storage.IndexedFolder) {
 			continue
 		}
 
-		vectorID := fmt.Sprintf("%s_%d", file.ID, i)
+		// Generate a new UUID for this vector point
+		// We can't use fileID_chunkNum because Qdrant requires pure UUIDs or unsigned integers
+		// The file/chunk relationship is tracked via the payload metadata
+		vectorID := uuid.New().String()
 
 		// Store in Qdrant
 		payload := map[string]interface{}{
@@ -527,6 +551,7 @@ func (fw *FileWatcher) shouldIgnore(path string) bool {
 	ignoredDirs := []string{
 		".git", "node_modules", "vendor", "dist", "build",
 		".vscode", ".idea", "__pycache__", ".next", "out",
+		"test-results", "coverage",
 	}
 
 	base := filepath.Base(path)
@@ -542,4 +567,68 @@ func (fw *FileWatcher) shouldIgnore(path string) bool {
 	}
 
 	return false
+}
+
+// ScanFolder performs a full scan of a folder and indexes all code files
+func (fw *FileWatcher) ScanFolder(folder *storage.IndexedFolder) error {
+	// Update folder status to scanning
+	if err := fw.mongoStorage.UpdateFolderStatus(folder.ID, "scanning", ""); err != nil {
+		return fmt.Errorf("failed to update folder status: %w", err)
+	}
+
+	// Create file scanner
+	fileScanner := scanner.NewFileScanner()
+
+	// Scan directory for files
+	scannedFiles, err := fileScanner.ScanDirectory(folder.Path)
+	if err != nil {
+		fw.mongoStorage.UpdateFolderStatus(folder.ID, "error", err.Error())
+		return fmt.Errorf("failed to scan directory: %w", err)
+	}
+
+	filesIndexed := 0
+	filesUpdated := 0
+	filesSkipped := 0
+
+	// Process each file
+	for _, scannedFile := range scannedFiles {
+		scannedFile.FolderID = folder.ID
+
+		// Check if file already exists
+		existingFile, _ := fw.mongoStorage.GetFileByPath(scannedFile.Path)
+
+		if existingFile != nil {
+			// Check if file has changed
+			if existingFile.SHA256 == scannedFile.SHA256 {
+				filesSkipped++
+				continue
+			}
+			filesUpdated++
+			scannedFile.ID = existingFile.ID
+		} else {
+			filesIndexed++
+		}
+
+		// Index the file using the file watcher's indexFile method
+		fw.indexFile(scannedFile.Path, folder)
+	}
+
+	// Update folder status and scan time
+	if err := fw.mongoStorage.UpdateFolderStatus(folder.ID, "active", ""); err != nil {
+		fw.logger.Warn("Failed to update folder status", zap.Error(err))
+	}
+
+	if err := fw.mongoStorage.UpdateFolderScanTime(folder.ID, len(scannedFiles)); err != nil {
+		fw.logger.Warn("Failed to update scan time", zap.Error(err))
+	}
+
+	fw.logger.Info("Completed folder scan",
+		zap.String("folderID", folder.ID),
+		zap.String("path", folder.Path),
+		zap.Int("filesIndexed", filesIndexed),
+		zap.Int("filesUpdated", filesUpdated),
+		zap.Int("filesSkipped", filesSkipped),
+		zap.Int("totalFiles", len(scannedFiles)))
+
+	return nil
 }

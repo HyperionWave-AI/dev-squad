@@ -11,7 +11,7 @@ import {
   CircularProgress,
 } from '@mui/material';
 import { FolderOpen, CheckCircle, Error as ErrorIcon } from '@mui/icons-material';
-import { codeClient } from '../../services/codeClient';
+import { restCodeClient } from '../../services/restCodeClient';
 import type { IndexStatus as IIndexStatus } from '../../types/codeIndex';
 
 export const IndexStatus: React.FC = () => {
@@ -23,7 +23,7 @@ export const IndexStatus: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await codeClient.getStatus();
+      const data = await restCodeClient.getStatus();
       setStatus(data);
     } catch (err) {
       console.error('Failed to load index status:', err);

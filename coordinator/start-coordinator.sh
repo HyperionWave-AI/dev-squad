@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Hyperion Coordinator Full Stack Start Script
-# Starts HTTP Bridge (which starts MCP Server) and React UI
+# Hyperion Unified Coordinator Start Script
+# Starts the unified coordinator service (REST API + UI serving)
 
 set -e
 
@@ -14,102 +14,91 @@ if [ -f "../.env" ]; then
   export $(grep -v '^#' ../.env | xargs)
 fi
 
-echo "🚀 Starting Hyperion Coordinator Full Stack..."
+echo "🚀 Starting Hyperion Unified Coordinator..."
+echo ""
+echo "Architecture: UI → REST API → Storage Layer"
 echo ""
 
-# Check if binaries exist
-if [ ! -f "mcp-server/hyperion-coordinator-mcp" ]; then
-  echo "❌ MCP server binary not found. Building..."
-  cd mcp-server
-  go build -o hyperion-coordinator-mcp
-  cd ..
-  echo "✅ MCP server built"
+# Check if binary exists
+if [ ! -f "bin/coordinator" ]; then
+  echo "❌ Coordinator binary not found. Building..."
+  go build -o bin/coordinator ./cmd/coordinator
+  echo "✅ Coordinator built ($(du -h bin/coordinator | cut -f1))"
 fi
 
-if [ ! -f "mcp-http-bridge/hyperion-coordinator-bridge" ]; then
-  echo "❌ HTTP bridge binary not found. Building..."
-  cd mcp-http-bridge
-  go build -o hyperion-coordinator-bridge
-  cd ..
-  echo "✅ HTTP bridge built"
-fi
-
-# Check if UI dependencies are installed
-if [ ! -d "ui/node_modules" ]; then
-  echo "📦 Installing UI dependencies..."
+# Check if UI dist exists
+if [ ! -d "ui/dist" ]; then
+  echo "❌ UI build not found. Building..."
   cd ui
   npm install
+  npm run build
   cd ..
-  echo "✅ UI dependencies installed"
+  echo "✅ UI built"
 fi
 
 echo ""
-echo "🎬 Starting services..."
+echo "🎬 Starting unified coordinator..."
 echo ""
 echo "📍 Service URLs:"
-echo "  - HTTP Bridge:  http://localhost:7095"
-echo "  - React UI:     http://localhost:5173"
-echo "  - MongoDB:      MongoDB Atlas (coordinator_db)"
+echo "  - REST API:     http://localhost:7095/api/*"
+echo "  - UI:           http://localhost:7095/ (served by coordinator)"
+echo "  - Health:       http://localhost:7095/health"
+echo "  - MongoDB:      ${MONGODB_URI:-MongoDB Atlas}"
+echo "  - Qdrant:       ${QDRANT_URL:-Cloud Qdrant}"
 echo ""
-echo "⚠️  Press Ctrl+C to stop all services"
+echo "⚠️  Press Ctrl+C to stop"
 echo ""
 
-# Function to cleanup background processes
+# Function to cleanup
 cleanup() {
   echo ""
-  echo "🛑 Shutting down services..."
-  kill $BRIDGE_PID 2>/dev/null || true
-  kill $UI_PID 2>/dev/null || true
+  echo "🛑 Shutting down coordinator..."
+  kill $COORDINATOR_PID 2>/dev/null || true
   wait
-  echo "✅ All services stopped"
+  echo "✅ Coordinator stopped"
   exit 0
 }
 
 trap cleanup INT TERM
 
-# Start HTTP Bridge (which will start MCP server)
-echo "🌉 Starting HTTP Bridge..."
-cd mcp-http-bridge
-./hyperion-coordinator-bridge &
-BRIDGE_PID=$!
-cd ..
+# Start unified coordinator in HTTP mode
+echo "🌟 Starting coordinator..."
+./bin/coordinator --mode=http &
+COORDINATOR_PID=$!
 
-# Wait for bridge to start
-sleep 2
+# Wait for coordinator to start
+sleep 3
 
-# Check if bridge is healthy
+# Check if coordinator is healthy
 if curl -s http://localhost:7095/health > /dev/null 2>&1; then
-  echo "✅ HTTP Bridge running (PID: $BRIDGE_PID)"
+  echo "✅ Coordinator running (PID: $COORDINATOR_PID)"
 else
-  echo "❌ HTTP Bridge failed to start"
-  kill $BRIDGE_PID 2>/dev/null || true
+  echo "❌ Coordinator failed to start"
+  echo ""
+  echo "Check logs for errors:"
+  echo "  tail -f logs/coordinator.log"
+  kill $COORDINATOR_PID 2>/dev/null || true
   exit 1
 fi
 
-# Start React UI
-echo "🎨 Starting React UI..."
-cd ui
-npm run dev &
-UI_PID=$!
-cd ..
-
-# Wait for UI to start
-sleep 3
-
 echo ""
-echo "✅ All services started!"
+echo "✅ Coordinator started successfully!"
 echo ""
-echo "📖 Open your browser to: http://localhost:5173"
+echo "📖 Open your browser to: http://localhost:7095"
 echo ""
-echo "🔍 Test the HTTP bridge:"
-echo "   curl http://localhost:7095/health"
+echo "🔍 Test the REST API:"
+echo "   curl http://localhost:7095/api/tasks"
 echo ""
 echo "💡 Create a test task:"
-echo "   curl -X POST http://localhost:7095/api/mcp/tools/call \\"
+echo "   curl -X POST http://localhost:7095/api/tasks \\"
 echo "     -H 'Content-Type: application/json' \\"
-echo "     -H 'X-Request-ID: test-1' \\"
-echo "     -d '{\"name\":\"coordinator_create_human_task\",\"arguments\":{\"prompt\":\"Test task\"}}'"
+echo "     -d '{\"prompt\":\"Test task from REST API\"}'"
+echo ""
+echo "🔎 Search code (after indexing):"
+echo "   curl -X POST http://localhost:7095/api/code-index/search \\"
+echo "     -H 'Content-Type: application/json' \\"
+echo "     -d '{\"query\":\"JWT authentication\",\"limit\":5}'"
 echo ""
 
-# Wait for processes
+# Wait for process
 wait
