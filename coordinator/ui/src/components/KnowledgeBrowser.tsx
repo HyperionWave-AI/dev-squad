@@ -18,7 +18,7 @@ import {
 } from '@mui/material';
 import { Search } from '@mui/icons-material';
 import type { KnowledgeEntry } from '../types/coordinator';
-import { mcpClient } from '../services/mcpClient';
+import { restClient } from '../services/restClient';
 
 export const KnowledgeBrowser: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -41,7 +41,7 @@ export const KnowledgeBrowser: React.FC = () => {
   useEffect(() => {
     const loadPopularCollections = async () => {
       try {
-        const popular = await mcpClient.getPopularCollections(5);
+        const popular = await restClient.getPopularCollections(5);
         setPopularCollections(popular.filter(c => !c.collection.startsWith('task:')));
       } catch (err) {
         console.error('Failed to load popular collections:', err);
@@ -74,11 +74,7 @@ export const KnowledgeBrowser: React.FC = () => {
 
         const searchPromises = collectionsToSearch.map(async (col) => {
           try {
-            return await mcpClient.queryKnowledge({
-              collection: col,
-              query,
-              limit: 5, // Limit per collection to get diverse results
-            });
+            return await restClient.queryKnowledge(col, query, 5);
           } catch (err) {
             console.warn(`Failed to search collection ${col}:`, err);
             return [];
@@ -95,11 +91,7 @@ export const KnowledgeBrowser: React.FC = () => {
         allEntries = allEntries.slice(0, 20);
       } else {
         // Search single collection
-        allEntries = await mcpClient.queryKnowledge({
-          collection,
-          query,
-          limit: 20,
-        });
+        allEntries = await restClient.queryKnowledge(collection, query, 20);
       }
 
       setResults(allEntries);

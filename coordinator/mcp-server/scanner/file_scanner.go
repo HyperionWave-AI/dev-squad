@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"hyperion-coordinator-mcp/storage"
@@ -21,6 +22,14 @@ type FileScanner struct {
 
 // NewFileScanner creates a new file scanner
 func NewFileScanner() *FileScanner {
+	// Get chunk size from ENV var (default: 200 lines)
+	chunkSize := 200
+	if envChunkSize := os.Getenv("CODE_INDEX_CHUNK_SIZE"); envChunkSize != "" {
+		if parsedSize, err := strconv.Atoi(envChunkSize); err == nil && parsedSize > 0 {
+			chunkSize = parsedSize
+		}
+	}
+
 	return &FileScanner{
 		supportedExtensions: map[string]string{
 			".go":   "go",
@@ -58,7 +67,7 @@ func NewFileScanner() *FileScanner {
 			".md":   "markdown",
 		},
 		maxFileSize: 10 * 1024 * 1024, // 10 MB
-		chunkSize:   200,               // 200 lines per chunk
+		chunkSize:   chunkSize,         // Configurable via CODE_INDEX_CHUNK_SIZE env var
 	}
 }
 
@@ -77,7 +86,8 @@ func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile,
 			dirName := filepath.Base(path)
 			if dirName == ".git" || dirName == "node_modules" || dirName == "vendor" ||
 				dirName == "dist" || dirName == "build" || dirName == ".vscode" ||
-				dirName == ".idea" || dirName == "__pycache__" {
+				dirName == ".idea" || dirName == "__pycache__" || dirName == "test-results" ||
+				dirName == "coverage" || dirName == ".next" || dirName == "out" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -153,6 +163,12 @@ func (fs *FileScanner) ReadFileChunks(filePath string) ([]string, error) {
 	var lineCount int
 
 	scanner := bufio.NewScanner(file)
+
+	// Increase buffer size to 1MB to handle minified files with very long lines
+	const maxCapacity = 1024 * 1024 // 1 MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
 	for scanner.Scan() {
 		currentChunk.WriteString(scanner.Text())
 		currentChunk.WriteString("\n")
@@ -238,6 +254,12 @@ func (fs *FileScanner) countLines(filePath string) (int, error) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+
+	// Increase buffer size to 1MB to handle minified files with very long lines
+	const maxCapacity = 1024 * 1024 // 1 MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
 	lineCount := 0
 
 	for scanner.Scan() {
@@ -245,7 +267,8 @@ func (fs *FileScanner) countLines(filePath string) (int, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return 0, err
+		// If still failing, skip this file instead of crashing the entire scan
+		return 0, fmt.Errorf("file contains lines too long to process: %w", err)
 	}
 
 	return lineCount, nil

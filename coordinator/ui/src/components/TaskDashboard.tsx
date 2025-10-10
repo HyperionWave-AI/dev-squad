@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { AgentTask, TaskWithChildren } from '../types/coordinator';
-import { mcpClient } from '../services/mcpClient';
+import { restClient } from '../services/restClient';
 import { TaskCard } from './TaskCard';
 import { AgentTaskCard } from './AgentTaskCard';
 
@@ -16,8 +16,8 @@ export const TaskDashboard: React.FC = () => {
       setError(null);
 
       const [humans, agents] = await Promise.all([
-        mcpClient.listHumanTasks(),
-        mcpClient.listAgentTasks()
+        restClient.listHumanTasks(),
+        restClient.listAgentTasks()
       ]);
 
       // Group agent tasks by human task ID
@@ -46,12 +46,10 @@ export const TaskDashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    mcpClient.connect().then(() => {
-      loadTasks();
-      // Poll every 3 seconds for updates
-      const interval = setInterval(loadTasks, 3000);
-      return () => clearInterval(interval);
-    });
+    loadTasks();
+    // Poll every 3 seconds for updates
+    const interval = setInterval(loadTasks, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading && humanTasks.length === 0) {
