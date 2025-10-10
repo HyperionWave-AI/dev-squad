@@ -451,7 +451,9 @@ func main() {
 		"http://localhost:5173",     // Vite dev server (host)
 		"http://localhost:5177",     // Alt Vite port
 		"http://localhost:5178",     // Alt Vite port
-		"http://localhost:7777",     // Coordinator UI (make run-all)
+		"http://localhost:7777",     // Main dev UI port
+		"http://localhost:7779",     // Dev UI port
+		"http://localhost:7780",     // Dev UI port (auto-assigned)
 		"http://localhost:9173",     // Custom UI port (via docker-compose.override.yml)
 		"http://localhost:3000",     // React dev server
 		"http://localhost",          // Docker UI (mapped to host)
@@ -502,4 +504,4 @@ func main() {
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
-}
+}// test comment
