@@ -310,9 +310,61 @@ go tool pprof http://localhost:7095/debug/pprof/heap
 - **Coordinator Specification:** `../SPECIFICATION.md`
 - **Dashboard UI:** `../../dashboard-ui/README.md`
 
+## Agent Tasks API - Pagination Support
+
+### Endpoint
+```
+GET /api/agent-tasks
+```
+
+### Query Parameters
+- `limit` (default: 50, max: 50) - Number of tasks per page
+- `offset` (default: 0) - Number of tasks to skip
+- `agentName` (optional) - Filter by agent name
+- `humanTaskId` (optional) - Filter by parent human task ID
+
+### Response Format
+```json
+{
+  "tasks": [...],
+  "count": 10,
+  "totalCount": 50,
+  "offset": 0,
+  "limit": 10
+}
+```
+
+### Usage Examples
+```bash
+# Default (first 50 tasks)
+GET /api/agent-tasks
+
+# First page (10 items)
+GET /api/agent-tasks?limit=10
+
+# Second page (10 items)
+GET /api/agent-tasks?limit=10&offset=10
+
+# Filter by agent
+GET /api/agent-tasks?agentName=go-dev&limit=20
+```
+
+### Performance
+- Response time: 40-50ms for any limit
+- Field truncation: Fields >500 bytes show `[TRUNCATED]` message
+- Full details: Use `GET /api/agent-tasks/:id` for complete task data
+
+See `PAGINATION_FIX.md` for complete documentation.
+
 ## Version History
 
-### v1.0.0 (Current)
+### v1.1.0 (Current)
+- ✅ Added pagination support to `/api/agent-tasks` endpoint
+- ✅ Field truncation for large responses (>500 bytes)
+- ✅ Query parameters: limit, offset, agentName, humanTaskId
+- ✅ Response metadata: count, totalCount, offset, limit
+
+### v1.0.0
 - ✅ Fixed broken pipe bug with background response handler
 - ✅ Added concurrent request support with pendingReqs map
 - ✅ Comprehensive test suite (60.3% coverage)

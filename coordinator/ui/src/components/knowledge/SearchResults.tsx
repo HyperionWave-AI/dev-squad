@@ -8,8 +8,10 @@ import {
   Chip,
   Pagination,
   Alert,
+  IconButton,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { KnowledgeEntry } from '../../types/knowledge';
@@ -102,6 +104,7 @@ export const SearchResults: React.FC<SearchResultsProps> = ({ results: propResul
   const { results: contextResults } = useKnowledge();
   const [page, setPage] = useState<number>(1);
   const [expanded, setExpanded] = useState<string | false>(false);
+  const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set());
 
   // Use prop results or context results
   const results = propResults ?? contextResults;
@@ -122,7 +125,20 @@ export const SearchResults: React.FC<SearchResultsProps> = ({ results: propResul
   const handlePageChange = (_event: React.ChangeEvent<unknown>, value: number) => {
     setPage(value);
     setExpanded(false); // Collapse all when changing page
+    setExpandedContent(new Set()); // Clear expanded content state
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const toggleContentExpansion = (entryId: string) => {
+    setExpandedContent((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(entryId)) {
+        newSet.delete(entryId);
+      } else {
+        newSet.add(entryId);
+      }
+      return newSet;
+    });
   };
 
   if (results.length === 0) {
@@ -196,9 +212,70 @@ export const SearchResults: React.FC<SearchResultsProps> = ({ results: propResul
               </AccordionSummary>
 
               <AccordionDetails>
-                {/* Full text with syntax highlighting */}
+                {/* Full text with syntax highlighting and expand/collapse */}
                 <Box sx={{ mb: 2 }}>
-                  {renderTextWithHighlighting(entry.text)}
+                  {(() => {
+                    const isExpanded = expandedContent.has(entry.id);
+                    const lines = entry.text.split('\n');
+                    const needsExpansion = lines.length > 10;
+                    const displayText = !isExpanded && needsExpansion
+                      ? lines.slice(0, 10).join('\n')
+                      : entry.text;
+
+                    return (
+                      <>
+                        <Box
+                          sx={{
+                            position: 'relative',
+                            ...(needsExpansion && !isExpanded && {
+                              '&::after': {
+                                content: '""',
+                                position: 'absolute',
+                                bottom: 0,
+                                left: 0,
+                                right: 0,
+                                height: '40px',
+                                background: 'linear-gradient(to bottom, transparent, rgba(18, 18, 18, 0.9))',
+                                pointerEvents: 'none',
+                              },
+                            }),
+                          }}
+                        >
+                          {renderTextWithHighlighting(displayText)}
+                        </Box>
+
+                        {needsExpansion && (
+                          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+                            <IconButton
+                              onClick={() => toggleContentExpansion(entry.id)}
+                              size="small"
+                              sx={{
+                                border: 1,
+                                borderColor: 'divider',
+                                borderRadius: 1,
+                                px: 2,
+                                gap: 1,
+                              }}
+                            >
+                              {isExpanded ? (
+                                <>
+                                  <ExpandLessIcon fontSize="small" />
+                                  <Typography variant="caption">Show Less</Typography>
+                                </>
+                              ) : (
+                                <>
+                                  <ExpandMoreIcon fontSize="small" />
+                                  <Typography variant="caption">
+                                    Show More ({lines.length - 10} more lines)
+                                  </Typography>
+                                </>
+                              )}
+                            </IconButton>
+                          </Box>
+                        )}
+                      </>
+                    );
+                  })()}
                 </Box>
 
                 {/* Metadata */}

@@ -287,7 +287,7 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
             />
             <Chip
               icon={getStatusIcon(task.status)}
-              label={task.status.replace('_', ' ').toUpperCase()}
+              label={task.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
               size="small"
               sx={{
                 backgroundColor: `${getStatusColor(task.status)}15`,
@@ -713,7 +713,7 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
               </Typography>
               <Box sx={{ display: 'flex', gap: 1 }}>
                 <Chip
-                  label={parentTask.status.replace('_', ' ').toUpperCase()}
+                  label={parentTask.status?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
                   size="small"
                   sx={{
                     backgroundColor: `${getStatusColor(parentTask.status)}15`,
@@ -947,7 +947,7 @@ export function TaskDetailDialog({ task, open, onClose, onTaskUpdate }: TaskDeta
                     </Box>
                     <Chip
                       icon={getStatusIcon(agentTask.status)}
-                      label={agentTask.status.replace('_', ' ')}
+                      label={agentTask.status?.replace('_', ' ') || 'unknown'}
                       size="small"
                       sx={{
                         backgroundColor: `${getStatusColor(agentTask.status)}15`,

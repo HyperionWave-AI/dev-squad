@@ -1,0 +1,77 @@
+# Air Configuration for Native Binary Hot Reload
+# Watches both Go files and React UI for changes
+# Rebuilds bin/hyper with embedded UI
+
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "tmp"
+
+[build]
+  # Pre-build hook: Smart UI rebuild (only if UI source changed)
+  pre_cmd = ["./scripts/rebuild-ui.sh"]
+
+  # Build command: Fast build with embedded UI
+  # Uses helper script to keep Air config simple
+  cmd = "./scripts/air-build.sh"
+
+  # Binary location and args
+  bin = "./bin/hyper"
+  args_bin = ["--mode=http"]
+
+  # Rebuild delay (1 second for stability)
+  delay = 1000
+
+  # Watch Go files in coordinator/
+  include_dir = ["coordinator/cmd", "coordinator/internal", "coordinator/mcp-server", "coordinator/ai-service"]
+  include_ext = ["go", "tpl", "tmpl", "html"]
+
+  # Also watch UI source files (triggers pre_cmd)
+  # Note: Air will run pre_cmd before build when ANY watched file changes
+  # The rebuild-ui.sh script is smart - it checks timestamps and skips if UI unchanged
+
+  # Exclude patterns
+  exclude_dir = [
+    "coordinator/tmp",
+    "coordinator/ui/node_modules",
+    "coordinator/ui/dist",
+    "coordinator/embed",
+    "bin",
+    "tmp",
+    "testdata",
+    "vendor"
+  ]
+  exclude_regex = ["_test\\.go$"]
+  exclude_unchanged = false
+
+  # Logging
+  log = "tmp/build-errors.log"
+
+  # Process control
+  kill_delay = "1s"
+  send_interrupt = false
+  stop_on_error = false
+  rerun = false
+  rerun_delay = 500
+
+  # Performance
+  poll = false
+  poll_interval = 0
+  follow_symlink = false
+
+[color]
+  app = ""
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[log]
+  main_only = false
+  time = false
+
+[misc]
+  clean_on_exit = false
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import {
   ThemeProvider,
   CssBaseline,
@@ -10,17 +11,20 @@ import {
   Box,
   IconButton,
 } from '@mui/material';
-import { Dashboard, Psychology, Refresh, Code } from '@mui/icons-material';
+import { Dashboard, Psychology, Refresh, Code, Chat, Build, Settings, SmartToy } from '@mui/icons-material';
 import { theme } from './theme';
 import { KanbanBoard } from './components/KanbanBoard';
 import { KnowledgeBrowser } from './components/KnowledgeBrowser';
 import { CodeSearchPage } from './pages/CodeSearchPage';
-
-type View = 'dashboard' | 'knowledge' | 'code-search';
+import { CodeChatPage } from './pages/CodeChatPage';
+import { HTTPToolsPage } from './pages/HTTPToolsPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { SubagentsPage } from './pages/SubagentsPage';
 
 function App() {
-  const [currentView, setCurrentView] = useState<View>('dashboard');
   const [refreshKey, setRefreshKey] = useState(0);
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const handleRefresh = () => {
     setRefreshKey((prev) => prev + 1);
@@ -71,20 +75,31 @@ function App() {
             {/* Navigation Buttons */}
             <Box sx={{ display: 'flex', gap: 1 }}>
               <Button
-                variant={currentView === 'dashboard' ? 'contained' : 'outlined'}
-                startIcon={<Dashboard />}
-                onClick={() => setCurrentView('dashboard')}
+                variant={location.pathname === '/chat' ? 'contained' : 'outlined'}
+                startIcon={<Chat />}
+                onClick={() => navigate('/chat')}
                 sx={{
                   textTransform: 'none',
                   fontWeight: 500,
                 }}
               >
-                Dashboard
+                Chat
               </Button>
               <Button
-                variant={currentView === 'knowledge' ? 'contained' : 'outlined'}
+                variant={location.pathname === '/tasks' ? 'contained' : 'outlined'}
+                startIcon={<Dashboard />}
+                onClick={() => navigate('/tasks')}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 500,
+                }}
+              >
+                Tasks
+              </Button>
+              <Button
+                variant={location.pathname === '/knowledge' ? 'contained' : 'outlined'}
                 startIcon={<Psychology />}
-                onClick={() => setCurrentView('knowledge')}
+                onClick={() => navigate('/knowledge')}
                 sx={{
                   textTransform: 'none',
                   fontWeight: 500,
@@ -93,15 +108,48 @@ function App() {
                 Knowledge
               </Button>
               <Button
-                variant={currentView === 'code-search' ? 'contained' : 'outlined'}
+                variant={location.pathname === '/code' ? 'contained' : 'outlined'}
                 startIcon={<Code />}
-                onClick={() => setCurrentView('code-search')}
+                onClick={() => navigate('/code')}
                 sx={{
                   textTransform: 'none',
                   fontWeight: 500,
                 }}
               >
-                Code Search
+                Code
+              </Button>
+              <Button
+                variant={location.pathname === '/tools' ? 'contained' : 'outlined'}
+                startIcon={<Build />}
+                onClick={() => navigate('/tools')}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 500,
+                }}
+              >
+                Tools
+              </Button>
+              <Button
+                variant={location.pathname === '/subagents' ? 'contained' : 'outlined'}
+                startIcon={<SmartToy />}
+                onClick={() => navigate('/subagents')}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 500,
+                }}
+              >
+                Subagents
+              </Button>
+              <Button
+                variant={location.pathname === '/settings' ? 'contained' : 'outlined'}
+                startIcon={<Settings />}
+                onClick={() => navigate('/settings')}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 500,
+                }}
+              >
+                Settings
               </Button>
               <IconButton
                 onClick={handleRefresh}
@@ -126,9 +174,16 @@ function App() {
           }}
         >
           <Container maxWidth="xl">
-            {currentView === 'dashboard' && <KanbanBoard key={refreshKey} />}
-            {currentView === 'knowledge' && <KnowledgeBrowser key={refreshKey} />}
-            {currentView === 'code-search' && <CodeSearchPage key={refreshKey} />}
+            <Routes>
+              <Route path="/" element={<Navigate to="/tasks" replace />} />
+              <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
+              <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
+              <Route path="/knowledge" element={<KnowledgeBrowser key={refreshKey} />} />
+              <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
+              <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
+              <Route path="/subagents" element={<SubagentsPage key={refreshKey} />} />
+              <Route path="/settings" element={<SettingsPage key={refreshKey} />} />
+            </Routes>
           </Container>
         </Box>
 
