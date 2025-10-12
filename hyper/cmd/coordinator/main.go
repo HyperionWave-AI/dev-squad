@@ -190,7 +190,10 @@ func main() {
 	// Get database
 	db := mongoClient.Database(mongoDatabase)
 
-	// Initialize Qdrant client
+	// Initialize Qdrant collection name from environment (must be done before creating qdrant client)
+	storage.InitCodeIndexCollection()
+
+	// Get Qdrant configuration
 	qdrantURL := os.Getenv("QDRANT_URL")
 	if qdrantURL == "" {
 		qdrantURL = "http://qdrant:6333"
@@ -202,41 +205,15 @@ func main() {
 		qdrantKnowledgeCollection = "dev_squad_knowledge"
 	}
 
-	qdrantClient := storage.NewQdrantClient(qdrantURL, qdrantKnowledgeCollection)
-	logger.Info("Qdrant client initialized",
-		zap.String("url", qdrantURL),
-		zap.String("knowledgeCollection", qdrantKnowledgeCollection))
-
-	// Initialize storage layers
-	taskStorage, err := storage.NewMongoTaskStorage(db)
-	if err != nil {
-		logger.Fatal("Failed to initialize task storage", zap.Error(err))
-	}
-	logger.Info("Task storage initialized with MongoDB")
-
-	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db, qdrantClient)
-	if err != nil {
-		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
-	}
-	logger.Info("Knowledge storage initialized with MongoDB + Qdrant")
-
-	// Initialize code indexing components
-	codeIndexStorage, err := storage.NewCodeIndexStorage(db)
-	if err != nil {
-		logger.Fatal("Failed to initialize code index storage", zap.Error(err))
-	}
-	logger.Info("Code index storage initialized")
-
-	// Initialize Qdrant collection name from environment
-	storage.InitCodeIndexCollection()
-	logger.Info("Code index collection configured", zap.String("collection", storage.CodeIndexCollection))
-
 	// Initialize embedding client based on EMBEDDING environment variable
+	// IMPORTANT: This must be created BEFORE qdrantClient to ensure correct embeddings are used
 	var embeddingClient embeddings.EmbeddingClient
 	embeddingMode := os.Getenv("EMBEDDING")
 	if embeddingMode == "" {
 		embeddingMode = "ollama" // Default to Ollama (GPU-accelerated llama.cpp as a service)
 	}
+
+	logger.Info("Initializing embedding client", zap.String("mode", embeddingMode))
 
 	switch embeddingMode {
 	case "ollama":
@@ -316,6 +293,44 @@ func main() {
 			zap.String("mode", embeddingMode))
 	}
 
+	// Now create Qdrant client with the correct embedding client
+	qdrantClient := storage.NewQdrantClientWithEmbeddingClient(qdrantURL, qdrantKnowledgeCollection, embeddingClient)
+	logger.Info("Qdrant client initialized with embedding client",
+		zap.String("url", qdrantURL),
+		zap.String("knowledgeCollection", qdrantKnowledgeCollection),
+		zap.Int("vectorDimensions", embeddingClient.GetDimensions()))
+
+	// Initialize storage layers (NOW that qdrantClient is created with correct embeddings)
+	taskStorage, err := storage.NewMongoTaskStorage(db)
+	if err != nil {
+		logger.Fatal("Failed to initialize task storage", zap.Error(err))
+	}
+	logger.Info("Task storage initialized with MongoDB")
+
+	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db, qdrantClient)
+	if err != nil {
+		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
+	}
+	logger.Info("Knowledge storage initialized with MongoDB + Qdrant")
+
+	// Initialize code indexing components
+	codeIndexStorage, err := storage.NewCodeIndexStorage(db)
+	if err != nil {
+		logger.Fatal("Failed to initialize code index storage", zap.Error(err))
+	}
+	logger.Info("Code index storage initialized")
+
+	// Initialize tools storage for tools discovery (with correct embedding client!)
+	toolsStorage, err := storage.NewToolsStorage(db, qdrantClient)
+	if err != nil {
+		logger.Fatal("Failed to initialize tools storage", zap.Error(err))
+	}
+	logger.Info("Tools storage initialized",
+		zap.String("embeddingMode", embeddingMode),
+		zap.Int("vectorDimensions", embeddingClient.GetDimensions()))
+
+	logger.Info("Code index collection configured", zap.String("collection", storage.CodeIndexCollection))
+
 	// Ensure Qdrant code index collection exists with correct dimensions
 	expectedDimensions := embeddingClient.GetDimensions()
 	if err := ensureCodeIndexCollectionWithDimensions(qdrantClient, expectedDimensions, logger); err != nil {
@@ -392,7 +407,7 @@ func main() {
 	}
 
 	// Create MCP server instance (used by both HTTP and stdio modes)
-	mcpServer := createMCPServer(taskStorage, knowledgeStorage, codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, mongoClient, logger)
+	mcpServer := createMCPServer(taskStorage, knowledgeStorage, codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, mongoClient, toolsStorage, logger)
 
 	// Check for embedded UI (production single-binary mode)
 	hasEmbedded := embed.HasUI()
@@ -493,6 +508,7 @@ func createMCPServer(
 	embeddingClient embeddings.EmbeddingClient,
 	fileWatcher *watcher.FileWatcher,
 	mongoClient *mongo.Client,
+	toolsStorage *storage.ToolsStorage,
 	logger *zap.Logger,
 ) *mcp.Server {
 	impl := &mcp.Implementation{
@@ -508,19 +524,37 @@ func createMCPServer(
 
 	server := mcp.NewServer(impl, opts)
 
+	// Get the database from mongoClient
+	mongoDB := mongoClient.Database(os.Getenv("MONGODB_DATABASE"))
+	if mongoDB == nil {
+		mongoDB = mongoClient.Database("coordinator_db1")
+	}
+
+	// Create tool metadata registry for automatic tool indexing
+	toolMetadataRegistry := handlers.NewToolMetadataRegistry()
+
 	// Initialize and register all handlers
 	resourceHandler := handlers.NewResourceHandler(taskStorage, knowledgeStorage)
 	docResourceHandler := handlers.NewDocResourceHandler()
 	workflowResourceHandler := handlers.NewWorkflowResourceHandler(taskStorage)
 	knowledgeResourceHandler := handlers.NewKnowledgeResourceHandler(knowledgeStorage)
 	metricsResourceHandler := handlers.NewMetricsResourceHandler(taskStorage)
-	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage)
+	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage, mongoDB)
 	qdrantToolHandler := handlers.NewQdrantToolHandler(qdrantClient)
 	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, logger)
 	planningPromptHandler := handlers.NewPlanningPromptHandler()
 	knowledgePromptHandler := handlers.NewKnowledgePromptHandler()
 	coordinationPromptHandler := handlers.NewCoordinationPromptHandler()
 	documentationPromptHandler := handlers.NewDocumentationPromptHandler()
+	filesystemToolHandler := handlers.NewFilesystemToolHandler(logger)
+	toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage)
+
+	// Set metadata registry on all tool handlers for automatic indexing
+	toolHandler.SetMetadataRegistry(toolMetadataRegistry)
+	qdrantToolHandler.SetMetadataRegistry(toolMetadataRegistry)
+	filesystemToolHandler.SetMetadataRegistry(toolMetadataRegistry)
+	codeToolsHandler.SetMetadataRegistry(toolMetadataRegistry)
+	toolsDiscoveryHandler.SetMetadataRegistry(toolMetadataRegistry)
 
 	// Register all handlers (panic on error)
 	must := func(err error) {
@@ -537,12 +571,24 @@ func createMCPServer(
 	must(toolHandler.RegisterToolHandlers(server))
 	must(qdrantToolHandler.RegisterQdrantTools(server))
 	must(codeToolsHandler.RegisterCodeIndexTools(server))
+	must(filesystemToolHandler.RegisterFilesystemTools(server))
+	must(toolsDiscoveryHandler.RegisterToolsDiscoveryTools(server))
 	must(planningPromptHandler.RegisterPlanningPrompts(server))
 	must(knowledgePromptHandler.RegisterKnowledgePrompts(server))
 	must(coordinationPromptHandler.RegisterCoordinationPrompts(server))
 	must(documentationPromptHandler.RegisterDocumentationPrompts(server))
 
 	logger.Info("MCP server configured with all handlers")
+
+	// Index all MCP tools for discovery via discover_tools (using automatic registry)
+	logger.Info("Indexing MCP tools for semantic discovery...")
+	if count, err := handlers.IndexRegisteredTools(toolMetadataRegistry, toolsStorage, logger); err != nil {
+		logger.Warn("Failed to index MCP tools (tools may not be discoverable)", zap.Error(err))
+	} else {
+		logger.Info("MCP tools indexed successfully",
+			zap.Int("count", count),
+			zap.String("collection", "mcp-tools"))
+	}
 
 	return server
 }
