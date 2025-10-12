@@ -28,10 +28,14 @@
     "@modelcontextprotocol/sdk": "^1.18.2",
     "@mui/icons-material": "^7.3.2",
     "@mui/material": "^7.3.2",
+    "@types/react-router-dom": "^5.3.3",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "ansi-to-react": "^6.1.6",
     "react": "^19.1.1",
+    "react-diff-view": "^3.2.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.9.4",
     "react-syntax-highlighter": "^15.6.6"
   },
   "devDependencies": {

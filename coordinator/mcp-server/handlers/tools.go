@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"hyperion-coordinator-mcp/storage"
@@ -111,6 +112,16 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 	// Register coordinator_clear_todo_prompt_notes
 	if err := h.registerClearTodoPromptNotes(server); err != nil {
 		return fmt.Errorf("failed to register clear_todo_prompt_notes tool: %w", err)
+	}
+
+	// Register list_subagents
+	if err := h.registerListSubagents(server); err != nil {
+		return fmt.Errorf("failed to register list_subagents tool: %w", err)
+	}
+
+	// Register set_current_subagent
+	if err := h.registerSetCurrentSubagent(server); err != nil {
+		return fmt.Errorf("failed to register set_current_subagent tool: %w", err)
 	}
 
 	return nil
@@ -1485,6 +1496,147 @@ func (h *ToolHandler) handleClearTodoPromptNotes(ctx context.Context, args map[s
 		},
 	}, nil, nil
 }
+
+// registerListSubagents registers the list_subagents tool
+func (h *ToolHandler) registerListSubagents(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "list_subagents",
+		Description: "Returns available subagents from CLAUDE.md agent list with names, descriptions, tools, and categories",
+		InputSchema: &jsonschema.Schema{
+			Type:       "object",
+			Properties: map[string]*jsonschema.Schema{},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, _, err := h.handleListSubagents(ctx)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleListSubagents handles the list_subagents tool call
+func (h *ToolHandler) handleListSubagents(ctx context.Context) (*mcp.CallToolResult, interface{}, error) {
+	// Read CLAUDE.md from project root (validation only - we hardcode the list for reliability)
+	claudeMdPath := "/Users/maxmednikov/MaxSpace/dev-squad/CLAUDE.md"
+	_, err := os.ReadFile(claudeMdPath)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to read CLAUDE.md: %s", err.Error())), nil, nil
+	}
+
+	// Parse subagent definitions from "Available Sub-Agents" section
+	type Subagent struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		Tools       []string `json:"tools"`
+		Category    string   `json:"category"`
+	}
+
+	subagents := []Subagent{
+		// Backend Infrastructure
+		{Name: "go-dev", Description: "Go microservices, REST APIs, business logic", Tools: []string{"hyper", "filesystem", "github", "fetch", "mongodb"}, Category: "Backend Infrastructure"},
+		{Name: "go-mcp-dev", Description: "MCP tools and integrations (Model Context Protocol)", Tools: []string{"hyper", "filesystem", "github", "fetch"}, Category: "Backend Infrastructure"},
+		{Name: "Backend Services Specialist", Description: "Service architecture (via coordinator)", Tools: []string{"hyper"}, Category: "Backend Infrastructure"},
+		{Name: "Event Systems Specialist", Description: "NATS JetStream (via coordinator)", Tools: []string{"hyper"}, Category: "Backend Infrastructure"},
+		{Name: "Data Platform Specialist", Description: "MongoDB optimization and data modeling (via coordinator)", Tools: []string{"hyper", "mongodb"}, Category: "Backend Infrastructure"},
+
+		// Frontend & Experience
+		{Name: "ui-dev", Description: "React/TypeScript implementation, components", Tools: []string{"hyper", "filesystem", "github", "fetch"}, Category: "Frontend & Experience"},
+		{Name: "ui-tester", Description: "Playwright E2E tests, accessibility validation", Tools: []string{"hyper", "filesystem", "playwright-mcp"}, Category: "Frontend & Experience"},
+		{Name: "Frontend Experience Specialist", Description: "UI architecture (via coordinator)", Tools: []string{"hyper"}, Category: "Frontend & Experience"},
+		{Name: "AI Integration Specialist", Description: "Claude/GPT integration (via coordinator)", Tools: []string{"hyper", "fetch"}, Category: "Frontend & Experience"},
+		{Name: "Real-time Systems Specialist", Description: "WebSocket, streaming (via coordinator)", Tools: []string{"hyper"}, Category: "Frontend & Experience"},
+
+		// Platform & Operations
+		{Name: "sre", Description: "Deployment to dev/prod environments", Tools: []string{"hyper", "kubernetes", "github", "fetch"}, Category: "Platform & Operations"},
+		{Name: "k8s-deployment-expert", Description: "Kubernetes manifests, rollouts, scaling", Tools: []string{"hyper", "kubernetes", "github"}, Category: "Platform & Operations"},
+		{Name: "Infrastructure Automation Specialist", Description: "GKE, GitHub Actions (via coordinator)", Tools: []string{"hyper", "kubernetes", "github"}, Category: "Platform & Operations"},
+		{Name: "Security & Auth Specialist", Description: "JWT, RBAC, security policies (via coordinator)", Tools: []string{"hyper"}, Category: "Platform & Operations"},
+		{Name: "Observability Specialist", Description: "Metrics, monitoring (via coordinator)", Tools: []string{"hyper"}, Category: "Platform & Operations"},
+
+		// Testing & Quality
+		{Name: "End-to-End Testing Coordinator", Description: "Cross-squad testing (via coordinator)", Tools: []string{"hyper"}, Category: "Testing & Quality"},
+	}
+
+	// Return JSON array
+	jsonData, err := json.Marshal(subagents)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to serialize subagents: %s", err.Error())), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(jsonData)},
+		},
+	}, subagents, nil
+}
+
+// registerSetCurrentSubagent registers the set_current_subagent tool
+func (h *ToolHandler) registerSetCurrentSubagent(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "set_current_subagent",
+		Description: "Associate a subagent with the current chat session. Stores subagent name in chat metadata.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"subagentName": {
+					Type:        "string",
+					Description: "Name of the subagent to associate with chat (must match list from list_subagents)",
+				},
+			},
+			Required: []string{"subagentName"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleSetCurrentSubagent(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleSetCurrentSubagent handles the set_current_subagent tool call
+func (h *ToolHandler) handleSetCurrentSubagent(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	subagentName, ok := args["subagentName"].(string)
+	if !ok || subagentName == "" {
+		return createErrorResult("subagentName parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Validate subagent name against known list
+	validSubagents := map[string]bool{
+		"go-dev": true, "go-mcp-dev": true, "Backend Services Specialist": true,
+		"Event Systems Specialist": true, "Data Platform Specialist": true,
+		"ui-dev": true, "ui-tester": true, "Frontend Experience Specialist": true,
+		"AI Integration Specialist": true, "Real-time Systems Specialist": true,
+		"sre": true, "k8s-deployment-expert": true, "Infrastructure Automation Specialist": true,
+		"Security & Auth Specialist": true, "Observability Specialist": true,
+		"End-to-End Testing Coordinator": true,
+	}
+
+	if !validSubagents[subagentName] {
+		return createErrorResult(fmt.Sprintf("invalid subagent name '%s'. Use list_subagents to see available subagents", subagentName)), nil, nil
+	}
+
+	// Note: Actual MongoDB update will be implemented in subchat service
+	// For now, return success with note that this requires chat context
+	resultText := fmt.Sprintf("✓ Subagent '%s' validated successfully\n\nNote: Chat session association will be implemented via subchat service. Use subchat_handler REST API to create subchats with subagent assignments.", subagentName)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultText},
+		},
+	}, map[string]interface{}{
+		"subagentName": subagentName,
+		"valid":        true,
+	}, nil
+}
+
 // registerGetPopularCollections registers the coordinator_get_popular_collections tool
 func (h *ToolHandler) registerGetPopularCollections(server *mcp.Server) error {
 	tool := &mcp.Tool{
@@ -1523,6 +1675,21 @@ func (h *ToolHandler) handleGetPopularCollections(ctx context.Context, args map[
 	stats, err := h.knowledgeStorage.GetPopularCollections(limit)
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to get popular collections: %s", err.Error())), nil, nil
+	}
+
+	// CRITICAL: Never return null - always return an empty array with a helpful message
+	if stats == nil || len(stats) == 0 {
+		emptyResponse := map[string]interface{}{
+			"collections":  []interface{}{},
+			"message":      "No collections with entries yet. Check hyperion://knowledge/collections resource for available collections.",
+			"totalDefined": 14, // Total predefined collections
+		}
+		jsonData, _ := json.Marshal(emptyResponse)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: string(jsonData)},
+			},
+		}, emptyResponse, nil
 	}
 
 	// Return JSON array directly

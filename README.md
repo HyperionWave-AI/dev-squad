@@ -21,7 +21,43 @@ A production-ready MCP server that enables AI agents to coordinate complex workf
 
 Perfect for multi-agent systems, autonomous coding agents, and AI workflow orchestration.
 
-## ⚡ Quick Start (60 seconds)
+## ⚡ Quick Start
+
+### Option 1: Desktop App (Easiest - Native UI!)
+
+```bash
+# Build and run as native desktop app
+make desktop
+
+# OR build for distribution
+make desktop-build
+# Creates .dmg (macOS), .msi (Windows), .AppImage (Linux)
+```
+
+**🖥️ Native desktop app with system tray!** See [desktop-app/README.md](./desktop-app/README.md) for details.
+
+### Option 2: Native Binary (Single File!)
+
+```bash
+# Build self-contained binary with embedded UI
+make native
+
+# Configure (one-time setup)
+cp .env.native .env.native
+# Edit .env.native with your MongoDB URI and settings
+
+# Run HTTP server with UI
+make run
+# Access UI: http://localhost:7095/ui
+
+# OR configure for Claude Code (MCP stdio mode)
+make configure-native
+# Restart Claude Code - hyper MCP tools are now available!
+```
+
+**✨ Zero Docker, zero dependencies, single binary!** See [README-NATIVE.md](./README-NATIVE.md) for details.
+
+### Option 3: Docker (Full Stack)
 
 ```bash
 # 1. Clone and install
@@ -594,6 +630,8 @@ Contributions are welcome! Please follow these guidelines:
 
 | Document | Description |
 |----------|-------------|
+| **[desktop-app/README.md](./desktop-app/README.md)** | ⭐ Desktop app guide (Tauri native app) |
+| **[README-NATIVE.md](./README-NATIVE.md)** | ⭐ Native binary guide (single file deployment) |
 | **[DOCKER.md](./DOCKER.md)** | Complete Docker installation & usage guide |
 | **[HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)** | MCP tool reference with examples |
 | **[CLAUDE.md](./CLAUDE.md)** | Multi-agent coordination patterns |
