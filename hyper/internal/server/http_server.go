@@ -1,9 +1,16 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	aiservice "hyper/internal/ai-service"
@@ -14,6 +21,7 @@ import (
 	"hyper/internal/middleware"
 	"hyper/internal/services"
 	"hyper/internal/mcp/embeddings"
+	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
 
@@ -22,7 +30,85 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
+	"golang.org/x/term"
 )
+
+// findProcessByPort finds the PID of the process using a specific port
+func findProcessByPort(port string) (int, error) {
+	// Try lsof first (macOS/BSD)
+	cmd := exec.Command("lsof", "-ti", fmt.Sprintf("tcp:%s", port))
+	output, err := cmd.Output()
+	if err == nil && len(output) > 0 {
+		pidStr := strings.TrimSpace(string(output))
+		// lsof can return multiple PIDs, take the first one
+		if lines := strings.Split(pidStr, "\n"); len(lines) > 0 {
+			pid, parseErr := strconv.Atoi(lines[0])
+			if parseErr == nil {
+				return pid, nil
+			}
+		}
+	}
+
+	// Fallback to netstat (works on macOS and some Linux)
+	cmd = exec.Command("sh", "-c", fmt.Sprintf("netstat -anv -p tcp | grep '.%s' | grep LISTEN | awk '{print $9}' | head -n1", port))
+	output, err = cmd.Output()
+	if err == nil && len(output) > 0 {
+		pidStr := strings.TrimSpace(string(output))
+		if pidStr != "" {
+			pid, parseErr := strconv.Atoi(pidStr)
+			if parseErr == nil {
+				return pid, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("no process found on port %s", port)
+}
+
+// isInteractiveTerminal checks if the program is running in an interactive terminal
+func isInteractiveTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// promptKillProcess asks the user if they want to kill the process using the port
+func promptKillProcess(port string, pid int, logger *zap.Logger) (bool, error) {
+	// Only prompt if running in an interactive terminal
+	if !isInteractiveTerminal() {
+		logger.Info("Not prompting to kill process - not running in interactive terminal")
+		return false, nil
+	}
+
+	fmt.Printf("\n⚠️  Port %s is already in use by process %d\n", port, pid)
+	fmt.Print("Kill the process and retry? [y/N]: ")
+
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false, fmt.Errorf("failed to read user input: %w", err)
+	}
+
+	response = strings.ToLower(strings.TrimSpace(response))
+	return response == "y" || response == "yes", nil
+}
+
+// killProcess attempts to gracefully terminate a process by PID
+func killProcess(pid int, logger *zap.Logger) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process: %w", err)
+	}
+
+	// Try SIGTERM first for graceful shutdown
+	logger.Info("Sending SIGTERM to process", zap.Int("pid", pid))
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("failed to terminate process: %w", err)
+	}
+
+	// Wait a bit for graceful shutdown
+	time.Sleep(2 * time.Second)
+
+	return nil
+}
 
 // StartHTTPServer starts the HTTP server with REST API + UI static serving + MCP HTTP endpoint
 func StartHTTPServer(
@@ -84,40 +170,95 @@ func StartHTTPServer(
 	logger.Info("AI chat service initialized successfully",
 		zap.String("provider", aiConfig.Provider))
 
+	// Initialize tools storage for HTTP tool management and MCP discovery
+	toolsStorage, err := storage.NewToolsStorage(mongoDatabase, qdrantClient)
+	if err != nil {
+		logger.Error("Failed to create tools storage", zap.Error(err))
+		return err
+	}
+	logger.Info("Tools storage initialized for HTTP tool management")
+
+	// Create tools discovery handler for MCP management tools
+	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage)
+	logger.Info("Tools discovery handler created for MCP management tools")
+
 	// Register MCP tools with the chat service
+	logger.Info("Starting MCP tools registration...")
 	toolRegistry := aiChatService.GetToolRegistry()
 
-	// Register coordinator tools (task management, knowledge base)
-	if err := mcptools.RegisterCoordinatorTools(toolRegistry, taskStorage, knowledgeStorage); err != nil {
+	// Register coordinator tools (task management, knowledge base, MCP management)
+	logger.Info("Registering coordinator tools (task management, knowledge base, MCP management)...")
+	beforeCount := len(toolRegistry.List())
+	if err := mcptools.RegisterCoordinatorTools(toolRegistry, taskStorage, knowledgeStorage, toolsDiscoveryHandler); err != nil {
 		logger.Error("Failed to register coordinator tools", zap.Error(err))
 		return err
 	}
-	logger.Info("Coordinator tools registered (16 tools)")
+	afterCount := len(toolRegistry.List())
+	coordinatorToolsCount := afterCount - beforeCount
+	logger.Info("Coordinator tools registered",
+		zap.Int("count", coordinatorToolsCount),
+		zap.Int("totalSoFar", afterCount))
+	for _, toolName := range toolRegistry.List()[beforeCount:afterCount] {
+		logger.Debug("Registered coordinator tool", zap.String("name", toolName))
+	}
 
 	// Register Qdrant tools (semantic search and storage)
+	logger.Info("Registering Qdrant tools (semantic search and storage)...")
+	beforeCount = len(toolRegistry.List())
 	if err := mcptools.RegisterQdrantTools(toolRegistry, qdrantClient); err != nil {
 		logger.Error("Failed to register Qdrant tools", zap.Error(err))
 		return err
 	}
-	logger.Info("Qdrant tools registered (2 tools)")
+	afterCount = len(toolRegistry.List())
+	qdrantToolsCount := afterCount - beforeCount
+	logger.Info("Qdrant tools registered",
+		zap.Int("count", qdrantToolsCount),
+		zap.Int("totalSoFar", afterCount))
+	for _, toolName := range toolRegistry.List()[beforeCount:afterCount] {
+		logger.Debug("Registered Qdrant tool", zap.String("name", toolName))
+	}
 
 	// Register code index tools (code search and indexing)
+	logger.Info("Registering code index tools (code search and indexing)...")
+	beforeCount = len(toolRegistry.List())
 	if err := mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage); err != nil {
 		logger.Error("Failed to register code index tools", zap.Error(err))
 		return err
 	}
-	logger.Info("Code index tools registered (5 tools)")
+	afterCount = len(toolRegistry.List())
+	codeIndexToolsCount := afterCount - beforeCount
+	logger.Info("Code index tools registered",
+		zap.Int("count", codeIndexToolsCount),
+		zap.Int("totalSoFar", afterCount))
+	for _, toolName := range toolRegistry.List()[beforeCount:afterCount] {
+		logger.Debug("Registered code index tool", zap.String("name", toolName))
+	}
 
 	// Register filesystem tools (bash, file operations, patch application)
+	logger.Info("Registering filesystem tools (bash, file operations, patch application)...")
+	beforeCount = len(toolRegistry.List())
 	if err := tools.RegisterFilesystemTools(toolRegistry); err != nil {
 		logger.Error("Failed to register filesystem tools", zap.Error(err))
 		return err
 	}
-	logger.Info("Filesystem tools registered (5 tools)")
+	afterCount = len(toolRegistry.List())
+	filesystemToolsCount := afterCount - beforeCount
+	logger.Info("Filesystem tools registered",
+		zap.Int("count", filesystemToolsCount),
+		zap.Int("totalSoFar", afterCount))
+	for _, toolName := range toolRegistry.List()[beforeCount:afterCount] {
+		logger.Debug("Registered filesystem tool", zap.String("name", toolName))
+	}
 
+	// Log final summary with all tool names
+	allTools := toolRegistry.List()
 	logger.Info("Chat service ready with MCP tools",
-		zap.Int("totalTools", len(toolRegistry.List())),
-		zap.Strings("availableTools", toolRegistry.List()))
+		zap.Int("totalTools", len(allTools)),
+		zap.Int("coordinatorTools", coordinatorToolsCount),
+		zap.Int("qdrantTools", qdrantToolsCount),
+		zap.Int("codeIndexTools", codeIndexToolsCount),
+		zap.Int("filesystemTools", filesystemToolsCount))
+	logger.Info("All registered tools", zap.Strings("availableTools", allTools))
 
 	// Create chat handlers
 	chatHandler := handlers.NewChatHandler(chatService, logger)
@@ -125,14 +266,6 @@ func StartHTTPServer(
 
 	// Create AI settings handler
 	aiSettingsHandler := handlers.NewAISettingsHandler(aiSettingsService, logger)
-
-	// Initialize tools storage for HTTP tool management
-	toolsStorage, err := storage.NewToolsStorage(mongoDatabase, qdrantClient)
-	if err != nil {
-		logger.Error("Failed to create tools storage", zap.Error(err))
-		return err
-	}
-	logger.Info("Tools storage initialized for HTTP tool management")
 
 	// Create HTTP tools handler
 	httpToolsHandler, err := handlers.NewHTTPToolsHandler(mongoDatabase, toolsStorage, logger)
@@ -307,17 +440,108 @@ func StartHTTPServer(
 		Handler: r,
 	}
 
-	// Start server in goroutine
-	go func() {
-		logger.Info("HTTP server listening",
-			zap.String("port", port),
-			zap.String("apiEndpoints", "/api/tasks, /api/agent-tasks, /api/code-index"),
-			zap.String("uiEndpoint", "/ui"))
+	// Retry logic for port-busy errors
+	maxRetries := 3
+	var startErr error
+	serverStarted := make(chan error, 1)
 
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server error", zap.Error(err))
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Start server in goroutine
+		go func() {
+			logger.Info("HTTP server starting",
+				zap.String("port", port),
+				zap.Int("attempt", attempt),
+				zap.Int("maxRetries", maxRetries))
+
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				serverStarted <- err
+			} else {
+				serverStarted <- nil
+			}
+		}()
+
+		// Wait briefly to see if server starts successfully or fails immediately
+		select {
+		case startErr = <-serverStarted:
+			if startErr == nil {
+				// Server started successfully
+				logger.Info("HTTP server listening",
+					zap.String("port", port),
+					zap.String("apiEndpoints", "/api/tasks, /api/agent-tasks, /api/code-index"),
+					zap.String("uiEndpoint", "/ui"))
+				break
+			}
+
+			// Check if error is "address already in use"
+			if !strings.Contains(startErr.Error(), "bind: address already in use") {
+				// Different error, don't retry
+				logger.Error("HTTP server error (not port-busy)", zap.Error(startErr))
+				return startErr
+			}
+
+			// Port is busy - try to find and kill the process
+			logger.Warn("Port is already in use", zap.String("port", port), zap.Int("attempt", attempt))
+
+			pid, findErr := findProcessByPort(port)
+			if findErr != nil {
+				errMsg := fmt.Sprintf("Port %s is busy but couldn't find the process: %v\nManually kill the process with:\n  lsof -ti tcp:%s | xargs kill", port, findErr, port)
+				logger.Error(errMsg)
+				return fmt.Errorf("%s", errMsg)
+			}
+
+			// Prompt user to kill the process
+			shouldKill, promptErr := promptKillProcess(port, pid, logger)
+			if promptErr != nil {
+				return fmt.Errorf("port %s is busy (PID: %d) but failed to prompt user: %w", port, pid, promptErr)
+			}
+
+			if !shouldKill {
+				errMsg := fmt.Sprintf("Port %s is busy (PID: %d). Please kill the process manually:\n  kill %d\n  or use:\n  lsof -ti tcp:%s | xargs kill", port, pid, pid, port)
+				logger.Error(errMsg)
+				return fmt.Errorf("%s", errMsg)
+			}
+
+			// Kill the process
+			logger.Info("Attempting to kill process", zap.Int("pid", pid))
+			if killErr := killProcess(pid, logger); killErr != nil {
+				return fmt.Errorf("failed to kill process %d: %w", pid, killErr)
+			}
+
+			fmt.Printf("✓ Killed process %d, retrying... (attempt %d/%d)\n", pid, attempt, maxRetries)
+			logger.Info("Process killed, retrying server start",
+				zap.Int("pid", pid),
+				zap.Int("attempt", attempt),
+				zap.Int("maxRetries", maxRetries))
+
+			// Wait a bit before retry
+			time.Sleep(1 * time.Second)
+
+			// Create new server instance for retry
+			srv = &http.Server{
+				Addr:    ":" + port,
+				Handler: r,
+			}
+
+		case <-time.After(500 * time.Millisecond):
+			// Server didn't fail immediately, assume it started successfully
+			logger.Info("HTTP server listening",
+				zap.String("port", port),
+				zap.String("apiEndpoints", "/api/tasks, /api/agent-tasks, /api/code-index"),
+				zap.String("uiEndpoint", "/ui"))
+			startErr = nil
+			break
 		}
-	}()
+
+		// If server started successfully, break out of retry loop
+		if startErr == nil {
+			break
+		}
+	}
+
+	// Check if we exhausted retries
+	if startErr != nil {
+		return fmt.Errorf("failed to start HTTP server after %d attempts: %w", maxRetries, startErr)
+	}
 
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
