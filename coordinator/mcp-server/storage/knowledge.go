@@ -38,6 +38,7 @@ type CollectionStats struct {
 type KnowledgeStorage interface {
 	Upsert(collection, text string, metadata map[string]interface{}) (*KnowledgeEntry, error)
 	Query(collection, query string, limit int) ([]*QueryResult, error)
+	ListKnowledge(collection string, limit int) ([]*KnowledgeEntry, error)
 	ListCollections() []string
 	GetPopularCollections(limit int) ([]*CollectionStats, error)
 }
@@ -54,7 +55,7 @@ func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInter
 	storage := &MongoKnowledgeStorage{
 		knowledgeCollection: db.Collection("knowledge_entries"),
 		qdrantClient:        qdrantClient,
-		vectorDimension:     1536, // OpenAI text-embedding-3-small dimension
+		vectorDimension:     768, // TEI nomic-embed-text-v1.5 dimension
 	}
 
 	// Create indexes
@@ -190,6 +191,37 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int) ([]*Q
 	return results, nil
 }
 
+// ListKnowledge retrieves knowledge entries from a collection without search (browse mode)
+// Returns entries sorted by creation date (newest first)
+func (s *MongoKnowledgeStorage) ListKnowledge(collection string, limit int) ([]*KnowledgeEntry, error) {
+	ctx := context.Background()
+
+	// Filter by collection
+	filter := bson.M{"collection": collection}
+
+	// Sort by creation date descending (newest first)
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+
+	// Apply limit
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+
+	cursor, err := s.knowledgeCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list knowledge entries: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	// Initialize empty slice (never return nil)
+	entries := make([]*KnowledgeEntry, 0)
+	if err := cursor.All(ctx, &entries); err != nil {
+		return nil, fmt.Errorf("failed to decode knowledge entries: %w", err)
+	}
+
+	return entries, nil
+}
+
 // fallbackQuery performs simple similarity matching when text search fails
 func (s *MongoKnowledgeStorage) fallbackQuery(ctx context.Context, collection, query string, limit int) ([]*QueryResult, error) {
 	filter := bson.M{"collection": collection}
@@ -284,7 +316,9 @@ func (s *MongoKnowledgeStorage) GetPopularCollections(limit int) ([]*CollectionS
 	}
 	defer cursor.Close(ctx)
 
-	var results []*CollectionStats
+	// CRITICAL: Initialize empty slice instead of nil - never return null
+	results := make([]*CollectionStats, 0)
+
 	for cursor.Next(ctx) {
 		var result struct {
 			ID    string `bson:"_id"`
@@ -303,6 +337,7 @@ func (s *MongoKnowledgeStorage) GetPopularCollections(limit int) ([]*CollectionS
 		return nil, fmt.Errorf("cursor error: %w", err)
 	}
 
+	// Return empty slice (not nil) if no results
 	return results, nil
 }
 

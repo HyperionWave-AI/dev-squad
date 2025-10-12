@@ -1,4 +1,4 @@
-.PHONY: help build run-mcp run-web run-all test clean install configure-claude test-connection docker-restart run-mcp-local configure-claude-local
+.PHONY: help build native install install-air dev run run-dev run-stdio configure-native run-mcp-local configure-claude-local desktop desktop-dev desktop-build test clean test-connection
 
 # Load environment variables from .env file
 include .env
@@ -10,145 +10,185 @@ help: ## Show this help message
 	@echo 'Available targets:'
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build the MCP server binary
-	@echo "Building MCP server..."
-	cd coordinator/mcp-server && go build -o hyperion-coordinator-mcp main.go
-	@echo "✓ Build complete: coordinator/mcp-server/hyperion-coordinator-mcp"
+#
+# Build Targets
+#
+
+build: native ## Alias for 'native' - build unified hyper binary with embedded UI
+
+native: ## Build native self-contained binary with embedded UI
+	@echo "Building unified hyper binary with embedded UI..."
+	./build-native.sh
+	@echo "✓ Native build complete: bin/hyper"
 
 install: ## Install all dependencies (Go + Node)
 	@echo "Installing Go dependencies..."
-	cd coordinator/mcp-server && go mod download
+	cd hyper && go mod download
 	@echo "✓ Go dependencies installed"
 	@echo "Installing Node.js dependencies..."
 	cd coordinator/ui && npm install
 	@echo "✓ Node.js dependencies installed"
 	@echo "✓ All dependencies installed"
 
-run-mcp: ## Run the MCP server (stdio mode for Claude Code)
-	@echo "Starting MCP server in stdio mode..."
-	cd coordinator/mcp-server && TRANSPORT_MODE=stdio ./hyperion-coordinator-mcp
+install-air: ## Install Air hot-reload tool locally
+	@if command -v air &> /dev/null; then \
+		echo "✓ Air already installed (version: $$(air -v))"; \
+	else \
+		echo "Installing Air..."; \
+		go install github.com/air-verse/air@latest; \
+		echo "✓ Air installed! Run 'air' in any Go service directory."; \
+	fi
 
-run-mcp-http: ## Run the MCP server in HTTP mode on port 7778
-	@echo "Starting MCP server in HTTP mode on port $(MCP_PORT)..."
-	@echo "HTTP endpoint: http://localhost:$(MCP_PORT)/mcp"
-	cd coordinator/mcp-server && TRANSPORT_MODE=http MCP_PORT=$(MCP_PORT) ./hyperion-coordinator-mcp
+#
+# Development Targets
+#
 
-run-web: ## Run the web UI on port 7777
-	@echo "Starting web UI on port $(WEB_PORT)..."
-	cd coordinator/ui && MCP_BRIDGE_URL=http://localhost:$(BRIDGE_PORT) npm run dev -- --port $(WEB_PORT)
+dev: install-air ## Start development mode with hot reload
+	@echo "Starting development mode with hot reload..."
+	@if [ ! -f .air.toml ]; then \
+		echo "Error: .air.toml not found at project root"; \
+		exit 1; \
+	fi
+	@if [ ! -f .env.hyper ]; then \
+		echo "Warning: .env.hyper not found. Using system environment variables."; \
+	fi
+	./scripts/dev-native.sh
 
-run-bridge: ## Run the HTTP bridge (REST API wrapper for MCP stdio)
-	@echo "Starting HTTP bridge on port $(BRIDGE_PORT)..."
-	@echo "Bridge endpoint: http://localhost:$(BRIDGE_PORT)"
-	cd coordinator/mcp-http-bridge && PORT=$(BRIDGE_PORT) ./hyperion-coordinator-http-bridge ../mcp-server/hyperion-coordinator-mcp
+dev-hot: install-air ## Start development with UI hot-reload (Vite dev server + Go Air)
+	@echo "Starting development with UI hot-reload..."
+	@if [ ! -f .air.toml ]; then \
+		echo "Error: .air.toml not found at project root"; \
+		exit 1; \
+	fi
+	./scripts/dev-hot.sh
 
-run-all: ## Run MCP server, HTTP bridge, and web UI in parallel
-	@echo "Starting dev-squad system..."
-	@echo "MCP Server (stdio via bridge): coordinator/mcp-server/hyperion-coordinator-mcp"
-	@echo "HTTP Bridge: http://localhost:$(BRIDGE_PORT)"
-	@echo "Web UI: http://localhost:$(WEB_PORT)"
-	@make -j2 run-bridge run-web
+run: ## Run the native compiled binary (synchronous)
+	@echo "Running native binary..."
+	@if [ ! -f bin/hyper ]; then \
+		echo "Error: Native binary not found. Run 'make native' first."; \
+		exit 1; \
+	fi
+	@if [ ! -f .env.native ]; then \
+		echo "Warning: .env.native not found. Please configure environment variables."; \
+		echo "Copy .env.native to your project root and update with your settings."; \
+	fi
+	./bin/hyper --mode=http
+
+run-dev: ## Run with Air hot-reload (coordinator only)
+	@echo "Starting development mode with hot-reload..."
+	@echo "Using Air for automatic rebuild on file changes"
+	@if ! command -v air &> /dev/null; then \
+		echo "Error: Air not found. Install with 'make install-air'"; \
+		exit 1; \
+	fi
+	cd coordinator && air
+
+run-stdio: ## Run the native binary in stdio mode (for Claude Code/MCP)
+	@echo "Running native binary in stdio mode..."
+	@if [ ! -f bin/hyper ]; then \
+		echo "Error: Native binary not found. Run 'make native' first."; \
+		exit 1; \
+	fi
+	@if [ ! -f .env.native ]; then \
+		echo "Warning: .env.native not found. Using system environment variables."; \
+	fi
+	./bin/hyper --mode=mcp
+
+#
+# MCP Configuration Targets
+#
+
+configure-native: native ## Configure Claude Code to use native binary (stdio mode)
+	@echo "🚀 Configuring Claude Code to use native binary..."
+	@echo ""
+	@if [ ! -f bin/hyper ]; then \
+		echo "Error: Native binary not found. Run 'make native' first."; \
+		exit 1; \
+	fi
+	@echo "Removing old hyper configuration (if exists)..."
+	@claude mcp remove hyper --scope user 2>/dev/null || true
+	@claude mcp remove hyper --scope project 2>/dev/null || true
+	@echo ""
+	@echo "Adding hyper native binary (stdio mode, user scope)..."
+	@claude mcp add hyper "$(shell pwd)/bin/hyper" --args "--mode=mcp" --scope user
+	@echo ""
+	@echo "✅ Configuration complete!"
+	@echo "Native binary: $(shell pwd)/bin/hyper"
+	@echo "Mode: stdio (MCP protocol)"
+	@echo "Config file: .env.native (place in project root)"
+	@echo ""
+	@echo "Verify connection:"
+	@claude mcp list 2>&1 | grep hyper || echo "❌ Failed to configure"
+
+run-mcp-http: native ## Run unified binary in HTTP mode (REST API + UI on port 7095)
+	@echo "Starting unified hyper binary in HTTP mode..."
+	@echo "REST API: http://localhost:7095/api/v1"
+	@echo "Web UI: http://localhost:7095"
+	@echo "Health: http://localhost:7095/api/v1/health"
+	@if [ ! -f bin/hyper ]; then \
+		echo "Error: Native binary not found. Run 'make native' first."; \
+		exit 1; \
+	fi
+	./bin/hyper --mode=http
+
+#
+# Desktop App Targets
+#
+
+desktop: ## Build and run desktop app (development mode)
+	@echo "🖥️  Starting Hyperion Coordinator Desktop App (development)..."
+	@if [ ! -f bin/hyper ]; then \
+		echo "Building native binary first..."; \
+		$(MAKE) native; \
+	fi
+	@if [ ! -f .env.hyper ]; then \
+		echo "⚠️  Warning: .env.hyper not found. Please configure before running."; \
+	fi
+	@echo "Starting hyper server in background..."
+	@pkill -f "bin/hyper" || true
+	@sleep 1
+	@cd bin && ./hyper --mode=http 2>&1 | sed 's/^/[hyper] /' &
+	@echo "Waiting for server to be ready..."
+	@sleep 5
+	@echo "Launching Tauri desktop app..."
+	cd desktop-app && npm install && npm run dev
+
+desktop-dev: desktop ## Alias for desktop (development mode)
+
+desktop-build: native ## Build desktop app for distribution
+	@echo "🖥️  Building Hyperion Coordinator Desktop App for distribution..."
+	@echo "This will create a native app bundle for your platform"
+	@if [ ! -f .env.hyper ]; then \
+		echo "⚠️  Warning: .env.hyper not found. The app will need it at runtime."; \
+	fi
+	cd desktop-app && npm install && npm run build
+	@echo ""
+	@echo "✅ Desktop app built successfully!"
+	@echo ""
+	@echo "📦 Output location:"
+	@echo "   macOS:   desktop-app/src-tauri/target/release/bundle/dmg/"
+	@echo "   macOS:   desktop-app/src-tauri/target/release/bundle/macos/"
+	@echo "   Windows: desktop-app/src-tauri/target/release/bundle/msi/"
+	@echo "   Linux:   desktop-app/src-tauri/target/release/bundle/appimage/"
+	@echo ""
+	@echo "💡 To install:"
+	@echo "   macOS:   Open the .dmg file"
+	@echo "   Windows: Run the .msi installer"
+	@echo "   Linux:   Run the .AppImage file"
+
+#
+# Utilities
+#
 
 test: ## Run tests
-	@echo "Running MCP server tests..."
-	cd coordinator/mcp-server && go test ./...
+	@echo "Running hyper tests..."
+	cd hyper && go test ./...
 	@echo "✓ All tests passed"
 
 clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
-	rm -f coordinator/mcp-server/hyperion-coordinator-mcp
-	rm -f coordinator/mcp-server/*.tgz
-	@echo "✓ Clean complete"
-
-configure-claude-stdio: ## Add MCP server to Claude Code (stdio mode - local development)
-	@echo "Configuring Claude Code MCP server (stdio mode)..."
-	cd coordinator/mcp-server && ./add-to-claude-code.sh
-	@echo "✓ Claude Code configured for stdio mode"
-	@echo ""
-	@echo "Note: This requires the MCP server binary to be built locally"
-	@echo "      For Docker setup, use 'make configure-claude' instead"
-
-configure-claude: ## Configure Claude Code MCP for HTTP transport (Docker)
-	@echo "🚀 Configuring Claude Code MCP for HTTP transport (Docker)..."
-	@echo ""
-	@echo "Removing old hyperion-coordinator configuration (if exists)..."
-	@claude mcp remove hyperion-coordinator --scope user 2>/dev/null || true
-	@claude mcp remove hyperion-coordinator --scope project 2>/dev/null || true
-	@echo ""
-	@echo "Adding hyperion-coordinator with HTTP transport (user scope - available globally)..."
-	@claude mcp add hyper http://localhost:7778/mcp --transport http --scope user
-	@echo ""
-	@echo "✅ Configuration complete!"
-	@echo "⚠️  Make sure docker-compose is running: docker-compose up -d"
-	@echo ""
-	@echo "Verify connection:"
-	@claude mcp list 2>&1 | grep hyperion-coordinator || echo "❌ Failed to configure"
-
-test-connection: ## Test MongoDB and Qdrant connections
-	@echo "Testing connections..."
-	cd coordinator/mcp-server && ./test-connection.sh
-	@echo "✓ Connection test complete"
-
-docker-restart: ## Rebuild and restart docker compose services
-	@echo "Rebuilding and restarting docker compose services..."
-	docker-compose down
-	docker-compose build --no-cache
-	docker-compose up -d
-	@echo "✓ Docker services restarted"
-	@echo "MCP Server: http://localhost:$(MCP_PORT)/mcp"
-	@echo "Web UI: http://localhost:$(WEB_PORT)"
-
-run-mcp-local: build ## Run local MCP server in HTTP mode on port 7778
-	@echo "Starting local MCP server in HTTP mode..."
-	@echo "MCP endpoint: http://localhost:7778/mcp"
-	@echo "Health endpoint: http://localhost:7778/health"
-	@pkill -f hyperion-coordinator-mcp || true
-	@sleep 1
-	cd coordinator/mcp-server && TRANSPORT_MODE=http MCP_PORT=7778 ./hyperion-coordinator-mcp
-
-configure-claude-local: ## Configure Claude CLI to use local MCP server (not Docker)
-	@echo "🚀 Configuring Claude Code MCP for local HTTP transport..."
-	@echo ""
-	@echo "Removing old hyperion-coordinator configuration (if exists)..."
-	@claude mcp remove hyperion-coordinator --scope user 2>/dev/null || true
-	@claude mcp remove hyperion-coordinator --scope project 2>/dev/null || true
-	@echo ""
-	@echo "Adding hyperion-coordinator with local HTTP transport (user scope)..."
-	@claude mcp add hyper http://localhost:7778/mcp --transport http --scope user
-	@echo ""
-	@echo "✅ Configuration complete!"
-	@echo "⚠️  Make sure local MCP server is running: make run-mcp-local"
-	@echo ""
-	@echo "Verify connection:"
-	@claude mcp list 2>&1 | grep hyperion-coordinator || echo "❌ Failed to configure"
-
-# Development with Hot-Reload
-.PHONY: dev dev-up dev-down dev-logs dev-build dev-mcp dev-bridge dev-ui install-air
-
-dev: ## Start all services with hot-reload (foreground)
-	docker-compose -f docker-compose.dev.yml up
-
-dev-up: ## Start all services with hot-reload (background)
-	docker-compose -f docker-compose.dev.yml up -d
-
-dev-down: ## Stop all development services
-	docker-compose -f docker-compose.dev.yml down
-
-dev-logs: ## Follow logs from all development services
-	docker-compose -f docker-compose.dev.yml logs -f
-
-dev-build: ## Rebuild all development images
-	docker-compose -f docker-compose.dev.yml build
-
-dev-mcp: ## Start only MCP server with hot-reload
-	docker-compose -f docker-compose.dev.yml up hyperion-mcp-server
-
-dev-bridge: ## Start only HTTP bridge with hot-reload
-	docker-compose -f docker-compose.dev.yml up hyperion-http-bridge
-
-dev-ui: ## Start only React UI with hot-reload
-	docker-compose -f docker-compose.dev.yml up hyperion-ui
-
-install-air: ## Install Air hot-reload tool locally
-	go install github.com/air-verse/air@latest
-	@echo "✓ Air installed! Run 'air' in any Go service directory."
+	@rm -rf bin/hyper || true
+	@rm -rf hyper/bin/ || true
+	@rm -rf coordinator/ui/dist || true
+	@rm -rf hyper/embed/ui || true
+	@echo "✓ Clean complete (node_modules preserved)"
