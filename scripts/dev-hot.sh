@@ -97,10 +97,10 @@ echo ""
 echo -e "${GREEN}🚀 Starting hot-reload development mode...${NC}"
 echo ""
 
-# Start Go backend with Air in background
-echo -e "${BLUE}[Backend] Starting Air hot-reload for Go...${NC}"
+# Start Go backend with Air in background (using unified hyper binary)
+echo -e "${BLUE}[Backend] Starting Air hot-reload for unified hyper binary...${NC}"
 (
-    cd coordinator
+    # Run Air from project root (uses root .air.toml -> builds bin/hyper)
     # Prefix all backend output with [Backend]
     air 2>&1 | while IFS= read -r line; do
         echo -e "${CYAN}[Backend]${NC} $line"

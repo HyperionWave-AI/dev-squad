@@ -48,6 +48,22 @@ func (m *MockChatService) SaveMessage(ctx context.Context, sessionID primitive.O
 	return args.Get(0).(*models.ChatMessage), args.Error(1)
 }
 
+func (m *MockChatService) SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error) {
+	callArgs := m.Called(ctx, sessionID, id, name, args, companyID)
+	if callArgs.Get(0) == nil {
+		return nil, callArgs.Error(1)
+	}
+	return callArgs.Get(0).(*models.ChatMessage), callArgs.Error(1)
+}
+
+func (m *MockChatService) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name, output, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error) {
+	callArgs := m.Called(ctx, sessionID, id, name, output, errorMsg, durationMs, companyID)
+	if callArgs.Get(0) == nil {
+		return nil, callArgs.Error(1)
+	}
+	return callArgs.Get(0).(*models.ChatMessage), callArgs.Error(1)
+}
+
 // MockAIService is a mock implementation of AI service for testing
 type MockAIService struct {
 	mock.Mock
@@ -62,10 +78,34 @@ func (m *MockAIService) StreamChat(ctx context.Context, messages []aiservice.Mes
 	return args.Get(0).(<-chan string), args.Error(1)
 }
 
+func (m *MockAIService) StreamChatWithTools(ctx context.Context, messages []aiservice.Message, maxToolCalls int) (<-chan aiservice.StreamEvent, error) {
+	// Convert simple token channel to StreamEvent channel for backward compatibility
+	args := m.Called(ctx, messages)
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	tokenChan := args.Get(0).(<-chan string)
+	eventChan := make(chan aiservice.StreamEvent, 10)
+
+	go func() {
+		defer close(eventChan)
+		for token := range tokenChan {
+			eventChan <- aiservice.StreamEvent{
+				Type:    aiservice.StreamEventToken,
+				Content: token,
+			}
+		}
+	}()
+
+	return eventChan, nil
+}
+
 func (m *MockAIService) GetConfig() *aiservice.AIConfig {
 	return &aiservice.AIConfig{
-		Provider: "mock",
-		Model:    "test-model",
+		Provider:     "mock",
+		Model:        "test-model",
+		MaxToolCalls: 3,
 	}
 }
 

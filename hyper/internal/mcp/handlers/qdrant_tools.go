@@ -14,7 +14,8 @@ import (
 
 // QdrantToolHandler manages MCP Qdrant tool operations
 type QdrantToolHandler struct {
-	qdrantClient storage.QdrantClientInterface
+	qdrantClient     storage.QdrantClientInterface
+	metadataRegistry *ToolMetadataRegistry
 }
 
 // NewQdrantToolHandler creates a new Qdrant tool handler
@@ -24,26 +25,31 @@ func NewQdrantToolHandler(client storage.QdrantClientInterface) *QdrantToolHandl
 	}
 }
 
+// SetMetadataRegistry sets the metadata registry for tool indexing
+func (h *QdrantToolHandler) SetMetadataRegistry(registry *ToolMetadataRegistry) {
+	h.metadataRegistry = registry
+}
+
 // RegisterQdrantTools registers Qdrant tools with the MCP server
 func (h *QdrantToolHandler) RegisterQdrantTools(server *mcp.Server) error {
-	// Register qdrant_find tool
-	if err := h.registerQdrantFind(server); err != nil {
-		return fmt.Errorf("failed to register qdrant_find tool: %w", err)
+	// Register knowledge_find tool
+	if err := h.registerKnowledgeFind(server); err != nil {
+		return fmt.Errorf("failed to register knowledge_find tool: %w", err)
 	}
 
-	// Register qdrant_store tool
-	if err := h.registerQdrantStore(server); err != nil {
-		return fmt.Errorf("failed to register qdrant_store tool: %w", err)
+	// Register knowledge_store tool
+	if err := h.registerKnowledgeStore(server); err != nil {
+		return fmt.Errorf("failed to register knowledge_store tool: %w", err)
 	}
 
 	return nil
 }
 
-// registerQdrantFind registers the qdrant_find tool
-func (h *QdrantToolHandler) registerQdrantFind(server *mcp.Server) error {
+// registerKnowledgeFind registers the knowledge_find tool
+func (h *QdrantToolHandler) registerKnowledgeFind(server *mcp.Server) error {
 	tool := &mcp.Tool{
-		Name:        "qdrant_find",
-		Description: "Search for knowledge in Qdrant by semantic similarity. Returns top N results with scores and metadata. Supports full or chunked text retrieval.",
+		Name:        "knowledge_find",
+		Description: "Search for knowledge by semantic similarity. Returns top N results with scores and metadata. Supports full or chunked text retrieval.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -82,14 +88,28 @@ func (h *QdrantToolHandler) registerQdrantFind(server *mcp.Server) error {
 		return result, err
 	})
 
+	// Report tool to metadata registry for indexing
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+			},
+		)
+	}
+
 	return nil
 }
 
-// registerQdrantStore registers the qdrant_store tool
-func (h *QdrantToolHandler) registerQdrantStore(server *mcp.Server) error {
+// registerKnowledgeStore registers the knowledge_store tool
+func (h *QdrantToolHandler) registerKnowledgeStore(server *mcp.Server) error {
 	tool := &mcp.Tool{
-		Name:        "qdrant_store",
-		Description: "Store knowledge in Qdrant with automatic embedding generation. Returns storage confirmation with ID and collection.",
+		Name:        "knowledge_store",
+		Description: "Store knowledge with automatic embedding generation. Returns storage confirmation with ID and collection.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -118,6 +138,20 @@ func (h *QdrantToolHandler) registerQdrantStore(server *mcp.Server) error {
 		result, _, err := h.handleQdrantStore(args)
 		return result, err
 	})
+
+	// Report tool to metadata registry for indexing
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+			},
+		)
+	}
 
 	return nil
 }

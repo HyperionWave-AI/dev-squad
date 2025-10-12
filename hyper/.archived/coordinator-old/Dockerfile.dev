@@ -1,0 +1,28 @@
+# Development Dockerfile with Air hot-reload
+FROM golang:1.25-alpine
+
+WORKDIR /app
+
+# Install Air for hot-reload and other dev tools
+RUN go install github.com/air-verse/air@latest
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Copy go mod files
+COPY go.mod go.sum ./
+COPY mcp-server/go.mod mcp-server/go.sum ./mcp-server/
+
+# Download dependencies
+RUN go mod download
+
+# Copy Air configuration
+COPY .air.toml .
+
+# Expose ports
+# 7095: HTTP REST API + UI serving
+# 7096: MCP stdio (not exposed, used internally)
+EXPOSE 7095
+
+# Run Air for hot-reload
+CMD ["air", "-c", ".air.toml"]
