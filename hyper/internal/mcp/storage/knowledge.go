@@ -48,6 +48,7 @@ type KnowledgeStorage interface {
 	ListCollections() []string
 	GetPopularCollections(limit int) ([]*CollectionStats, error)
 	GetCollectionStatsWithMetadata() ([]*CollectionWithMetadata, error)
+	ListKnowledge(collection string, limit int) ([]*KnowledgeEntry, error)
 }
 
 // MongoKnowledgeStorage implements KnowledgeStorage using MongoDB + Qdrant
@@ -364,6 +365,41 @@ func (s *MongoKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*CollectionW
 	}
 
 	return results, nil
+}
+
+// ListKnowledge retrieves knowledge entries from a collection without search (browse mode)
+// Returns entries sorted by creation date (newest first)
+func (s *MongoKnowledgeStorage) ListKnowledge(collection string, limit int) ([]*KnowledgeEntry, error) {
+	ctx := context.Background()
+
+	// Build filter
+	filter := bson.M{"collection": collection}
+
+	// Set options: sort by creation date descending, limit results
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+
+	// Query MongoDB
+	cursor, err := s.knowledgeCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list knowledge entries: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	// Decode results
+	var entries []*KnowledgeEntry
+	if err := cursor.All(ctx, &entries); err != nil {
+		return nil, fmt.Errorf("failed to decode knowledge entries: %w", err)
+	}
+
+	// Return empty slice (not nil) if no results
+	if entries == nil {
+		entries = make([]*KnowledgeEntry, 0)
+	}
+
+	return entries, nil
 }
 
 // calculateSimilarity provides simple text similarity scoring

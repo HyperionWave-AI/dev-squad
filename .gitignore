@@ -21,3 +21,4 @@ coordinator/embed/ui/
 bin/
 /hyper/embed/ui
 .env
+/hyper/.archived/coordinator-old/embed/ui

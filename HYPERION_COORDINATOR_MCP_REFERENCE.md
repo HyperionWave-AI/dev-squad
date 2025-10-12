@@ -958,6 +958,351 @@ The coordinator MCP server provides **real-time workflow visibility resources** 
 
 ---
 
+## 🔧 MCP Server Management Tools
+
+The unified hyper binary provides **6 tools for dynamic MCP server and tool discovery**. These enable runtime discovery and management of external MCP servers.
+
+### Tool 16: Discover Tools
+
+**Tool Name:** `mcp__hyper__discover_tools`
+
+**Description:** Search for MCP tools using natural language semantic search across all registered servers
+
+**Parameters:**
+- `query` (string, REQUIRED): Natural language search query describing the tool you need
+- `limit` (number, optional): Maximum number of results (default: 5, max: 20)
+
+**Example:**
+```typescript
+mcp__hyper__discover_tools({
+  query: "convert images to different formats",
+  limit: 10
+})
+```
+
+**Returns:**
+```json
+{
+  "tools": [
+    {
+      "toolName": "image_convert",
+      "description": "Convert images between PNG, JPG, WEBP formats",
+      "serverName": "image-processing-mcp",
+      "score": 0.92
+    }
+  ]
+}
+```
+
+**Use Cases:**
+- Find tools by natural language description
+- Discover capabilities across all registered MCP servers
+- Search when you don't know exact tool names
+
+---
+
+### Tool 17: Get Tool Schema
+
+**Tool Name:** `mcp__hyper__get_tool_schema`
+
+**Description:** Retrieve the complete JSON schema definition for a specific tool
+
+**Parameters:**
+- `toolName` (string, REQUIRED): Exact name of the tool
+
+**Example:**
+```typescript
+mcp__hyper__get_tool_schema({
+  toolName: "image_convert"
+})
+```
+
+**Returns:**
+```json
+{
+  "toolName": "image_convert",
+  "description": "Convert images between PNG, JPG, WEBP formats",
+  "serverName": "image-processing-mcp",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "inputPath": { "type": "string", "description": "Path to input image" },
+      "outputFormat": { "type": "string", "enum": ["png", "jpg", "webp"] }
+    },
+    "required": ["inputPath", "outputFormat"]
+  }
+}
+```
+
+**Use Cases:**
+- Get full parameter schema before calling a tool
+- Understand required and optional parameters
+- Validate arguments before execution
+
+---
+
+### Tool 18: Execute Tool
+
+**Tool Name:** `mcp__hyper__execute_tool`
+
+**Description:** Execute a discovered tool dynamically via HTTP bridge to its MCP server
+
+**Parameters:**
+- `toolName` (string, REQUIRED): Name of the tool to execute
+- `arguments` (object, optional): Tool-specific arguments matching its schema
+
+**Example:**
+```typescript
+mcp__hyper__execute_tool({
+  toolName: "image_convert",
+  arguments: {
+    inputPath: "/images/photo.png",
+    outputFormat: "webp"
+  }
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "result": {
+    "outputPath": "/images/photo.webp",
+    "fileSize": 45678
+  }
+}
+```
+
+**Use Cases:**
+- Execute tools from external MCP servers
+- Dynamic tool invocation without hardcoded integrations
+- Bridge between discovery and execution
+
+---
+
+### Tool 19: Add MCP Server
+
+**Tool Name:** `mcp__hyper__mcp_add_server`
+
+**Description:** Register a new external MCP server, automatically discover its tools, and store them in MongoDB + Qdrant for semantic search
+
+**Parameters:**
+- `serverName` (string, REQUIRED): Unique identifier for this server (e.g., "openai-mcp", "github-tools")
+- `serverUrl` (string, REQUIRED): HTTP/HTTPS URL of the MCP server endpoint
+- `description` (string, optional): Human-readable description of what this server provides
+
+**Example:**
+```typescript
+mcp__hyper__mcp_add_server({
+  serverName: "openai-mcp",
+  serverUrl: "http://localhost:3000/mcp",
+  description: "OpenAI GPT and DALL-E tools for AI generation"
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "serverName": "openai-mcp",
+  "serverUrl": "http://localhost:3000/mcp",
+  "toolsDiscovered": 12,
+  "toolsStored": 12,
+  "message": "Server 'openai-mcp' added successfully!"
+}
+```
+
+**What It Does:**
+1. Registers server metadata in MongoDB (`mcp_servers` collection)
+2. Connects to server via HTTP POST to `tools/list` endpoint (MCP JSON-RPC protocol)
+3. Discovers all available tools from the server
+4. Stores tool metadata (name, description, schema) in MongoDB (`tools` collection)
+5. Stores tool embeddings in Qdrant (`mcp-tools` collection) for semantic search
+6. Links all tools to their source server via `serverName` field
+
+**MCP Server Requirements:**
+- Must accept HTTP POST requests at the configured `serverUrl`
+- Must implement MCP JSON-RPC protocol for `tools/list` method
+- Must return tool definitions with:
+  - `name` (string) - Tool identifier
+  - `description` (string) - Human-readable description
+  - `inputSchema` (object) - JSON schema for parameters
+
+**Example MCP Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "generate_image",
+        "description": "Generate images using DALL-E",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prompt": { "type": "string", "description": "Image description" }
+          },
+          "required": ["prompt"]
+        }
+      }
+    ]
+  }
+}
+```
+
+**Use Cases:**
+- Add third-party MCP servers at runtime (no restart required)
+- Integrate marketplace MCP servers dynamically
+- Enable multi-MCP environments with centralized discovery
+- Register development servers during testing
+
+---
+
+### Tool 20: Rediscover Server Tools
+
+**Tool Name:** `mcp__hyper__mcp_rediscover_server`
+
+**Description:** Refresh/update tools from an existing registered MCP server (useful when server adds new tools or updates existing ones)
+
+**Parameters:**
+- `serverName` (string, REQUIRED): Name of the registered MCP server
+
+**Example:**
+```typescript
+mcp__hyper__mcp_rediscover_server({
+  serverName: "openai-mcp"
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "serverName": "openai-mcp",
+  "serverUrl": "http://localhost:3000/mcp",
+  "toolsDiscovered": 15,
+  "toolsStored": 15,
+  "message": "Server 'openai-mcp' rediscovered successfully! Discovered 15 tools, stored 15 tools."
+}
+```
+
+**What It Does:**
+1. Retrieves server metadata from MongoDB
+2. Removes all old tools for this server (MongoDB + Qdrant cleanup)
+3. Connects to the server and discovers current tools
+4. Stores updated tool metadata in MongoDB
+5. Stores updated tool embeddings in Qdrant
+6. Updates server tool count
+
+**Use Cases:**
+- Server deployed new tool versions
+- Server added new capabilities
+- Refresh stale tool metadata
+- Sync after server updates
+
+---
+
+### Tool 21: Remove MCP Server
+
+**Tool Name:** `mcp__hyper__mcp_remove_server`
+
+**Description:** Remove an MCP server and all its tools from the registry (cleanup all associated data)
+
+**Parameters:**
+- `serverName` (string, REQUIRED): Name of the MCP server to remove
+
+**Example:**
+```typescript
+mcp__hyper__mcp_remove_server({
+  serverName: "openai-mcp"
+})
+```
+
+**Returns:**
+```json
+{
+  "success": true,
+  "serverName": "openai-mcp",
+  "serverUrl": "http://localhost:3000/mcp",
+  "toolsRemoved": 12,
+  "message": "Server 'openai-mcp' removed successfully! All tools and metadata deleted."
+}
+```
+
+**What It Does:**
+1. Retrieves server metadata
+2. Removes all tools for this server from MongoDB (`tools` collection)
+3. Removes all tool embeddings from Qdrant (`mcp-tools` collection)
+4. Removes server metadata from MongoDB (`mcp_servers` collection)
+5. Returns confirmation with cleanup summary
+
+**Use Cases:**
+- Remove deprecated/obsolete servers
+- Clean up test servers after development
+- Deregister third-party servers
+- Maintain registry hygiene
+
+---
+
+### MCP Server Management Workflow
+
+**Complete workflow for managing external MCP servers:**
+
+```typescript
+// 1. Add a new MCP server
+await mcp__hyper__mcp_add_server({
+  serverName: "image-tools",
+  serverUrl: "http://localhost:3000/mcp",
+  description: "Image processing and conversion tools"
+})
+// → Server registered, 8 tools discovered and stored
+
+// 2. Discover available tools
+const results = await mcp__hyper__discover_tools({
+  query: "convert image formats",
+  limit: 5
+})
+// → Returns tools with semantic similarity scores
+
+// 3. Get tool schema
+const schema = await mcp__hyper__get_tool_schema({
+  toolName: "image_convert"
+})
+// → Full JSON schema with parameters
+
+// 4. Execute the tool
+const result = await mcp__hyper__execute_tool({
+  toolName: "image_convert",
+  arguments: {
+    inputPath: "/images/photo.png",
+    outputFormat: "webp"
+  }
+})
+// → Tool executed on remote server, result returned
+
+// 5. Refresh when server updates
+await mcp__hyper__mcp_rediscover_server({
+  serverName: "image-tools"
+})
+// → Old tools removed, new tools discovered
+
+// 6. Remove when no longer needed
+await mcp__hyper__mcp_remove_server({
+  serverName: "image-tools"
+})
+// → Server and all tools removed from registry
+```
+
+**Benefits:**
+- **Dynamic Discovery**: Add servers at runtime without code changes
+- **Semantic Search**: Find tools by natural language across all servers
+- **Unified Registry**: Single source of truth for all MCP tools
+- **Automatic Sync**: Rediscover tools when servers update
+- **Clean Removal**: Complete cleanup of server and tool data
+
+---
+
 ## ✅ Best Practices
 
 1. **Always get fresh task data** - Call `coordinator_list_agent_tasks` to get current TODO IDs before updating
