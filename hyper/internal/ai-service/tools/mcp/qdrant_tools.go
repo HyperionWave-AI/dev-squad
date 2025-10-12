@@ -9,20 +9,20 @@ import (
 	"hyper/internal/mcp/storage"
 )
 
-// QdrantFindTool implements the ToolExecutor interface for searching Qdrant
-type QdrantFindTool struct {
+// KnowledgeFindTool implements the ToolExecutor interface for searching knowledge
+type KnowledgeFindTool struct {
 	qdrantClient storage.QdrantClientInterface
 }
 
-func (t *QdrantFindTool) Name() string {
-	return "qdrant_find"
+func (t *KnowledgeFindTool) Name() string {
+	return "knowledge_find"
 }
 
-func (t *QdrantFindTool) Description() string {
-	return "Search for knowledge in Qdrant by semantic similarity. Returns top matches with scores and metadata. Use for discovering patterns, solutions, and related knowledge. Limit: 5 results default (max: 20). If embedding service is down, use query_knowledge tool as fallback."
+func (t *KnowledgeFindTool) Description() string {
+	return "Search for knowledge by semantic similarity. Returns top matches with scores and metadata. Use for discovering patterns, solutions, and related knowledge. Limit: 5 results default (max: 20). If embedding service is down, use query_knowledge tool as fallback."
 }
 
-func (t *QdrantFindTool) InputSchema() map[string]interface{} {
+func (t *KnowledgeFindTool) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -43,7 +43,7 @@ func (t *QdrantFindTool) InputSchema() map[string]interface{} {
 	}
 }
 
-func (t *QdrantFindTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+func (t *KnowledgeFindTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	// Extract and validate required fields
 	collection, ok := input["collection"].(string)
 	if !ok || collection == "" {
@@ -105,20 +105,20 @@ func (t *QdrantFindTool) Execute(ctx context.Context, input map[string]interface
 	return formattedResults, nil
 }
 
-// QdrantStoreTool implements the ToolExecutor interface for storing in Qdrant
-type QdrantStoreTool struct {
+// KnowledgeStoreTool implements the ToolExecutor interface for storing knowledge
+type KnowledgeStoreTool struct {
 	qdrantClient storage.QdrantClientInterface
 }
 
-func (t *QdrantStoreTool) Name() string {
-	return "qdrant_store"
+func (t *KnowledgeStoreTool) Name() string {
+	return "knowledge_store"
 }
 
-func (t *QdrantStoreTool) Description() string {
-	return "Store knowledge in Qdrant with automatic embedding generation. Returns storage confirmation. Use to persist reusable patterns, solutions, and learnings for semantic search. If embedding service is down, use coordinator upsert_knowledge tool for MongoDB storage (no semantic search)."
+func (t *KnowledgeStoreTool) Description() string {
+	return "Store knowledge with automatic embedding generation. Returns storage confirmation. Use to persist reusable patterns, solutions, and learnings for semantic search. If embedding service is down, use coordinator upsert_knowledge tool for MongoDB storage (no semantic search)."
 }
 
-func (t *QdrantStoreTool) InputSchema() map[string]interface{} {
+func (t *KnowledgeStoreTool) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -139,7 +139,7 @@ func (t *QdrantStoreTool) InputSchema() map[string]interface{} {
 	}
 }
 
-func (t *QdrantStoreTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+func (t *KnowledgeStoreTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	// Extract and validate required fields
 	collection, ok := input["collection"].(string)
 	if !ok || collection == "" {
@@ -198,8 +198,8 @@ func containsAny(s string, substrings []string) bool {
 // RegisterQdrantTools registers all Qdrant tools with the tool registry
 func RegisterQdrantTools(registry *aiservice.ToolRegistry, qdrantClient storage.QdrantClientInterface) error {
 	tools := []aiservice.ToolExecutor{
-		&QdrantFindTool{qdrantClient: qdrantClient},
-		&QdrantStoreTool{qdrantClient: qdrantClient},
+		&KnowledgeFindTool{qdrantClient: qdrantClient},
+		&KnowledgeStoreTool{qdrantClient: qdrantClient},
 	}
 
 	for _, tool := range tools {

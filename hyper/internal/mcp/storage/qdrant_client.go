@@ -20,6 +20,7 @@ type QdrantClientInterface interface {
 	EnsureCollection(collectionName string, vectorSize int) error
 	StorePoint(collectionName string, id string, text string, metadata map[string]interface{}) error
 	SearchSimilar(collectionName string, query string, limit int) ([]*QdrantQueryResult, error)
+	DeletePoint(collectionName string, pointID string) error
 	Ping(ctx context.Context) error
 }
 
@@ -88,14 +89,56 @@ func NewQdrantClient(baseURL string, knowledgeCollectionName string) *QdrantClie
 
 // NewQdrantClientWithEmbedding creates a Qdrant client with custom embedding function (for testing)
 func NewQdrantClientWithEmbedding(baseURL string, embeddingFunc func(string) ([]float64, error), vectorDim int) *QdrantClient {
+	qdrantKey := os.Getenv("QDRANT_API_KEY")
+
 	return &QdrantClient{
 		baseURL:         baseURL,
+		qdrantAPIKey:    qdrantKey,
 		embeddingFunc:   embeddingFunc,
 		vectorDimension: vectorDim,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// NewQdrantClientWithEmbeddingClient creates a Qdrant client using an external embedding client
+// This allows using the same embedding client (Ollama, OpenAI, Voyage, etc.) for both code indexing and knowledge/tools storage
+func NewQdrantClientWithEmbeddingClient(baseURL string, knowledgeCollectionName string, embeddingClient embeddings.EmbeddingClient) *QdrantClient {
+	qdrantKey := os.Getenv("QDRANT_API_KEY")
+
+	// Default collection name if not provided
+	if knowledgeCollectionName == "" {
+		knowledgeCollectionName = "dev_squad_knowledge"
+	}
+
+	client := &QdrantClient{
+		baseURL:                 baseURL,
+		qdrantAPIKey:            qdrantKey,
+		vectorDimension:         embeddingClient.GetDimensions(),
+		knowledgeCollectionName: knowledgeCollectionName,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+
+	// Set embedding function to use the provided embedding client
+	// Convert float32 embeddings to float64 for Qdrant compatibility
+	client.embeddingFunc = func(text string) ([]float64, error) {
+		embedding32, err := embeddingClient.CreateEmbedding(text)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert []float32 to []float64
+		embedding64 := make([]float64, len(embedding32))
+		for i, v := range embedding32 {
+			embedding64[i] = float64(v)
+		}
+		return embedding64, nil
+	}
+
+	return client
 }
 
 // addAuthHeader adds the Qdrant API key header if available
@@ -287,6 +330,40 @@ func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit 
 	}
 
 	return results, nil
+}
+
+// DeletePoint deletes a single point from a collection
+func (c *QdrantClient) DeletePoint(collectionName string, pointID string) error {
+	requestBody := map[string]interface{}{
+		"points": []string{pointID},
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", c.baseURL, collectionName)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete point: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete point (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 // Helper functions

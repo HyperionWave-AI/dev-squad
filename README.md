@@ -15,7 +15,7 @@ A production-ready MCP server that enables AI agents to coordinate complex workf
 
 - **Hierarchical Tasks** - Human tasks → Agent tasks → TODO tracking
 - **Knowledge Base** - Store and query coordination knowledge with semantic search
-- **MCP Native** - 9 tools for complete task lifecycle management
+- **MCP Native** - 33 tools for complete task lifecycle management
 - **MongoDB Persistence** - Cloud-based storage with real-time sync
 - **Kanban UI** - Visual progress tracking with drag-and-drop
 
@@ -110,9 +110,10 @@ docker-compose up -d
 - Context preservation across agents
 
 **🔧 MCP Integration**
-- 9 coordination tools
-- Dynamic resources (`hyperion://task/*`)
-- HTTP bridge for web clients
+- 36 tools (coordinator, code index, knowledge, filesystem, discovery, server management)
+- 12 dynamic resources (`hyperion://task/*`, `hyperion://docs/*`, etc.)
+- 7 AI assistance prompts
+- HTTP + stdio transports
 - Official MCP Go SDK v0.3.0
 
 ---
@@ -170,18 +171,18 @@ docker-compose up -d
                      │ stdio (JSON-RPC)
                      ▼
 ┌─────────────────────────────────────────────────────────┐
-│           MCP Server (hyper)             │
+│       Unified Hyper Binary (bin/hyper)                  │
 │  ┌───────────────────────────────────────────────────┐  │
-│  │ Tools (9)                                         │  │
-│  │ • coordinator_create_human_task                   │  │
-│  │ • coordinator_create_agent_task                   │  │
-│  │ • coordinator_list_human_tasks                    │  │
-│  │ • coordinator_list_agent_tasks                    │  │
-│  │ • coordinator_update_task_status                  │  │
-│  │ • coordinator_update_todo_status                  │  │
-│  │ • coordinator_clear_task_board                    │  │
-│  │ • coordinator_upsert_knowledge                    │  │
-│  │ • coordinator_query_knowledge                     │  │
+│  │ 36 MCP Tools                                      │  │
+│  │ • Coordinator (19): Tasks, TODOs, Knowledge       │  │
+│  │ • Code Index (5): Semantic code search            │  │
+│  │ • Qdrant (2): Vector knowledge storage            │  │
+│  │ • Filesystem (4): File operations, bash, patches  │  │
+│  │ • Discovery (3): Dynamic tool discovery           │  │
+│  │ • Server Mgmt (3): MCP server management          │  │
+│  │                                                   │  │
+│  │ 12 MCP Resources (docs, workflow, metrics)        │  │
+│  │ 7 MCP Prompts (planning, knowledge, diagnostics)  │  │
 │  └───────────────────────────────────────────────────┘  │
 └──────────────┬────────────────────┬─────────────────────┘
                │                    │
@@ -254,11 +255,20 @@ docker-compose build                          # Rebuild images
 ```bash
 # Clone and setup
 git clone <repository-url>
-cd coordinator
+cd dev-squad
 export MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/coordinator_db"
 
-# Start full stack (MCP + HTTP bridge + UI)
-./start-coordinator.sh
+# Build unified binary
+make build
+
+# Run in HTTP mode (REST API + UI + MCP HTTP)
+./bin/hyper --mode=http
+
+# OR run in MCP stdio mode (for Claude Code)
+./bin/hyper --mode=mcp
+
+# OR run in dual mode (both HTTP and MCP)
+./bin/hyper --mode=both
 ```
 
 **Service URLs:**
@@ -359,19 +369,61 @@ Visit http://localhost:5173 for visual task management:
 
 ## 🔧 MCP Tools
 
-The server provides 9 coordination tools:
+The unified hyper binary provides **36 MCP tools** across 6 categories:
 
-| Tool | Purpose | Key Parameters |
-|------|---------|----------------|
-| `coordinator_create_human_task` | Create user-level task | `prompt` |
-| `coordinator_create_agent_task` | Assign task to agent | `humanTaskId`, `agentName`, `role`, `todos` |
-| `coordinator_list_human_tasks` | List all human tasks | None |
-| `coordinator_list_agent_tasks` | List agent tasks | `agentName?`, `humanTaskId?` |
-| `coordinator_update_task_status` | Update task status | `taskId`, `status`, `notes?` |
-| `coordinator_update_todo_status` | Update TODO item | `agentTaskId`, `todoId`, `status` |
-| `coordinator_clear_task_board` | Clear all tasks | `confirm: true` |
-| `coordinator_upsert_knowledge` | Store knowledge | `collection`, `text`, `metadata?` |
-| `coordinator_query_knowledge` | Query knowledge | `collection`, `query`, `limit?` |
+### Coordinator Tools (19 tools)
+Task management, knowledge, and coordination:
+- `coordinator_create_human_task` - Create user-level task
+- `coordinator_create_agent_task` - Assign task to specialist agent
+- `coordinator_list_human_tasks` - List all human tasks
+- `coordinator_list_agent_tasks` - List agent tasks (with pagination)
+- `coordinator_get_agent_task` - Get full task details (untruncated)
+- `coordinator_update_task_status` - Update task progress
+- `coordinator_update_todo_status` - Mark TODO items complete
+- `coordinator_add_task_prompt_notes` - Add human guidance to tasks
+- `coordinator_update_task_prompt_notes` - Update task guidance
+- `coordinator_clear_task_prompt_notes` - Remove task guidance
+- `coordinator_add_todo_prompt_notes` - Add guidance to TODOs
+- `coordinator_update_todo_prompt_notes` - Update TODO guidance
+- `coordinator_clear_todo_prompt_notes` - Remove TODO guidance
+- `coordinator_upsert_knowledge` - Store knowledge in MongoDB
+- `coordinator_query_knowledge` - Query task-specific knowledge
+- `coordinator_get_popular_collections` - Get most-used collections
+- `coordinator_clear_task_board` - Clear all tasks (destructive)
+- `list_subagents` - Query available specialist agents
+- `set_current_subagent` - Associate subagent with chat
+
+### Code Indexing Tools (5 tools)
+Semantic code search and indexing:
+- `code_index_add_folder` - Add folder to semantic index
+- `code_index_remove_folder` - Remove folder from index
+- `code_index_scan` - Scan folder for changes
+- `code_index_search` - Natural language code search
+- `code_index_status` - Get indexing status
+
+### Knowledge Tools (2 tools)
+Vector-based knowledge storage:
+- `knowledge_find` - Semantic similarity search
+- `knowledge_store` - Store with embeddings
+
+### Filesystem Tools (4 tools)
+File operations and command execution:
+- `file_read` - Read files with chunked streaming
+- `file_write` - Write files with chunked streaming
+- `bash` - Execute bash commands with streaming
+- `apply_patch` - Apply unified diff patches
+
+### Discovery Tools (3 tools)
+Dynamic tool discovery:
+- `discover_tools` - Natural language tool search
+- `get_tool_schema` - Get tool JSON schema
+- `execute_tool` - Execute tools dynamically
+
+### Server Management Tools (3 tools)
+External MCP server management:
+- `mcp_add_server` - Register external MCP servers and discover tools
+- `mcp_rediscover_server` - Refresh tools from registered servers
+- `mcp_remove_server` - Remove servers and cleanup tool data
 
 **📖 Complete reference:** [HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)
 
@@ -430,75 +482,101 @@ const results = await coordinator_query_knowledge({
 ## 📁 Project Structure
 
 ```
-coordinator/
-├── mcp-server/                  # MCP protocol server (Go)
-│   ├── main.go                  # Server entry point
-│   ├── handlers/                # MCP tool handlers
-│   │   ├── tools.go             # Tool implementations
-│   │   └── resources.go         # Resource implementations
-│   ├── storage/                 # Database layer
-│   │   ├── tasks.go             # Task storage (MongoDB)
-│   │   └── knowledge.go         # Knowledge storage (Qdrant)
+dev-squad/
+├── hyper/                       # ✅ UNIFIED GO BINARY (ACTIVE)
+│   ├── cmd/coordinator/         # Main entry point
+│   │   └── main.go              # Unified binary with HTTP + MCP
+│   ├── internal/                # Internal packages
+│   │   ├── mcp/                 # MCP protocol layer
+│   │   │   ├── handlers/        # 36 MCP tools
+│   │   │   │   ├── tools.go                # Coordinator (19)
+│   │   │   │   ├── code_tools.go           # Code index (5)
+│   │   │   │   ├── qdrant_tools.go         # Knowledge (2)
+│   │   │   │   ├── filesystem_tools.go     # Filesystem (4)
+│   │   │   │   └── tools_discovery.go      # Discovery (3) + Server Mgmt (3)
+│   │   │   ├── storage/         # MongoDB + Qdrant clients
+│   │   │   └── embeddings/      # Embedding providers
+│   │   ├── server/              # HTTP server
+│   │   │   └── http_server.go   # REST API + MCP HTTP + UI
+│   │   ├── ai-service/          # AI chat streaming
+│   │   └── services/            # Business logic
+│   ├── embed/                   # Embedded UI bundle
+│   │   └── ui/                  # Production UI assets
 │   └── go.mod                   # Go dependencies
 │
-├── mcp-http-bridge/             # HTTP ↔ MCP adapter (Go)
-│   ├── main.go                  # Bridge server + routing
-│   ├── main_test.go             # Unit tests (60.3% coverage)
-│   ├── benchmark_test.go        # Performance benchmarks
-│   ├── CLAUDE.md                # Architecture documentation
-│   └── TEST_README.md           # Testing guide
+├── coordinator/                 # ✅ ACTIVE UI SOURCE
+│   ├── ui/                      # React frontend (source)
+│   │   ├── src/
+│   │   │   ├── App.tsx          # Main application
+│   │   │   ├── components/      # React components
+│   │   │   ├── services/        # API clients
+│   │   │   └── types/           # TypeScript types
+│   │   ├── tests/               # Playwright E2E tests (109 tests)
+│   │   ├── package.json         # Node dependencies
+│   │   └── vite.config.ts       # Build configuration
+│   └── *.md                     # Documentation
 │
-├── ui/                          # React frontend
-│   ├── src/
-│   │   ├── App.tsx              # Main application
-│   │   ├── theme.ts             # MUI theme configuration
-│   │   ├── components/          # React components
-│   │   │   ├── KanbanBoard.tsx  # Kanban board container
-│   │   │   ├── KanbanTaskCard.tsx  # Task card component
-│   │   │   └── KnowledgeBrowser.tsx  # Knowledge UI (future)
-│   │   ├── services/            # API clients
-│   │   │   └── mcpClient.ts     # MCP HTTP client
-│   │   └── types/               # TypeScript types
-│   │       └── coordinator.ts   # Task/Agent types
-│   ├── tests/                   # Playwright E2E tests
-│   │   ├── kanban-rendering.spec.ts
-│   │   ├── drag-drop.spec.ts
-│   │   ├── accessibility.spec.ts
-│   │   └── ... (8 test suites, 109 tests)
-│   ├── package.json             # Node dependencies
-│   └── vite.config.ts           # Build configuration
+├── bin/                         # ✅ COMPILED BINARY
+│   └── hyper                    # 17MB unified binary (http|mcp|both)
 │
-├── start-coordinator.sh         # One-command startup script
-├── SPECIFICATION.md             # Technical specification
-├── FULL_STACK_SETUP.md         # Integration guide
-└── README.md                    # This file
+├── scripts/                     # Development scripts
+│   ├── dev-hot.sh               # Full stack hot reload
+│   ├── dev-native.sh            # Native dev mode
+│   └── air-build.sh             # Air build script
+│
+├── .air.toml                    # Air hot reload config
+├── Makefile                     # Build targets
+├── CLAUDE.md                    # Agent coordination guide
+├── README.md                    # This file
+└── HYPERION_COORDINATOR_MCP_REFERENCE.md  # MCP tool reference
 ```
+
+**⚠️ Deprecated (Archived in hyper/.archived/coordinator-old/):**
+- Old coordinator binary (24MB, http only)
+- Old MCP server (12MB, separate process)
+- Old HTTP bridge (12MB, subprocess)
+- Duplicate internal packages
+
+**✅ Use unified binary only:** `bin/hyper` (17MB, all features, single process)
 
 ## 🔧 Development
 
 ### Building from Source
 
-**Backend:**
+**Unified Binary:**
 ```bash
-# MCP Server
-cd coordinator/mcp-server
-go build -o hyper-mcp
+# Build from hyper/cmd/coordinator
+make build
+# Output: bin/hyper (17MB)
 
-# HTTP Bridge
-cd ../mcp-http-bridge
-go build -o mcp-http-bridge
+# OR use native build script
+./build-native.sh
 ```
 
-**Frontend:**
+**Frontend (UI source):**
 ```bash
 cd coordinator/ui
 npm install
 npm run build
+# Output: hyper/embed/ui/ (embedded in binary)
 ```
 
 **Docker:**
 ```bash
 docker-compose build
+```
+
+### Development Modes
+
+```bash
+# Hot reload (Go only)
+make dev
+
+# Full stack hot reload (Go + UI)
+make dev-hot
+
+# Native development
+make run-native
 ```
 
 ### Code Quality Standards
@@ -633,11 +711,11 @@ Contributions are welcome! Please follow these guidelines:
 | **[desktop-app/README.md](./desktop-app/README.md)** | ⭐ Desktop app guide (Tauri native app) |
 | **[README-NATIVE.md](./README-NATIVE.md)** | ⭐ Native binary guide (single file deployment) |
 | **[DOCKER.md](./DOCKER.md)** | Complete Docker installation & usage guide |
-| **[HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)** | MCP tool reference with examples |
+| **[HYPERION_COORDINATOR_MCP_REFERENCE.md](./HYPERION_COORDINATOR_MCP_REFERENCE.md)** | ⭐ Complete MCP tool reference (33 tools) |
 | **[CLAUDE.md](./CLAUDE.md)** | Multi-agent coordination patterns |
-| **[coordinator/mcp-server/README.md](./coordinator/mcp-server/README.md)** | MCP server technical details |
+| **[GO_CODE_CONSOLIDATION_STATUS.md](./GO_CODE_CONSOLIDATION_STATUS.md)** | Go code consolidation details |
+| **[ARCHIVE_SUMMARY.md](./ARCHIVE_SUMMARY.md)** | Archive information |
 | **[SPECIFICATION.md](./SPECIFICATION.md)** | Full technical specification |
-| **[mcp-http-bridge/CLAUDE.md](./mcp-http-bridge/CLAUDE.md)** | HTTP bridge architecture |
 
 ## 🧪 Testing
 

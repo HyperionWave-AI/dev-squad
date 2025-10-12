@@ -45,7 +45,7 @@ done
 # Configuration
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 HYPER_DIR="$PROJECT_ROOT/hyper"
-UI_DIR="$PROJECT_ROOT/coordinator/ui"
+UI_DIR="$PROJECT_ROOT/.archive/coordinator/ui"
 CMD_DIR="$HYPER_DIR/cmd/coordinator"
 OUTPUT_DIR="$PROJECT_ROOT/bin"
 
@@ -104,24 +104,31 @@ echo ""
 echo -e "${BLUE}[1/4] Building UI...${NC}"
 cd "$UI_DIR"
 
-# Check if node_modules exists
-if [ ! -d "node_modules" ]; then
-    echo -e "${YELLOW}Installing UI dependencies...${NC}"
-    npm install
+# Check if UI is already built
+if [ -f "dist/index.html" ]; then
+    echo -e "${GREEN}✓ UI already built (using existing dist)${NC}"
+    echo -e "  Assets: $(find dist/assets -type f | wc -l | tr -d ' ') files"
+    echo -e "  Size: $(du -sh dist | awk '{print $1}')"
+else
+    # Check if node_modules exists
+    if [ ! -d "node_modules" ]; then
+        echo -e "${YELLOW}Installing UI dependencies...${NC}"
+        npm install
+    fi
+
+    echo -e "${YELLOW}Building production UI bundle...${NC}"
+    npm run build
+
+    # Verify UI build
+    if [ ! -f "dist/index.html" ]; then
+        echo -e "${RED}ERROR: UI build failed - dist/index.html not found${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ UI built successfully${NC}"
+    echo -e "  Assets: $(find dist/assets -type f | wc -l | tr -d ' ') files"
+    echo -e "  Size: $(du -sh dist | awk '{print $1}')"
 fi
-
-echo -e "${YELLOW}Building production UI bundle...${NC}"
-npm run build
-
-# Verify UI build
-if [ ! -f "dist/index.html" ]; then
-    echo -e "${RED}ERROR: UI build failed - dist/index.html not found${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✓ UI built successfully${NC}"
-echo -e "  Assets: $(find dist/assets -type f | wc -l | tr -d ' ') files"
-echo -e "  Size: $(du -sh dist | awk '{print $1}')"
 echo ""
 
 # Step 2: Prepare UI for embedding

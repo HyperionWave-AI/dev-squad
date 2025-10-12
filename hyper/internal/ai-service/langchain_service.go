@@ -2,6 +2,7 @@ package aiservice
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 )
@@ -282,9 +283,20 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					Content: responseText,
 				})
 				// Add tool result as a message
-				toolResultMsg := fmt.Sprintf("Tool '%s' result: %v", result.Name, result.Output)
+				// CRITICAL FIX: JSON-marshal the output to properly serialize values
+				// Using %v with fmt.Sprintf causes pointer addresses to be printed instead of values
+				var toolResultMsg string
 				if result.Error != "" {
 					toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
+				} else {
+					// Marshal output to JSON to ensure proper serialization
+					outputJSON, err := json.Marshal(result.Output)
+					if err != nil {
+						// Fallback to error message if marshaling fails
+						toolResultMsg = fmt.Sprintf("Tool '%s' result serialization error: %v", result.Name, err)
+					} else {
+						toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
+					}
 				}
 				currentMessages = append(currentMessages, Message{
 					Role:    "system",
