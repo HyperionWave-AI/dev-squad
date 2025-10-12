@@ -79,7 +79,7 @@
 - `mcp__hyper__resources_read({ uri: "hyperion://metrics/squad-velocity" })` - Completion rates
 - `mcp__hyper__resources_read({ uri: "hyperion://metrics/context-efficiency" })` - Efficiency stats
 
-**MCP Prompts (6 prompts) - AI Assistance! NEW!:**
+**MCP Prompts (7 prompts) - AI Assistance! NEW!:**
 
 **For Workflow Coordinators:**
 - `mcp__hyper__prompts_get({ name: "plan_task_breakdown", arguments: {...} })` - Break down tasks
@@ -89,6 +89,7 @@
 **For Implementation Agents:**
 - `mcp__hyper__prompts_get({ name: "recommend_knowledge_query", arguments: {...} })` - Optimize knowledge queries
 - `mcp__hyper__prompts_get({ name: "diagnose_blocked_task", arguments: {...} })` - Unblock help
+- `mcp__hyper__prompts_get({ name: "guide_knowledge_storage", arguments: {...} })` - **MANDATORY** - Get storage guidelines before storing knowledge
 - `mcp__hyper__prompts_get({ name: "suggest_knowledge_structure", arguments: {...} })` - Structure learnings for storage
 
 ---
@@ -433,9 +434,19 @@ const unblockHelp = await prompts_get({
 // Get specific unblocking actions
 ```
 
-**AFTER completing work:**
+**AFTER completing work (MANDATORY SEQUENCE):**
 ```typescript
-// Structure your learnings properly
+// 1. Get storage guidelines FIRST (MANDATORY)
+const storageGuide = await prompts_get({
+  name: "guide_knowledge_storage",
+  arguments: {
+    knowledgeType: "pattern|solution|gotcha|adr",
+    domain: "backend|frontend|infrastructure"
+  }
+})
+// Follow guide: Headline (max 100 words) + What + Why + How + Important
+
+// 2. Structure your learnings per guide format
 const structureHelp = await prompts_get({
   name: "suggest_knowledge_structure",
   arguments: {
@@ -443,7 +454,7 @@ const structureHelp = await prompts_get({
     context: JSON.stringify({ squad: "...", files: [...] })
   }
 })
-// Store knowledge in a reusable format
+// Store knowledge in the exact format from guide
 ```
 
 **FOR Workflow Coordinators:**
@@ -485,12 +496,15 @@ const handoff = await prompts_get({
 - Ignore prompt suggestions (they're AI-optimized!)
 - Query knowledge base blindly (use `recommend_knowledge_query` first)
 - Implement without checking `recent-learnings` (reuse > rebuild)
+- **Store knowledge without using `guide_knowledge_storage` prompt** (FORBIDDEN!)
+- Write generic headlines or fluff content
 
 **✅ DO:**
 - Check `active-agents` before starting (avoid duplicates)
 - Check `recent-learnings` before coding (reuse solutions)
 - Use `recommend_knowledge_query` before querying (optimize queries)
 - Use `diagnose_blocked_task` when stuck (unblock faster)
+- **Use `guide_knowledge_storage` BEFORE storing any knowledge** (MANDATORY!)
 - Use prompts for guidance (they know the patterns)
 
 ---
@@ -514,18 +528,48 @@ coordinator_upsert_knowledge({ collection_name: "team-coordination", information
 
 **Post-Work (REQUIRED):**
 ```typescript
+// 0. Get knowledge storage guidelines (MANDATORY BEFORE STORING)
+const storageGuide = await mcp__hyper__prompts_get({
+  name: "guide_knowledge_storage",
+  arguments: {
+    knowledgeType: "pattern|solution|gotcha|adr",
+    domain: "backend|frontend|infrastructure"
+  }
+})
+// Follow the guide: Headline (max 100 words), What, Why, How, Important
+// NO FLUFF - only what matters for future AI agents
+
 // 1. Store task-specific knowledge in coordinator
 coordinator_upsert_knowledge({
   collection: `task:hyperion://task/human/${humanTaskId}`,
-  text: "[solution, gotchas, testing approach]",
+  text: `
+## [Headline - WHAT + WHY in <100 words]
+
+### What
+[Core technical details with code]
+
+### Why
+[Business/technical importance]
+
+### How
+[Step-by-step implementation]
+
+### Important
+[Critical gotchas with Why/Solution/Detection]
+  `,
   metadata: { taskId, agentName, completedAt, relatedServices }
 })
 
-// 2. Share reusable knowledge in knowledge base
+// 2. Share reusable knowledge in knowledge base (FOLLOW STORAGE GUIDE)
 coordinator_upsert_knowledge({
   collection_name: "technical-knowledge",
-  information: "[detailed solution with code examples]",
-  metadata: { knowledgeType, domain, title, tags, linkedTaskId }
+  information: "[Use format from guide_knowledge_storage prompt]",
+  metadata: {
+    knowledgeType: "pattern|solution|gotcha|adr",
+    domain: "backend|frontend|infrastructure",
+    title: "[Searchable title from headline]",
+    tags: ["tag1", "tag2", "tag3", "tag4", "tag5"] // 5-8 specific tags
+  }
 })
 
 // 3. Document technical debt (if found)
@@ -537,6 +581,90 @@ coordinator_upsert_knowledge({
 // 4. Final status update
 coordinator_update_task_status({ taskId, status: "completed", notes: "..." })
 ```
+
+---
+
+## 🚨 **KNOWLEDGE STORAGE ENFORCEMENT (MANDATORY)**
+
+**CRITICAL RULE: NEVER store knowledge without following the storage guide format.**
+
+### **Before Storing ANY Knowledge (REQUIRED)**
+
+**Step 1: Retrieve the Storage Guide**
+```typescript
+const storageGuide = await mcp__hyper__prompts_get({
+  name: "guide_knowledge_storage",
+  arguments: {
+    knowledgeType: "pattern|solution|gotcha|adr",
+    domain: "backend|frontend|infrastructure"
+  }
+})
+// This returns the EXACT format to follow
+```
+
+**Step 2: Follow the Format EXACTLY**
+
+**EVERY knowledge entry MUST have:**
+
+1. **Headline (Max 100 words)** - WHAT + WHY
+   - ✅ "JWT HS256 Middleware for Go Gin - Validates Bearer tokens with 5ms latency. Critical for authenticated endpoints."
+   - ❌ "Authentication middleware" (too generic)
+
+2. **What** - Core technical details with tested code
+   - NO fluff, NO filler words
+   - Working code examples with comments
+   - File locations, function names, exact details
+
+3. **Why** - Business/technical importance
+   - What problem does this solve?
+   - Why this approach over alternatives?
+   - When should agents use this?
+
+4. **How** - Step-by-step implementation
+   - Prerequisites (dependencies, env vars)
+   - Integration steps
+   - Testing approach
+
+5. **Important** - Critical gotchas (≥2 required)
+   - Format: ⚠️ **Gotcha:** + Why + Solution + Detection
+   - Non-obvious issues that cause failures
+   - Edge cases discovered
+
+6. **Metadata** - 5-8 specific searchable tags
+   - Technology + Domain + Pattern + Problem
+   - ✅ ["go", "jwt", "middleware", "authentication", "hs256"]
+   - ❌ ["backend", "code", "implementation"]
+
+### **Quality Checklist (Before Storing)**
+
+Verify EVERY knowledge entry has:
+- [ ] Headline <100 words answering WHAT + WHY
+- [ ] What section with tested code (NO FLUFF)
+- [ ] Why section explaining value/importance
+- [ ] How section with step-by-step implementation
+- [ ] Important section with ≥2 gotchas (Why/Solution/Detection format)
+- [ ] 5-8 specific, searchable tags
+- [ ] Zero filler words ("This section explains...", "As you can see...")
+- [ ] All code is tested and working
+
+### **Enforcement Rules**
+
+**✅ ALLOWED:**
+- Storing knowledge that follows guide format
+- Concise, actionable content
+- Tested code examples
+- Non-obvious gotchas with solutions
+
+**❌ FORBIDDEN:**
+- Storing knowledge without retrieving guide first
+- Generic headlines that don't answer WHAT + WHY
+- Filler content ("This explains...", "It's important to note...")
+- Untested code
+- Missing gotchas section
+- Vague tags (["backend", "code"])
+- Fluff or padding content
+
+**💡 Remember:** Future AI agents rely on this knowledge. Every word matters. Make it count.
 
 ---
 
@@ -831,6 +959,22 @@ coordinator_query_knowledge({ collection_name: "go-examples", query: "middleware
 
 ### **Phase 3: Completion (2-5 min)**
 
+**Step 0: Get Knowledge Storage Guidelines (MANDATORY)**
+
+**BEFORE storing ANY knowledge, retrieve the storage guide:**
+```typescript
+const storageGuide = await mcp__hyper__prompts_get({
+  name: "guide_knowledge_storage",
+  arguments: {
+    knowledgeType: "pattern", // or "solution", "gotcha", "adr"
+    domain: "backend"          // or "frontend", "infrastructure"
+  }
+})
+// Read the guide output - it provides the EXACT structure to follow
+// Headline (max 100 words) + What + Why + How + Important
+// NO FLUFF - only what matters for AI agents
+```
+
 **Step 1: Update all TODOs with implementation notes**
 
 For EACH completed TODO:
@@ -843,39 +987,71 @@ coordinator_update_todo_status({
 });
 ```
 
-**Step 2: Store task completion in coordinator knowledge**
+**Step 2: Store task completion in coordinator knowledge (FOLLOW GUIDE FORMAT)**
 
 ```typescript
 coordinator_upsert_knowledge({
   collection: `task:hyperion://task/human/${task.humanTaskId}`,
   text: `
-## Implementation Summary
-Agent: ${task.agentName}
-Files Created: ${filesCreated}
-API Contracts: ${apiContracts}
-Key Decisions: ${decisions}
-Gotchas: ${gotchas}
-Next Agent Should Know: ${handoffInfo}
+## JWT HS256 Middleware for Go Gin - Validates Bearer tokens in Authorization headers. Uses jwt.Parse() with 5ms latency. Critical for authenticated endpoints. Handles exp/iss/aud claims, stores user context. [<100 words HEADLINE]
+
+### What
+[Core implementation with code examples - NO FLUFF]
+` + "```go\n// Working, tested code\n```" + `
+
+### Why
+[Business/technical value - why this approach was chosen]
+
+### How
+[Prerequisites, integration steps, testing approach]
+
+### Important
+⚠️ **Gotcha:** [What can go wrong]
+   - **Why:** [Root cause]
+   - **Solution:** [How to fix]
+   - **Detection:** [How to recognize]
   `,
   metadata: {
     taskId: task.id,
     agentName: task.agentName,
-    completedAt: new Date().toISOString()
+    completedAt: new Date().toISOString(),
+    knowledgeType: "solution",
+    tags: ["specific", "searchable", "tags"]
   }
 });
 ```
 
-**Step 3: Store reusable patterns in knowledge base (if created new pattern)**
+**Step 3: Store reusable patterns in knowledge base (MANDATORY GUIDE FORMAT)**
 
 Only if you created a NEW pattern not in `knowledgeCollections`:
 ```typescript
+// CRITICAL: Follow guide_knowledge_storage format EXACTLY
 coordinator_upsert_knowledge({
   collection_name: "technical-knowledge",
-  information: "Detailed implementation of ${pattern} with code examples",
+  information: `
+## [Headline - WHAT + WHY in <100 words - make it count!]
+
+### What
+[Core technical details with tested code examples]
+
+### Why
+[Business/technical importance - when to use this]
+
+### How
+[Step-by-step implementation with prerequisites]
+
+### Important
+⚠️ **Gotcha:** [Non-obvious issue]
+   - **Why:** [Root cause]
+   - **Solution:** [How to fix]
+   - **Detection:** [How to recognize]
+  `,
   metadata: {
     knowledgeType: "pattern",
     domain: "backend",
-    tags: ["jwt", "middleware", "authentication"]
+    title: "[Searchable title matching headline]",
+    tags: ["tag1", "tag2", "tag3", "tag4", "tag5"], // 5-8 specific tags
+    linkedTaskId: task.id
   }
 });
 ```
@@ -902,6 +1078,9 @@ After completing a task, verify you used context efficiently:
 - [ ] Used `contextHint` for every TODO (didn't reinvent approach)
 - [ ] Used `priorWorkSummary` instead of reading other agent's code
 - [ ] Updated all TODOs with implementation notes
+- [ ] **Retrieved `guide_knowledge_storage` prompt BEFORE storing knowledge** (MANDATORY!)
+- [ ] **Followed guide format: Headline (max 100 words) + What + Why + How + Important**
+- [ ] **Used 5-8 specific, searchable tags (not generic)**
 - [ ] Stored completion summary for next agent
 
 **If any checkbox is unchecked:** Review why and improve next time.
@@ -1024,7 +1203,7 @@ After completing a task, verify you used context efficiently:
 | `hyperion://task/human/{id}` | Human task details | Dynamic (auto-registered) |
 | `hyperion://task/agent/{agent}/{id}` | Agent task details | Dynamic (auto-registered) |
 
-### **Prompts (6 total - AI assistance for complex decisions)**
+### **Prompts (7 total - AI assistance for complex decisions)**
 
 | Prompt | Purpose | Required Arguments | Who Uses It |
 |--------|---------|-------------------|-------------|
@@ -1034,6 +1213,7 @@ After completing a task, verify you used context efficiently:
 | `suggest_handoff_strategy` | Plan multi-phase handoffs | `phase1Work`, `phase2Scope`, `knowledgeGap` | Coordinators |
 | `recommend_knowledge_query` | Optimize knowledge base queries | `agentQuestion`, `taskContext` | Agents |
 | `diagnose_blocked_task` | Unblock stuck agents | `taskId`, `blockReason`, `attemptedSteps` | Agents |
+| `guide_knowledge_storage` | **MANDATORY** - Get storage format before storing | `knowledgeType`, `domain` (optional) | **ALL Agents** |
 | `suggest_knowledge_structure` | Structure learnings for storage | `rawLearning`, `context` | Agents |
 
 ### **Tools (9 total - Core operations)**
@@ -1049,9 +1229,10 @@ After completing a task, verify you used context efficiently:
 
 ---
 
-**Version:** v1.4 Coordinator-Only Knowledge | **Updated:** 2025-10-05
-**Capabilities:** 7 tools, 12 resources, 6 prompts | **Status:** Production Ready
+**Version:** v1.5 Knowledge Storage Enforcement | **Updated:** 2025-10-12
+**Capabilities:** 7 tools, 12 resources, 7 prompts | **Status:** Production Ready
 **Mantra:** *Context First, Resources Free, Prompts Guide, Domain Focus, Parallel Always, Knowledge Shared, Quality Enforced*
+**Key Addition:** Mandatory `guide_knowledge_storage` prompt for all knowledge storage operations
 ---
 
 ## 🚨 **ENFORCEMENT CHECKLIST**
