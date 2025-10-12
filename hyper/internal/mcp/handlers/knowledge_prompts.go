@@ -315,8 +315,8 @@ If both queries return no results:
 Based on your question, here's a ready-to-use query:
 
 ` + "```typescript" + `
-const results = await mcp__qdrant__qdrant_find({
-  collection_name: "[recommended-collection]",
+const results = await mcp__hyper__knowledge_find({
+  collectionName: "[recommended-collection]",
   query: "[optimized-query-string]",
   limit: 3 // Start small, can query again if needed
 });
@@ -493,8 +493,8 @@ Before storing in Qdrant, verify:
 Once structured, store using:
 
 ` + "```typescript" + `
-await mcp__qdrant__qdrant_store({
-  collection_name: "[choose-collection]",
+await mcp__hyper__knowledge_store({
+  collectionName: "[choose-collection]",
   information: ` + "`" + `
 ## [Your Title]
 

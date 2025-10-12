@@ -1,0 +1,30 @@
+# Exclude compiled binaries from Docker builds
+# These are platform-specific and should be built inside the container
+
+# Binaries
+hyperion-coordinator-bridge
+hyperion-coordinator-http-bridge
+*.exe
+*.dll
+*.dylib
+*.so
+
+# MCP server binaries (prevent macOS binaries from being copied)
+mcp-server/hyperion-coordinator-mcp
+mcp-server/*.exe
+mcp-server/tmp/
+
+# Build artifacts
+tmp/
+build-errors.log
+
+# Go build cache
+*.test
+*.out
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

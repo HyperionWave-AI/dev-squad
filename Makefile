@@ -74,14 +74,19 @@ run: ## Run the native compiled binary (synchronous)
 	fi
 	./bin/hyper --mode=http
 
-run-dev: ## Run with Air hot-reload (coordinator only)
+run-dev: ## Run with Air hot-reload (unified hyper binary)
 	@echo "Starting development mode with hot-reload..."
 	@echo "Using Air for automatic rebuild on file changes"
 	@if ! command -v air &> /dev/null; then \
 		echo "Error: Air not found. Install with 'make install-air'"; \
 		exit 1; \
 	fi
-	cd coordinator && air
+	@if [ ! -f .air.toml ]; then \
+		echo "Error: .air.toml not found at project root"; \
+		exit 1; \
+	fi
+	@echo "Building and running unified hyper binary with Air..."
+	air
 
 run-stdio: ## Run the native binary in stdio mode (for Claude Code/MCP)
 	@echo "Running native binary in stdio mode..."

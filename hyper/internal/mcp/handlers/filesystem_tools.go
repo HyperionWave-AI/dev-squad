@@ -21,8 +21,9 @@ import (
 
 // FilesystemToolHandler handles MCP tool requests for filesystem operations
 type FilesystemToolHandler struct {
-	logger  *zap.Logger
-	baseDir string // Base directory for path validation
+	logger           *zap.Logger
+	baseDir          string // Base directory for path validation
+	metadataRegistry *ToolMetadataRegistry
 }
 
 // NewFilesystemToolHandler creates a new filesystem tools handler
@@ -32,6 +33,28 @@ func NewFilesystemToolHandler(logger *zap.Logger) *FilesystemToolHandler {
 	return &FilesystemToolHandler{
 		logger:  logger,
 		baseDir: baseDir,
+	}
+}
+
+// SetMetadataRegistry sets the metadata registry for tool indexing
+func (h *FilesystemToolHandler) SetMetadataRegistry(registry *ToolMetadataRegistry) {
+	h.metadataRegistry = registry
+}
+
+// addToolWithMetadata adds a tool to the server and registers it for indexing
+func (h *FilesystemToolHandler) addToolWithMetadata(server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandler) {
+	server.AddTool(tool, handler)
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+			},
+		)
 	}
 }
 
@@ -114,7 +137,7 @@ func (h *FilesystemToolHandler) registerBashTool(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createFilesystemErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -213,7 +236,7 @@ func (h *FilesystemToolHandler) registerFileReadTool(server *mcp.Server) error {
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"filePath": {
+				"path": {
 					Type:        "string",
 					Description: "Absolute or relative path to the file to read",
 				},
@@ -226,11 +249,11 @@ func (h *FilesystemToolHandler) registerFileReadTool(server *mcp.Server) error {
 					Description: "Optional offset in bytes to start reading from (for resumable reads)",
 				},
 			},
-			Required: []string{"filePath"},
+			Required: []string{"path"},
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createFilesystemErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -243,9 +266,9 @@ func (h *FilesystemToolHandler) registerFileReadTool(server *mcp.Server) error {
 
 // handleFileRead reads a file with chunked streaming
 func (h *FilesystemToolHandler) handleFileRead(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	filePath, ok := args["filePath"].(string)
+	filePath, ok := args["path"].(string)
 	if !ok || filePath == "" {
-		return createFilesystemErrorResult("filePath is required and must be a non-empty string"), nil
+		return createFilesystemErrorResult("path is required and must be a non-empty string"), nil
 	}
 
 	// Validate path
@@ -344,7 +367,7 @@ func (h *FilesystemToolHandler) registerFileWriteTool(server *mcp.Server) error 
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"filePath": {
+				"path": {
 					Type:        "string",
 					Description: "Absolute or relative path to the file to write",
 				},
@@ -357,11 +380,11 @@ func (h *FilesystemToolHandler) registerFileWriteTool(server *mcp.Server) error 
 					Description: "Optional: append to file instead of overwriting (default: false)",
 				},
 			},
-			Required: []string{"filePath", "content"},
+			Required: []string{"path", "content"},
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createFilesystemErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -374,9 +397,9 @@ func (h *FilesystemToolHandler) registerFileWriteTool(server *mcp.Server) error 
 
 // handleFileWrite writes content to a file
 func (h *FilesystemToolHandler) handleFileWrite(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	filePath, ok := args["filePath"].(string)
+	filePath, ok := args["path"].(string)
 	if !ok || filePath == "" {
-		return createFilesystemErrorResult("filePath is required and must be a non-empty string"), nil
+		return createFilesystemErrorResult("path is required and must be a non-empty string"), nil
 	}
 
 	content, ok := args["content"].(string)
@@ -468,7 +491,7 @@ func (h *FilesystemToolHandler) registerApplyPatchTool(server *mcp.Server) error
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"filePath": {
+				"path": {
 					Type:        "string",
 					Description: "Optional: Absolute or relative path to the file to patch. If not provided, path will be extracted from patch headers (--- a/file or +++ b/file)",
 				},
@@ -485,7 +508,7 @@ func (h *FilesystemToolHandler) registerApplyPatchTool(server *mcp.Server) error
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createFilesystemErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -555,13 +578,13 @@ func (h *FilesystemToolHandler) handleApplyPatch(ctx context.Context, args map[s
 		return createFilesystemErrorResult("patch is required and must be a non-empty string"), nil
 	}
 
-	// Try to get filePath from args, or extract from patch
-	filePath, ok := args["filePath"].(string)
+	// Try to get path from args, or extract from patch
+	filePath, ok := args["path"].(string)
 	if !ok || filePath == "" {
 		// Extract file path from patch headers (--- a/file or +++ b/file)
 		extractedPath, err := h.extractFilePathFromPatch(patch)
 		if err != nil {
-			return createFilesystemErrorResult(fmt.Sprintf("filePath not provided and could not extract from patch: %s", err.Error())), nil
+			return createFilesystemErrorResult(fmt.Sprintf("path not provided and could not extract from patch: %s", err.Error())), nil
 		}
 		filePath = extractedPath
 		h.logger.Info("Extracted file path from patch", zap.String("path", filePath))

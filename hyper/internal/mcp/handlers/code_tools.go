@@ -26,6 +26,7 @@ type CodeToolsHandler struct {
 	fileScanner      *scanner.FileScanner
 	fileWatcher      *watcher.FileWatcher
 	logger           *zap.Logger
+	metadataRegistry *ToolMetadataRegistry
 }
 
 // NewCodeToolsHandler creates a new code tools handler
@@ -43,6 +44,28 @@ func NewCodeToolsHandler(
 		fileScanner:      scanner.NewFileScanner(),
 		fileWatcher:      fileWatcher,
 		logger:           logger,
+	}
+}
+
+// SetMetadataRegistry sets the metadata registry for tool indexing
+func (h *CodeToolsHandler) SetMetadataRegistry(registry *ToolMetadataRegistry) {
+	h.metadataRegistry = registry
+}
+
+// addToolWithMetadata adds a tool to the server and registers it for indexing
+func (h *CodeToolsHandler) addToolWithMetadata(server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandler) {
+	server.AddTool(tool, handler)
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+			},
+		)
 	}
 }
 
@@ -93,7 +116,7 @@ func (h *CodeToolsHandler) registerAddFolder(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createCodeIndexErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -121,7 +144,7 @@ func (h *CodeToolsHandler) registerRemoveFolder(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createCodeIndexErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -149,7 +172,7 @@ func (h *CodeToolsHandler) registerScan(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createCodeIndexErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -190,7 +213,7 @@ func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createCodeIndexErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -212,7 +235,7 @@ func (h *CodeToolsHandler) registerStatus(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return h.handleStatus(ctx)
 	})
 

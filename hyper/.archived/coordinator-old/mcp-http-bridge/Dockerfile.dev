@@ -1,0 +1,36 @@
+# Development Dockerfile with Air hot-reload
+FROM golang:1.25-alpine
+
+WORKDIR /app
+
+# Install Air for hot-reload and build dependencies
+RUN go install github.com/air-verse/air@latest
+
+# Copy bridge go mod files and download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy bridge source code
+COPY . .
+
+# Expose HTTP bridge port
+EXPOSE 7095
+
+# Entrypoint script that verifies MCP server binary exists
+# The MCP server binary should be pre-built in the mcp-binaries volume
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'set -e' >> /entrypoint.sh && \
+    echo 'echo "Checking for MCP server binary..."' >> /entrypoint.sh && \
+    echo 'if [ ! -f /app/mcp-server/hyperion-coordinator-mcp ]; then' >> /entrypoint.sh && \
+    echo '  echo "ERROR: MCP server binary not found at /app/mcp-server/hyperion-coordinator-mcp"' >> /entrypoint.sh && \
+    echo '  echo "The mcp-binaries volume should contain the pre-built MCP server"' >> /entrypoint.sh && \
+    echo '  exit 1' >> /entrypoint.sh && \
+    echo 'fi' >> /entrypoint.sh && \
+    echo 'echo "MCP server binary found:"' >> /entrypoint.sh && \
+    echo 'ls -lh /app/mcp-server/hyperion-coordinator-mcp' >> /entrypoint.sh && \
+    echo 'echo "Starting Air hot-reload for HTTP bridge..."' >> /entrypoint.sh && \
+    echo 'exec air -c .air.toml' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# Run entrypoint that builds MCP server then starts Air
+CMD ["/entrypoint.sh"]
