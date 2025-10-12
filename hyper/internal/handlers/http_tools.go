@@ -75,10 +75,10 @@ func NewHTTPToolsHandler(
 
 // RegisterHTTPToolsRoutes registers HTTP tools routes with the router
 func (h *HTTPToolsHandler) RegisterHTTPToolsRoutes(router *gin.RouterGroup) {
-	router.POST("/http", h.CreateHTTPTool)
-	router.GET("/http", h.ListHTTPTools)
-	router.DELETE("/http/:id", h.DeleteHTTPTool)
-	router.GET("/http/:id", h.GetHTTPTool)
+	router.POST("", h.CreateHTTPTool)
+	router.GET("", h.ListHTTPTools)
+	router.DELETE("/:id", h.DeleteHTTPTool)
+	router.GET("/:id", h.GetHTTPTool)
 }
 
 // CreateHTTPTool handles POST /api/v1/tools/http

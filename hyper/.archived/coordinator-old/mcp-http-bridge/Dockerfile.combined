@@ -1,0 +1,40 @@
+# Multi-stage build: MCP Server + HTTP Bridge
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /build
+
+# Build MCP Server first
+WORKDIR /build/mcp-server
+COPY mcp-server/go.mod mcp-server/go.sum ./
+RUN go mod download
+COPY mcp-server/*.go ./
+COPY mcp-server/handlers ./handlers
+COPY mcp-server/storage ./storage
+COPY mcp-server/embeddings ./embeddings
+COPY mcp-server/scanner ./scanner
+COPY mcp-server/watcher ./watcher
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o hyper-mcp .
+
+# Build HTTP Bridge
+WORKDIR /build/http-bridge
+COPY mcp-http-bridge/go.mod mcp-http-bridge/go.sum ./
+RUN go mod download
+COPY mcp-http-bridge/*.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o hyperion-http-bridge .
+
+# Runtime stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates wget
+
+WORKDIR /app
+
+# Copy both binaries from builder
+COPY --from=builder /build/mcp-server/hyper-mcp ./
+COPY --from=builder /build/http-bridge/hyperion-http-bridge ./
+
+# Expose HTTP bridge port
+EXPOSE 7095
+
+# Run the HTTP bridge (which will spawn the MCP server)
+CMD ["./hyperion-http-bridge"]

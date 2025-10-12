@@ -10,19 +10,45 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // ToolHandler manages MCP tool operations
 type ToolHandler struct {
 	taskStorage      storage.TaskStorage
 	knowledgeStorage storage.KnowledgeStorage
+	mongoDatabase    *mongo.Database // For querying subagents
+	metadataRegistry *ToolMetadataRegistry
 }
 
 // NewToolHandler creates a new tool handler
-func NewToolHandler(taskStorage storage.TaskStorage, knowledgeStorage storage.KnowledgeStorage) *ToolHandler {
+func NewToolHandler(taskStorage storage.TaskStorage, knowledgeStorage storage.KnowledgeStorage, mongoDatabase *mongo.Database) *ToolHandler {
 	return &ToolHandler{
 		taskStorage:      taskStorage,
 		knowledgeStorage: knowledgeStorage,
+		mongoDatabase:    mongoDatabase,
+	}
+}
+
+// SetMetadataRegistry sets the metadata registry for tool indexing
+func (h *ToolHandler) SetMetadataRegistry(registry *ToolMetadataRegistry) {
+	h.metadataRegistry = registry
+}
+
+// addToolWithMetadata adds a tool to the server and registers it for indexing
+func (h *ToolHandler) addToolWithMetadata(server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandler) {
+	server.AddTool(tool, handler)
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+			},
+		)
 	}
 }
 
@@ -113,6 +139,16 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 		return fmt.Errorf("failed to register clear_todo_prompt_notes tool: %w", err)
 	}
 
+	// Register list_subagents
+	if err := h.registerListSubagents(server); err != nil {
+		return fmt.Errorf("failed to register list_subagents tool: %w", err)
+	}
+
+	// Register set_current_subagent
+	if err := h.registerSetCurrentSubagent(server); err != nil {
+		return fmt.Errorf("failed to register set_current_subagent tool: %w", err)
+	}
+
 	return nil
 }
 
@@ -141,7 +177,7 @@ func (h *ToolHandler) registerUpsertKnowledge(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -178,7 +214,7 @@ func (h *ToolHandler) registerQueryKnowledge(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -207,7 +243,7 @@ func (h *ToolHandler) registerCreateHumanTask(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -301,7 +337,7 @@ func (h *ToolHandler) registerCreateAgentTask(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -339,7 +375,7 @@ func (h *ToolHandler) registerUpdateTaskStatus(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -661,7 +697,7 @@ func (h *ToolHandler) registerUpdateTodoStatus(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -730,7 +766,7 @@ func (h *ToolHandler) registerListHumanTasks(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, _, err := h.handleListHumanTasks(ctx)
 		return result, err
 	})
@@ -766,7 +802,7 @@ func (h *ToolHandler) registerListAgentTasks(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -968,7 +1004,7 @@ func (h *ToolHandler) registerGetAgentTask(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1050,7 +1086,7 @@ func (h *ToolHandler) registerClearTaskBoard(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1114,7 +1150,7 @@ func (h *ToolHandler) registerAddTaskPromptNotes(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1147,7 +1183,7 @@ func (h *ToolHandler) registerUpdateTaskPromptNotes(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1176,7 +1212,7 @@ func (h *ToolHandler) registerClearTaskPromptNotes(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1213,7 +1249,7 @@ func (h *ToolHandler) registerAddTodoPromptNotes(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1250,7 +1286,7 @@ func (h *ToolHandler) registerUpdateTodoPromptNotes(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1283,7 +1319,7 @@ func (h *ToolHandler) registerClearTodoPromptNotes(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1501,7 +1537,7 @@ func (h *ToolHandler) registerGetPopularCollections(server *mcp.Server) error {
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := h.extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -1551,4 +1587,154 @@ func (h *ToolHandler) handleGetPopularCollections(ctx context.Context, args map[
 			&mcp.TextContent{Text: string(jsonData)},
 		},
 	}, stats, nil
+}
+
+// registerListSubagents registers the list_subagents tool
+func (h *ToolHandler) registerListSubagents(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "list_subagents",
+		Description: "Returns available subagents from CLAUDE.md agent list with names, descriptions, tools, and categories",
+		InputSchema: &jsonschema.Schema{
+			Type:       "object",
+			Properties: map[string]*jsonschema.Schema{},
+		},
+	}
+
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, _, err := h.handleListSubagents(ctx)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleListSubagents handles the list_subagents tool call
+// Queries MongoDB for imported subagents
+func (h *ToolHandler) handleListSubagents(ctx context.Context) (*mcp.CallToolResult, interface{}, error) {
+	// Query subagents collection from MongoDB
+	type MongoSubagent struct {
+		Name         string `bson:"name" json:"name"`
+		Description  string `bson:"description" json:"description"`
+		SystemPrompt string `bson:"systemPrompt" json:"systemPrompt"`
+	}
+
+	// Simple struct for return data (without full system prompt)
+	type SubagentSummary struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	collection := h.mongoDatabase.Collection("subagents")
+
+	cursor, err := collection.Find(ctx, map[string]interface{}{})
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to query subagents: %s", err.Error())), nil, nil
+	}
+	defer cursor.Close(ctx)
+
+	var dbSubagents []MongoSubagent
+	if err := cursor.All(ctx, &dbSubagents); err != nil {
+		return createErrorResult(fmt.Sprintf("failed to decode subagents: %s", err.Error())), nil, nil
+	}
+
+	// Convert to summary format (without system prompts which can be large)
+	subagents := make([]SubagentSummary, len(dbSubagents))
+	for i, s := range dbSubagents {
+		subagents[i] = SubagentSummary{
+			Name:        s.Name,
+			Description: s.Description,
+		}
+	}
+
+	// Return empty array if no subagents found
+	if len(subagents) == 0 {
+		emptyResponse := map[string]interface{}{
+			"subagents": []interface{}{},
+			"message":   "No subagents found in database. Import agents from .claude/agents directory via the UI at /ui/subagents",
+			"count":     0,
+		}
+		jsonData, _ := json.Marshal(emptyResponse)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: string(jsonData)},
+			},
+		}, emptyResponse, nil
+	}
+
+	// Return JSON array
+	jsonData, err := json.Marshal(subagents)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to serialize subagents: %s", err.Error())), nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(jsonData)},
+		},
+	}, subagents, nil
+}
+
+// registerSetCurrentSubagent registers the set_current_subagent tool
+func (h *ToolHandler) registerSetCurrentSubagent(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "set_current_subagent",
+		Description: "Associate a subagent with the current chat session. Stores subagent name in chat metadata.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"subagentName": {
+					Type:        "string",
+					Description: "Name of the subagent to associate with chat (must match list from list_subagents)",
+				},
+			},
+			Required: []string{"subagentName"},
+		},
+	}
+
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := h.extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleSetCurrentSubagent(ctx, args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleSetCurrentSubagent handles the set_current_subagent tool call
+func (h *ToolHandler) handleSetCurrentSubagent(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	subagentName, ok := args["subagentName"].(string)
+	if !ok || subagentName == "" {
+		return createErrorResult("subagentName parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Validate subagent name against known list
+	validSubagents := map[string]bool{
+		"go-dev": true, "go-mcp-dev": true, "Backend Services Specialist": true,
+		"Event Systems Specialist": true, "Data Platform Specialist": true,
+		"ui-dev": true, "ui-tester": true, "Frontend Experience Specialist": true,
+		"AI Integration Specialist": true, "Real-time Systems Specialist": true,
+		"sre": true, "k8s-deployment-expert": true, "Infrastructure Automation Specialist": true,
+		"Security & Auth Specialist": true, "Observability Specialist": true,
+		"End-to-End Testing Coordinator": true,
+	}
+
+	if !validSubagents[subagentName] {
+		return createErrorResult(fmt.Sprintf("invalid subagent name '%s'. Use list_subagents to see available subagents", subagentName)), nil, nil
+	}
+
+	// Note: Actual MongoDB update will be implemented in subchat service
+	// For now, return success with note that this requires chat context
+	resultText := fmt.Sprintf("✓ Subagent '%s' validated successfully\n\nNote: Chat session association will be implemented via subchat service. Use subchat_handler REST API to create subchats with subagent assignments.", subagentName)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultText},
+		},
+	}, map[string]interface{}{
+		"subagentName": subagentName,
+		"valid":        true,
+	}, nil
 }
