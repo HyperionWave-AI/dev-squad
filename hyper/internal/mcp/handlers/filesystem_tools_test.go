@@ -131,9 +131,9 @@ func TestHandleFileReadWrite(t *testing.T) {
 		encodedContent := base64.StdEncoding.EncodeToString([]byte(testContent))
 
 		args := map[string]interface{}{
-			"filePath": testFile,
-			"content":  encodedContent,
-			"append":   false,
+			"path":    testFile,
+			"content": encodedContent,
+			"append":  false,
 		}
 
 		result, err := handler.handleFileWrite(context.Background(), args)
@@ -149,7 +149,7 @@ func TestHandleFileReadWrite(t *testing.T) {
 	// Test file read
 	t.Run("file_read", func(t *testing.T) {
 		args := map[string]interface{}{
-			"filePath":  testFile,
+			"path":      testFile,
 			"chunkSize": 4096,
 		}
 
@@ -168,9 +168,9 @@ func TestHandleFileReadWrite(t *testing.T) {
 		encodedContent := base64.StdEncoding.EncodeToString([]byte(appendContent))
 
 		args := map[string]interface{}{
-			"filePath": testFile,
-			"content":  encodedContent,
-			"append":   true,
+			"path":    testFile,
+			"content": encodedContent,
+			"append":  true,
 		}
 
 		result, err := handler.handleFileWrite(context.Background(), args)
@@ -246,9 +246,9 @@ func TestHandleApplyPatch(t *testing.T) {
 `
 
 		args := map[string]interface{}{
-			"filePath": testFile,
-			"patch":    patch,
-			"dryRun":   true,
+			"path":   testFile,
+			"patch":  patch,
+			"dryRun": true,
 		}
 
 		result, err := handler.handleApplyPatch(context.Background(), args)
@@ -264,9 +264,9 @@ func TestHandleApplyPatch(t *testing.T) {
 `
 
 		args := map[string]interface{}{
-			"filePath": testFile,
-			"patch":    patch,
-			"dryRun":   true,
+			"path":   testFile,
+			"patch":  patch,
+			"dryRun": true,
 		}
 
 		result, err := handler.handleApplyPatch(context.Background(), args)
@@ -299,7 +299,7 @@ func TestHandleFileReadLargeFile(t *testing.T) {
 
 	t.Run("read large file with default chunk size", func(t *testing.T) {
 		args := map[string]interface{}{
-			"filePath": testFile,
+			"path": testFile,
 		}
 
 		result, err := handler.handleFileRead(context.Background(), args)
@@ -310,7 +310,7 @@ func TestHandleFileReadLargeFile(t *testing.T) {
 
 	t.Run("read large file with custom chunk size", func(t *testing.T) {
 		args := map[string]interface{}{
-			"filePath":  testFile,
+			"path":      testFile,
 			"chunkSize": float64(8192),
 		}
 
@@ -322,8 +322,8 @@ func TestHandleFileReadLargeFile(t *testing.T) {
 
 	t.Run("read with offset", func(t *testing.T) {
 		args := map[string]interface{}{
-			"filePath": testFile,
-			"offset":   float64(1024),
+			"path":   testFile,
+			"offset": float64(1024),
 		}
 
 		result, err := handler.handleFileRead(context.Background(), args)

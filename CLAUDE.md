@@ -2,6 +2,81 @@
 
 > **Mission:** Deliver 15x development efficiency through autonomous domain expertise and dual-MCP coordination.
 
+---
+
+## 🚨 **CRITICAL: Unified Hyper Binary Architecture**
+
+**⚠️ IMPORTANT: DO NOT use `coordinator/` directory as main entry point!**
+
+### **Correct Architecture (MANDATORY)**
+
+```
+✅ CORRECT: Use unified hyper binary
+  Entry Point:  hyper/cmd/coordinator/main.go
+  Build Output: bin/hyper
+  Source Code:  hyper/*
+  Size:         17MB
+  Modes:        http | mcp | both
+  Version:      2.0.0
+```
+
+```
+❌ DEPRECATED: Old coordinator (DO NOT USE)
+  Entry Point:  coordinator/cmd/coordinator/main.go
+  Build Output: coordinator/tmp/coordinator
+  Source Code:  coordinator/*
+  Size:         24MB
+  Modes:        http only
+  Version:      1.0.0 (obsolete)
+```
+
+### **Development Commands (Updated)**
+
+```bash
+# Build unified binary
+make build              # Builds bin/hyper with embedded UI
+
+# Development modes
+make dev               # Air hot-reload (Go only)
+make dev-hot           # Air + Vite HMR (Go + React)
+make run-dev           # Air hot-reload (unified hyper)
+
+# Run compiled binary
+make run               # HTTP mode
+make run-stdio         # MCP/stdio mode
+./bin/hyper --mode=both  # Both modes
+```
+
+### **Why Unified Hyper?**
+
+1. **30% smaller** - 17MB vs 24MB
+2. **Multiple modes** - HTTP + MCP + both
+3. **Embedded UI** - Single binary deployment
+4. **Graceful shutdown** - Advanced signal handling
+5. **Smart config** - Multi-location .env.hyper loading
+6. **Modern architecture** - Clean separation of concerns
+
+### **Migration Notes**
+
+- All `make dev*` targets now use `hyper/*` source
+- Air configuration (`.air.toml`) watches `hyper/cmd` and `hyper/internal`
+- Build scripts (`scripts/air-build.sh`) compile from `hyper/cmd/coordinator`
+- Process manager (`hyper-manager.sh`) manages `bin/hyper` lifecycle
+
+**DO NOT:**
+- ❌ Build from `coordinator/cmd/coordinator`
+- ❌ Use `coordinator/tmp/coordinator` binary
+- ❌ Run `cd coordinator && air`
+- ❌ Reference `coordinator/*` in build scripts
+
+**ALWAYS:**
+- ✅ Build from `hyper/cmd/coordinator`
+- ✅ Use `bin/hyper` binary
+- ✅ Run Air from project root (uses root `.air.toml`)
+- ✅ Reference `hyper/*` in all development workflows
+
+---
+
 ## 🚨 **CRITICAL RULES - MUST FOLLOW**
 
 ### **RULE 1: MANDATORY HYPERION MCP USAGE**

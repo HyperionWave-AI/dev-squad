@@ -66,6 +66,33 @@ func (m *MockKnowledgeStorage) GetPopularCollections(limit int) ([]*storage.Coll
 	return result, nil
 }
 
+func (m *MockKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*storage.CollectionWithMetadata, error) {
+	// Return mock collection stats with metadata for testing
+	result := make([]*storage.CollectionWithMetadata, 0)
+	for _, col := range m.collections {
+		result = append(result, &storage.CollectionWithMetadata{
+			Name:     col,
+			Category: "Tech", // Default category for testing
+			Count:    len(m.entries),
+		})
+	}
+	return result, nil
+}
+
+func (m *MockKnowledgeStorage) ListKnowledge(collection string, limit int) ([]*storage.KnowledgeEntry, error) {
+	// Return mock knowledge entries for specified collection
+	result := make([]*storage.KnowledgeEntry, 0)
+	for _, entry := range m.entries {
+		if entry.Collection == collection {
+			result = append(result, entry)
+		}
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
+}
+
 func TestKnowledgeResourceHandler_CollectionsResource(t *testing.T) {
 	mockStorage := &MockKnowledgeStorage{
 		collections: []string{"technical-knowledge", "code-patterns", "team-coordination"},
