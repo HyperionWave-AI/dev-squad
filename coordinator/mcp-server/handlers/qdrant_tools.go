@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"hyperion-coordinator-mcp/storage"
 
@@ -42,7 +43,7 @@ func (h *QdrantToolHandler) RegisterQdrantTools(server *mcp.Server) error {
 func (h *QdrantToolHandler) registerQdrantFind(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "qdrant_find",
-		Description: "Search for knowledge in Qdrant by semantic similarity. Returns top N results with scores and metadata.",
+		Description: "Search for knowledge in Qdrant by semantic similarity. Returns top N results with scores and metadata. Supports full or chunked text retrieval.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -57,6 +58,15 @@ func (h *QdrantToolHandler) registerQdrantFind(server *mcp.Server) error {
 				"limit": {
 					Type:        "number",
 					Description: "Maximum number of results (default: 5, max: 20)",
+				},
+				"retrieveMode": {
+					Type:        "string",
+					Description: "Content retrieval mode: 'full' (entire document) or 'chunk' (partial content). Default: 'full'",
+					Enum:        []interface{}{"full", "chunk"},
+				},
+				"chunkSize": {
+					Type:        "number",
+					Description: "Maximum characters to return per result when retrieveMode is 'chunk' (default: 500, min: 100, max: 2000)",
 				},
 			},
 			Required: []string{"collectionName", "query"},
@@ -138,15 +148,45 @@ func (h *QdrantToolHandler) handleQdrantFind(args map[string]interface{}) (*mcp.
 		}
 	}
 
-	// Ensure collection exists (with 1536 dimensions for OpenAI embeddings)
-	if err := h.qdrantClient.EnsureCollection(collectionName, 1536); err != nil {
-		return createErrorResult(fmt.Sprintf("failed to ensure collection exists: %s", err.Error())), nil, nil
+	// Extract retrieveMode (optional, default "full")
+	retrieveMode := "full"
+	if mode, ok := args["retrieveMode"].(string); ok {
+		if mode == "chunk" || mode == "full" {
+			retrieveMode = mode
+		}
+	}
+
+	// Extract chunkSize (optional, default 500, min 100, max 2000)
+	chunkSize := 500
+	if size, ok := args["chunkSize"].(float64); ok {
+		chunkSize = int(size)
+		if chunkSize < 100 {
+			chunkSize = 100
+		}
+		if chunkSize > 2000 {
+			chunkSize = 2000
+		}
+	}
+
+	// Ensure collection exists (with 768 dimensions for TEI embeddings)
+	if err := h.qdrantClient.EnsureCollection(collectionName, 768); err != nil {
+		// Provide helpful recovery guidance based on error type
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") {
+			return createErrorResult(fmt.Sprintf("Qdrant embedding service unavailable. For task-specific knowledge, use coordinator_query_knowledge with task URI (e.g., collection='task:hyperion://task/human/{taskId}'). Original error: %s", errMsg)), nil, nil
+		}
+		return createErrorResult(fmt.Sprintf("Failed to ensure collection exists: %s. Try coordinator_query_knowledge as fallback.", errMsg)), nil, nil
 	}
 
 	// Search for similar entries
 	results, err := h.qdrantClient.SearchSimilar(collectionName, query, limit)
 	if err != nil {
-		return createErrorResult(fmt.Sprintf("search failed: %s", err.Error())), nil, nil
+		// Provide helpful recovery guidance based on error type
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") || strings.Contains(errMsg, "timeout") {
+			return createErrorResult(fmt.Sprintf("Qdrant search unavailable. Use coordinator_query_knowledge as fallback for task-specific knowledge. Original error: %s", errMsg)), nil, nil
+		}
+		return createErrorResult(fmt.Sprintf("Search failed: %s. Try coordinator_query_knowledge as alternative.", errMsg)), nil, nil
 	}
 
 	if len(results) == 0 {
@@ -159,17 +199,22 @@ func (h *QdrantToolHandler) handleQdrantFind(args map[string]interface{}) (*mcp.
 		}, results, nil
 	}
 
-	// Format results
-	resultText := fmt.Sprintf("Found %d results:\n\n", len(results))
+	// Format results with chunking if requested
+	resultText := fmt.Sprintf("Found %d results (retrieveMode: %s):\n\n", len(results), retrieveMode)
 	for i, result := range results {
 		resultText += fmt.Sprintf("Result %d (Score: %.2f)\n", i+1, result.Score)
 
-		// Show first 200 chars of text
+		// Apply chunking logic based on retrieveMode
 		text := result.Entry.Text
-		if len(text) > 200 {
-			text = text[:200] + "..."
+		if retrieveMode == "chunk" && len(text) > chunkSize {
+			text = text[:chunkSize] + "..."
+			resultText += fmt.Sprintf("Text (truncated to %d chars): %s\n", chunkSize, text)
+		} else if retrieveMode == "full" {
+			resultText += fmt.Sprintf("Text: %s\n", text)
+		} else {
+			// Default fallback
+			resultText += fmt.Sprintf("Text: %s\n", text)
 		}
-		resultText += fmt.Sprintf("Text: %s\n", text)
 
 		// Show metadata if present
 		if len(result.Entry.Metadata) > 0 {
@@ -212,9 +257,14 @@ func (h *QdrantToolHandler) handleQdrantStore(args map[string]interface{}) (*mcp
 		metadata = m
 	}
 
-	// Ensure collection exists (with 1536 dimensions for OpenAI embeddings)
-	if err := h.qdrantClient.EnsureCollection(collectionName, 1536); err != nil {
-		return createErrorResult(fmt.Sprintf("failed to ensure collection exists: %s", err.Error())), nil, nil
+	// Ensure collection exists (with 768 dimensions for TEI embeddings)
+	if err := h.qdrantClient.EnsureCollection(collectionName, 768); err != nil {
+		// Provide helpful recovery guidance based on error type
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") {
+			return createErrorResult(fmt.Sprintf("Qdrant embedding service unavailable. Cannot store vector embeddings. Use coordinator_upsert_knowledge to store in MongoDB (metadata only, no semantic search). Original error: %s", errMsg)), nil, nil
+		}
+		return createErrorResult(fmt.Sprintf("Failed to ensure collection exists: %s. Try coordinator_upsert_knowledge as fallback.", errMsg)), nil, nil
 	}
 
 	// Generate ID
@@ -222,10 +272,15 @@ func (h *QdrantToolHandler) handleQdrantStore(args map[string]interface{}) (*mcp
 
 	// Store point with embedding
 	if err := h.qdrantClient.StorePoint(collectionName, id, information, metadata); err != nil {
-		return createErrorResult(fmt.Sprintf("failed to store knowledge: %s", err.Error())), nil, nil
+		// Provide helpful recovery guidance based on error type
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") || strings.Contains(errMsg, "timeout") {
+			return createErrorResult(fmt.Sprintf("Qdrant storage unavailable. Use coordinator_upsert_knowledge to store in MongoDB instead. Original error: %s", errMsg)), nil, nil
+		}
+		return createErrorResult(fmt.Sprintf("Failed to store knowledge: %s. Try coordinator_upsert_knowledge as alternative.", errMsg)), nil, nil
 	}
 
-	resultText := fmt.Sprintf("✓ Knowledge stored in Qdrant\n\nID: %s\nCollection: %s\nVector dimensions: 1536",
+	resultText := fmt.Sprintf("✓ Knowledge stored in Qdrant\n\nID: %s\nCollection: %s\nVector dimensions: 768 (TEI nomic-embed-text-v1.5)",
 		id, collectionName)
 
 	return &mcp.CallToolResult{

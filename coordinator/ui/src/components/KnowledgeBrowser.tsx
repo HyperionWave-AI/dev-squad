@@ -26,6 +26,7 @@ export const KnowledgeBrowser: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collection, setCollection] = useState('All Collections');
+  const [limit, setLimit] = useState(10);
   const [popularCollections, setPopularCollections] = useState<Array<{ collection: string; count: number }>>([]);
 
   const collections = [
@@ -48,11 +49,44 @@ export const KnowledgeBrowser: React.FC = () => {
       }
     };
 
+    const loadInitialKnowledge = async () => {
+      try {
+        setLoading(true);
+        const entries = await restClient.browseKnowledge(undefined, limit);
+        setResults(entries);
+      } catch (err) {
+        console.error('Failed to load initial knowledge:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     loadPopularCollections();
-  }, []);
+    loadInitialKnowledge();
+  }, [limit]);
+
+  const handleBrowse = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const col = collection === 'All Collections' ? undefined : collection;
+      const entries = await restClient.browseKnowledge(col, limit);
+      setResults(entries);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Browse failed');
+      console.error('Browse error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSearch = async () => {
-    if (!query.trim()) return;
+    // If no query, browse instead
+    if (!query.trim()) {
+      handleBrowse();
+      return;
+    }
 
     try {
       setLoading(true);
@@ -88,10 +122,10 @@ export const KnowledgeBrowser: React.FC = () => {
         allEntries.sort((a, b) => (b.score || 0) - (a.score || 0));
 
         // Limit total results
-        allEntries = allEntries.slice(0, 20);
+        allEntries = allEntries.slice(0, limit);
       } else {
         // Search single collection
-        allEntries = await restClient.queryKnowledge(collection, query, 20);
+        allEntries = await restClient.queryKnowledge(collection, query, limit);
       }
 
       setResults(allEntries);
@@ -131,10 +165,16 @@ export const KnowledgeBrowser: React.FC = () => {
           backgroundColor: 'white',
         }}
       >
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
           <Select
             value={collection}
-            onChange={(e) => setCollection(e.target.value)}
+            onChange={(e) => {
+              setCollection(e.target.value);
+              // Trigger browse with new collection
+              if (!query.trim()) {
+                setTimeout(() => handleBrowse(), 0);
+              }
+            }}
             displayEmpty
             size="small"
             sx={{ minWidth: 200 }}
@@ -146,9 +186,20 @@ export const KnowledgeBrowser: React.FC = () => {
             ))}
           </Select>
 
+          <Select
+            value={limit}
+            onChange={(e) => setLimit(Number(e.target.value))}
+            size="small"
+            sx={{ minWidth: 100 }}
+          >
+            <MenuItem value={10}>10 results</MenuItem>
+            <MenuItem value={50}>50 results</MenuItem>
+            <MenuItem value={100}>100 results</MenuItem>
+          </Select>
+
           <TextField
             fullWidth
-            placeholder="Search knowledge base..."
+            placeholder="Search knowledge base (leave empty to browse)..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyPress={handleKeyPress}
@@ -165,10 +216,10 @@ export const KnowledgeBrowser: React.FC = () => {
             variant="contained"
             color="primary"
             onClick={handleSearch}
-            disabled={loading || !query.trim()}
+            disabled={loading}
             sx={{ px: 4 }}
           >
-            {loading ? <CircularProgress size={20} sx={{ color: 'white' }} /> : 'Search'}
+            {loading ? <CircularProgress size={20} sx={{ color: 'white' }} /> : query.trim() ? 'Search' : 'Browse'}
           </Button>
         </Box>
       </Paper>
@@ -204,10 +255,10 @@ export const KnowledgeBrowser: React.FC = () => {
             }}
           >
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-              {results.length} result{results.length !== 1 ? 's' : ''} found
+              {results.length} {query.trim() ? 'result' : 'entry'}{results.length !== 1 ? 's' : ''} {query.trim() ? 'found' : ''}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              in {collection || 'technical-knowledge'}
+              {query.trim() ? 'in' : 'from'} {collection || 'All Collections'}
             </Typography>
           </Box>
 
