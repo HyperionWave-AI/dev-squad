@@ -10,7 +10,7 @@
 BINARY_NAME=coordinator
 BINARY_PATH=bin/$(BINARY_NAME)
 UI_DIST=ui/dist
-DOCKER_COMPOSE=docker-compose -f docker-compose.unified.yml
+DOCKER_COMPOSE=docker-compose -f ../docker-compose.unified.yml
 GO_FILES=$(shell find . -name '*.go' -not -path "./ui/*" -not -path "./vendor/*")
 
 ## help: Display this help message
@@ -49,9 +49,13 @@ run: build
 	@echo "🚀 Starting unified coordinator..."
 	@./$(BINARY_PATH) --mode=http
 
-## dev: Run coordinator in development mode with hot-reload
+## dev: Run coordinator in native development mode with hot-reload (no Docker)
 dev:
-	@echo "🔥 Starting development mode..."
+	@./scripts/dev-native.sh
+
+## dev-docker: Run coordinator in Docker development mode with hot-reload
+dev-docker:
+	@echo "🔥 Starting development mode (Docker)..."
 	@echo "   - Coordinator: Air hot-reload"
 	@echo "   - UI: Vite dev server"
 	@$(DOCKER_COMPOSE) up --build

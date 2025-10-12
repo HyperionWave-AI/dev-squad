@@ -26,7 +26,7 @@ interface APIAgentTask {
   agentName: string;
   role: string;
   status: 'pending' | 'in_progress' | 'completed' | 'blocked';
-  todos: APITodo[];
+  todos?: APITodo[]; // Optional since API may not always include todos
   createdAt: string;
   updatedAt: string;
   notes?: string;
@@ -106,7 +106,7 @@ function transformTodo(api: APITodo): TodoItem {
 function transformAgentTask(api: APIAgentTask): AgentTask {
   return {
     ...api,
-    todos: api.todos.map(transformTodo),
+    todos: (api.todos || []).map(transformTodo),
     qdrantCollections: api.qdrantCollections || undefined,
     humanPromptNotesAddedAt: api.humanPromptNotesAddedAt || undefined,
     humanPromptNotesUpdatedAt: api.humanPromptNotesUpdatedAt || undefined,
@@ -393,6 +393,24 @@ class RestClient {
       `/knowledge/popular-collections${queryParam}`
     );
     return data.collections || [];
+  }
+
+  /**
+   * Browse knowledge entries without search (browse mode)
+   */
+  async browseKnowledge(
+    collection?: string,
+    limit?: number
+  ): Promise<KnowledgeEntry[]> {
+    const params = new URLSearchParams();
+    if (collection) params.append('collection', collection);
+    if (limit) params.append('limit', limit.toString());
+
+    const queryString = params.toString();
+    const endpoint = `/knowledge/browse${queryString ? `?${queryString}` : ''}`;
+
+    const data = await this.fetchJSON<{ entries: APIKnowledgeEntry[] }>(endpoint);
+    return (data.entries || []).map(transformKnowledgeEntry);
   }
 }
 
