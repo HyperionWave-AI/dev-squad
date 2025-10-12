@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Hyperion Coordinator",
+  "version": "2.0.0",
+  "identifier": "com.hyperion.coordinator",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "cd .. && make native",
+    "devUrl": "http://localhost:7095/ui",
+    "frontendDist": "../coordinator/embed/ui/dist"
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "resources": [],
+    "externalBin": [],
+    "category": "DeveloperTool",
+    "shortDescription": "AI Agent Task Coordination Platform",
+    "longDescription": "Orchestrate AI agents with hierarchical task management, real-time progress tracking, and intelligent knowledge coordination.",
+    "macOS": {
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null,
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Hyperion Coordinator",
+        "width": 1400,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": false
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

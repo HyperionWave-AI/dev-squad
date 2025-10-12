@@ -13,6 +13,7 @@ import (
 	"hyperion-coordinator-mcp/storage"
 	"hyperion-coordinator-mcp/watcher"
 
+	"github.com/joho/godotenv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -29,6 +30,18 @@ func main() {
 	defer logger.Sync()
 
 	logger.Info("Starting Hyperion Coordinator MCP Server")
+
+	// Load environment variables from .env.hyper if it exists in current working directory
+	// This allows the service to work from any directory
+	if err := godotenv.Load(".env.hyper"); err != nil {
+		// Not finding .env.hyper is not an error - variables may be set externally
+		logger.Info("No .env.hyper file found in current directory (environment variables may be set externally)")
+	} else {
+		// Get current working directory for logging
+		cwd, _ := os.Getwd()
+		logger.Info("Loaded environment from .env.hyper",
+			zap.String("workingDirectory", cwd))
+	}
 
 	// Get MongoDB configuration from environment
 	mongoURI := os.Getenv("MONGODB_URI")
@@ -74,8 +87,17 @@ func main() {
 	if qdrantURL == "" {
 		qdrantURL = "http://qdrant:6333"
 	}
-	qdrantClient := storage.NewQdrantClient(qdrantURL)
-	logger.Info("Qdrant client initialized", zap.String("url", qdrantURL))
+
+	// Get knowledge collection name from environment
+	knowledgeCollection := os.Getenv("QDRANT_KNOWLEDGE_COLLECTION")
+	if knowledgeCollection == "" {
+		knowledgeCollection = "dev_squad_knowledge"
+	}
+
+	qdrantClient := storage.NewQdrantClient(qdrantURL, knowledgeCollection)
+	logger.Info("Qdrant client initialized",
+		zap.String("url", qdrantURL),
+		zap.String("knowledgeCollection", knowledgeCollection))
 
 	// Initialize storage with MongoDB
 	taskStorage, err := storage.NewMongoTaskStorage(db)
@@ -90,6 +112,13 @@ func main() {
 		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
 	}
 	logger.Info("Knowledge storage initialized with MongoDB + Qdrant vector search")
+
+	// Initialize tools storage with MongoDB + Qdrant
+	toolsStorage, err := storage.NewToolsStorage(db, qdrantClient)
+	if err != nil {
+		logger.Fatal("Failed to initialize tools storage", zap.Error(err))
+	}
+	logger.Info("Tools storage initialized with MongoDB + Qdrant")
 
 	// Create MCP server with capabilities
 	impl := &mcp.Implementation{
@@ -152,8 +181,39 @@ func main() {
 			zap.String("model", "text-embedding-3-small"),
 			zap.Int("dimensions", 1536))
 
+	case "voyage":
+		// Use Voyage AI embeddings (Anthropic's recommended provider)
+		voyageKey := os.Getenv("VOYAGE_API_KEY")
+		if voyageKey == "" {
+			logger.Fatal("VOYAGE_API_KEY is required when EMBEDDING=voyage")
+		}
+		embeddingClient = embeddings.NewVoyageClient(voyageKey)
+		logger.Info("Using Voyage AI embedding service",
+			zap.String("model", "voyage-3"),
+			zap.Int("dimensions", 1024))
+
+	case "ollama":
+		// Use Ollama embeddings (local llama.cpp with GPU acceleration via REST API)
+		ollamaURL := os.Getenv("OLLAMA_URL")
+		if ollamaURL == "" {
+			ollamaURL = "http://localhost:11434"
+		}
+		ollamaModel := os.Getenv("OLLAMA_MODEL")
+		if ollamaModel == "" {
+			ollamaModel = "nomic-embed-text"
+		}
+		var err error
+		embeddingClient, err = embeddings.NewOllamaClient(ollamaURL, ollamaModel)
+		if err != nil {
+			logger.Fatal("Failed to initialize Ollama client", zap.Error(err))
+		}
+		logger.Info("Using Ollama embedding service",
+			zap.String("url", ollamaURL),
+			zap.String("model", ollamaModel),
+			zap.Int("dimensions", embeddingClient.GetDimensions()))
+
 	default:
-		logger.Fatal("Invalid EMBEDDING mode. Use 'local' or 'openai'",
+		logger.Fatal("Invalid EMBEDDING mode. Use 'local', 'openai', 'voyage', or 'ollama'",
 			zap.String("mode", embeddingMode))
 	}
 
@@ -306,6 +366,8 @@ func main() {
 	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage)
 	qdrantToolHandler := handlers.NewQdrantToolHandler(qdrantClient)
 	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, logger)
+	filesystemToolsHandler := handlers.NewFilesystemToolHandler(logger)
+	toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage)
 	planningPromptHandler := handlers.NewPlanningPromptHandler()
 	knowledgePromptHandler := handlers.NewKnowledgePromptHandler()
 	coordinationPromptHandler := handlers.NewCoordinationPromptHandler()
@@ -352,6 +414,16 @@ func main() {
 		logger.Fatal("Failed to register code indexing tool handlers", zap.Error(err))
 	}
 
+	// Register filesystem tool handlers
+	if err := filesystemToolsHandler.RegisterFilesystemTools(server); err != nil {
+		logger.Fatal("Failed to register filesystem tool handlers", zap.Error(err))
+	}
+
+	// Register tools discovery handlers
+	if err := toolsDiscoveryHandler.RegisterToolsDiscoveryTools(server); err != nil {
+		logger.Fatal("Failed to register tools discovery handlers", zap.Error(err))
+	}
+
 	// Register planning prompts
 	if err := planningPromptHandler.RegisterPlanningPrompts(server); err != nil {
 		logger.Fatal("Failed to register planning prompts", zap.Error(err))
@@ -373,7 +445,7 @@ func main() {
 	}
 
 	logger.Info("All handlers registered successfully",
-		zap.Int("tools", 24), // 17 coordinator + 2 qdrant + 5 code indexing
+		zap.Int("tools", 31), // 17 coordinator + 2 qdrant + 5 code indexing + 4 filesystem + 3 tools discovery
 		zap.Int("resources", 12), // 2 task + 3 doc + 3 workflow + 2 knowledge + 2 metrics
 		zap.Int("prompts", 7))    // 2 planning + 2 knowledge + 2 coordination + 1 documentation
 
@@ -410,8 +482,10 @@ func main() {
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", handler)
 
-		// Add comprehensive health check endpoint
+		// Add comprehensive health check endpoints
 		mux.Handle("/health", healthCheckHandler)
+		mux.HandleFunc("/health/qdrant", healthCheckHandler.ServeQdrantHealth)
+		mux.HandleFunc("/health/ollama", healthCheckHandler.ServeOllamaHealth)
 
 		httpServer := &http.Server{
 			Addr:    fmt.Sprintf(":%s", mcpPort),
@@ -421,7 +495,9 @@ func main() {
 		logger.Info("HTTP server listening",
 			zap.String("address", httpServer.Addr),
 			zap.String("mcp_endpoint", "/mcp"),
-			zap.String("health_endpoint", "/health"))
+			zap.String("health_endpoint", "/health"),
+			zap.String("qdrant_health_endpoint", "/health/qdrant"),
+			zap.String("ollama_health_endpoint", "/health/ollama"))
 
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("HTTP server error", zap.Error(err))

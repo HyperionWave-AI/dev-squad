@@ -3,6 +3,9 @@
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 .env
+.env.native
+.env.hyper
+bin/.env.hyper
 
 
 
@@ -14,3 +17,7 @@ coordinator/mcp-http-bridge/hyperion-coordinator-bridge
 # Local Hyperion configuration
 .hyper
 docker-compose.*.yml
+coordinator/embed/ui/
+bin/
+/hyper/embed/ui
+.env

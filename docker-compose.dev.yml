@@ -19,6 +19,9 @@ services:
       - EMBEDDING=${EMBEDDING:-local}
       - TEI_URL=${TEI_URL:-http://embedding-service:8080}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-nomic-embed-text}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
       - CODE_INDEX_FOLDERS=${CODE_INDEX_FOLDERS:-/workspace}
       - CODE_INDEX_AUTO_SCAN=${CODE_INDEX_AUTO_SCAN:-true}
@@ -56,6 +59,9 @@ services:
       - EMBEDDING=${EMBEDDING:-local}
       - TEI_URL=${TEI_URL:-http://embedding-service:8080}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-nomic-embed-text}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
     volumes:
       # Mount bridge source code (excludes binaries via .dockerignore)

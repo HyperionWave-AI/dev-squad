@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"hyperion-coordinator-mcp/embeddings"
+
 	"github.com/google/uuid"
 )
 
@@ -23,14 +25,13 @@ type QdrantClientInterface interface {
 
 // QdrantClient provides direct access to Qdrant vector database
 type QdrantClient struct {
-	baseURL         string
-	httpClient      *http.Client
-	embeddingFunc   func(string) ([]float64, error)
-	qdrantAPIKey    string
-	openAIAPIKey    string
-	openAIBaseURL   string
-	embeddingModel  string
-	vectorDimension int
+	baseURL                  string
+	httpClient               *http.Client
+	embeddingFunc            func(string) ([]float64, error)
+	qdrantAPIKey             string
+	teiClient                *embeddings.TEIClient
+	vectorDimension          int
+	knowledgeCollectionName  string // Configurable knowledge collection name
 }
 
 // QdrantPoint represents a point to store in Qdrant
@@ -53,32 +54,34 @@ type QdrantQueryResult struct {
 	Score float64
 }
 
-// NewQdrantClient creates a new Qdrant client with OpenAI embeddings
-func NewQdrantClient(baseURL string) *QdrantClient {
-	openAIKey := os.Getenv("OPENAI_API_KEY")
+// NewQdrantClient creates a new Qdrant client with TEI embeddings
+func NewQdrantClient(baseURL string, knowledgeCollectionName string) *QdrantClient {
 	qdrantKey := os.Getenv("QDRANT_API_KEY")
+	teiURL := os.Getenv("TEI_URL")
+	if teiURL == "" {
+		teiURL = "http://embedding-service:8080"
+	}
+
+	// Default collection name if not provided
+	if knowledgeCollectionName == "" {
+		knowledgeCollectionName = "dev_squad_knowledge"
+	}
+
+	teiClient := embeddings.NewTEIClient(teiURL)
 
 	client := &QdrantClient{
-		baseURL:         baseURL,
-		qdrantAPIKey:    qdrantKey,
-		openAIAPIKey:    openAIKey,
-		openAIBaseURL:   "https://api.openai.com/v1",
-		embeddingModel:  "text-embedding-3-small",
-		vectorDimension: 1536,
+		baseURL:                 baseURL,
+		qdrantAPIKey:            qdrantKey,
+		teiClient:               teiClient,
+		vectorDimension:         768, // TEI nomic-embed-text-v1.5 dimension
+		knowledgeCollectionName: knowledgeCollectionName,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 
-	// Set embedding function based on API key availability
-	if openAIKey != "" {
-		client.embeddingFunc = client.generateOpenAIEmbedding
-	} else {
-		// Fallback to simple embedding for testing
-		client.embeddingFunc = func(text string) ([]float64, error) {
-			return generateSimpleEmbedding(text, client.vectorDimension), nil
-		}
-	}
+	// Set embedding function to use TEI
+	client.embeddingFunc = client.generateTEIEmbedding
 
 	return client
 }
@@ -363,9 +366,33 @@ func (c *QdrantClient) Ping(ctx context.Context) error {
 // Code Indexing specific methods (using float32 vectors)
 
 const (
-	CodeIndexCollection = "code_index"
-	CodeIndexVectorSize = 768 // TEI nomic-embed-text-v1.5 dimension (default)
+	DefaultCodeIndexCollection = "code_index"
+	CodeIndexVectorSize        = 768 // TEI nomic-embed-text-v1.5 dimension (default - may be overridden)
 )
+
+var (
+	// CodeIndexCollection is the collection name used for code indexing (configurable via QDRANT_CODE_COLLECTION env var)
+	CodeIndexCollection = DefaultCodeIndexCollection
+)
+
+// InitCodeIndexCollection initializes the code index collection name from environment
+func InitCodeIndexCollection() {
+	if collectionName := os.Getenv("QDRANT_CODE_COLLECTION"); collectionName != "" {
+		CodeIndexCollection = collectionName
+	}
+}
+
+// DimensionMismatchError represents a dimension mismatch error from Qdrant
+type DimensionMismatchError struct {
+	ExpectedDim int
+	GotDim      int
+	Collection  string
+	OriginalErr error
+}
+
+func (e *DimensionMismatchError) Error() string {
+	return fmt.Sprintf("dimension mismatch in collection '%s': expected %d, got %d", e.Collection, e.ExpectedDim, e.GotDim)
+}
 
 // CodeIndexPoint represents a code indexing point with float32 vectors
 type CodeIndexPoint struct {
@@ -384,8 +411,112 @@ type CodeIndexSearchResponse struct {
 	} `json:"result"`
 }
 
+// parseDimensionMismatchError parses a Qdrant error response for dimension mismatch
+func parseDimensionMismatchError(statusCode int, body string, collection string) error {
+	if statusCode != http.StatusBadRequest {
+		return nil
+	}
+
+	// Check for dimension mismatch in error message
+	if !bytes.Contains([]byte(body), []byte("Vector dimension error")) &&
+		!bytes.Contains([]byte(body), []byte("Wrong input")) {
+		return nil
+	}
+
+	// Try to parse expected and got dimensions from error message
+	// Example: "Vector dimension error: expected dim: 1024, got 768"
+	var expectedDim, gotDim int
+	_, err := fmt.Sscanf(body, `{"status":{"error":"Wrong input: Vector dimension error: expected dim: %d, got %d"}`, &expectedDim, &gotDim)
+	if err != nil {
+		// Alternative format
+		_, err = fmt.Sscanf(body, `Vector dimension error: expected dim: %d, got %d`, &expectedDim, &gotDim)
+	}
+
+	if err == nil && expectedDim > 0 && gotDim > 0 {
+		return &DimensionMismatchError{
+			ExpectedDim: expectedDim,
+			GotDim:      gotDim,
+			Collection:  collection,
+		}
+	}
+
+	// Generic dimension error without parsing
+	return &DimensionMismatchError{
+		ExpectedDim: 0,
+		GotDim:      0,
+		Collection:  collection,
+		OriginalErr: fmt.Errorf("%s", body),
+	}
+}
+
+// DeleteCollection deletes a Qdrant collection
+func (c *QdrantClient) DeleteCollection(collectionName string) error {
+	url := fmt.Sprintf("%s/collections/%s", c.baseURL, collectionName)
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete request: %w", err)
+	}
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete collection: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete collection (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// RecreateCodeIndexCollection deletes and recreates the code index collection with new dimensions
+func (c *QdrantClient) RecreateCodeIndexCollection(vectorSize int) error {
+	// Delete existing collection
+	if err := c.DeleteCollection(CodeIndexCollection); err != nil {
+		return fmt.Errorf("failed to delete collection: %w", err)
+	}
+
+	// Create collection with new dimensions
+	collectionConfig := map[string]interface{}{
+		"vectors": map[string]interface{}{
+			"size":     vectorSize,
+			"distance": "Cosine",
+		},
+	}
+
+	jsonBody, err := json.Marshal(collectionConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal collection config: %w", err)
+	}
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/collections/%s", c.baseURL, CodeIndexCollection), bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create collection: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create collection (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // EnsureCodeIndexCollection creates the code index collection if it doesn't exist
-func (c *QdrantClient) EnsureCodeIndexCollection() error {
+// If expectedDimensions > 0, it also verifies the collection has matching dimensions
+func (c *QdrantClient) EnsureCodeIndexCollection(expectedDimensions ...int) error {
 	// Check if collection exists
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/collections/%s", c.baseURL, CodeIndexCollection), nil)
 	if err != nil {
@@ -399,8 +530,41 @@ func (c *QdrantClient) EnsureCodeIndexCollection() error {
 	}
 	defer resp.Body.Close()
 
-	// Collection exists
+	// Collection exists - check dimensions if expectedDimensions provided
 	if resp.StatusCode == http.StatusOK {
+		// If expectedDimensions provided, verify vector size matches
+		if len(expectedDimensions) > 0 && expectedDimensions[0] > 0 {
+			// Get collection info to check vector size
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return fmt.Errorf("failed to read collection info: %w", err)
+			}
+
+			var collectionInfo struct {
+				Result struct {
+					Config struct {
+						Params struct {
+							Vectors struct {
+								Size int `json:"size"`
+							} `json:"vectors"`
+						} `json:"params"`
+					} `json:"config"`
+				} `json:"result"`
+			}
+
+			if err := json.Unmarshal(body, &collectionInfo); err != nil {
+				return fmt.Errorf("failed to parse collection info: %w", err)
+			}
+
+			actualDim := collectionInfo.Result.Config.Params.Vectors.Size
+			if actualDim != expectedDimensions[0] {
+				return &DimensionMismatchError{
+					ExpectedDim: actualDim,
+					GotDim:      expectedDimensions[0],
+					Collection:  CodeIndexCollection,
+				}
+			}
+		}
 		return nil
 	}
 
@@ -467,7 +631,14 @@ func (c *QdrantClient) UpsertCodeIndexPoints(points []CodeIndexPoint) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to upsert points (status %d): %s", resp.StatusCode, string(body))
+		bodyStr := string(body)
+
+		// Check for dimension mismatch
+		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, CodeIndexCollection); dimErr != nil {
+			return dimErr
+		}
+
+		return fmt.Errorf("failed to upsert points (status %d): %s", resp.StatusCode, bodyStr)
 	}
 
 	return nil
@@ -504,7 +675,14 @@ func (c *QdrantClient) SearchCodeIndex(vector []float32, limit int) (*CodeIndexS
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("search failed (status %d): %s", resp.StatusCode, string(body))
+		bodyStr := string(body)
+
+		// Check for dimension mismatch
+		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, CodeIndexCollection); dimErr != nil {
+			return nil, dimErr
+		}
+
+		return nil, fmt.Errorf("search failed (status %d): %s", resp.StatusCode, bodyStr)
 	}
 
 	var searchResp CodeIndexSearchResponse
