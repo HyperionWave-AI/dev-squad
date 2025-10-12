@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Tauri build outputs
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Generated icons (will be created during build)
+src-tauri/icons/*.png
+src-tauri/icons/*.icns
+src-tauri/icons/*.ico
+
+# Keep the README
+!src-tauri/icons/README.md
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS specific
+.DS_Store
+Thumbs.db

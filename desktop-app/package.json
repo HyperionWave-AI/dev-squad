@@ -1,0 +1,21 @@
+{
+  "name": "hyperion-coordinator-desktop",
+  "version": "2.0.0",
+  "description": "Hyperion Coordinator Desktop App",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:mac": "tauri build --target universal-apple-darwin",
+    "build:mac-intel": "tauri build --target x86_64-apple-darwin",
+    "build:mac-arm": "tauri build --target aarch64-apple-darwin",
+    "build:windows": "tauri build --target x86_64-pc-windows-msvc",
+    "build:linux": "tauri build --target x86_64-unknown-linux-gnu"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  }
+}
