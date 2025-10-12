@@ -29,6 +29,11 @@ func (h *KnowledgePromptHandler) RegisterKnowledgePrompts(server *mcp.Server) er
 		return fmt.Errorf("failed to register suggest_knowledge_structure prompt: %w", err)
 	}
 
+	// Register guide_knowledge_storage prompt
+	if err := h.registerGuideKnowledgeStorage(server); err != nil {
+		return fmt.Errorf("failed to register guide_knowledge_storage prompt: %w", err)
+	}
+
 	return nil
 }
 
@@ -571,4 +576,477 @@ func getStringField(m map[string]interface{}, key, defaultValue string) string {
 		}
 	}
 	return defaultValue
+}
+
+// registerGuideKnowledgeStorage registers the guide_knowledge_storage prompt
+func (h *KnowledgePromptHandler) registerGuideKnowledgeStorage(server *mcp.Server) error {
+	prompt := &mcp.Prompt{
+		Name:        "guide_knowledge_storage",
+		Description: "Provide guidelines on HOW to store knowledge effectively in the Hyperion Coordinator with focus on concise, AI-optimized content.",
+		Arguments: []*mcp.PromptArgument{
+			{
+				Name:        "knowledgeType",
+				Description: "Type of knowledge being stored: pattern, solution, gotcha, adr (optional)",
+				Required:    false,
+			},
+			{
+				Name:        "domain",
+				Description: "Domain/squad context: backend, frontend, infrastructure, etc. (optional)",
+				Required:    false,
+			},
+		},
+	}
+
+	handler := func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		// Extract optional arguments
+		knowledgeType := ""
+		domain := ""
+
+		if req.Params != nil && req.Params.Arguments != nil {
+			knowledgeType = req.Params.Arguments["knowledgeType"]
+			domain = req.Params.Arguments["domain"]
+		}
+
+		promptText := h.buildKnowledgeStorageGuide(knowledgeType, domain)
+
+		return &mcp.GetPromptResult{
+			Description: "Knowledge storage best practices guide",
+			Messages: []*mcp.PromptMessage{
+				{
+					Role: "user",
+					Content: &mcp.TextContent{
+						Text: promptText,
+					},
+				},
+			},
+		}, nil
+	}
+
+	server.AddPrompt(prompt, handler)
+	return nil
+}
+
+// buildKnowledgeStorageGuide builds the knowledge storage guidelines prompt
+func (h *KnowledgePromptHandler) buildKnowledgeStorageGuide(knowledgeType, domain string) string {
+	contextSection := ""
+	if knowledgeType != "" || domain != "" {
+		contextSection = "\n## Your Context\n"
+		if knowledgeType != "" {
+			contextSection += fmt.Sprintf("- **Knowledge Type:** %s\n", knowledgeType)
+		}
+		if domain != "" {
+			contextSection += fmt.Sprintf("- **Domain:** %s\n", domain)
+		}
+		contextSection += "\n"
+	}
+
+	return fmt.Sprintf(`# Knowledge Storage Guide for Hyperion Coordinator%s
+## Your Mission
+
+Store knowledge that future AI agents will discover and reuse. **Make every word count.** No fluff, only what matters.
+
+## Core Principle: Headline First (CRITICAL)
+
+**EVERY knowledge entry MUST start with a headline (max 100 words) that answers:**
+- **WHAT** is this knowledge? (Be specific - technology, component, action)
+- **WHY** does it matter? (Impact, value, when to use it)
+
+**Example Headline (GOOD):**
+
+"**JWT HS256 Token Validation Middleware for Go Gin** - Prevents unauthorized API access by validating Bearer tokens in Authorization headers. Uses jwt.Parse() with 5ms latency. Critical for all authenticated endpoints. Handles exp/iss/aud claims validation and stores user context for downstream handlers. Supports token refresh and revocation via Redis cache."
+
+**Example Headline (BAD - too generic):**
+
+"Authentication middleware for API endpoints"
+
+**Why Headline Matters:**
+- AI agents scan headlines first (semantic search preview)
+- Headline determines if they read further
+- Good headline = instant context, no need to read entire entry
+- Bad headline = wasted query, re-searching with different terms
+
+---
+
+## Content Structure (Required Sections)
+
+After the headline, structure your knowledge with these sections:
+
+### 1. What (Core Information)
+
+**Keep it concise and actionable:**
+- Technical details that matter
+- Code examples (working, tested, with comments)
+- API signatures, function names, file locations
+- Configuration requirements
+- **NO filler words** like "This section explains..." or "As you can see..."
+
+**Example:**
+` + "```go" + `
+// ValidateJWT extracts and validates JWT token from Authorization header
+func ValidateJWT() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        authHeader := c.GetHeader("Authorization")
+        if !strings.HasPrefix(authHeader, "Bearer ") {
+            c.AbortWithStatusJSON(401, gin.H{"error": "invalid_token"})
+            return
+        }
+
+        token := strings.TrimPrefix(authHeader, "Bearer ")
+        claims, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+            // Validate algorithm
+            if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+                return nil, fmt.Errorf("unexpected signing method: %%v", t.Header["alg"])
+            }
+            return []byte(os.Getenv("JWT_SECRET")), nil
+        })
+
+        if err != nil || !claims.Valid {
+            c.AbortWithStatusJSON(401, gin.H{"error": "invalid_token"})
+            return
+        }
+
+        // Store user ID in context
+        if userID, ok := claims["sub"].(string); ok {
+            c.Set("userID", userID)
+        }
+        c.Next()
+    }
+}
+` + "```" + `
+
+**Register in router:**
+` + "```go" + `
+api := router.Group("/api/v1")
+api.Use(ValidateJWT()) // All /api/v1/* routes require auth
+api.GET("/tasks", taskHandler.List)
+` + "```" + `
+
+---
+
+### 2. Why (Importance & Value)
+
+**Explain the business/technical impact:**
+- What problem does this solve?
+- Why was this approach chosen?
+- When should agents use this?
+- What's the user/system benefit?
+
+**Example:**
+
+"JWT validation prevents unauthorized access to user data and operations. HS256 symmetric signing was chosen for:
+1. **Performance:** 5ms validation vs 15ms for RS256 asymmetric
+2. **Simplicity:** Single secret management vs public/private key pairs
+3. **Compatibility:** Frontend already uses HS256 for signing
+4. **Cost:** No HSM or key rotation infrastructure needed
+
+Use this middleware for ALL authenticated endpoints except /health, /metrics, and public documentation."
+
+---
+
+### 3. How (Implementation Guide)
+
+**Step-by-step implementation:**
+- Prerequisites (dependencies, env vars, config)
+- Integration steps (where to add, how to wire up)
+- Testing approach (unit tests, integration tests)
+- Verification steps (how to confirm it works)
+
+**Example:**
+
+**Prerequisites:**
+` + "```bash" + `
+go get github.com/golang-jwt/jwt/v5
+export JWT_SECRET="your-256-bit-secret"
+` + "```" + `
+
+**Integration:**
+1. Add middleware to router before protected routes
+2. Extract userID from context in handlers: ` + "`c.GetString(\"userID\")`" + `
+3. Use userID for database queries with user-level isolation
+
+**Testing:**
+` + "```go" + `
+func TestValidateJWT_Valid(t *testing.T) {
+    token := generateTestToken(t, "user123")
+    req := httptest.NewRequest("GET", "/api/v1/tasks", nil)
+    req.Header.Set("Authorization", "Bearer "+token)
+
+    w := httptest.NewRecorder()
+    router.ServeHTTP(w, req)
+
+    assert.Equal(t, 200, w.Code)
+}
+
+func TestValidateJWT_Invalid(t *testing.T) {
+    req := httptest.NewRequest("GET", "/api/v1/tasks", nil)
+    req.Header.Set("Authorization", "Bearer invalid-token")
+
+    w := httptest.NewRecorder()
+    router.ServeHTTP(w, req)
+
+    assert.Equal(t, 401, w.Code)
+    assert.Contains(t, w.Body.String(), "invalid_token")
+}
+` + "```" + `
+
+---
+
+### 4. Important (Critical Gotchas & Non-Obvious Insights)
+
+**Document what's NOT obvious from code:**
+- Edge cases that cause failures
+- Performance pitfalls
+- Security vulnerabilities
+- Common mistakes (with fixes)
+- Integration gotchas
+
+**Format:**
+⚠️ **Gotcha:** [What can go wrong]
+   - **Why:** [Root cause]
+   - **Solution:** [How to avoid/fix]
+   - **Detection:** [How to recognize this issue]
+
+**Example:**
+
+⚠️ **Gotcha:** Middleware runs on /health endpoint, causing Kubernetes readiness probe failures
+   - **Why:** Health checks don't send Authorization headers
+   - **Solution:** Exclude health endpoints from auth middleware
+     ` + "```go" + `
+     public := router.Group(\"/\")
+     public.GET(\"/health\", healthHandler)
+
+     api := router.Group(\"/api/v1\")
+     api.Use(ValidateJWT()) // Auth only on /api/v1/*
+     ` + "```" + `
+   - **Detection:** Service shows "not ready" in kubectl, logs show 401 on /health
+
+⚠️ **Gotcha:** Token validation fails with "signature invalid" even with correct JWT_SECRET
+   - **Why:** Token was signed with different algorithm (RS256 vs HS256)
+   - **Solution:** Always check token header algorithm matches validation:
+     ` + "```go" + `
+     if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+         return nil, fmt.Errorf(\"unexpected algorithm\")
+     }
+     ` + "```" + `
+   - **Detection:** Decode token without verification: ` + "`jwt.DecodeSegment(tokenParts[0])`" + ` → check ` + "`alg`" + ` field
+
+⚠️ **Gotcha:** JWT_SECRET loaded from .env file has trailing newline, all validations fail
+   - **Why:** ` + "`os.Getenv(\"JWT_SECRET\")`" + ` returns value with \\n if file has newline
+   - **Solution:** Trim whitespace: ` + "`strings.TrimSpace(os.Getenv(\"JWT_SECRET\"))`" + `
+   - **Detection:** Compare byte lengths: ` + "`len(os.Getenv(\"JWT_SECRET\"))`" + ` vs expected 32
+
+---
+
+## Metadata for Semantic Search (REQUIRED)
+
+Choose 5-8 tags that help AI agents discover this knowledge:
+
+**Tag Categories:**
+- **Technology:** go, typescript, react, mongodb, kubernetes, python, rust
+- **Domain:** auth, api, database, frontend, infrastructure, deployment
+- **Pattern:** middleware, hook, aggregation, pipeline, state-machine
+- **Problem:** performance, security, bug-fix, optimization, scalability
+
+**Example Tags:**
+` + "`[\"go\", \"jwt\", \"middleware\", \"authentication\", \"hs256\", \"api-security\", \"gin\", \"error-handling\"]`" + `
+
+**Tag Selection Rules:**
+- Include language/framework (1-2 tags)
+- Include domain/purpose (1-2 tags)
+- Include pattern type (1 tag)
+- Include problem solved (1-2 tags)
+- Be specific: "jwt" > "auth", "gin-middleware" > "middleware"
+
+---
+
+## Quality Checklist (Before Storing)
+
+Before calling ` + "`mcp__hyper__coordinator_upsert_knowledge`" + `, verify:
+
+- [ ] **Headline** is <100 words and answers WHAT + WHY
+- [ ] **What section** has tested code examples with comments
+- [ ] **Why section** explains business/technical value
+- [ ] **How section** provides step-by-step implementation
+- [ ] **Important section** documents ≥2 non-obvious gotchas with solutions
+- [ ] **Zero fluff:** Every sentence adds value
+- [ ] **Tags:** 5-8 specific, searchable tags
+- [ ] **Searchability test:** Would you find this with semantic search?
+- [ ] **Completeness test:** Can agent implement without re-researching?
+
+---
+
+## Storage Command Template
+
+` + "```typescript" + `
+await mcp__hyper__coordinator_upsert_knowledge({
+  collection: "[choose-appropriate-collection]",
+  text: ` + "`" + `
+## [Headline - What + Why in <100 words]
+
+### What
+[Core technical details with code examples]
+
+### Why
+[Business/technical importance and when to use]
+
+### How
+[Step-by-step implementation with prerequisites, integration, testing]
+
+### Important
+[Critical gotchas with Why/Solution/Detection format]
+  ` + "`" + `,
+  metadata: {
+    knowledgeType: "[pattern|solution|gotcha|adr]",
+    domain: "[backend|frontend|infrastructure]",
+    title: "[Searchable title matching headline]",
+    tags: ["tag1", "tag2", "tag3", "tag4", "tag5"],
+    linkedTaskId: "[taskId if applicable]",
+    createdAt: new Date().toISOString()
+  }
+})
+` + "```" + `
+
+---
+
+## Collection Selection Guide
+
+**Choose collection based on reusability and scope:**
+
+### Technical Collections (Most Reusable)
+
+**technical-knowledge** ← Use for cross-service patterns
+- Authentication/authorization patterns
+- Error handling strategies
+- Performance optimization techniques
+- Architecture patterns (CQRS, Event Sourcing, etc.)
+
+**code-patterns** ← Use for language-specific implementations
+- Go middleware examples
+- React hooks patterns
+- Database query optimizations
+- API client implementations
+
+**adr** ← Use for architecture decisions
+- Why we chose Technology X over Y
+- Trade-offs considered
+- Long-term implications
+- Migration paths
+
+### Domain-Specific Collections
+
+**ui-component-patterns** ← Frontend components
+- React component examples
+- Radix UI integration
+- Accessibility patterns
+- State management
+
+**ui-test-strategies** ← Testing approaches
+- Playwright patterns
+- Visual regression
+- E2E test organization
+
+**data-contracts** ← API schemas
+- Request/response formats
+- GraphQL schemas
+- Event payloads
+- Database models
+
+### Task-Specific Collections
+
+**task:hyperion://task/human/{taskId}** ← One-off solutions
+- Task completion summaries
+- Agent handoff information
+- Task-specific gotchas
+- NOT for reusable patterns
+
+---
+
+## Anti-Patterns (NEVER Do This)
+
+❌ **Generic Headlines**
+` + "```" + `
+"Authentication implementation" ← WHAT authentication? WHY important?
+` + "```" + `
+
+❌ **Filler Content**
+` + "```" + `
+"This section will explain how to implement JWT validation..."
+"As you can see from the code above..."
+"It's important to note that..."
+` + "```" + `
+
+❌ **Untested Code**
+` + "```go" + `
+// Code that looks right but hasn't been tested
+func ValidateJWT() { /* ... */ } // Does this compile? Does it work?
+` + "```" + `
+
+❌ **Missing Gotchas**
+` + "```" + `
+### Important
+Make sure to test thoroughly. ← NOT HELPFUL
+` + "```" + `
+
+❌ **Vague Tags**
+` + "```json" + `
+{"tags": ["backend", "code", "implementation"]} ← Too generic
+` + "```" + `
+
+---
+
+## Examples by Knowledge Type
+
+### Pattern Example (Reusable Implementation)
+
+**Headline:** "Go Gin Router Group Pattern with Middleware Chaining - Organize API endpoints by domain with shared authentication, logging, and rate limiting. Reduces code duplication by 60%% vs per-route middleware. Use for multi-tenant APIs with role-based access control."
+
+**Collection:** ` + "`technical-knowledge`" + `
+**Tags:** ` + "`[\"go\", \"gin\", \"router-pattern\", \"middleware\", \"api-organization\", \"rbac\"]`" + `
+
+---
+
+### Solution Example (Bug Fix or Specific Problem)
+
+**Headline:** "MongoDB Aggregation Pipeline Duplicate Detection Performance Fix - Solves 30s+ query timeouts when checking for duplicate tasks across 1M+ documents. Uses compound index on (userId, title, status) + $lookup optimization. Reduces query time to <100ms."
+
+**Collection:** ` + "`technical-knowledge`" + `
+**Tags:** ` + "`[\"mongodb\", \"aggregation\", \"performance\", \"duplicate-detection\", \"indexing\"]`" + `
+
+---
+
+### Gotcha Example (Critical Non-Obvious Issue)
+
+**Headline:** "Docker Volume Bind Mount File Watcher Issue - Go file watchers (fsnotify) fail silently on Docker bind mounts due to inotify incompatibility. Hot reload breaks in development. Use polling fallback or named volumes instead."
+
+**Collection:** ` + "`technical-knowledge`" + `
+**Tags:** ` + "`[\"docker\", \"file-watcher\", \"gotcha\", \"development\", \"hot-reload\", \"fsnotify\"]`" + `
+
+---
+
+### ADR Example (Architecture Decision)
+
+**Headline:** "ADR-012: Dual-MCP Architecture (MongoDB + Qdrant) - Separates task coordination (relational) from knowledge discovery (semantic). MongoDB for real-time task board, Qdrant for AI agent context retrieval. Enables 90%% knowledge reuse vs 40%% with MongoDB-only approach."
+
+**Collection:** ` + "`adr`" + `
+**Tags:** ` + "`[\"architecture\", \"mcp\", \"mongodb\", \"qdrant\", \"vector-db\", \"knowledge-management\"]`" + `
+
+---
+
+## Remember: Headline is KING
+
+**Future AI agents will see:**
+1. Your headline (first 100 words) ← **MAKE IT COUNT**
+2. Semantic similarity score
+3. Collection name
+4. Tags
+
+**If headline is good:** Agent reads full content, implements solution, marks task complete.
+
+**If headline is bad:** Agent skips, searches again, wastes context window.
+
+**Your goal:** Write headlines so good that agents KNOW they found the right knowledge in <10 seconds.
+
+---
+
+Now, structure your knowledge following this guide and store it using ` + "`mcp__hyper__coordinator_upsert_knowledge`" + `.`, contextSection)
 }

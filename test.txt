@@ -1,0 +1,5 @@
+Line 1: PATCHED using sed
+Line 2: This is the MODIFIED second line
+Line 3: PATCHED using sed
+Line 4: This is the PATCHED fourth line
+Line 5: PATCHED using sed

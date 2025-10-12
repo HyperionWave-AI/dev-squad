@@ -194,6 +194,22 @@ type IndexStatusResponse struct {
 	Folders       []FolderDTO `json:"folders"`
 }
 
+// Knowledge DTOs
+type KnowledgeEntryDTO struct {
+	ID         string                 `json:"id"`
+	Collection string                 `json:"collection"`
+	Text       string                 `json:"text"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt  string                 `json:"createdAt"`
+	Score      *float64               `json:"score,omitempty"`
+}
+
+type BrowseKnowledgeResponse struct {
+	Entries []KnowledgeEntryDTO `json:"entries"`
+	Count   int                 `json:"count"`
+	Limit   int                 `json:"limit"`
+}
+
 // RESTAPIHandler wraps TaskStorage for HTTP REST API
 type RESTAPIHandler struct {
 	taskStorage      storage.TaskStorage
@@ -957,6 +973,80 @@ func (h *RESTAPIHandler) GetIndexStatus(c *gin.Context) {
 	})
 }
 
+// BrowseKnowledge retrieves knowledge entries without search (browse mode)
+// GET /api/knowledge/browse?collection=...&limit=10
+func (h *RESTAPIHandler) BrowseKnowledge(c *gin.Context) {
+	collection := c.Query("collection")
+	limit := 10 // Default
+
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 {
+			limit = val
+			if limit > 100 {
+				limit = 100 // Max limit
+			}
+		}
+	}
+
+	// If no collection specified, browse across all major collections
+	collectionsToQuery := []string{}
+	if collection == "" || collection == "All Collections" {
+		collectionsToQuery = []string{
+			"technical-knowledge",
+			"adr",
+			"data-contracts",
+			"team-coordination",
+			"workflow-context",
+		}
+	} else {
+		collectionsToQuery = []string{collection}
+	}
+
+	var allEntries []KnowledgeEntryDTO
+
+	// List entries from each collection
+	for _, col := range collectionsToQuery {
+		entries, err := h.knowledgeStorage.ListKnowledge(col, limit)
+		if err != nil {
+			h.logger.Warn("Failed to list knowledge from collection",
+				zap.String("collection", col),
+				zap.Error(err))
+			continue
+		}
+
+		// Convert to DTOs
+		for _, entry := range entries {
+			dto := KnowledgeEntryDTO{
+				ID:         entry.ID,
+				Collection: entry.Collection,
+				Text:       entry.Text,
+				Metadata:   entry.Metadata,
+				CreatedAt:  entry.CreatedAt.Format("2006-01-02T15:04:05.000Z"),
+			}
+			allEntries = append(allEntries, dto)
+		}
+	}
+
+	// Sort by creation date (newest first)
+	// Note: Entries are already sorted by MongoDB query
+
+	// Limit total results if browsing multiple collections
+	if len(allEntries) > limit {
+		allEntries = allEntries[:limit]
+	}
+
+	h.logger.Info("Browse knowledge completed",
+		zap.String("collection", collection),
+		zap.Int("limit", limit),
+		zap.Int("results", len(allEntries)))
+
+	c.JSON(http.StatusOK, BrowseKnowledgeResponse{
+		Entries: allEntries,
+		Count:   len(allEntries),
+		Limit:   limit,
+	})
+}
+
 // RegisterRESTRoutes registers all REST API routes
 func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	// Human Tasks
@@ -985,5 +1075,11 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		codeIndex.POST("/scan", h.ScanFolder)
 		codeIndex.POST("/search", h.SearchCode)
 		codeIndex.GET("/status", h.GetIndexStatus)
+	}
+
+	// Knowledge
+	knowledge := r.Group("/api/knowledge")
+	{
+		knowledge.GET("/browse", h.BrowseKnowledge)
 	}
 }
