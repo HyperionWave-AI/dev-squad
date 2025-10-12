@@ -30,24 +30,43 @@ type ToolMatch struct {
 	Score       float64 `json:"score"`
 }
 
+// ServerMetadata represents metadata about an MCP server
+type ServerMetadata struct {
+	ServerName  string    `json:"serverName" bson:"serverName"`
+	ServerURL   string    `json:"serverUrl" bson:"serverUrl"`
+	Description string    `json:"description" bson:"description"`
+	ToolCount   int       `json:"toolCount" bson:"toolCount"`
+	CreatedAt   time.Time `json:"createdAt" bson:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt" bson:"updatedAt"`
+}
+
 // ToolsStorageInterface defines the interface for MCP tools storage operations
 type ToolsStorageInterface interface {
 	StoreToolMetadata(ctx context.Context, toolName, description string, schema map[string]interface{}, serverName string) error
 	SearchTools(ctx context.Context, query string, limit int) ([]*ToolMatch, error)
 	GetToolSchema(ctx context.Context, toolName string) (*ToolMetadata, error)
+
+	// Server management
+	AddServer(ctx context.Context, serverName, serverURL, description string) error
+	RemoveServer(ctx context.Context, serverName string) error
+	GetServer(ctx context.Context, serverName string) (*ServerMetadata, error)
+	ListServers(ctx context.Context) ([]*ServerMetadata, error)
+	RemoveServerTools(ctx context.Context, serverName string) error
 }
 
 // ToolsStorage provides storage interface for MCP tools metadata
 type ToolsStorage struct {
-	toolsCollection *mongo.Collection
-	qdrantClient    QdrantClientInterface
+	toolsCollection   *mongo.Collection
+	serversCollection *mongo.Collection
+	qdrantClient      QdrantClientInterface
 }
 
 // NewToolsStorage creates a new tools storage instance
 func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface) (*ToolsStorage, error) {
 	storage := &ToolsStorage{
-		toolsCollection: db.Collection("tools"),
-		qdrantClient:    qdrantClient,
+		toolsCollection:   db.Collection("tools"),
+		serversCollection: db.Collection("mcp_servers"),
+		qdrantClient:      qdrantClient,
 	}
 
 	// Create indexes
@@ -84,6 +103,16 @@ func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface) (*T
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create description text index: %w", err)
+	}
+
+	// Create indexes for servers collection
+	// Index on serverName (unique)
+	_, err = storage.serversCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "serverName", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create serverName index: %w", err)
 	}
 
 	return storage, nil
@@ -125,8 +154,15 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 
 	// Store in Qdrant for semantic search (description + tool name for better matching)
 	if s.qdrantClient != nil {
-		// Ensure collection exists
-		if err := s.qdrantClient.EnsureCollection("mcp-tools", 768); err != nil {
+		// Get vector dimensions from qdrant client (uses configured embedding client dimensions)
+		// This ensures we use the correct dimensions (Ollama:768, OpenAI:1536, Voyage:1024, etc.)
+		vectorDim := 768 // Default fallback
+		if qdrantClientTyped, ok := s.qdrantClient.(*QdrantClient); ok {
+			vectorDim = qdrantClientTyped.vectorDimension
+		}
+
+		// Ensure collection exists with correct dimensions
+		if err := s.qdrantClient.EnsureCollection("mcp-tools", vectorDim); err != nil {
 			// Log error but don't fail - MongoDB has the data
 			fmt.Printf("Warning: failed to ensure Qdrant collection 'mcp-tools': %v\n", err)
 		} else {
@@ -250,4 +286,146 @@ func (s *ToolsStorage) GetToolSchema(ctx context.Context, toolName string) (*Too
 	}
 
 	return &metadata, nil
+}
+
+// AddServer adds a new MCP server to the registry
+func (s *ToolsStorage) AddServer(ctx context.Context, serverName, serverURL, description string) error {
+	server := &ServerMetadata{
+		ServerName:  serverName,
+		ServerURL:   serverURL,
+		Description: description,
+		ToolCount:   0,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	filter := bson.M{"serverName": serverName}
+	update := bson.M{
+		"$set": bson.M{
+			"serverName":  server.ServerName,
+			"serverUrl":   server.ServerURL,
+			"description": server.Description,
+			"updatedAt":   server.UpdatedAt,
+		},
+		"$setOnInsert": bson.M{
+			"toolCount": 0,
+			"createdAt": server.CreatedAt,
+		},
+	}
+
+	opts := options.Update().SetUpsert(true)
+	_, err := s.serversCollection.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return fmt.Errorf("failed to add server: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveServer removes an MCP server from the registry
+func (s *ToolsStorage) RemoveServer(ctx context.Context, serverName string) error {
+	filter := bson.M{"serverName": serverName}
+	result, err := s.serversCollection.DeleteOne(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("failed to remove server: %w", err)
+	}
+
+	if result.DeletedCount == 0 {
+		return fmt.Errorf("server not found: %s", serverName)
+	}
+
+	return nil
+}
+
+// GetServer retrieves server metadata
+func (s *ToolsStorage) GetServer(ctx context.Context, serverName string) (*ServerMetadata, error) {
+	var server ServerMetadata
+
+	filter := bson.M{"serverName": serverName}
+	err := s.serversCollection.FindOne(ctx, filter).Decode(&server)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, fmt.Errorf("server not found: %s", serverName)
+		}
+		return nil, fmt.Errorf("failed to get server: %w", err)
+	}
+
+	return &server, nil
+}
+
+// ListServers lists all registered MCP servers
+func (s *ToolsStorage) ListServers(ctx context.Context) ([]*ServerMetadata, error) {
+	cursor, err := s.serversCollection.Find(ctx, bson.M{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list servers: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	servers := make([]*ServerMetadata, 0)
+	for cursor.Next(ctx) {
+		var server ServerMetadata
+		if err := cursor.Decode(&server); err != nil {
+			continue
+		}
+		servers = append(servers, &server)
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("cursor error: %w", err)
+	}
+
+	return servers, nil
+}
+
+// RemoveServerTools removes all tools associated with a server
+func (s *ToolsStorage) RemoveServerTools(ctx context.Context, serverName string) error {
+	// First, get all tool IDs for this server to remove from Qdrant
+	filter := bson.M{"serverName": serverName}
+	cursor, err := s.toolsCollection.Find(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("failed to find server tools: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	// Collect tool IDs for Qdrant deletion
+	var toolIDs []string
+	for cursor.Next(ctx) {
+		var metadata ToolMetadata
+		if err := cursor.Decode(&metadata); err != nil {
+			continue
+		}
+		toolIDs = append(toolIDs, metadata.ID)
+	}
+
+	// Delete from MongoDB
+	result, err := s.toolsCollection.DeleteMany(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("failed to remove server tools from MongoDB: %w", err)
+	}
+
+	// Delete from Qdrant
+	if s.qdrantClient != nil && len(toolIDs) > 0 {
+		for _, toolID := range toolIDs {
+			if err := s.qdrantClient.DeletePoint("mcp-tools", toolID); err != nil {
+				// Log error but don't fail
+				fmt.Printf("Warning: failed to delete tool %s from Qdrant: %v\n", toolID, err)
+			}
+		}
+	}
+
+	// Update server tool count
+	update := bson.M{
+		"$set": bson.M{
+			"toolCount": 0,
+			"updatedAt": time.Now().UTC(),
+		},
+	}
+	_, err = s.serversCollection.UpdateOne(ctx, bson.M{"serverName": serverName}, update)
+	if err != nil {
+		// Log error but don't fail - tools are deleted
+		fmt.Printf("Warning: failed to update server tool count: %v\n", err)
+	}
+
+	fmt.Printf("Removed %d tools for server %s\n", result.DeletedCount, serverName)
+	return nil
 }

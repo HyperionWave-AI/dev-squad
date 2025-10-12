@@ -77,6 +77,16 @@ func (m *MockQdrantClient) SearchSimilar(collectionName string, query string, li
 	return results, nil
 }
 
+func (m *MockQdrantClient) DeletePoint(collectionName string, pointID string) error {
+	if m.shouldError {
+		return &mockError{msg: m.errorMsg}
+	}
+	if points, ok := m.points[collectionName]; ok {
+		delete(points, pointID)
+	}
+	return nil
+}
+
 func (m *MockQdrantClient) Ping(ctx context.Context) error {
 	if m.pingError != nil {
 		return m.pingError
@@ -92,8 +102,8 @@ func (e *mockError) Error() string {
 	return e.msg
 }
 
-// Test qdrant_find with valid parameters
-func TestQdrantFind_ValidParams(t *testing.T) {
+// Test knowledge_find with valid parameters
+func TestKnowledgeFind_ValidParams(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -104,7 +114,7 @@ func TestQdrantFind_ValidParams(t *testing.T) {
 		"tags":   []string{"testing", "qdrant"},
 	})
 
-	// Test qdrant_find
+	// Test knowledge_find
 	args := map[string]interface{}{
 		"collectionName": "test-collection",
 		"query":          "test content",
@@ -125,8 +135,8 @@ func TestQdrantFind_ValidParams(t *testing.T) {
 	assert.Contains(t, textContent.Text, "This is test content")
 }
 
-// Test qdrant_find with missing collectionName
-func TestQdrantFind_MissingCollectionName(t *testing.T) {
+// Test knowledge_find with missing collectionName
+func TestKnowledgeFind_MissingCollectionName(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -145,8 +155,8 @@ func TestQdrantFind_MissingCollectionName(t *testing.T) {
 	assert.Contains(t, textContent.Text, "collectionName parameter is required")
 }
 
-// Test qdrant_find with missing query
-func TestQdrantFind_MissingQuery(t *testing.T) {
+// Test knowledge_find with missing query
+func TestKnowledgeFind_MissingQuery(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -165,8 +175,8 @@ func TestQdrantFind_MissingQuery(t *testing.T) {
 	assert.Contains(t, textContent.Text, "query parameter is required")
 }
 
-// Test qdrant_find with limit > 20 (should use max 20)
-func TestQdrantFind_LimitExceedsMax(t *testing.T) {
+// Test knowledge_find with limit > 20 (should use max 20)
+func TestKnowledgeFind_LimitExceedsMax(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -194,8 +204,8 @@ func TestQdrantFind_LimitExceedsMax(t *testing.T) {
 	assert.LessOrEqual(t, len(results), 20, "Results should be capped at 20")
 }
 
-// Test qdrant_find with no results
-func TestQdrantFind_NoResults(t *testing.T) {
+// Test knowledge_find with no results
+func TestKnowledgeFind_NoResults(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -219,8 +229,8 @@ func TestQdrantFind_NoResults(t *testing.T) {
 	assert.Contains(t, textContent.Text, "No results found")
 }
 
-// Test qdrant_store with valid parameters
-func TestQdrantStore_ValidParams(t *testing.T) {
+// Test knowledge_store with valid parameters
+func TestKnowledgeStore_ValidParams(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -254,8 +264,8 @@ func TestQdrantStore_ValidParams(t *testing.T) {
 	assert.Equal(t, "test-collection", dataMap["collection"])
 }
 
-// Test qdrant_store with missing collectionName
-func TestQdrantStore_MissingCollectionName(t *testing.T) {
+// Test knowledge_store with missing collectionName
+func TestKnowledgeStore_MissingCollectionName(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -274,8 +284,8 @@ func TestQdrantStore_MissingCollectionName(t *testing.T) {
 	assert.Contains(t, textContent.Text, "collectionName parameter is required")
 }
 
-// Test qdrant_store with empty information
-func TestQdrantStore_EmptyInformation(t *testing.T) {
+// Test knowledge_store with empty information
+func TestKnowledgeStore_EmptyInformation(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -295,8 +305,8 @@ func TestQdrantStore_EmptyInformation(t *testing.T) {
 	assert.Contains(t, textContent.Text, "information parameter is required")
 }
 
-// Test qdrant_store without metadata (optional parameter)
-func TestQdrantStore_NoMetadata(t *testing.T) {
+// Test knowledge_store without metadata (optional parameter)
+func TestKnowledgeStore_NoMetadata(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
@@ -317,8 +327,8 @@ func TestQdrantStore_NoMetadata(t *testing.T) {
 	assert.Contains(t, textContent.Text, "✓ Knowledge stored in Qdrant")
 }
 
-// Test qdrant_store with storage failure
-func TestQdrantStore_StorageFailure(t *testing.T) {
+// Test knowledge_store with storage failure
+func TestKnowledgeStore_StorageFailure(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	mockClient.shouldError = true
 	mockClient.errorMsg = "storage failure"
@@ -340,8 +350,8 @@ func TestQdrantStore_StorageFailure(t *testing.T) {
 	assert.Contains(t, textContent.Text, "failed to ensure collection exists")
 }
 
-// Test qdrant_find with collection creation failure
-func TestQdrantFind_CollectionFailure(t *testing.T) {
+// Test knowledge_find with collection creation failure
+func TestKnowledgeFind_CollectionFailure(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	mockClient.shouldError = true
 	mockClient.errorMsg = "collection creation failed"
@@ -426,7 +436,7 @@ func TestExtractArguments(t *testing.T) {
 }
 
 // Test response format verification
-func TestQdrantFind_ResponseFormat(t *testing.T) {
+func TestKnowledgeFind_ResponseFormat(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 

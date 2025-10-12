@@ -1,0 +1,2486 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>handlers: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">hyperion-coordinator-mcp/handlers/resources.go (0.0%)</option>
+				
+				<option value="file1">hyperion-coordinator-mcp/handlers/tools.go (0.0%)</option>
+				
+				<option value="file2">hyperion-coordinator-mcp/storage/knowledge.go (0.0%)</option>
+				
+				<option value="file3">hyperion-coordinator-mcp/storage/tasks.go (0.0%)</option>
+				
+				<option value="file4">hyperion-coordinator-mcp/storage/validation.go (100.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package handlers
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+
+        "hyperion-coordinator-mcp/storage"
+
+        "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// ResourceHandler manages MCP resource operations
+type ResourceHandler struct {
+        taskStorage      storage.TaskStorage
+        knowledgeStorage storage.KnowledgeStorage
+}
+
+// NewResourceHandler creates a new resource handler
+func NewResourceHandler(taskStorage storage.TaskStorage, knowledgeStorage storage.KnowledgeStorage) *ResourceHandler <span class="cov0" title="0">{
+        return &amp;ResourceHandler{
+                taskStorage:      taskStorage,
+                knowledgeStorage: knowledgeStorage,
+        }
+}</span>
+
+// RegisterResourceHandlers registers all resource handlers with the MCP server
+func (h *ResourceHandler) RegisterResourceHandlers(server *mcp.Server) error <span class="cov0" title="0">{
+        // Register all human tasks as resources
+        humanTasks := h.taskStorage.ListAllHumanTasks()
+        for _, task := range humanTasks </span><span class="cov0" title="0">{
+                resource := &amp;mcp.Resource{
+                        URI:         fmt.Sprintf("hyperion://task/human/%s", task.ID),
+                        Name:        fmt.Sprintf("Human Task: %s", truncateText(task.Prompt, 50)),
+                        Description: fmt.Sprintf("Human task created at %s with status: %s", task.CreatedAt.Format("2006-01-02 15:04:05"), task.Status),
+                        MIMEType:    "application/json",
+                }
+
+                server.AddResource(resource, h.createResourceHandler(task.ID, "human", ""))
+        }</span>
+
+        // Register all agent tasks as resources
+        <span class="cov0" title="0">agentTasks := h.taskStorage.ListAllAgentTasks()
+        for _, task := range agentTasks </span><span class="cov0" title="0">{
+                resource := &amp;mcp.Resource{
+                        URI:         fmt.Sprintf("hyperion://task/agent/%s/%s", task.AgentName, task.ID),
+                        Name:        fmt.Sprintf("Agent Task: %s - %s", task.AgentName, task.Role),
+                        Description: fmt.Sprintf("Agent task for %s (parent: %s) with status: %s", task.AgentName, task.HumanTaskID, task.Status),
+                        MIMEType:    "application/json",
+                }
+
+                server.AddResource(resource, h.createResourceHandler(task.ID, "agent", task.AgentName))
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// createResourceHandler creates a handler function for a specific task resource
+func (h *ResourceHandler) createResourceHandler(taskID, taskType, agentName string) mcp.ResourceHandler <span class="cov0" title="0">{
+        return func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) </span><span class="cov0" title="0">{
+                var task interface{}
+                var uri string
+                var err error
+
+                switch taskType </span>{
+                case "human":<span class="cov0" title="0">
+                        task, err = h.taskStorage.GetHumanTask(taskID)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return nil, fmt.Errorf("failed to retrieve human task: %w", err)
+                        }</span>
+                        <span class="cov0" title="0">uri = fmt.Sprintf("hyperion://task/human/%s", taskID)</span>
+
+                case "agent":<span class="cov0" title="0">
+                        agentTask, err := h.taskStorage.GetAgentTask(taskID)
+                        if err != nil </span><span class="cov0" title="0">{
+                                return nil, fmt.Errorf("failed to retrieve agent task: %w", err)
+                        }</span>
+
+                        // Verify agent name matches
+                        <span class="cov0" title="0">if agentTask.AgentName != agentName </span><span class="cov0" title="0">{
+                                return nil, fmt.Errorf("agent name mismatch: expected %s but task belongs to %s", agentName, agentTask.AgentName)
+                        }</span>
+
+                        <span class="cov0" title="0">task = agentTask
+                        uri = fmt.Sprintf("hyperion://task/agent/%s/%s", agentName, taskID)</span>
+
+                default:<span class="cov0" title="0">
+                        return nil, fmt.Errorf("unknown task type: %s", taskType)</span>
+                }
+
+                <span class="cov0" title="0">jsonData, err := json.MarshalIndent(task, "", "  ")
+                if err != nil </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("failed to marshal task data: %w", err)
+                }</span>
+
+                <span class="cov0" title="0">return &amp;mcp.ReadResourceResult{
+                        Contents: []*mcp.ResourceContents{
+                                {
+                                        URI:      uri,
+                                        MIMEType: "application/json",
+                                        Text:     string(jsonData),
+                                },
+                        },
+                }, nil</span>
+        }
+}
+
+// truncateText truncates text to a maximum length
+func truncateText(text string, maxLen int) string <span class="cov0" title="0">{
+        if len(text) &lt;= maxLen </span><span class="cov0" title="0">{
+                return text
+        }</span>
+        <span class="cov0" title="0">return text[:maxLen] + "..."</span>
+}</pre>
+		
+		<pre class="file" id="file1" style="display: none">package handlers
+
+import (
+        "context"
+        "encoding/json"
+        "fmt"
+
+        "hyperion-coordinator-mcp/storage"
+
+        "github.com/google/jsonschema-go/jsonschema"
+        "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// ToolHandler manages MCP tool operations
+type ToolHandler struct {
+        taskStorage      storage.TaskStorage
+        knowledgeStorage storage.KnowledgeStorage
+}
+
+// NewToolHandler creates a new tool handler
+func NewToolHandler(taskStorage storage.TaskStorage, knowledgeStorage storage.KnowledgeStorage) *ToolHandler <span class="cov0" title="0">{
+        return &amp;ToolHandler{
+                taskStorage:      taskStorage,
+                knowledgeStorage: knowledgeStorage,
+        }
+}</span>
+
+// RegisterToolHandlers registers all tool handlers with the MCP server
+func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error <span class="cov0" title="0">{
+        // Register coordinator_upsert_knowledge
+        if err := h.registerUpsertKnowledge(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register upsert_knowledge tool: %w", err)
+        }</span>
+
+        // Register coordinator_query_knowledge
+        <span class="cov0" title="0">if err := h.registerQueryKnowledge(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register query_knowledge tool: %w", err)
+        }</span>
+
+        // Register coordinator_create_human_task
+        <span class="cov0" title="0">if err := h.registerCreateHumanTask(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register create_human_task tool: %w", err)
+        }</span>
+
+        // Register coordinator_create_agent_task
+        <span class="cov0" title="0">if err := h.registerCreateAgentTask(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register create_agent_task tool: %w", err)
+        }</span>
+
+        // Register coordinator_update_task_status
+        <span class="cov0" title="0">if err := h.registerUpdateTaskStatus(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register update_task_status tool: %w", err)
+        }</span>
+
+        // Register coordinator_update_todo_status
+        <span class="cov0" title="0">if err := h.registerUpdateTodoStatus(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register update_todo_status tool: %w", err)
+        }</span>
+
+        // Register coordinator_list_human_tasks
+        <span class="cov0" title="0">if err := h.registerListHumanTasks(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register list_human_tasks tool: %w", err)
+        }</span>
+
+        // Register coordinator_list_agent_tasks
+        <span class="cov0" title="0">if err := h.registerListAgentTasks(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register list_agent_tasks tool: %w", err)
+        }</span>
+
+        // Register coordinator_clear_task_board
+        <span class="cov0" title="0">if err := h.registerClearTaskBoard(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register clear_task_board tool: %w", err)
+        }</span>
+
+        // Register coordinator_add_task_prompt_notes
+        <span class="cov0" title="0">if err := h.registerAddTaskPromptNotes(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register add_task_prompt_notes tool: %w", err)
+        }</span>
+
+        // Register coordinator_update_task_prompt_notes
+        <span class="cov0" title="0">if err := h.registerUpdateTaskPromptNotes(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register update_task_prompt_notes tool: %w", err)
+        }</span>
+
+        // Register coordinator_clear_task_prompt_notes
+        <span class="cov0" title="0">if err := h.registerClearTaskPromptNotes(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register clear_task_prompt_notes tool: %w", err)
+        }</span>
+
+        // Register coordinator_add_todo_prompt_notes
+        <span class="cov0" title="0">if err := h.registerAddTodoPromptNotes(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register add_todo_prompt_notes tool: %w", err)
+        }</span>
+
+        // Register coordinator_update_todo_prompt_notes
+        <span class="cov0" title="0">if err := h.registerUpdateTodoPromptNotes(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register update_todo_prompt_notes tool: %w", err)
+        }</span>
+
+        // Register coordinator_clear_todo_prompt_notes
+        <span class="cov0" title="0">if err := h.registerClearTodoPromptNotes(server); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to register clear_todo_prompt_notes tool: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerUpsertKnowledge registers the coordinator_upsert_knowledge tool
+func (h *ToolHandler) registerUpsertKnowledge(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_upsert_knowledge",
+                Description: "Store knowledge in the coordinator knowledge base. Use for storing task context, ADRs, data contracts, and coordination information.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "collection": {
+                                        Type:        "string",
+                                        Description: "Collection name (e.g., 'task:taskURI', 'adr', 'data-contracts')",
+                                },
+                                "text": {
+                                        Type:        "string",
+                                        Description: "Content to store",
+                                },
+                                "metadata": {
+                                        Type:        "object",
+                                        Description: "Optional metadata (taskId, agentName, timestamp, etc.)",
+                                },
+                        },
+                        Required: []string{"collection", "text"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleUpsertKnowledge(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerQueryKnowledge registers the coordinator_query_knowledge tool
+func (h *ToolHandler) registerQueryKnowledge(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_query_knowledge",
+                Description: "Query the coordinator knowledge base. Returns most relevant knowledge entries with similarity scores.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "collection": {
+                                        Type:        "string",
+                                        Description: "Collection name to query",
+                                },
+                                "query": {
+                                        Type:        "string",
+                                        Description: "Text to search for",
+                                },
+                                "limit": {
+                                        Type:        "number",
+                                        Description: "Maximum number of results (default: 5)",
+                                },
+                        },
+                        Required: []string{"collection", "query"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleQueryKnowledge(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerCreateHumanTask registers the coordinator_create_human_task tool
+func (h *ToolHandler) registerCreateHumanTask(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_create_human_task",
+                Description: "Create a new human task with the original user prompt. Returns a unique taskId (UUID format).",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "prompt": {
+                                        Type:        "string",
+                                        Description: "Original human request/prompt",
+                                },
+                        },
+                        Required: []string{"prompt"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleCreateHumanTask(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerCreateAgentTask registers the coordinator_create_agent_task tool
+func (h *ToolHandler) registerCreateAgentTask(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_create_agent_task",
+                Description: "Create a new agent task linked to a human task. Returns a unique taskId (UUID format). Supports context-rich task creation to minimize agent context window usage.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "humanTaskId": {
+                                        Type:        "string",
+                                        Description: "Parent human task ID (UUID)",
+                                },
+                                "agentName": {
+                                        Type:        "string",
+                                        Description: "Name of the agent assigned to this task",
+                                },
+                                "role": {
+                                        Type:        "string",
+                                        Description: "Agent's role/responsibility for this task",
+                                },
+                                "contextSummary": {
+                                        Type:        "string",
+                                        Description: "200-word summary of what agent needs to know (business context, constraints, pattern references). Optional but highly recommended for context efficiency.",
+                                },
+                                "filesModified": {
+                                        Type:        "array",
+                                        Description: "List of file paths this task will create or modify. Optional.",
+                                        Items: &amp;jsonschema.Schema{
+                                                Type: "string",
+                                        },
+                                },
+                                "qdrantCollections": {
+                                        Type:        "array",
+                                        Description: "Suggested Qdrant collections to query if technical patterns needed (1-2 max). Optional.",
+                                        Items: &amp;jsonschema.Schema{
+                                                Type: "string",
+                                        },
+                                },
+                                "priorWorkSummary": {
+                                        Type:        "string",
+                                        Description: "Summary of previous agent's work and key decisions (for multi-phase tasks). Optional.",
+                                },
+                                "todos": {
+                                        Type:        "array",
+                                        Description: "List of TODO items. Can be strings (legacy) or objects with context hints (recommended).",
+                                        Items: &amp;jsonschema.Schema{
+                                                OneOf: []*jsonschema.Schema{
+                                                        {Type: "string"},
+                                                        {
+                                                                Type: "object",
+                                                                Properties: map[string]*jsonschema.Schema{
+                                                                        "description": {
+                                                                                Type:        "string",
+                                                                                Description: "What to do",
+                                                                        },
+                                                                        "filePath": {
+                                                                                Type:        "string",
+                                                                                Description: "Specific file to modify (optional)",
+                                                                        },
+                                                                        "functionName": {
+                                                                                Type:        "string",
+                                                                                Description: "Specific function to create/modify (optional)",
+                                                                        },
+                                                                        "contextHint": {
+                                                                                Type:        "string",
+                                                                                Description: "50-word hint of how to implement (optional)",
+                                                                        },
+                                                                        "notes": {
+                                                                                Type:        "string",
+                                                                                Description: "Additional context for this TODO (optional)",
+                                                                        },
+                                                                },
+                                                                Required: []string{"description"},
+                                                        },
+                                                },
+                                        },
+                                },
+                        },
+                        Required: []string{"humanTaskId", "agentName", "role", "todos"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleCreateAgentTask(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerUpdateTaskStatus registers the coordinator_update_task_status tool
+func (h *ToolHandler) registerUpdateTaskStatus(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_update_task_status",
+                Description: "Update the status of any task (human or agent). Status values: pending, in_progress, completed, blocked.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "taskId": {
+                                        Type:        "string",
+                                        Description: "Task ID to update (UUID)",
+                                },
+                                "status": {
+                                        Type:        "string",
+                                        Description: "New status (pending, in_progress, completed, blocked)",
+                                        Enum:        []interface{}{"pending", "in_progress", "completed", "blocked"},
+                                },
+                                "notes": {
+                                        Type:        "string",
+                                        Description: "Optional progress notes",
+                                },
+                        },
+                        Required: []string{"taskId", "status"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleUpdateTaskStatus(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// handleUpsertKnowledge handles the coordinator_upsert_knowledge tool call
+func (h *ToolHandler) handleUpsertKnowledge(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        collection, ok := args["collection"].(string)
+        if !ok || collection == "" </span><span class="cov0" title="0">{
+                return createErrorResult("collection parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">text, ok := args["text"].(string)
+        if !ok || text == "" </span><span class="cov0" title="0">{
+                return createErrorResult("text parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">var metadata map[string]interface{}
+        if m, ok := args["metadata"].(map[string]interface{}); ok </span><span class="cov0" title="0">{
+                metadata = m
+        }</span>
+
+        <span class="cov0" title="0">entry, err := h.knowledgeStorage.Upsert(collection, text, metadata)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to upsert knowledge: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">resultText := fmt.Sprintf("✓ Knowledge stored successfully\n\nID: %s\nCollection: %s\nCreated: %s",
+                entry.ID, entry.Collection, entry.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
+
+        return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, entry, nil</span>
+}
+
+// handleQueryKnowledge handles the coordinator_query_knowledge tool call
+func (h *ToolHandler) handleQueryKnowledge(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        collection, ok := args["collection"].(string)
+        if !ok || collection == "" </span><span class="cov0" title="0">{
+                return createErrorResult("collection parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">query, ok := args["query"].(string)
+        if !ok || query == "" </span><span class="cov0" title="0">{
+                return createErrorResult("query parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">limit := 5
+        if l, ok := args["limit"].(float64); ok </span><span class="cov0" title="0">{
+                limit = int(l)
+        }</span>
+
+        <span class="cov0" title="0">results, err := h.knowledgeStorage.Query(collection, query, limit)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to query knowledge: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">if len(results) == 0 </span><span class="cov0" title="0">{
+                return &amp;mcp.CallToolResult{
+                        Content: []mcp.Content{
+                                &amp;mcp.TextContent{Text: fmt.Sprintf("No knowledge found in collection '%s' for query: %s", collection, query)},
+                        },
+                }, results, nil
+        }</span>
+
+        // Format results
+        <span class="cov0" title="0">resultText := fmt.Sprintf("Found %d knowledge entries:\n\n", len(results))
+        for i, result := range results </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf("Result %d (Score: %.2f)\n", i+1, result.Score)
+                resultText += fmt.Sprintf("ID: %s\n", result.Entry.ID)
+                resultText += fmt.Sprintf("Created: %s\n", result.Entry.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
+                resultText += fmt.Sprintf("Text: %s\n", result.Entry.Text)
+                if len(result.Entry.Metadata) &gt; 0 </span><span class="cov0" title="0">{
+                        metadataJSON, _ := json.MarshalIndent(result.Entry.Metadata, "", "  ")
+                        resultText += fmt.Sprintf("Metadata: %s\n", string(metadataJSON))
+                }</span>
+                <span class="cov0" title="0">resultText += "\n---\n\n"</span>
+        }
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, results, nil</span>
+}
+
+// handleCreateHumanTask handles the coordinator_create_human_task tool call
+func (h *ToolHandler) handleCreateHumanTask(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        prompt, ok := args["prompt"].(string)
+        if !ok || prompt == "" </span><span class="cov0" title="0">{
+                return createErrorResult("prompt parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">task, err := h.taskStorage.CreateHumanTask(prompt)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to create human task: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">resultText := fmt.Sprintf("✓ Human task created successfully\n\nTask ID: %s\nCreated: %s\nStatus: %s\n\nPrompt: %s",
+                task.ID, task.CreatedAt.Format("2006-01-02 15:04:05 UTC"), task.Status, task.Prompt)
+
+        return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, task, nil</span>
+}
+
+// handleCreateAgentTask handles the coordinator_create_agent_task tool call
+func (h *ToolHandler) handleCreateAgentTask(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        humanTaskID, ok := args["humanTaskId"].(string)
+        if !ok || humanTaskID == "" </span><span class="cov0" title="0">{
+                return createErrorResult("humanTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">agentName, ok := args["agentName"].(string)
+        if !ok || agentName == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentName parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">role, ok := args["role"].(string)
+        if !ok || role == "" </span><span class="cov0" title="0">{
+                return createErrorResult("role parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        // Parse todos - support both string[] (legacy) and TodoItemInput[] (new)
+        <span class="cov0" title="0">todosInterface, ok := args["todos"].([]interface{})
+        if !ok || len(todosInterface) == 0 </span><span class="cov0" title="0">{
+                return createErrorResult("todos parameter is required and must be a non-empty array"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">todos := make([]storage.TodoItemInput, len(todosInterface))
+        for i, t := range todosInterface </span><span class="cov0" title="0">{
+                // Check if it's a string (legacy format)
+                if str, ok := t.(string); ok </span><span class="cov0" title="0">{
+                        todos[i] = storage.TodoItemInput{
+                                Description: str,
+                        }
+                }</span> else<span class="cov0" title="0"> if todoMap, ok := t.(map[string]interface{}); ok </span><span class="cov0" title="0">{
+                        // New format with context hints
+                        desc, ok := todoMap["description"].(string)
+                        if !ok || desc == "" </span><span class="cov0" title="0">{
+                                return createErrorResult(fmt.Sprintf("todos[%d].description is required and must be a non-empty string", i)), nil, nil
+                        }</span>
+                        <span class="cov0" title="0">todos[i] = storage.TodoItemInput{
+                                Description: desc,
+                        }
+                        // Optional fields
+                        if filePath, ok := todoMap["filePath"].(string); ok </span><span class="cov0" title="0">{
+                                todos[i].FilePath = filePath
+                        }</span>
+                        <span class="cov0" title="0">if functionName, ok := todoMap["functionName"].(string); ok </span><span class="cov0" title="0">{
+                                todos[i].FunctionName = functionName
+                        }</span>
+                        <span class="cov0" title="0">if contextHint, ok := todoMap["contextHint"].(string); ok </span><span class="cov0" title="0">{
+                                todos[i].ContextHint = contextHint
+                        }</span>
+                        <span class="cov0" title="0">if notes, ok := todoMap["notes"].(string); ok </span><span class="cov0" title="0">{
+                                todos[i].Notes = notes
+                        }</span>
+                } else<span class="cov0" title="0"> {
+                        return createErrorResult(fmt.Sprintf("todos[%d] must be a string or an object with description field", i)), nil, nil
+                }</span>
+        }
+
+        // Parse optional context fields
+        <span class="cov0" title="0">contextSummary := ""
+        if cs, ok := args["contextSummary"].(string); ok </span><span class="cov0" title="0">{
+                contextSummary = cs
+        }</span>
+
+        <span class="cov0" title="0">var filesModified []string
+        if fm, ok := args["filesModified"].([]interface{}); ok </span><span class="cov0" title="0">{
+                filesModified = make([]string, len(fm))
+                for i, f := range fm </span><span class="cov0" title="0">{
+                        if str, ok := f.(string); ok </span><span class="cov0" title="0">{
+                                filesModified[i] = str
+                        }</span>
+                }
+        }
+
+        <span class="cov0" title="0">var qdrantCollections []string
+        if qc, ok := args["qdrantCollections"].([]interface{}); ok </span><span class="cov0" title="0">{
+                qdrantCollections = make([]string, len(qc))
+                for i, c := range qc </span><span class="cov0" title="0">{
+                        if str, ok := c.(string); ok </span><span class="cov0" title="0">{
+                                qdrantCollections[i] = str
+                        }</span>
+                }
+        }
+
+        <span class="cov0" title="0">priorWorkSummary := ""
+        if pws, ok := args["priorWorkSummary"].(string); ok </span><span class="cov0" title="0">{
+                priorWorkSummary = pws
+        }</span>
+
+        <span class="cov0" title="0">task, err := h.taskStorage.CreateAgentTask(humanTaskID, agentName, role, todos, contextSummary, filesModified, qdrantCollections, priorWorkSummary)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to create agent task: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">resultText := fmt.Sprintf("✓ Agent task created successfully\n\nTask ID: %s\nAgent: %s\nRole: %s\nParent Task: %s\nCreated: %s\nStatus: %s\n",
+                task.ID, task.AgentName, task.Role, task.HumanTaskID, task.CreatedAt.Format("2006-01-02 15:04:05 UTC"), task.Status)
+
+        if task.ContextSummary != "" </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf("\nContext Summary: %s\n", task.ContextSummary)
+        }</span>
+        <span class="cov0" title="0">if len(task.FilesModified) &gt; 0 </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf("\nFiles to Modify: %v\n", task.FilesModified)
+        }</span>
+        <span class="cov0" title="0">if len(task.QdrantCollections) &gt; 0 </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf("\nSuggested Qdrant Collections: %v\n", task.QdrantCollections)
+        }</span>
+
+        <span class="cov0" title="0">resultText += "\nTODOs:\n"
+        for i, todo := range task.Todos </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf("  %d. %s", i+1, todo.Description)
+                if todo.FilePath != "" </span><span class="cov0" title="0">{
+                        resultText += fmt.Sprintf(" (File: %s)", todo.FilePath)
+                }</span>
+                <span class="cov0" title="0">if todo.FunctionName != "" </span><span class="cov0" title="0">{
+                        resultText += fmt.Sprintf(" (Function: %s)", todo.FunctionName)
+                }</span>
+                <span class="cov0" title="0">resultText += "\n"
+                if todo.ContextHint != "" </span><span class="cov0" title="0">{
+                        resultText += fmt.Sprintf("     Hint: %s\n", todo.ContextHint)
+                }</span>
+        }
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, task, nil</span>
+}
+
+// handleUpdateTaskStatus handles the coordinator_update_task_status tool call
+func (h *ToolHandler) handleUpdateTaskStatus(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        taskID, ok := args["taskId"].(string)
+        if !ok || taskID == "" </span><span class="cov0" title="0">{
+                return createErrorResult("taskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">statusStr, ok := args["status"].(string)
+        if !ok || statusStr == "" </span><span class="cov0" title="0">{
+                return createErrorResult("status parameter is required and must be one of: pending, in_progress, completed, blocked"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">status := storage.TaskStatus(statusStr)
+
+        notes := ""
+        if n, ok := args["notes"].(string); ok </span><span class="cov0" title="0">{
+                notes = n
+        }</span>
+
+        <span class="cov0" title="0">err := h.taskStorage.UpdateTaskStatus(taskID, status, notes)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to update task status: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">resultText := fmt.Sprintf("✓ Task status updated successfully\n\nTask ID: %s\nNew Status: %s", taskID, status)
+        if notes != "" </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf("\nNotes: %s", notes)
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, map[string]interface{}{
+                "taskId": taskID,
+                "status": status,
+                "notes":  notes,
+        }, nil</span>
+}
+
+// registerUpdateTodoStatus registers the coordinator_update_todo_status tool
+func (h *ToolHandler) registerUpdateTodoStatus(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_update_todo_status",
+                Description: "Update the status of a specific TODO item within an agent task. Status values: pending, in_progress, completed. When all TODOs are completed, the agent task is automatically marked as completed.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "agentTaskId": {
+                                        Type:        "string",
+                                        Description: "Agent task ID (UUID)",
+                                },
+                                "todoId": {
+                                        Type:        "string",
+                                        Description: "TODO item ID (UUID)",
+                                },
+                                "status": {
+                                        Type:        "string",
+                                        Description: "New status (pending, in_progress, completed)",
+                                        Enum:        []interface{}{"pending", "in_progress", "completed"},
+                                },
+                                "notes": {
+                                        Type:        "string",
+                                        Description: "Optional progress notes for this TODO",
+                                },
+                        },
+                        Required: []string{"agentTaskId", "todoId", "status"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleUpdateTodoStatus(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// handleUpdateTodoStatus handles the coordinator_update_todo_status tool call
+func (h *ToolHandler) handleUpdateTodoStatus(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        agentTaskID, ok := args["agentTaskId"].(string)
+        if !ok || agentTaskID == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">todoID, ok := args["todoId"].(string)
+        if !ok || todoID == "" </span><span class="cov0" title="0">{
+                return createErrorResult("todoId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">statusStr, ok := args["status"].(string)
+        if !ok || statusStr == "" </span><span class="cov0" title="0">{
+                return createErrorResult("status parameter is required and must be one of: pending, in_progress, completed"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">status := storage.TodoStatus(statusStr)
+
+        notes := ""
+        if n, ok := args["notes"].(string); ok </span><span class="cov0" title="0">{
+                notes = n
+        }</span>
+
+        <span class="cov0" title="0">err := h.taskStorage.UpdateTodoStatus(agentTaskID, todoID, status, notes)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to update TODO status: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">resultText := fmt.Sprintf("✓ TODO status updated successfully\n\nAgent Task ID: %s\nTODO ID: %s\nNew Status: %s", agentTaskID, todoID, status)
+        if notes != "" </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf("\nNotes: %s", notes)
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, map[string]interface{}{
+                "agentTaskId": agentTaskID,
+                "todoId":      todoID,
+                "status":      status,
+                "notes":       notes,
+        }, nil</span>
+}
+
+// registerListHumanTasks registers the coordinator_list_human_tasks tool
+func (h *ToolHandler) registerListHumanTasks(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_list_human_tasks",
+                Description: "List all human tasks from the coordinator database. Returns array of tasks with all fields.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type:       "object",
+                        Properties: map[string]*jsonschema.Schema{},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                result, _, err := h.handleListHumanTasks(ctx)
+                return result, err
+        }</span>)
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerListAgentTasks registers the coordinator_list_agent_tasks tool
+func (h *ToolHandler) registerListAgentTasks(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_list_agent_tasks",
+                Description: "List all agent tasks from the coordinator database. Returns array of tasks with all fields.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "humanTaskId": {
+                                        Type:        "string",
+                                        Description: "Optional: Filter by parent human task ID",
+                                },
+                                "agentName": {
+                                        Type:        "string",
+                                        Description: "Optional: Filter by agent name",
+                                },
+                        },
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleListAgentTasks(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// handleListHumanTasks retrieves all human tasks
+func (h *ToolHandler) handleListHumanTasks(ctx context.Context) (*mcp.CallToolResult, map[string]interface{}, error) <span class="cov0" title="0">{
+        tasks := h.taskStorage.ListAllHumanTasks()
+
+        tasksJSON, err := json.MarshalIndent(tasks, "", "  ")
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to marshal tasks: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">resultText := fmt.Sprintf("✓ Retrieved %d human tasks\n\nTasks:\n%s", len(tasks), string(tasksJSON))
+
+        return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, map[string]interface{}{
+                "tasks": tasks,
+                "count": len(tasks),
+        }, nil</span>
+}
+
+// handleListAgentTasks retrieves all agent tasks with optional filters
+func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, map[string]interface{}, error) <span class="cov0" title="0">{
+        humanTaskID, _ := args["humanTaskId"].(string)
+        agentName, _ := args["agentName"].(string)
+
+        allTasks := h.taskStorage.ListAllAgentTasks()
+
+        // Apply filters if provided
+        var filteredTasks []*storage.AgentTask
+        for _, task := range allTasks </span><span class="cov0" title="0">{
+                if humanTaskID != "" &amp;&amp; task.HumanTaskID != humanTaskID </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov0" title="0">if agentName != "" &amp;&amp; task.AgentName != agentName </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov0" title="0">filteredTasks = append(filteredTasks, task)</span>
+        }
+
+        <span class="cov0" title="0">tasksJSON, err := json.MarshalIndent(filteredTasks, "", "  ")
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("failed to marshal tasks: %s", err.Error())), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">resultText := fmt.Sprintf("✓ Retrieved %d agent tasks", len(filteredTasks))
+        if humanTaskID != "" </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf(" (filtered by humanTaskId: %s)", humanTaskID)
+        }</span>
+        <span class="cov0" title="0">if agentName != "" </span><span class="cov0" title="0">{
+                resultText += fmt.Sprintf(" (filtered by agentName: %s)", agentName)
+        }</span>
+        <span class="cov0" title="0">resultText += fmt.Sprintf("\n\nTasks:\n%s", string(tasksJSON))
+
+        return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: resultText},
+                },
+        }, map[string]interface{}{
+                "tasks": filteredTasks,
+                "count": len(filteredTasks),
+        }, nil</span>
+}
+
+// extractArguments safely extracts arguments from CallToolRequest
+func (h *ToolHandler) extractArguments(req *mcp.CallToolRequest) (map[string]interface{}, error) <span class="cov0" title="0">{
+        if req.Params.Arguments == nil || len(req.Params.Arguments) == 0 </span><span class="cov0" title="0">{
+                return make(map[string]interface{}), nil
+        }</span>
+
+        // Arguments is json.RawMessage in SDK v1.0.0, unmarshal it directly
+        <span class="cov0" title="0">var result map[string]interface{}
+        if err := json.Unmarshal(req.Params.Arguments, &amp;result); err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("arguments must be a valid JSON object: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return result, nil</span>
+}
+
+// createErrorResult creates an error result with the given message
+func createErrorResult(message string) *mcp.CallToolResult <span class="cov0" title="0">{
+        return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{Text: fmt.Sprintf("❌ Error: %s", message)},
+                },
+                IsError: true,
+        }
+}</span>
+
+// registerClearTaskBoard registers the coordinator_clear_task_board tool
+func (h *ToolHandler) registerClearTaskBoard(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_clear_task_board",
+                Description: "Clear all tasks from the coordinator. ⚠️ DESTRUCTIVE OPERATION - Cannot be undone. Removes all human tasks and agent tasks.",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "confirm": {
+                                        Type:        "boolean",
+                                        Description: "Must be true to confirm deletion",
+                                },
+                        },
+                        Required: []string{"confirm"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+
+                <span class="cov0" title="0">result, _, err := h.handleClearTaskBoard(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// handleClearTaskBoard clears all tasks from the database
+func (h *ToolHandler) handleClearTaskBoard(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, map[string]interface{}, error) <span class="cov0" title="0">{
+        // Check confirmation
+        confirm, ok := args["confirm"].(bool)
+        if !ok || !confirm </span><span class="cov0" title="0">{
+                return createErrorResult("Confirmation required: set confirm=true to clear all tasks"), nil, nil
+        }</span>
+
+        // Clear all tasks
+        <span class="cov0" title="0">result, err := h.taskStorage.ClearAllTasks()
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Failed to clear tasks: %v", err)), nil, nil
+        }</span>
+
+        // Format result
+        <span class="cov0" title="0">resultJSON, _ := json.MarshalIndent(result, "", "  ")
+
+        return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{
+                                Text: fmt.Sprintf("✓ Task board cleared successfully\n\n%s", string(resultJSON)),
+                        },
+                },
+        }, map[string]interface{}{
+                "humanTasksDeleted": result.HumanTasksDeleted,
+                "agentTasksDeleted": result.AgentTasksDeleted,
+                "clearedAt":         result.ClearedAt,
+        }, nil</span>
+}
+
+// registerAddTaskPromptNotes registers the coordinator_add_task_prompt_notes tool
+func (h *ToolHandler) registerAddTaskPromptNotes(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_add_task_prompt_notes",
+                Description: "Add human guidance notes to an agent task",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "agentTaskId": {
+                                        Type:        "string",
+                                        Description: "Agent task UUID",
+                                },
+                                "promptNotes": {
+                                        Type:        "string",
+                                        Description: "Human guidance notes, markdown supported",
+                                },
+                        },
+                        Required: []string{"agentTaskId", "promptNotes"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleAddTaskPromptNotes(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerUpdateTaskPromptNotes registers the coordinator_update_task_prompt_notes tool
+func (h *ToolHandler) registerUpdateTaskPromptNotes(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_update_task_prompt_notes",
+                Description: "Update existing human guidance notes on an agent task",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "agentTaskId": {
+                                        Type:        "string",
+                                        Description: "Agent task UUID",
+                                },
+                                "promptNotes": {
+                                        Type:        "string",
+                                        Description: "Human guidance notes, markdown supported",
+                                },
+                        },
+                        Required: []string{"agentTaskId", "promptNotes"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleUpdateTaskPromptNotes(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerClearTaskPromptNotes registers the coordinator_clear_task_prompt_notes tool
+func (h *ToolHandler) registerClearTaskPromptNotes(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_clear_task_prompt_notes",
+                Description: "Clear/remove human guidance notes from an agent task",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "agentTaskId": {
+                                        Type:        "string",
+                                        Description: "Agent task UUID",
+                                },
+                        },
+                        Required: []string{"agentTaskId"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleClearTaskPromptNotes(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerAddTodoPromptNotes registers the coordinator_add_todo_prompt_notes tool
+func (h *ToolHandler) registerAddTodoPromptNotes(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_add_todo_prompt_notes",
+                Description: "Add human guidance notes to a specific TODO item",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "agentTaskId": {
+                                        Type:        "string",
+                                        Description: "Agent task UUID",
+                                },
+                                "todoId": {
+                                        Type:        "string",
+                                        Description: "TODO item UUID",
+                                },
+                                "promptNotes": {
+                                        Type:        "string",
+                                        Description: "Human guidance notes, markdown supported",
+                                },
+                        },
+                        Required: []string{"agentTaskId", "todoId", "promptNotes"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleAddTodoPromptNotes(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerUpdateTodoPromptNotes registers the coordinator_update_todo_prompt_notes tool
+func (h *ToolHandler) registerUpdateTodoPromptNotes(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_update_todo_prompt_notes",
+                Description: "Update existing human guidance notes on a TODO item",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "agentTaskId": {
+                                        Type:        "string",
+                                        Description: "Agent task UUID",
+                                },
+                                "todoId": {
+                                        Type:        "string",
+                                        Description: "TODO item UUID",
+                                },
+                                "promptNotes": {
+                                        Type:        "string",
+                                        Description: "Human guidance notes, markdown supported",
+                                },
+                        },
+                        Required: []string{"agentTaskId", "todoId", "promptNotes"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleUpdateTodoPromptNotes(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// registerClearTodoPromptNotes registers the coordinator_clear_todo_prompt_notes tool
+func (h *ToolHandler) registerClearTodoPromptNotes(server *mcp.Server) error <span class="cov0" title="0">{
+        tool := &amp;mcp.Tool{
+                Name:        "coordinator_clear_todo_prompt_notes",
+                Description: "Clear/remove human guidance notes from a TODO item",
+                InputSchema: &amp;jsonschema.Schema{
+                        Type: "object",
+                        Properties: map[string]*jsonschema.Schema{
+                                "agentTaskId": {
+                                        Type:        "string",
+                                        Description: "Agent task UUID",
+                                },
+                                "todoId": {
+                                        Type:        "string",
+                                        Description: "TODO item UUID",
+                                },
+                        },
+                        Required: []string{"agentTaskId", "todoId"},
+                },
+        }
+
+        server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) </span><span class="cov0" title="0">{
+                args, err := h.extractArguments(req)
+                if err != nil </span><span class="cov0" title="0">{
+                        return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+                }</span>
+                <span class="cov0" title="0">result, _, err := h.handleClearTodoPromptNotes(ctx, args)
+                return result, err</span>
+        })
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// handleAddTaskPromptNotes adds human prompt notes to an agent task
+func (h *ToolHandler) handleAddTaskPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        agentTaskId, ok := args["agentTaskId"].(string)
+        if !ok || agentTaskId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">promptNotes, ok := args["promptNotes"].(string)
+        if !ok || promptNotes == "" </span><span class="cov0" title="0">{
+                return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        // Validate and sanitize prompt notes
+        <span class="cov0" title="0">sanitized, err := storage.ValidatePromptNotes(promptNotes)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+        }</span>
+
+        // Add prompt notes to task
+        <span class="cov0" title="0">err = h.taskStorage.AddTaskPromptNotes(agentTaskId, sanitized)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Failed to add prompt notes: %v", err)), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{
+                                Text: fmt.Sprintf("✓ Added prompt notes to task %s", agentTaskId),
+                        },
+                },
+        }, nil, nil</span>
+}
+
+// handleUpdateTaskPromptNotes updates existing human prompt notes on an agent task
+func (h *ToolHandler) handleUpdateTaskPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        agentTaskId, ok := args["agentTaskId"].(string)
+        if !ok || agentTaskId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">promptNotes, ok := args["promptNotes"].(string)
+        if !ok || promptNotes == "" </span><span class="cov0" title="0">{
+                return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        // Validate and sanitize prompt notes
+        <span class="cov0" title="0">sanitized, err := storage.ValidatePromptNotes(promptNotes)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+        }</span>
+
+        // Update prompt notes
+        <span class="cov0" title="0">err = h.taskStorage.UpdateTaskPromptNotes(agentTaskId, sanitized)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Failed to update prompt notes: %v", err)), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{
+                                Text: fmt.Sprintf("✓ Updated prompt notes for task %s", agentTaskId),
+                        },
+                },
+        }, nil, nil</span>
+}
+
+// handleClearTaskPromptNotes clears human prompt notes from an agent task
+func (h *ToolHandler) handleClearTaskPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        agentTaskId, ok := args["agentTaskId"].(string)
+        if !ok || agentTaskId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        // Clear prompt notes
+        <span class="cov0" title="0">err := h.taskStorage.ClearTaskPromptNotes(agentTaskId)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Failed to clear prompt notes: %v", err)), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{
+                                Text: fmt.Sprintf("✓ Cleared prompt notes from task %s", agentTaskId),
+                        },
+                },
+        }, nil, nil</span>
+}
+
+// handleAddTodoPromptNotes adds human prompt notes to a specific TODO item
+func (h *ToolHandler) handleAddTodoPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        agentTaskId, ok := args["agentTaskId"].(string)
+        if !ok || agentTaskId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">todoId, ok := args["todoId"].(string)
+        if !ok || todoId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("todoId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">promptNotes, ok := args["promptNotes"].(string)
+        if !ok || promptNotes == "" </span><span class="cov0" title="0">{
+                return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        // Validate and sanitize prompt notes
+        <span class="cov0" title="0">sanitized, err := storage.ValidatePromptNotes(promptNotes)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+        }</span>
+
+        // Add prompt notes to TODO
+        <span class="cov0" title="0">err = h.taskStorage.AddTodoPromptNotes(agentTaskId, todoId, sanitized)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Failed to add TODO prompt notes: %v", err)), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{
+                                Text: fmt.Sprintf("✓ Added prompt notes to TODO %s in task %s", todoId, agentTaskId),
+                        },
+                },
+        }, nil, nil</span>
+}
+
+// handleUpdateTodoPromptNotes updates existing human prompt notes on a specific TODO item
+func (h *ToolHandler) handleUpdateTodoPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        agentTaskId, ok := args["agentTaskId"].(string)
+        if !ok || agentTaskId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">todoId, ok := args["todoId"].(string)
+        if !ok || todoId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("todoId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">promptNotes, ok := args["promptNotes"].(string)
+        if !ok || promptNotes == "" </span><span class="cov0" title="0">{
+                return createErrorResult("promptNotes parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        // Validate and sanitize prompt notes
+        <span class="cov0" title="0">sanitized, err := storage.ValidatePromptNotes(promptNotes)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Validation error: %v", err)), nil, nil
+        }</span>
+
+        // Update prompt notes
+        <span class="cov0" title="0">err = h.taskStorage.UpdateTodoPromptNotes(agentTaskId, todoId, sanitized)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Failed to update TODO prompt notes: %v", err)), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{
+                                Text: fmt.Sprintf("✓ Updated prompt notes for TODO %s in task %s", todoId, agentTaskId),
+                        },
+                },
+        }, nil, nil</span>
+}
+
+// handleClearTodoPromptNotes clears human prompt notes from a specific TODO item
+func (h *ToolHandler) handleClearTodoPromptNotes(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) <span class="cov0" title="0">{
+        agentTaskId, ok := args["agentTaskId"].(string)
+        if !ok || agentTaskId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("agentTaskId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">todoId, ok := args["todoId"].(string)
+        if !ok || todoId == "" </span><span class="cov0" title="0">{
+                return createErrorResult("todoId parameter is required and must be a non-empty string"), nil, nil
+        }</span>
+
+        // Clear prompt notes from TODO
+        <span class="cov0" title="0">err := h.taskStorage.ClearTodoPromptNotes(agentTaskId, todoId)
+        if err != nil </span><span class="cov0" title="0">{
+                return createErrorResult(fmt.Sprintf("Failed to clear TODO prompt notes: %v", err)), nil, nil
+        }</span>
+
+        <span class="cov0" title="0">return &amp;mcp.CallToolResult{
+                Content: []mcp.Content{
+                        &amp;mcp.TextContent{
+                                Text: fmt.Sprintf("✓ Cleared prompt notes from TODO %s in task %s", todoId, agentTaskId),
+                        },
+                },
+        }, nil, nil</span>
+}</pre>
+		
+		<pre class="file" id="file2" style="display: none">package storage
+
+import (
+        "context"
+        "fmt"
+        "sort"
+        "strings"
+        "time"
+
+        "github.com/google/uuid"
+        "go.mongodb.org/mongo-driver/bson"
+        "go.mongodb.org/mongo-driver/mongo"
+        "go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// KnowledgeEntry represents a stored knowledge item
+type KnowledgeEntry struct {
+        ID         string                 `json:"id" bson:"entryId"`
+        Collection string                 `json:"collection" bson:"collection"`
+        Text       string                 `json:"text" bson:"text"`
+        Metadata   map[string]interface{} `json:"metadata,omitempty" bson:"metadata,omitempty"`
+        CreatedAt  time.Time              `json:"createdAt" bson:"createdAt"`
+}
+
+// QueryResult represents a knowledge query result with similarity score
+type QueryResult struct {
+        Entry *KnowledgeEntry `json:"entry"`
+        Score float64         `json:"score"`
+}
+
+// KnowledgeStorage provides storage interface for knowledge entries
+type KnowledgeStorage interface {
+        Upsert(collection, text string, metadata map[string]interface{}) (*KnowledgeEntry, error)
+        Query(collection, query string, limit int) ([]*QueryResult, error)
+        ListCollections() []string
+}
+
+// MongoKnowledgeStorage implements KnowledgeStorage using MongoDB
+type MongoKnowledgeStorage struct {
+        knowledgeCollection *mongo.Collection
+}
+
+// NewMongoKnowledgeStorage creates a new MongoDB-backed knowledge storage
+func NewMongoKnowledgeStorage(db *mongo.Database) (*MongoKnowledgeStorage, error) <span class="cov0" title="0">{
+        storage := &amp;MongoKnowledgeStorage{
+                knowledgeCollection: db.Collection("knowledge_entries"),
+        }
+
+        // Create indexes
+        ctx := context.Background()
+
+        // Index on entryId
+        _, err := storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+                Keys:    bson.D{{Key: "entryId", Value: 1}},
+                Options: options.Index().SetUnique(true),
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create entry ID index: %w", err)
+        }</span>
+
+        // Index on collection for efficient queries
+        <span class="cov0" title="0">_, err = storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+                Keys: bson.D{{Key: "collection", Value: 1}},
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create collection index: %w", err)
+        }</span>
+
+        // Text index for full-text search on text field
+        <span class="cov0" title="0">_, err = storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+                Keys: bson.D{{Key: "text", Value: "text"}},
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create text index: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return storage, nil</span>
+}
+
+// Upsert stores or updates a knowledge entry
+func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}) (*KnowledgeEntry, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        entry := &amp;KnowledgeEntry{
+                ID:         uuid.New().String(),
+                Collection: collection,
+                Text:       text,
+                Metadata:   metadata,
+                CreatedAt:  time.Now().UTC(),
+        }
+
+        _, err := s.knowledgeCollection.InsertOne(ctx, entry)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to insert knowledge entry: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return entry, nil</span>
+}
+
+// Query searches for knowledge entries matching the query text
+func (s *MongoKnowledgeStorage) Query(collection, query string, limit int) ([]*QueryResult, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        // Use MongoDB text search for better performance
+        filter := bson.M{
+                "collection": collection,
+                "$text":      bson.M{"$search": query},
+        }
+
+        // Add text score for sorting
+        opts := options.Find().
+                SetProjection(bson.D{{Key: "score", Value: bson.D{{Key: "$meta", Value: "textScore"}}}}).
+                SetSort(bson.D{{Key: "score", Value: bson.D{{Key: "$meta", Value: "textScore"}}}})
+
+        if limit &gt; 0 </span><span class="cov0" title="0">{
+                opts.SetLimit(int64(limit))
+        }</span>
+
+        <span class="cov0" title="0">cursor, err := s.knowledgeCollection.Find(ctx, filter, opts)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to query knowledge: %w", err)
+        }</span>
+        <span class="cov0" title="0">defer cursor.Close(ctx)
+
+        var entries []*KnowledgeEntry
+        if err := cursor.All(ctx, &amp;entries); err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to decode knowledge entries: %w", err)
+        }</span>
+
+        // If MongoDB text search returns no results, fallback to simple similarity
+        <span class="cov0" title="0">if len(entries) == 0 </span><span class="cov0" title="0">{
+                return s.fallbackQuery(ctx, collection, query, limit)
+        }</span>
+
+        // Convert to QueryResult format with normalized scores
+        <span class="cov0" title="0">results := make([]*QueryResult, len(entries))
+        for i, entry := range entries </span><span class="cov0" title="0">{
+                // Normalize text search score to 0-1 range (text scores are typically 0.75-1.5)
+                score := 0.7 // Default score for text matches
+                results[i] = &amp;QueryResult{
+                        Entry: entry,
+                        Score: score,
+                }
+        }</span>
+
+        <span class="cov0" title="0">return results, nil</span>
+}
+
+// fallbackQuery performs simple similarity matching when text search fails
+func (s *MongoKnowledgeStorage) fallbackQuery(ctx context.Context, collection, query string, limit int) ([]*QueryResult, error) <span class="cov0" title="0">{
+        filter := bson.M{"collection": collection}
+        cursor, err := s.knowledgeCollection.Find(ctx, filter)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to query knowledge: %w", err)
+        }</span>
+        <span class="cov0" title="0">defer cursor.Close(ctx)
+
+        var entries []*KnowledgeEntry
+        if err := cursor.All(ctx, &amp;entries); err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to decode knowledge entries: %w", err)
+        }</span>
+
+        // Calculate similarity scores
+        <span class="cov0" title="0">results := make([]*QueryResult, 0)
+        queryLower := strings.ToLower(query)
+
+        for _, entry := range entries </span><span class="cov0" title="0">{
+                score := calculateSimilarity(queryLower, strings.ToLower(entry.Text))
+
+                // Only include results with non-zero similarity
+                if score &gt; 0 </span><span class="cov0" title="0">{
+                        results = append(results, &amp;QueryResult{
+                                Entry: entry,
+                                Score: score,
+                        })
+                }</span>
+        }
+
+        // Sort by score descending
+        <span class="cov0" title="0">sort.Slice(results, func(i, j int) bool </span><span class="cov0" title="0">{
+                return results[i].Score &gt; results[j].Score
+        }</span>)
+
+        // Apply limit
+        <span class="cov0" title="0">if limit &gt; 0 &amp;&amp; len(results) &gt; limit </span><span class="cov0" title="0">{
+                results = results[:limit]
+        }</span>
+
+        <span class="cov0" title="0">return results, nil</span>
+}
+
+// ListCollections returns all unique collection names
+func (s *MongoKnowledgeStorage) ListCollections() []string <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        collections, err := s.knowledgeCollection.Distinct(ctx, "collection", bson.M{})
+        if err != nil </span><span class="cov0" title="0">{
+                return []string{}
+        }</span>
+
+        // Convert interface{} to []string
+        <span class="cov0" title="0">result := make([]string, 0, len(collections))
+        for _, c := range collections </span><span class="cov0" title="0">{
+                if str, ok := c.(string); ok </span><span class="cov0" title="0">{
+                        result = append(result, str)
+                }</span>
+        }
+
+        <span class="cov0" title="0">sort.Strings(result)
+        return result</span>
+}
+
+// calculateSimilarity provides simple text similarity scoring
+// Returns a score between 0.0 and 1.0 based on:
+// - Exact match: 1.0
+// - Contains query: 0.7
+// - Word overlap: proportional to matched words
+func calculateSimilarity(query, text string) float64 <span class="cov0" title="0">{
+        // Exact match
+        if query == text </span><span class="cov0" title="0">{
+                return 1.0
+        }</span>
+
+        // Contains query as substring
+        <span class="cov0" title="0">if strings.Contains(text, query) </span><span class="cov0" title="0">{
+                return 0.7
+        }</span>
+
+        // Word-level overlap
+        <span class="cov0" title="0">queryWords := strings.Fields(query)
+        textWords := strings.Fields(text)
+
+        if len(queryWords) == 0 </span><span class="cov0" title="0">{
+                return 0.0
+        }</span>
+
+        <span class="cov0" title="0">matchCount := 0
+        for _, qw := range queryWords </span><span class="cov0" title="0">{
+                for _, tw := range textWords </span><span class="cov0" title="0">{
+                        if qw == tw </span><span class="cov0" title="0">{
+                                matchCount++
+                                break</span>
+                        }
+                }
+        }
+
+        // Return proportion of query words found
+        <span class="cov0" title="0">return float64(matchCount) / float64(len(queryWords)) * 0.5</span>
+}</pre>
+		
+		<pre class="file" id="file3" style="display: none">package storage
+
+import (
+        "context"
+        "fmt"
+        "time"
+
+        "github.com/google/uuid"
+        "go.mongodb.org/mongo-driver/bson"
+        "go.mongodb.org/mongo-driver/mongo"
+        "go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// TaskType represents the type of task
+type TaskType string
+
+const (
+        TaskTypeHuman TaskType = "human"
+        TaskTypeAgent TaskType = "agent"
+)
+
+// TaskStatus represents the current state of a task
+type TaskStatus string
+
+const (
+        TaskStatusPending    TaskStatus = "pending"
+        TaskStatusInProgress TaskStatus = "in_progress"
+        TaskStatusCompleted  TaskStatus = "completed"
+        TaskStatusBlocked    TaskStatus = "blocked"
+)
+
+// TodoStatus represents the state of an individual TODO item
+type TodoStatus string
+
+const (
+        TodoStatusPending    TodoStatus = "pending"
+        TodoStatusInProgress TodoStatus = "in_progress"
+        TodoStatusCompleted  TodoStatus = "completed"
+)
+
+// TodoItem represents a single trackable subtask within an agent task
+type TodoItem struct {
+        ID           string     `json:"id" bson:"id"`
+        Description  string     `json:"description" bson:"description"`
+        Status       TodoStatus `json:"status" bson:"status"`
+        CreatedAt    time.Time  `json:"createdAt" bson:"createdAt"`
+        CompletedAt  *time.Time `json:"completedAt,omitempty" bson:"completedAt,omitempty"`
+        Notes                     string     `json:"notes,omitempty" bson:"notes,omitempty"`
+        FilePath                  string     `json:"filePath,omitempty" bson:"filePath,omitempty"`
+        FunctionName              string     `json:"functionName,omitempty" bson:"functionName,omitempty"`
+        ContextHint               string     `json:"contextHint,omitempty" bson:"contextHint,omitempty"`
+        HumanPromptNotes          string     `json:"humanPromptNotes,omitempty" bson:"humanPromptNotes,omitempty"`
+        HumanPromptNotesAddedAt   *time.Time `json:"humanPromptNotesAddedAt,omitempty" bson:"humanPromptNotesAddedAt,omitempty"`
+        HumanPromptNotesUpdatedAt *time.Time `json:"humanPromptNotesUpdatedAt,omitempty" bson:"humanPromptNotesUpdatedAt,omitempty"`
+}
+
+// TodoItemInput represents the input format for creating a TODO item
+type TodoItemInput struct {
+        Description  string `json:"description"`
+        FilePath     string `json:"filePath,omitempty"`
+        FunctionName string `json:"functionName,omitempty"`
+        ContextHint  string `json:"contextHint,omitempty"`
+        Notes        string `json:"notes,omitempty"`
+}
+
+// HumanTask represents a task created by a human user
+type HumanTask struct {
+        ID        string     `json:"id" bson:"taskId"`
+        Prompt    string     `json:"prompt" bson:"prompt"`
+        CreatedAt time.Time  `json:"createdAt" bson:"createdAt"`
+        UpdatedAt time.Time  `json:"updatedAt" bson:"updatedAt"`
+        Status    TaskStatus `json:"status" bson:"status"`
+        Notes     string     `json:"notes,omitempty" bson:"notes,omitempty"`
+}
+
+// AgentTask represents a task assigned to an agent
+type AgentTask struct {
+        ID                string     `json:"id" bson:"taskId"`
+        HumanTaskID       string     `json:"humanTaskId" bson:"humanTaskId"`
+        AgentName         string     `json:"agentName" bson:"agentName"`
+        Role              string     `json:"role" bson:"role"`
+        Todos             []TodoItem `json:"todos" bson:"todos"`
+        CreatedAt         time.Time  `json:"createdAt" bson:"createdAt"`
+        UpdatedAt         time.Time  `json:"updatedAt" bson:"updatedAt"`
+        Status            TaskStatus `json:"status" bson:"status"`
+        Notes             string     `json:"notes,omitempty" bson:"notes,omitempty"`
+        ContextSummary    string     `json:"contextSummary,omitempty" bson:"contextSummary,omitempty"`
+        FilesModified             []string   `json:"filesModified,omitempty" bson:"filesModified,omitempty"`
+        QdrantCollections         []string   `json:"qdrantCollections,omitempty" bson:"qdrantCollections,omitempty"`
+        PriorWorkSummary          string     `json:"priorWorkSummary,omitempty" bson:"priorWorkSummary,omitempty"`
+        HumanPromptNotes          string     `json:"humanPromptNotes,omitempty" bson:"humanPromptNotes,omitempty"`
+        HumanPromptNotesAddedAt   *time.Time `json:"humanPromptNotesAddedAt,omitempty" bson:"humanPromptNotesAddedAt,omitempty"`
+        HumanPromptNotesUpdatedAt *time.Time `json:"humanPromptNotesUpdatedAt,omitempty" bson:"humanPromptNotesUpdatedAt,omitempty"`
+}
+
+// ClearResult contains statistics about cleared tasks
+type ClearResult struct {
+        HumanTasksDeleted int64     `json:"humanTasksDeleted"`
+        AgentTasksDeleted int64     `json:"agentTasksDeleted"`
+        ClearedAt         time.Time `json:"clearedAt"`
+}
+
+// TaskStorage provides storage interface for tasks
+type TaskStorage interface {
+        CreateHumanTask(prompt string) (*HumanTask, error)
+        CreateAgentTask(humanTaskID, agentName, role string, todos []TodoItemInput, contextSummary string, filesModified []string, qdrantCollections []string, priorWorkSummary string) (*AgentTask, error)
+        GetHumanTask(taskID string) (*HumanTask, error)
+        GetAgentTask(taskID string) (*AgentTask, error)
+        GetAgentTasksByName(agentName string) ([]*AgentTask, error)
+        ListAllHumanTasks() []*HumanTask
+        ListAllAgentTasks() []*AgentTask
+        UpdateTaskStatus(taskID string, status TaskStatus, notes string) error
+        UpdateTodoStatus(agentTaskID, todoID string, status TodoStatus, notes string) error
+        AddTaskPromptNotes(agentTaskID string, notes string) error
+        UpdateTaskPromptNotes(agentTaskID string, notes string) error
+        ClearTaskPromptNotes(agentTaskID string) error
+        AddTodoPromptNotes(agentTaskID string, todoID string, notes string) error
+        UpdateTodoPromptNotes(agentTaskID string, todoID string, notes string) error
+        ClearTodoPromptNotes(agentTaskID string, todoID string) error
+        ClearAllTasks() (*ClearResult, error)
+}
+
+// MongoTaskStorage implements TaskStorage using MongoDB
+type MongoTaskStorage struct {
+        humanTasksCollection *mongo.Collection
+        agentTasksCollection *mongo.Collection
+}
+
+// NewMongoTaskStorage creates a new MongoDB-backed task storage
+func NewMongoTaskStorage(db *mongo.Database) (*MongoTaskStorage, error) <span class="cov0" title="0">{
+        storage := &amp;MongoTaskStorage{
+                humanTasksCollection: db.Collection("human_tasks"),
+                agentTasksCollection: db.Collection("agent_tasks"),
+        }
+
+        // Create indexes
+        ctx := context.Background()
+
+        // Index on humanTasks.taskId
+        _, err := storage.humanTasksCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+                Keys:    bson.D{{Key: "taskId", Value: 1}},
+                Options: options.Index().SetUnique(true),
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create human tasks index: %w", err)
+        }</span>
+
+        // Index on agentTasks.taskId
+        <span class="cov0" title="0">_, err = storage.agentTasksCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+                Keys:    bson.D{{Key: "taskId", Value: 1}},
+                Options: options.Index().SetUnique(true),
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create agent tasks index: %w", err)
+        }</span>
+
+        // Index on agentTasks.agentName for efficient queries
+        <span class="cov0" title="0">_, err = storage.agentTasksCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+                Keys: bson.D{{Key: "agentName", Value: 1}},
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create agent name index: %w", err)
+        }</span>
+
+        // Index on agentTasks.humanTaskId for linking
+        <span class="cov0" title="0">_, err = storage.agentTasksCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+                Keys: bson.D{{Key: "humanTaskId", Value: 1}},
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create human task ID index: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return storage, nil</span>
+}
+
+// CreateHumanTask creates a new human task
+func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        now := time.Now().UTC()
+        task := &amp;HumanTask{
+                ID:        uuid.New().String(),
+                Prompt:    prompt,
+                CreatedAt: now,
+                UpdatedAt: now,
+                Status:    TaskStatusPending,
+        }
+
+        _, err := s.humanTasksCollection.InsertOne(ctx, task)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to insert human task: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return task, nil</span>
+}
+
+// CreateAgentTask creates a new agent task
+func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, todos []TodoItemInput, contextSummary string, filesModified []string, qdrantCollections []string, priorWorkSummary string) (*AgentTask, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        // Validate human task exists
+        var humanTask HumanTask
+        err := s.humanTasksCollection.FindOne(ctx, bson.M{"taskId": humanTaskID}).Decode(&amp;humanTask)
+        if err != nil </span><span class="cov0" title="0">{
+                if err == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("human task with ID %s not found", humanTaskID)
+                }</span>
+                <span class="cov0" title="0">return nil, fmt.Errorf("failed to validate human task: %w", err)</span>
+        }
+
+        <span class="cov0" title="0">now := time.Now().UTC()
+
+        // Convert TodoItemInput to TodoItem structs
+        todoItems := make([]TodoItem, len(todos))
+        for i, input := range todos </span><span class="cov0" title="0">{
+                todoItems[i] = TodoItem{
+                        ID:           uuid.New().String(),
+                        Description:  input.Description,
+                        Status:       TodoStatusPending,
+                        CreatedAt:    now,
+                        FilePath:     input.FilePath,
+                        FunctionName: input.FunctionName,
+                        ContextHint:  input.ContextHint,
+                        Notes:        input.Notes,
+                }
+        }</span>
+
+        <span class="cov0" title="0">task := &amp;AgentTask{
+                ID:                uuid.New().String(),
+                HumanTaskID:       humanTaskID,
+                AgentName:         agentName,
+                Role:              role,
+                Todos:             todoItems,
+                CreatedAt:         now,
+                UpdatedAt:         now,
+                Status:            TaskStatusPending,
+                ContextSummary:    contextSummary,
+                FilesModified:     filesModified,
+                QdrantCollections: qdrantCollections,
+                PriorWorkSummary:  priorWorkSummary,
+        }
+
+        _, err = s.agentTasksCollection.InsertOne(ctx, task)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to insert agent task: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return task, nil</span>
+}
+
+// GetHumanTask retrieves a human task by ID
+func (s *MongoTaskStorage) GetHumanTask(taskID string) (*HumanTask, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        var task HumanTask
+        err := s.humanTasksCollection.FindOne(ctx, bson.M{"taskId": taskID}).Decode(&amp;task)
+        if err != nil </span><span class="cov0" title="0">{
+                if err == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("human task with ID %s not found", taskID)
+                }</span>
+                <span class="cov0" title="0">return nil, fmt.Errorf("failed to retrieve human task: %w", err)</span>
+        }
+
+        <span class="cov0" title="0">return &amp;task, nil</span>
+}
+
+// GetAgentTask retrieves an agent task by ID
+func (s *MongoTaskStorage) GetAgentTask(taskID string) (*AgentTask, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        var task AgentTask
+        err := s.agentTasksCollection.FindOne(ctx, bson.M{"taskId": taskID}).Decode(&amp;task)
+        if err != nil </span><span class="cov0" title="0">{
+                if err == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("agent task with ID %s not found", taskID)
+                }</span>
+                <span class="cov0" title="0">return nil, fmt.Errorf("failed to retrieve agent task: %w", err)</span>
+        }
+
+        <span class="cov0" title="0">return &amp;task, nil</span>
+}
+
+// GetAgentTasksByName retrieves all agent tasks for a specific agent
+func (s *MongoTaskStorage) GetAgentTasksByName(agentName string) ([]*AgentTask, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        cursor, err := s.agentTasksCollection.Find(ctx, bson.M{"agentName": agentName})
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to query agent tasks: %w", err)
+        }</span>
+        <span class="cov0" title="0">defer cursor.Close(ctx)
+
+        var tasks []*AgentTask
+        if err := cursor.All(ctx, &amp;tasks); err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to decode agent tasks: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">return tasks, nil</span>
+}
+
+// ListAllHumanTasks returns all human tasks
+func (s *MongoTaskStorage) ListAllHumanTasks() []*HumanTask <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        cursor, err := s.humanTasksCollection.Find(ctx, bson.M{})
+        if err != nil </span><span class="cov0" title="0">{
+                return []*HumanTask{}
+        }</span>
+        <span class="cov0" title="0">defer cursor.Close(ctx)
+
+        var tasks []*HumanTask
+        if err := cursor.All(ctx, &amp;tasks); err != nil </span><span class="cov0" title="0">{
+                return []*HumanTask{}
+        }</span>
+
+        <span class="cov0" title="0">return tasks</span>
+}
+
+// ListAllAgentTasks returns all agent tasks
+func (s *MongoTaskStorage) ListAllAgentTasks() []*AgentTask <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        cursor, err := s.agentTasksCollection.Find(ctx, bson.M{})
+        if err != nil </span><span class="cov0" title="0">{
+                return []*AgentTask{}
+        }</span>
+        <span class="cov0" title="0">defer cursor.Close(ctx)
+
+        var tasks []*AgentTask
+        if err := cursor.All(ctx, &amp;tasks); err != nil </span><span class="cov0" title="0">{
+                return []*AgentTask{}
+        }</span>
+
+        <span class="cov0" title="0">return tasks</span>
+}
+
+// UpdateTaskStatus updates the status and notes of any task (human or agent)
+func (s *MongoTaskStorage) UpdateTaskStatus(taskID string, status TaskStatus, notes string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        update := bson.M{
+                "$set": bson.M{
+                        "status":    status,
+                        "updatedAt": time.Now().UTC(),
+                },
+        }
+
+        if notes != "" </span><span class="cov0" title="0">{
+                update["$set"].(bson.M)["notes"] = notes
+        }</span>
+
+        // Try human tasks first
+        <span class="cov0" title="0">result := s.humanTasksCollection.FindOneAndUpdate(
+                ctx,
+                bson.M{"taskId": taskID},
+                update,
+        )
+        if result.Err() == nil </span><span class="cov0" title="0">{
+                return nil
+        }</span>
+
+        // If not found in human tasks, try agent tasks
+        <span class="cov0" title="0">result = s.agentTasksCollection.FindOneAndUpdate(
+                ctx,
+                bson.M{"taskId": taskID},
+                update,
+        )
+        if result.Err() != nil </span><span class="cov0" title="0">{
+                if result.Err() == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return fmt.Errorf("task with ID %s not found", taskID)
+                }</span>
+                <span class="cov0" title="0">return fmt.Errorf("failed to update task status: %w", result.Err())</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// UpdateTodoStatus updates the status of a specific TODO item within an agent task
+func (s *MongoTaskStorage) UpdateTodoStatus(agentTaskID, todoID string, status TodoStatus, notes string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+
+        // First, get the agent task to find the todo item
+        var agentTask AgentTask
+        err := s.agentTasksCollection.FindOne(ctx, bson.M{"taskId": agentTaskID}).Decode(&amp;agentTask)
+        if err != nil </span><span class="cov0" title="0">{
+                if err == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+                }</span>
+                <span class="cov0" title="0">return fmt.Errorf("failed to retrieve agent task: %w", err)</span>
+        }
+
+        // Find the todo item index
+        <span class="cov0" title="0">todoIndex := -1
+        for i, todo := range agentTask.Todos </span><span class="cov0" title="0">{
+                if todo.ID == todoID </span><span class="cov0" title="0">{
+                        todoIndex = i
+                        break</span>
+                }
+        }
+
+        <span class="cov0" title="0">if todoIndex == -1 </span><span class="cov0" title="0">{
+                return fmt.Errorf("todo item with ID %s not found in agent task %s", todoID, agentTaskID)
+        }</span>
+
+        // Prepare the update for the specific todo item
+        <span class="cov0" title="0">now := time.Now().UTC()
+        updateFields := bson.M{
+                fmt.Sprintf("todos.%d.status", todoIndex):    status,
+                "updatedAt":                                   now,
+        }
+
+        // Add completion timestamp if status is completed
+        if status == TodoStatusCompleted </span><span class="cov0" title="0">{
+                updateFields[fmt.Sprintf("todos.%d.completedAt", todoIndex)] = now
+        }</span>
+
+        // Add notes if provided
+        <span class="cov0" title="0">if notes != "" </span><span class="cov0" title="0">{
+                updateFields[fmt.Sprintf("todos.%d.notes", todoIndex)] = notes
+        }</span>
+
+        <span class="cov0" title="0">update := bson.M{"$set": updateFields}
+
+        // Update the agent task
+        result := s.agentTasksCollection.FindOneAndUpdate(
+                ctx,
+                bson.M{"taskId": agentTaskID},
+                update,
+        )
+
+        if result.Err() != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to update todo status: %w", result.Err())
+        }</span>
+
+        // Check if all todos are completed, and if so, auto-complete the agent task
+        <span class="cov0" title="0">var updatedTask AgentTask
+        err = s.agentTasksCollection.FindOne(ctx, bson.M{"taskId": agentTaskID}).Decode(&amp;updatedTask)
+        if err == nil </span><span class="cov0" title="0">{
+                allCompleted := true
+                for _, todo := range updatedTask.Todos </span><span class="cov0" title="0">{
+                        if todo.Status != TodoStatusCompleted </span><span class="cov0" title="0">{
+                                allCompleted = false
+                                break</span>
+                        }
+                }
+
+                // Auto-complete the agent task if all todos are done
+                <span class="cov0" title="0">if allCompleted &amp;&amp; updatedTask.Status != TaskStatusCompleted </span><span class="cov0" title="0">{
+                        s.UpdateTaskStatus(agentTaskID, TaskStatusCompleted, "All TODO items completed")
+                }</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// AddTaskPromptNotes adds human prompt notes to an agent task
+func (s *MongoTaskStorage) AddTaskPromptNotes(agentTaskID string, notes string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+        now := time.Now().UTC()
+
+        update := bson.M{
+                "$set": bson.M{
+                        "humanPromptNotes":          notes,
+                        "humanPromptNotesAddedAt":   now,
+                        "humanPromptNotesUpdatedAt": now,
+                        "updatedAt":                 now,
+                },
+        }
+
+        result := s.agentTasksCollection.FindOneAndUpdate(
+                ctx,
+                bson.M{"taskId": agentTaskID},
+                update,
+        )
+
+        if result.Err() != nil </span><span class="cov0" title="0">{
+                if result.Err() == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+                }</span>
+                <span class="cov0" title="0">return fmt.Errorf("failed to add task prompt notes: %w", result.Err())</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// UpdateTaskPromptNotes updates existing human prompt notes on an agent task
+func (s *MongoTaskStorage) UpdateTaskPromptNotes(agentTaskID string, notes string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+        now := time.Now().UTC()
+
+        update := bson.M{
+                "$set": bson.M{
+                        "humanPromptNotes":          notes,
+                        "humanPromptNotesUpdatedAt": now,
+                        "updatedAt":                 now,
+                },
+        }
+
+        result := s.agentTasksCollection.FindOneAndUpdate(
+                ctx,
+                bson.M{"taskId": agentTaskID},
+                update,
+        )
+
+        if result.Err() != nil </span><span class="cov0" title="0">{
+                if result.Err() == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+                }</span>
+                <span class="cov0" title="0">return fmt.Errorf("failed to update task prompt notes: %w", result.Err())</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// ClearTaskPromptNotes removes human prompt notes from an agent task
+func (s *MongoTaskStorage) ClearTaskPromptNotes(agentTaskID string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+        now := time.Now().UTC()
+
+        update := bson.M{
+                "$unset": bson.M{
+                        "humanPromptNotes":          "",
+                        "humanPromptNotesAddedAt":   "",
+                        "humanPromptNotesUpdatedAt": "",
+                },
+                "$set": bson.M{
+                        "updatedAt": now,
+                },
+        }
+
+        result := s.agentTasksCollection.FindOneAndUpdate(
+                ctx,
+                bson.M{"taskId": agentTaskID},
+                update,
+        )
+
+        if result.Err() != nil </span><span class="cov0" title="0">{
+                if result.Err() == mongo.ErrNoDocuments </span><span class="cov0" title="0">{
+                        return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+                }</span>
+                <span class="cov0" title="0">return fmt.Errorf("failed to clear task prompt notes: %w", result.Err())</span>
+        }
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// AddTodoPromptNotes adds human prompt notes to a specific TODO item
+func (s *MongoTaskStorage) AddTodoPromptNotes(agentTaskID string, todoID string, notes string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+        now := time.Now().UTC()
+
+        update := bson.M{
+                "$set": bson.M{
+                        "todos.$[elem].humanPromptNotes":          notes,
+                        "todos.$[elem].humanPromptNotesAddedAt":   now,
+                        "todos.$[elem].humanPromptNotesUpdatedAt": now,
+                        "updatedAt": now,
+                },
+        }
+
+        arrayFilters := options.Update().SetArrayFilters(options.ArrayFilters{
+                Filters: []interface{}{
+                        bson.M{"elem.id": todoID},
+                },
+        })
+
+        result, err := s.agentTasksCollection.UpdateOne(
+                ctx,
+                bson.M{"taskId": agentTaskID},
+                update,
+                arrayFilters,
+        )
+
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to add todo prompt notes: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">if result.MatchedCount == 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+        }</span>
+
+        <span class="cov0" title="0">if result.ModifiedCount == 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("todo item with ID %s not found in agent task %s", todoID, agentTaskID)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// UpdateTodoPromptNotes updates existing human prompt notes on a specific TODO item
+func (s *MongoTaskStorage) UpdateTodoPromptNotes(agentTaskID string, todoID string, notes string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+        now := time.Now().UTC()
+
+        update := bson.M{
+                "$set": bson.M{
+                        "todos.$[elem].humanPromptNotes":          notes,
+                        "todos.$[elem].humanPromptNotesUpdatedAt": now,
+                        "updatedAt": now,
+                },
+        }
+
+        arrayFilters := options.Update().SetArrayFilters(options.ArrayFilters{
+                Filters: []interface{}{
+                        bson.M{"elem.id": todoID},
+                },
+        })
+
+        result, err := s.agentTasksCollection.UpdateOne(
+                ctx,
+                bson.M{"taskId": agentTaskID},
+                update,
+                arrayFilters,
+        )
+
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to update todo prompt notes: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">if result.MatchedCount == 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+        }</span>
+
+        <span class="cov0" title="0">if result.ModifiedCount == 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("todo item with ID %s not found in agent task %s", todoID, agentTaskID)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// ClearTodoPromptNotes removes human prompt notes from a specific TODO item
+func (s *MongoTaskStorage) ClearTodoPromptNotes(agentTaskID string, todoID string) error <span class="cov0" title="0">{
+        ctx := context.Background()
+        now := time.Now().UTC()
+
+        update := bson.M{
+                "$unset": bson.M{
+                        "todos.$[elem].humanPromptNotes":          "",
+                        "todos.$[elem].humanPromptNotesAddedAt":   "",
+                        "todos.$[elem].humanPromptNotesUpdatedAt": "",
+                },
+                "$set": bson.M{
+                        "updatedAt": now,
+                },
+        }
+
+        arrayFilters := options.Update().SetArrayFilters(options.ArrayFilters{
+                Filters: []interface{}{
+                        bson.M{"elem.id": todoID},
+                },
+        })
+
+        result, err := s.agentTasksCollection.UpdateOne(
+                ctx,
+                bson.M{"taskId": agentTaskID},
+                update,
+                arrayFilters,
+        )
+
+        if err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to clear todo prompt notes: %w", err)
+        }</span>
+
+        <span class="cov0" title="0">if result.MatchedCount == 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("agent task with ID %s not found", agentTaskID)
+        }</span>
+
+        <span class="cov0" title="0">if result.ModifiedCount == 0 </span><span class="cov0" title="0">{
+                return fmt.Errorf("todo item with ID %s not found in agent task %s", todoID, agentTaskID)
+        }</span>
+
+        <span class="cov0" title="0">return nil</span>
+}
+
+// ClearAllTasks removes all tasks from the database
+func (s *MongoTaskStorage) ClearAllTasks() (*ClearResult, error) <span class="cov0" title="0">{
+        ctx := context.Background()
+        result := &amp;ClearResult{
+                ClearedAt: time.Now(),
+        }
+
+        // Delete all human tasks
+        humanResult, err := s.humanTasksCollection.DeleteMany(ctx, bson.M{})
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to delete human tasks: %w", err)
+        }</span>
+        <span class="cov0" title="0">result.HumanTasksDeleted = humanResult.DeletedCount
+
+        // Delete all agent tasks
+        agentResult, err := s.agentTasksCollection.DeleteMany(ctx, bson.M{})
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to delete agent tasks: %w", err)
+        }</span>
+        <span class="cov0" title="0">result.AgentTasksDeleted = agentResult.DeletedCount
+
+        return result, nil</span>
+}</pre>
+		
+		<pre class="file" id="file4" style="display: none">package storage
+
+import (
+        "fmt"
+
+        "github.com/microcosm-cc/bluemonday"
+)
+
+// ValidatePromptNotes validates and sanitizes human prompt notes
+func ValidatePromptNotes(notes string) (string, error) <span class="cov8" title="1">{
+        if len(notes) &gt; 5000 </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("prompt notes exceed maximum length of 5000 characters")
+        }</span>
+
+        <span class="cov8" title="1">p := bluemonday.UGCPolicy()
+        return p.Sanitize(notes), nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

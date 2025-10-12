@@ -15,7 +15,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  Hyper - Native Development Mode with Hot Reload         ║${NC}"
+echo -e "${BLUE}║  Unified Hyper - Native Development Mode with Hot Reload  ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -56,9 +56,9 @@ if [ ! -f "$PROJECT_ROOT/.air.toml" ]; then
     exit 1
 fi
 
-echo -e "${BLUE}Starting Air hot reload...${NC}"
-echo -e "  Watching:   coordinator/**/*.go, coordinator/ui/src/**/*"
-echo -e "  Binary:     bin/hyper"
+echo -e "${BLUE}Starting Air hot reload for unified hyper binary...${NC}"
+echo -e "  Watching:   hyper/**/*.go"
+echo -e "  Binary:     bin/hyper (unified)"
 echo -e "  Mode:       http"
 echo -e "  UI:         http://localhost:${HTTP_PORT:-7095}/ui"
 echo ""
@@ -69,7 +69,17 @@ echo ""
 cleanup() {
     echo ""
     echo -e "${YELLOW}Stopping development server...${NC}"
+
+    # Kill Air and all its child processes (including hyper binary)
+    # This ensures proper cleanup even if Air spawned grandchildren
     pkill -P $$ 2>/dev/null || true
+
+    # Give processes time to shutdown gracefully (Air will send SIGINT to hyper)
+    sleep 1
+
+    # Double-check: kill any remaining hyper processes
+    pkill -f "bin/hyper" 2>/dev/null || true
+
     echo -e "${GREEN}✓ Stopped${NC}"
     exit 0
 }
