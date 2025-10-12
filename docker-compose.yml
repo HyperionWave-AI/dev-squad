@@ -12,7 +12,11 @@ version: '3.8'
 services:
   # Unified Coordinator (replaces mcp-server + http-bridge)
   hyperion-coordinator:
-    image: us-central1-docker.pkg.dev/production-471918/hyperion-public/hyperion-coordinator:latest
+    # TEMP: Build locally to test TEI timeout fix
+    # image: us-central1-docker.pkg.dev/production-471918/hyperion-public/hyperion-coordinator:latest
+    build:
+      context: ./coordinator
+      dockerfile: Dockerfile
     ports:
       - "${HTTP_PORT:-7095}:7095"  # REST API + UI serving
     environment:
@@ -24,6 +28,8 @@ services:
       - EMBEDDING=${EMBEDDING:-local}
       - TEI_URL=${TEI_URL:-http://embedding-service:8080}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY}
+      - VOYAGE_MODEL=${VOYAGE_MODEL:-voyage-3}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - CODE_INDEX_FOLDERS=${CODE_INDEX_FOLDERS:-}
       - CODE_INDEX_AUTO_SCAN=${CODE_INDEX_AUTO_SCAN:-false}
