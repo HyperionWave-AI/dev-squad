@@ -1,0 +1,9 @@
+@@ -1,5 +1,5 @@
+-Line 1: This is the first line
++Line 1: PATCHED with Unix patch command
+ Line 2: This is the MODIFIED second line
+-Line 3: This is the third line
++Line 3: PATCHED with Unix patch command
+ Line 4: This is the PATCHED fourth line
+-Line 5: This is the fifth line
++Line 5: PATCHED with Unix patch command
