@@ -7,19 +7,22 @@ testdata_dir = "testdata"
 tmp_dir = "tmp"
 
 [build]
-  # Pre-build hook: Smart UI rebuild (only if UI source changed)
-  pre_cmd = ["./scripts/rebuild-ui.sh"]
+  # Pre-build hook: Disabled for dev mode (UI should use Vite dev server)
+  # To enable UI embedding, use 'make native' to build production binary
+  # pre_cmd = ["./scripts/rebuild-ui.sh"]
 
-  # Build command: Fast build with embedded UI
-  # Uses helper script to keep Air config simple
-  cmd = "./scripts/air-build.sh"
+  # Build command: Compile from hyper/ directory where go.mod is located
+  # Use -tags dev to disable UI embedding (UI served from Vite dev server)
+  cmd = "cd hyper && go build -tags dev -o ../tmp/hyper ./cmd/coordinator"
 
-  # Binary location and args
-  bin = "./bin/hyper"
+  # Binary location and execution
+  bin = "tmp/hyper"
+
+  # Arguments passed to the binary
   args_bin = ["--mode=http"]
 
-  # Rebuild delay (1 second for stability)
-  delay = 1000
+  # Rebuild delay (500ms for faster hot reload)
+  delay = 500
 
   # Watch Go files in unified hyper/
   include_dir = ["hyper/cmd", "hyper/internal"]
@@ -31,9 +34,8 @@ tmp_dir = "tmp"
 
   # Exclude patterns
   exclude_dir = [
-    "coordinator/tmp",
-    "coordinator/ui/node_modules",
-    "coordinator/ui/dist",
+    "ui/node_modules",
+    "ui/dist",
     "hyper/embed",
     "bin",
     "tmp",
