@@ -8,7 +8,7 @@
 
 import type { HumanTask, AgentTask, TodoItem, KnowledgeEntry } from '../types/coordinator';
 
-const BASE_URL = '/api';
+const BASE_URL = '/api/v1';
 
 // API response types (raw from backend)
 interface APIHumanTask {
