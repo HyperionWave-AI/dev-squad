@@ -9,7 +9,6 @@ import React, { useState, useEffect } from 'react';
 import {
   Box,
   Button,
-  Grid,
   Typography,
   CircularProgress,
   Alert,
@@ -129,16 +128,26 @@ export const SubchatList: React.FC<SubchatListProps> = ({
 
       {/* Subchat grid */}
       {subchats.length > 0 && (
-        <Grid container spacing={2}>
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: {
+              xs: '1fr',
+              sm: 'repeat(2, 1fr)',
+              md: 'repeat(3, 1fr)',
+            },
+            gap: 2,
+          }}
+        >
           {subchats.map((subchat) => (
-            <Grid item xs={12} sm={6} md={4} key={subchat.id}>
+            <Box key={subchat.id}>
               <SubchatCard
                 subchat={subchat}
                 onClick={handleCardClick}
               />
-            </Grid>
+            </Box>
           ))}
-        </Grid>
+        </Box>
       )}
 
       {/* Creation dialog */}
