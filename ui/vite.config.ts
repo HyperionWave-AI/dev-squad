@@ -14,6 +14,12 @@ export default defineConfig({
         changeOrigin: true
         // Don't rewrite - bridge expects /api/mcp prefix
       },
+      '/api/v1': {
+        // Proxy all v1 API calls to the coordinator
+        target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
+        changeOrigin: true
+        // Don't rewrite - coordinator expects /api/v1 prefix
+      },
       '/api/knowledge': {
         // Proxy knowledge API calls to the same MCP bridge (coordinator MCP server handles these)
         target: process.env.VITE_MCP_BRIDGE_URL || 'http://localhost:7095',
