@@ -408,7 +408,11 @@ func StartHTTPServer(
 				Director: func(req *http.Request) {
 					req.URL.Scheme = "http"
 					req.URL.Host = "localhost:5173"
-					req.URL.Path = c.Request.URL.Path[3:] // Remove /ui prefix
+					// Strip /ui prefix - Vite serves from root in dev mode
+					req.URL.Path = strings.TrimPrefix(c.Request.URL.Path, "/ui")
+					if req.URL.Path == "" {
+						req.URL.Path = "/"
+					}
 					req.Host = "localhost:5173"
 				},
 			}
@@ -421,6 +425,7 @@ func StartHTTPServer(
 				Director: func(req *http.Request) {
 					req.URL.Scheme = "http"
 					req.URL.Host = "localhost:5173"
+					// Vite serves from root in dev mode
 					req.URL.Path = "/"
 					req.Host = "localhost:5173"
 				},

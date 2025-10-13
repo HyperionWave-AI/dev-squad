@@ -34,7 +34,7 @@ type ChatServiceInterface interface {
 	GetSessionMessages(ctx context.Context, sessionID primitive.ObjectID) ([]models.ChatMessage, error)
 	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
 	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
-	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name, output, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
+	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
 }
 
 // AIServiceInterface defines the interface for AI service operations
@@ -141,16 +141,20 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 		zap.String("sessionId", sessionID.Hex()),
 		zap.String("userId", userID))
 
-	// Create context with cancellation
-	ctx, cancel := context.WithCancel(c.Request.Context())
-	defer cancel()
+	// Create background context for AI processing (not tied to HTTP lifecycle)
+	aiCtx := context.Background()
+	aiCtx, aiCancel := context.WithTimeout(aiCtx, 10*time.Minute) // Generous timeout for multi-tool AI ops
+	defer aiCancel()
 
-	// Start message handling loop
-	h.handleMessages(ctx, conn, sessionID, userID, companyID)
+	// Keep HTTP context for connection monitoring
+	httpCtx := c.Request.Context()
+
+	// Pass both contexts to handleMessages
+	h.handleMessages(aiCtx, httpCtx, conn, sessionID, userID, companyID)
 }
 
 // handleMessages manages the WebSocket message loop with processing state
-func (h *ChatWebSocketHandler) handleMessages(ctx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string) {
+func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string) {
 	// Set read deadline for ping/pong
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
@@ -178,7 +182,7 @@ func (h *ChatWebSocketHandler) handleMessages(ctx context.Context, conn *websock
 					h.logger.Warn("Failed to send ping", zap.Error(err))
 					return
 				}
-			case <-ctx.Done():
+			case <-httpCtx.Done():
 				return
 			case <-done:
 				return
@@ -189,8 +193,8 @@ func (h *ChatWebSocketHandler) handleMessages(ctx context.Context, conn *websock
 	// Main message loop
 	for {
 		select {
-		case <-ctx.Done():
-			h.logger.Info("Context cancelled, closing WebSocket")
+		case <-httpCtx.Done():
+			h.logger.Info("HTTP context cancelled, closing WebSocket")
 			close(done)
 			return
 		default:
@@ -237,7 +241,7 @@ func (h *ChatWebSocketHandler) handleMessages(ctx context.Context, conn *websock
 			processingMutex.Unlock()
 
 			// Save user message to database
-			_, err = h.chatService.SaveMessage(ctx, sessionID, "user", userMsg.Content, companyID)
+			_, err = h.chatService.SaveMessage(aiCtx, sessionID, "user", userMsg.Content, companyID)
 			if err != nil {
 				h.logger.Error("Failed to save user message", zap.Error(err))
 				h.sendError(conn, "Failed to save message")
@@ -248,7 +252,7 @@ func (h *ChatWebSocketHandler) handleMessages(ctx context.Context, conn *websock
 			}
 
 			// Stream AI response with tool execution events
-			h.streamAIResponse(ctx, conn, sessionID, userMsg.Content, companyID)
+			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID)
 
 			// Reset processing state after response complete
 			processingMutex.Lock()
