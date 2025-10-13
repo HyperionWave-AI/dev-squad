@@ -196,3 +196,34 @@ func (s *SubchatStorage) GetSubagent(name string) (*Subagent, error) {
 
 	return &subagent, nil
 }
+
+// UpdateSubchatAgentTask links an agent task ID to a subchat
+func (s *SubchatStorage) UpdateSubchatAgentTask(subchatID string, agentTaskID *string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := s.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": subchatID},
+		bson.M{
+			"$set": bson.M{
+				"assignedTaskId": agentTaskID,
+				"updatedAt":      time.Now(),
+			},
+		},
+	)
+	if err != nil {
+		s.logger.Error("Failed to update subchat agent task", zap.String("subchatId", subchatID), zap.Error(err))
+		return fmt.Errorf("failed to update subchat agent task: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("subchat not found: %s", subchatID)
+	}
+
+	s.logger.Info("Updated subchat with agent task",
+		zap.String("subchatId", subchatID),
+		zap.Stringp("agentTaskId", agentTaskID))
+
+	return nil
+}

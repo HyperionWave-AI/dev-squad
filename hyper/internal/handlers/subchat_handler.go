@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"hyper/internal/mcp/storage"
@@ -12,13 +13,15 @@ import (
 // SubchatHandler handles HTTP REST requests for subchat operations
 type SubchatHandler struct {
 	subchatStorage *storage.SubchatStorage
+	taskStorage    storage.TaskStorage
 	logger         *zap.Logger
 }
 
 // NewSubchatHandler creates a new subchat handler
-func NewSubchatHandler(subchatStorage *storage.SubchatStorage, logger *zap.Logger) *SubchatHandler {
+func NewSubchatHandler(subchatStorage *storage.SubchatStorage, taskStorage storage.TaskStorage, logger *zap.Logger) *SubchatHandler {
 	return &SubchatHandler{
 		subchatStorage: subchatStorage,
+		taskStorage:    taskStorage,
 		logger:         logger,
 	}
 }
@@ -56,11 +59,67 @@ func (h *SubchatHandler) CreateSubchat(c *gin.Context) {
 		return
 	}
 
+	// Step 1: Create the subchat
 	subchat, err := h.subchatStorage.CreateSubchat(req.ParentChatID, req.SubagentName, req.TaskID, req.TodoID)
 	if err != nil {
 		h.logger.Error("Failed to create subchat", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create subchat: " + err.Error()})
 		return
+	}
+
+	// Step 2: Automatically create an agent task for this subchat
+	// Create a human task first (required parent for agent task)
+	humanTaskPrompt := fmt.Sprintf("Subchat work assigned to %s for parent chat %s", req.SubagentName, req.ParentChatID)
+	humanTask, err := h.taskStorage.CreateHumanTask(humanTaskPrompt)
+	if err != nil {
+		h.logger.Error("Failed to create human task for subchat",
+			zap.String("subchatId", subchat.ID),
+			zap.Error(err))
+		// Continue without agent task - subchat is already created
+	} else {
+		// Create agent task
+		agentRole := fmt.Sprintf("Execute work in subchat %s", subchat.ID)
+		todos := []storage.TodoItemInput{
+			{
+				Description: fmt.Sprintf("Complete assigned work in subchat (agent: %s)", req.SubagentName),
+			},
+		}
+
+		agentTask, err := h.taskStorage.CreateAgentTask(
+			humanTask.ID,
+			req.SubagentName,
+			agentRole,
+			todos,
+			fmt.Sprintf("This agent task is automatically assigned to subchat %s", subchat.ID),
+			[]string{},  // filesModified
+			[]string{},  // qdrantCollections
+			"",          // priorWorkSummary
+		)
+
+		if err != nil {
+			h.logger.Error("Failed to create agent task for subchat",
+				zap.String("subchatId", subchat.ID),
+				zap.String("humanTaskId", humanTask.ID),
+				zap.Error(err))
+		} else {
+			// Step 3: Link the agent task to the subchat
+			agentTaskID := agentTask.ID
+			err = h.subchatStorage.UpdateSubchatAgentTask(subchat.ID, &agentTaskID)
+			if err != nil {
+				h.logger.Error("Failed to link agent task to subchat",
+					zap.String("subchatId", subchat.ID),
+					zap.String("agentTaskId", agentTask.ID),
+					zap.Error(err))
+			} else {
+				// Update subchat object with agent task ID
+				subchat.AssignedTaskID = &agentTaskID
+
+				h.logger.Info("Successfully created and linked agent task to subchat",
+					zap.String("subchatId", subchat.ID),
+					zap.String("agentTaskId", agentTask.ID),
+					zap.String("subagentName", req.SubagentName))
+			}
+		}
 	}
 
 	c.JSON(http.StatusCreated, h.toSubchatResponse(subchat))
