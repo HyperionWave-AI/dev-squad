@@ -1219,6 +1219,7 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		knowledge.GET("/popular-collections", h.GetPopularCollections)
 		knowledge.GET("/browse", h.BrowseKnowledge)
 		knowledge.POST("/query", h.QueryKnowledge)
+		
 	}
 
 	// Code Index
