@@ -351,7 +351,7 @@ func StartHTTPServer(
 
 	// Initialize subchat storage and handlers
 	subchatStorage := storage.NewSubchatStorage(mongoDatabase, logger)
-	subchatHandler := handlers.NewSubchatHandler(subchatStorage, logger)
+	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, logger)
 	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
 
 	// Register subchat routes
