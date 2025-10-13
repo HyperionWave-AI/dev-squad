@@ -26,7 +26,7 @@ install: ## Install all dependencies (Go + Node)
 	cd hyper && go mod download
 	@echo "✓ Go dependencies installed"
 	@echo "Installing Node.js dependencies..."
-	cd coordinator/ui && npm install
+	cd ui && npm install
 	@echo "✓ Node.js dependencies installed"
 	@echo "✓ All dependencies installed"
 
@@ -43,8 +43,8 @@ install-air: ## Install Air hot-reload tool locally
 # Development Targets
 #
 
-dev: install-air ## Start development mode with hot reload
-	@echo "Starting development mode with hot reload..."
+dev: install-air ## Start Go backend hot reload only (no UI compilation)
+	@echo "Starting Go backend development mode with hot reload..."
 	@if [ ! -f .air.toml ]; then \
 		echo "Error: .air.toml not found at project root"; \
 		exit 1; \
@@ -54,8 +54,8 @@ dev: install-air ## Start development mode with hot reload
 	fi
 	./scripts/dev-native.sh
 
-dev-hot: install-air ## Start development with UI hot-reload (Vite dev server + Go Air)
-	@echo "Starting development with UI hot-reload..."
+dev-hot: install-air ## Start full-stack hot-reload (Vite dev server + Go Air)
+	@echo "Starting full-stack development with hot-reload..."
 	@if [ ! -f .air.toml ]; then \
 		echo "Error: .air.toml not found at project root"; \
 		exit 1; \
@@ -194,6 +194,6 @@ clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
 	@rm -rf bin/hyper || true
 	@rm -rf hyper/bin/ || true
-	@rm -rf coordinator/ui/dist || true
+	@rm -rf ui/dist || true
 	@rm -rf hyper/embed/ui || true
 	@echo "✓ Clean complete (node_modules preserved)"

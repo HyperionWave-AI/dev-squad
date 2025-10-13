@@ -135,7 +135,7 @@ func TestReadFileTool(t *testing.T) {
 	}{
 		{
 			name:      "read normal file",
-			input:     `{"filePath":"` + normalFile + `"}`,
+			input:     `{"path":"` + normalFile + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ReadFileOutput
@@ -152,7 +152,7 @@ func TestReadFileTool(t *testing.T) {
 		},
 		{
 			name:      "read binary file",
-			input:     `{"filePath":"` + binaryFile + `"}`,
+			input:     `{"path":"` + binaryFile + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ReadFileOutput
@@ -166,22 +166,22 @@ func TestReadFileTool(t *testing.T) {
 		},
 		{
 			name:      "size limit exceeded",
-			input:     `{"filePath":"` + largeFile + `"}`,
+			input:     `{"path":"` + largeFile + `"}`,
 			wantError: true,
 		},
 		{
 			name:      "path traversal blocked",
-			input:     `{"filePath":"../../../etc/passwd"}`,
+			input:     `{"path":"../../../etc/passwd"}`,
 			wantError: true,
 		},
 		{
 			name:      "file not found",
-			input:     `{"filePath":"` + filepath.Join(tmpDir, "nonexistent.txt") + `"}`,
+			input:     `{"path":"` + filepath.Join(tmpDir, "nonexistent.txt") + `"}`,
 			wantError: true,
 		},
 		{
 			name:      "directory instead of file",
-			input:     `{"filePath":"` + tmpDir + `"}`,
+			input:     `{"path":"` + tmpDir + `"}`,
 			wantError: true,
 		},
 	}
@@ -223,7 +223,7 @@ func TestWriteFileTool(t *testing.T) {
 	}{
 		{
 			name:      "create new file",
-			input:     `{"filePath":"` + filepath.Join(tmpDir, "new.txt") + `","content":"test content"}`,
+			input:     `{"path":"` + filepath.Join(tmpDir, "new.txt") + `","content":"test content"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result WriteFileOutput
@@ -244,7 +244,7 @@ func TestWriteFileTool(t *testing.T) {
 			input: func() string {
 				path := filepath.Join(tmpDir, "existing.txt")
 				os.WriteFile(path, []byte("old content"), 0644)
-				return `{"filePath":"` + path + `","content":"new content"}`
+				return `{"path":"` + path + `","content":"new content"}`
 			}(),
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
@@ -257,7 +257,7 @@ func TestWriteFileTool(t *testing.T) {
 		},
 		{
 			name:      "create directories",
-			input:     `{"filePath":"` + filepath.Join(tmpDir, "subdir/nested/file.txt") + `","content":"test","createDirs":true}`,
+			input:     `{"path":"` + filepath.Join(tmpDir, "subdir/nested/file.txt") + `","content":"test","createDirs":true}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result WriteFileOutput
@@ -271,12 +271,12 @@ func TestWriteFileTool(t *testing.T) {
 		},
 		{
 			name:      "size limit exceeded",
-			input:     `{"filePath":"` + filepath.Join(tmpDir, "large.txt") + `","content":"` + strings.Repeat("x", 6*1024*1024) + `"}`,
+			input:     `{"path":"` + filepath.Join(tmpDir, "large.txt") + `","content":"` + strings.Repeat("x", 6*1024*1024) + `"}`,
 			wantError: true,
 		},
 		{
 			name:      "path traversal blocked",
-			input:     `{"filePath":"../../../tmp/evil.txt","content":"bad"}`,
+			input:     `{"path":"../../../tmp/evil.txt","content":"bad"}`,
 			wantError: true,
 		},
 	}
@@ -453,7 +453,7 @@ line 5`
 	}{
 		{
 			name:      "valid patch",
-			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `"}`,
+			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -474,7 +474,7 @@ line 5`
 		},
 		{
 			name:      "invalid patch (context mismatch)",
-			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(invalidPatch, "\n", "\\n") + `"}`,
+			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(invalidPatch, "\n", "\\n") + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -491,7 +491,7 @@ line 5`
 		},
 		{
 			name:      "dry run mode",
-			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `","dryRun":true}`,
+			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `","dryRun":true}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -507,7 +507,7 @@ line 5`
 		},
 		{
 			name:      "file not found",
-			input:     `{"filePath":"` + filepath.Join(tmpDir, "nonexistent.txt") + `","patch":"` + validPatch + `"}`,
+			input:     `{"path":"` + filepath.Join(tmpDir, "nonexistent.txt") + `","patch":"` + validPatch + `"}`,
 			wantError: true,
 		},
 	}
@@ -574,7 +574,7 @@ func BenchmarkReadFileTool(b *testing.B) {
 	defer os.Remove(tmpFile)
 
 	ctx := context.Background()
-	input := `{"filePath":"` + tmpFile + `"}`
+	input := `{"path":"` + tmpFile + `"}`
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
