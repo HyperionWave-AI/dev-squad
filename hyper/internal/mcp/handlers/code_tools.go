@@ -265,6 +265,14 @@ func (h *CodeToolsHandler) handleAddFolder(ctx context.Context, args map[string]
 		return createCodeIndexErrorResult(fmt.Sprintf("invalid folder path: %s", err.Error())), nil
 	}
 
+	// CRITICAL SAFETY: Validate path before doing ANYTHING else
+	if err := validateSafeIndexPath(absPath); err != nil {
+		h.logger.Error("REJECTED dangerous path in code_index_add_folder",
+			zap.String("path", absPath),
+			zap.Error(err))
+		return createCodeIndexErrorResult(fmt.Sprintf("FORBIDDEN: %s", err.Error())), nil
+	}
+
 	// Validate that the path exists and is a directory
 	info, err := os.Stat(absPath)
 	if err != nil {
@@ -746,6 +754,65 @@ func (h *CodeToolsHandler) extractArguments(req *mcp.CallToolRequest) (map[strin
 	}
 
 	return result, nil
+}
+
+// validateSafeIndexPath validates that a path is safe to index
+// Prevents indexing system-critical directories that would destroy the system
+func validateSafeIndexPath(path string) error {
+	// Clean the path
+	cleanPath := filepath.Clean(path)
+
+	// CRITICAL: Reject root filesystem
+	if cleanPath == "/" {
+		return fmt.Errorf("cannot index root filesystem '/' - would destroy system")
+	}
+
+	// CRITICAL: Reject common system directories
+	dangerousPaths := []string{
+		"/bin", "/sbin", "/usr", "/lib", "/lib64",
+		"/etc", "/var", "/sys", "/proc", "/dev", "/boot",
+		"/System", "/Library", "/Applications", "/Volumes",
+		"/private", "/cores", "/tmp", "/var/tmp",
+	}
+
+	for _, dangerous := range dangerousPaths {
+		if cleanPath == dangerous {
+			return fmt.Errorf("cannot index system directory '%s'", cleanPath)
+		}
+		if strings.HasPrefix(cleanPath, dangerous+"/") &&
+		   dangerous != "/opt" && dangerous != "/tmp" {
+			return fmt.Errorf("cannot index system subdirectory '%s' under '%s'", cleanPath, dangerous)
+		}
+	}
+
+	// CRITICAL: Require minimum path depth
+	pathSegments := strings.Split(strings.Trim(cleanPath, "/"), "/")
+	if len(pathSegments) < 2 {
+		return fmt.Errorf("path too shallow '%s' - must be at least 2 levels deep (e.g., /Users/name/project)", cleanPath)
+	}
+
+	// CRITICAL: Require paths to be within safe user directories
+	allowedPrefixes := []string{
+		"/Users/",     // macOS user directories
+		"/home/",      // Linux user directories
+		"/opt/",       // Optional software (containers, projects)
+		"/workspace/", // Common container workspace
+		"/app/",       // Common container app directory
+	}
+
+	isAllowed := false
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(cleanPath, prefix) {
+			isAllowed = true
+			break
+		}
+	}
+
+	if !isAllowed {
+		return fmt.Errorf("path '%s' must be within allowed directories: /Users/, /home/, /opt/, /workspace/, or /app/", cleanPath)
+	}
+
+	return nil
 }
 
 // createCodeIndexErrorResult creates an error result with the given message
