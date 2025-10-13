@@ -51,6 +51,11 @@ type CreateSessionRequest struct {
 	Title string `json:"title" binding:"required"`
 }
 
+// UpdateSessionRequest represents the request to update a chat session
+type UpdateSessionRequest struct {
+	Title string `json:"title" binding:"required"`
+}
+
 // GetMessagesResponse represents paginated message response
 type GetMessagesResponse struct {
 	Messages   []ChatMessage `json:"messages"`
