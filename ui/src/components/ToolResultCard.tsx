@@ -28,7 +28,7 @@ import {
 import { CheckCircle, Error as ErrorIcon, ExpandMore } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import Ansi from 'ansi-to-react';
+import { AnsiUp } from 'ansi_up';
 
 interface ToolResultCardProps {
   tool: string;
@@ -88,23 +88,27 @@ export function ToolResultCard({
     return langMap[ext || ''] || 'text';
   };
 
-  const renderBashOutput = (output: string) => (
-    <Box
-      sx={{
-        backgroundColor: 'grey.900',
-        color: 'white',
-        p: 2,
-        borderRadius: 1,
-        fontFamily: 'monospace',
-        fontSize: '0.875rem',
-        overflowX: 'auto',
-        maxHeight: 400,
-        overflowY: 'auto',
-      }}
-    >
-      <Ansi>{output}</Ansi>
-    </Box>
-  );
+  const renderBashOutput = (output: string) => {
+    const ansi_up = new AnsiUp();
+    const html = ansi_up.ansi_to_html(output);
+
+    return (
+      <Box
+        sx={{
+          backgroundColor: 'grey.900',
+          color: 'white',
+          p: 2,
+          borderRadius: 1,
+          fontFamily: 'monospace',
+          fontSize: '0.875rem',
+          overflowX: 'auto',
+          maxHeight: 400,
+          overflowY: 'auto',
+        }}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    );
+  };
 
   const renderReadFile = (data: any) => {
     const content = data.content || data;
