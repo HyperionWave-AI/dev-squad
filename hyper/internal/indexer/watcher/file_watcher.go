@@ -72,6 +72,12 @@ func NewFileWatcher(
 
 // Start begins watching all indexed folders
 func (fw *FileWatcher) Start() error {
+	// Check if file watcher is disabled via ENV
+	if os.Getenv("ENABLE_FILE_WATCHER") == "false" {
+		fw.logger.Info("File watcher is DISABLED via ENABLE_FILE_WATCHER=false")
+		return nil
+	}
+
 	// Load all indexed folders from MongoDB
 	folders, err := fw.mongoStorage.ListFolders()
 	if err != nil {
@@ -113,6 +119,72 @@ func (fw *FileWatcher) Stop() error {
 	return nil
 }
 
+// validateSafePath validates that a path is safe to watch
+// Prevents watching system-critical directories that would destroy the system
+func (fw *FileWatcher) validateSafePath(path string) error {
+	// Clean the path
+	cleanPath := filepath.Clean(path)
+
+	// CRITICAL: Reject root filesystem
+	if cleanPath == "/" {
+		return fmt.Errorf("FORBIDDEN: cannot watch root filesystem '/' - would destroy system")
+	}
+
+	// CRITICAL: Reject common system directories
+	dangerousPaths := []string{
+		"/bin", "/sbin", "/usr", "/lib", "/lib64", "/opt",
+		"/etc", "/var", "/sys", "/proc", "/dev", "/boot",
+		"/System", "/Library", "/Applications", "/Volumes",
+		"/private", "/cores", "/tmp", "/var/tmp",
+	}
+
+	for _, dangerous := range dangerousPaths {
+		if cleanPath == dangerous {
+			return fmt.Errorf("FORBIDDEN: cannot watch system directory '%s' - would destroy system", cleanPath)
+		}
+		// Also check if path is a subdirectory of dangerous paths (except /Users, /home, /opt/project, etc.)
+		if strings.HasPrefix(cleanPath, dangerous+"/") &&
+		   dangerous != "/opt" && // Allow /opt/project but not /opt itself
+		   dangerous != "/tmp" {   // Allow /tmp/myproject but not /tmp itself
+			return fmt.Errorf("FORBIDDEN: cannot watch system subdirectory '%s' under '%s'", cleanPath, dangerous)
+		}
+	}
+
+	// CRITICAL: Require minimum path depth (prevent "/" or "/usr" etc.)
+	// Allow /Users/username/... or /home/username/... or /opt/project/...
+	pathSegments := strings.Split(strings.Trim(cleanPath, "/"), "/")
+	if len(pathSegments) < 2 {
+		return fmt.Errorf("FORBIDDEN: path too shallow '%s' - must be at least 2 levels deep (e.g., /Users/name/project)", cleanPath)
+	}
+
+	// CRITICAL: Require paths to be within safe user directories
+	allowedPrefixes := []string{
+		"/Users/",     // macOS user directories
+		"/home/",      // Linux user directories
+		"/opt/",       // Optional software (containers, projects)
+		"/workspace/", // Common container workspace
+		"/app/",       // Common container app directory
+	}
+
+	isAllowed := false
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(cleanPath, prefix) {
+			isAllowed = true
+			break
+		}
+	}
+
+	if !isAllowed {
+		return fmt.Errorf("FORBIDDEN: path '%s' must be within allowed directories: %v", cleanPath, allowedPrefixes)
+	}
+
+	fw.logger.Info("Path validation passed",
+		zap.String("path", cleanPath),
+		zap.Int("depth", len(pathSegments)))
+
+	return nil
+}
+
 // AddFolder adds a folder to the watch list
 func (fw *FileWatcher) AddFolder(folder *storage.IndexedFolder) error {
 	fw.foldersMutex.Lock()
@@ -121,6 +193,12 @@ func (fw *FileWatcher) AddFolder(folder *storage.IndexedFolder) error {
 	// Check if already watching
 	if _, exists := fw.watchedFolders[folder.Path]; exists {
 		return nil
+	}
+
+	// CRITICAL: Validate path safety - prevent watching system-critical paths
+	if err := fw.validateSafePath(folder.Path); err != nil {
+		fw.logger.Error("REJECTED unsafe path", zap.String("path", folder.Path), zap.Error(err))
+		return err
 	}
 
 	// Add folder to watcher
@@ -523,20 +601,70 @@ func (fw *FileWatcher) findFolder(filePath string) *storage.IndexedFolder {
 }
 
 // shouldIgnore checks if a path should be ignored
+// Uses patterns from .gitignore as source of truth
 func (fw *FileWatcher) shouldIgnore(path string) bool {
+	// Core build/dependency directories (from .gitignore)
 	ignoredDirs := []string{
-		".git", "node_modules", "vendor", "dist", "build",
-		".vscode", ".idea", "__pycache__", ".next", "out",
+		// Version control
+		".git",
+		// Dependencies
+		"node_modules", "vendor",
+		// Build outputs
+		"dist", "dist-ssr", "build", "bin", "target", "out",
+		// Editor/IDE
+		".vscode", ".idea", ".DS_Store",
+		// Python
+		"__pycache__",
+		// JavaScript frameworks
+		".next",
+		// Testing
+		"test-results", "coverage", "playwright-report",
+		// Temporary/cache
+		"tmp", ".cache",
+		// Project-specific (from git status --ignored)
+		".archive", "third_party", ".hyper", ".playwright-mcp",
+		".github", ".codacy",
+		// Generated UI (embedded)
+		"embed",
 	}
 
 	base := filepath.Base(path)
+
+	// Check exact directory name matches
 	for _, ignored := range ignoredDirs {
 		if base == ignored {
 			return true
 		}
 	}
 
-	// Ignore hidden files (except .go, .c, etc.)
+	// Check path segments (handles nested ignored dirs like "hyper/embed/ui")
+	pathSegments := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	for _, segment := range pathSegments {
+		for _, ignored := range ignoredDirs {
+			if segment == ignored {
+				return true
+			}
+		}
+	}
+
+	// Ignore log files
+	if strings.HasSuffix(base, ".log") {
+		return true
+	}
+
+	// Ignore lock files (except .go.sum, Cargo.lock for reference)
+	if strings.HasSuffix(base, "package-lock.json") ||
+	   strings.HasSuffix(base, "yarn.lock") ||
+	   strings.HasSuffix(base, "pnpm-lock.yaml") {
+		return true
+	}
+
+	// Ignore coverage files
+	if strings.Contains(base, "coverage") && strings.HasSuffix(base, ".out") {
+		return true
+	}
+
+	// Ignore hidden files (except code files like .go, .c, etc.)
 	if strings.HasPrefix(base, ".") && !scanner.IsCodeFile(path) {
 		return true
 	}
