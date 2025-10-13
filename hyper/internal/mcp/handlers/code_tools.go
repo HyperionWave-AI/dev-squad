@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -99,20 +100,20 @@ func (h *CodeToolsHandler) RegisterCodeIndexTools(server *mcp.Server) error {
 func (h *CodeToolsHandler) registerAddFolder(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "code_index_add_folder",
-		Description: "Add a folder to the code index for semantic search. The folder will be scanned and all supported code files will be indexed.",
+		Description: "Add a folder to the code index for semantic search. The folder will be scanned and all supported code files will be indexed. If folderPath is not provided, uses INDEX_SOURCE_PATH environment variable or current working directory.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
 				"folderPath": {
 					Type:        "string",
-					Description: "Absolute path to the folder to index",
+					Description: "Absolute path to the folder to index (optional: defaults to INDEX_SOURCE_PATH env var or current directory)",
 				},
 				"description": {
 					Type:        "string",
 					Description: "Optional description of the folder/project",
 				},
 			},
-			Required: []string{"folderPath"},
+			Required: []string{},
 		},
 	}
 
@@ -159,16 +160,16 @@ func (h *CodeToolsHandler) registerRemoveFolder(server *mcp.Server) error {
 func (h *CodeToolsHandler) registerScan(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "code_index_scan",
-		Description: "Scan or rescan a folder to update the code index. This will detect new/modified/deleted files and update the index accordingly.",
+		Description: "Scan or rescan a folder to update the code index. This will detect new/modified/deleted files and update the index accordingly. If folderPath is not provided, uses INDEX_SOURCE_PATH environment variable or current working directory.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
 				"folderPath": {
 					Type:        "string",
-					Description: "Absolute path to the folder to scan",
+					Description: "Absolute path to the folder to scan (optional: defaults to INDEX_SOURCE_PATH env var or current directory)",
 				},
 			},
-			Required: []string{"folderPath"},
+			Required: []string{},
 		},
 	}
 
@@ -245,14 +246,35 @@ func (h *CodeToolsHandler) registerStatus(server *mcp.Server) error {
 // handleAddFolder handles the code_index_add_folder tool
 func (h *CodeToolsHandler) handleAddFolder(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	folderPath, ok := args["folderPath"].(string)
-	if !ok {
-		return createCodeIndexErrorResult("folderPath is required and must be a string"), nil
+	if !ok || folderPath == "" {
+		// Use INDEX_SOURCE_PATH from environment if no folderPath provided
+		folderPath = os.Getenv("INDEX_SOURCE_PATH")
+		if folderPath == "" {
+			// Fallback to current working directory
+			var err error
+			folderPath, err = os.Getwd()
+			if err != nil {
+				return createCodeIndexErrorResult(fmt.Sprintf("failed to get current directory and INDEX_SOURCE_PATH not set: %s", err.Error())), nil
+			}
+		}
 	}
 
 	// Convert to absolute path
 	absPath, err := filepath.Abs(folderPath)
 	if err != nil {
 		return createCodeIndexErrorResult(fmt.Sprintf("invalid folder path: %s", err.Error())), nil
+	}
+
+	// Validate that the path exists and is a directory
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return createCodeIndexErrorResult(fmt.Sprintf("path does not exist: %s - check INDEX_SOURCE_PATH environment variable", absPath)), nil
+		}
+		return createCodeIndexErrorResult(fmt.Sprintf("failed to access path %s: %s", absPath, err.Error())), nil
+	}
+	if !info.IsDir() {
+		return createCodeIndexErrorResult(fmt.Sprintf("path is not a directory: %s", absPath)), nil
 	}
 
 	description := ""
@@ -382,8 +404,17 @@ func (h *CodeToolsHandler) handleRemoveFolder(ctx context.Context, args map[stri
 // handleScan handles the code_index_scan tool
 func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	folderPath, ok := args["folderPath"].(string)
-	if !ok {
-		return createCodeIndexErrorResult("folderPath is required and must be a string"), nil
+	if !ok || folderPath == "" {
+		// Use INDEX_SOURCE_PATH from environment if no folderPath provided
+		folderPath = os.Getenv("INDEX_SOURCE_PATH")
+		if folderPath == "" {
+			// Fallback to current working directory
+			var err error
+			folderPath, err = os.Getwd()
+			if err != nil {
+				return createCodeIndexErrorResult(fmt.Sprintf("failed to get current directory and INDEX_SOURCE_PATH not set: %s", err.Error())), nil
+			}
+		}
 	}
 
 	// Convert to absolute path

@@ -169,20 +169,61 @@ func (h *ChatHandler) DeleteSession(c *gin.Context) {
 	})
 }
 
+// getOrCreateDefaultSession finds or creates a default session for the user
+func (h *ChatHandler) getOrCreateDefaultSession(c *gin.Context, userID, companyID string) (primitive.ObjectID, error) {
+	// Try to find existing default session for this user
+	sessions, err := h.chatService.GetUserSessions(c.Request.Context(), userID, companyID)
+	if err != nil {
+		return primitive.NilObjectID, err
+	}
+
+	// Look for a session titled "default-session"
+	for _, session := range sessions {
+		if session.Title == "default-session" {
+			return session.ID, nil
+		}
+	}
+
+	// No default session found, create one
+	session, err := h.chatService.CreateSession(c.Request.Context(), userID, companyID, "default-session")
+	if err != nil {
+		return primitive.NilObjectID, err
+	}
+
+	h.logger.Info("Auto-created default session",
+		zap.String("userId", userID),
+		zap.String("sessionId", session.ID.Hex()))
+
+	return session.ID, nil
+}
+
 // GetMessages retrieves messages for a session with pagination
 // GET /api/v1/chat/sessions/:id/messages?limit=50&offset=0
 func (h *ChatHandler) GetMessages(c *gin.Context) {
-	_, companyID, err := h.extractUserContext(c)
+	userID, companyID, err := h.extractUserContext(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: " + err.Error()})
 		return
 	}
 
 	sessionIDStr := c.Param("id")
-	sessionID, err := primitive.ObjectIDFromHex(sessionIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID"})
-		return
+
+	// Handle special "default-session" identifier
+	var sessionID primitive.ObjectID
+	if sessionIDStr == "default-session" {
+		sessionID, err = h.getOrCreateDefaultSession(c, userID, companyID)
+		if err != nil {
+			h.logger.Error("Failed to get or create default session", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get default session"})
+			return
+		}
+	} else {
+		// Parse as MongoDB ObjectID
+		sessionID, err = primitive.ObjectIDFromHex(sessionIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID format. Use a valid ObjectID hex string or 'default-session'"})
+			return
+		}
 	}
 
 	// Parse pagination parameters

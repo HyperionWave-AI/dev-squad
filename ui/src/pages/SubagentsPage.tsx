@@ -19,6 +19,7 @@ import {
   Stack,
   List,
   ListItem,
+  ListItemButton,
   ListItemText,
   Checkbox,
 } from '@mui/material';
@@ -552,20 +553,23 @@ export function SubagentsPage() {
               {claudeAgents.map((agent) => (
                 <ListItem
                   key={agent.name}
-                  dense
-                  button
-                  onClick={() => handleToggleAgent(agent.name)}
+                  disablePadding
                 >
-                  <Checkbox
-                    edge="start"
-                    checked={selectedAgents.includes(agent.name)}
-                    tabIndex={-1}
-                    disableRipple
-                  />
-                  <ListItemText
-                    primary={agent.name}
-                    secondary={agent.description}
-                  />
+                  <ListItemButton
+                    dense
+                    onClick={() => handleToggleAgent(agent.name)}
+                  >
+                    <Checkbox
+                      edge="start"
+                      checked={selectedAgents.includes(agent.name)}
+                      tabIndex={-1}
+                      disableRipple
+                    />
+                    <ListItemText
+                      primary={agent.name}
+                      secondary={agent.description}
+                    />
+                  </ListItemButton>
                 </ListItem>
               ))}
             </List>
