@@ -4,11 +4,6 @@
 .github/instructions/codacy.instructions.md
 .env
 .env.*
-.env.native
-.env.hyper
-.env.hyper.stable
-bin/.env.hyper
-bin/.env.*
 
 
 
