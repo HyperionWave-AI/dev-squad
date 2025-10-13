@@ -6,7 +6,7 @@
 set -e  # Exit on error
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UI_DIR="$PROJECT_ROOT/coordinator/ui"
+UI_DIR="$PROJECT_ROOT/ui"
 MARKER_FILE="$UI_DIR/.last-ui-build"
 DIST_DIR="$UI_DIR/dist"
 
