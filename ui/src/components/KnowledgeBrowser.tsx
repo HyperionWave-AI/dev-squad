@@ -28,18 +28,23 @@ export const KnowledgeBrowser: React.FC = () => {
   const [collection, setCollection] = useState('All Collections');
   const [limit, setLimit] = useState(10);
   const [popularCollections, setPopularCollections] = useState<Array<{ collection: string; count: number }>>([]);
-
-  const collections = [
-    'All Collections',
-    'task',
-    'adr',
-    'data-contracts',
-    'technical-knowledge',
-    'workflow-context',
-    'team-coordination',
-  ];
+  const [collections, setCollections] = useState<string[]>(['All Collections']);
 
   useEffect(() => {
+    const loadAllCollections = async () => {
+      try {
+        const allCollections = await restClient.getAllCollections();
+        // Filter out task-specific collections (task:hyperion://...) and extract unique collection names
+        const nonTaskCollections = allCollections
+          .filter(c => !c.name.startsWith('task:hyperion://'))
+          .map(c => c.name);
+        const uniqueNames = ['All Collections', ...new Set(nonTaskCollections)];
+        setCollections(uniqueNames);
+      } catch (err) {
+        console.error('Failed to load collections:', err);
+      }
+    };
+
     const loadPopularCollections = async () => {
       try {
         const popular = await restClient.getPopularCollections(5);
@@ -61,6 +66,7 @@ export const KnowledgeBrowser: React.FC = () => {
       }
     };
 
+    loadAllCollections();
     loadPopularCollections();
     loadInitialKnowledge();
   }, [limit]);

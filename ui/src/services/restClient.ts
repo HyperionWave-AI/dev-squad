@@ -83,6 +83,12 @@ interface CollectionInfo {
   count: number;
 }
 
+interface AllCollectionInfo {
+  name: string;
+  category: string;
+  count: number;
+}
+
 // Transform functions to convert API types to UI types
 function transformHumanTask(api: APIHumanTask): HumanTask {
   return {
@@ -391,6 +397,16 @@ class RestClient {
     const queryParam = limit ? `?limit=${limit}` : '';
     const data = await this.fetchJSON<{ collections: CollectionInfo[] }>(
       `/knowledge/popular-collections${queryParam}`
+    );
+    return data.collections || [];
+  }
+
+  /**
+   * Get all knowledge collections
+   */
+  async getAllCollections(): Promise<AllCollectionInfo[]> {
+    const data = await this.fetchJSON<{ collections: AllCollectionInfo[] }>(
+      '/knowledge/collections'
     );
     return data.collections || [];
   }
