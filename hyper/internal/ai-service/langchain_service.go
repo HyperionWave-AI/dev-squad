@@ -224,9 +224,35 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		defer close(eventChan)
 
 		toolCallCount := 0
+		iterationCount := 0
 		currentMessages := append([]Message{}, messages...) // Copy messages
 
 		for toolCallCount < maxToolCalls {
+			iterationCount++
+
+			// Apply sliding window BEFORE calling LLM to prevent accumulation
+			// Keep: system prompt (if exists) + original user message + last 2 tool exchanges (4 messages)
+			currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
+
+			// Calculate request size and context size for logging
+			requestSize := 0
+			contextSize := 0
+			for _, msg := range currentMessages {
+				msgSize := len(msg.Content)
+				requestSize += msgSize
+				contextSize += msgSize
+			}
+
+			// Log iteration details
+			log.Printf("[AI Processing] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d",
+				iterationCount, requestSize, contextSize, toolCallCount)
+
+			// DEBUG: Log context details before LLM API call to identify accumulation
+			contextSize = calculateContextSize(currentMessages)
+			toolResultPreview := getToolResultPreview(currentMessages, 200)
+			log.Printf("[DEBUG Context] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
+				len(currentMessages), contextSize, toolResultPreview)
+
 			// Call provider with tools
 			toolProvider := s.provider.(ToolCapableProvider)
 			response, err := toolProvider.StreamChatWithTools(ctx, currentMessages, tools)
@@ -238,15 +264,22 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 			// Stream response tokens
 			var responseText string
+			responseTokens := 0
 			for chunk := range response.TextChannel {
 				eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
 				responseText += chunk
+				responseTokens++
 			}
+
+			// Log iteration response details
+			log.Printf("[AI Processing] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
+				iterationCount, responseTokens, len(response.ToolCalls))
 
 			// Check for tool calls
 			if len(response.ToolCalls) == 0 {
 				// No more tool calls, we're done
-				log.Printf("[ChatService] Stream complete - RequestID: %s - Tool calls: %d", requestID, toolCallCount)
+				log.Printf("[ChatService] Stream complete - RequestID: %s - Total iterations: %d, Tool calls: %d",
+					requestID, iterationCount, toolCallCount)
 				return
 			}
 
@@ -265,7 +298,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				// Execute tool
 				result := s.toolRegistry.ExecuteToolCall(ctx, toolCall)
 
-				// Send tool result event
+				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
 				// Log tool execution
@@ -277,36 +310,57 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 						result.Name, requestID, result.DurationMs)
 				}
 
-				// Add tool result to message history for next iteration
+				// Add assistant response to history (brief)
 				currentMessages = append(currentMessages, Message{
 					Role:    "assistant",
 					Content: responseText,
 				})
-				// Add tool result as a message
-				// CRITICAL FIX: JSON-marshal the output to properly serialize values
-				// Using %v with fmt.Sprintf causes pointer addresses to be printed instead of values
+
+				// Add tool result to message history (TRUNCATED to prevent context overflow)
 				var toolResultMsg string
 				if result.Error != "" {
 					toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
 				} else {
-					// Marshal output to JSON to ensure proper serialization
+					// Marshal output to JSON for context
 					outputJSON, err := json.Marshal(result.Output)
 					if err != nil {
-						// Fallback to error message if marshaling fails
-						toolResultMsg = fmt.Sprintf("Tool '%s' result serialization error: %v", result.Name, err)
+						toolResultMsg = fmt.Sprintf("Tool '%s' result: <serialization error: %v>", result.Name, err)
 					} else {
-						toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
+						fullResult := fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
+
+						// Truncate large results to prevent context explosion (210KB → 2KB)
+						const maxToolResultChars = 2000
+						if len(fullResult) > maxToolResultChars {
+							truncated := fullResult[:maxToolResultChars]
+							toolResultMsg = fmt.Sprintf("%s... [TRUNCATED from %d to %d chars for context efficiency]",
+								truncated, len(fullResult), maxToolResultChars)
+							log.Printf("[Tool Result] Truncated '%s' result: %d → %d chars for context",
+								result.Name, len(fullResult), maxToolResultChars)
+						} else {
+							toolResultMsg = fullResult
+						}
 					}
 				}
+
 				currentMessages = append(currentMessages, Message{
 					Role:    "system",
 					Content: toolResultMsg,
 				})
+
+				log.Printf("[AI Processing] Context after tool %d: %d messages, %d total chars",
+					toolCallCount, len(currentMessages), func() int {
+						sum := 0
+						for _, m := range currentMessages {
+							sum += len(m.Content)
+						}
+						return sum
+					}())
 			}
 		}
 
 		// Max iterations reached
-		log.Printf("[ChatService] Max tool calls reached - RequestID: %s", requestID)
+		log.Printf("[ChatService] Max tool calls reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
+			requestID, iterationCount, toolCallCount)
 	}()
 
 	return eventChan, nil
@@ -352,4 +406,109 @@ func GetIdentityFromContext(ctx context.Context) (*Identity, error) {
 		return nil, fmt.Errorf("identity not found in context")
 	}
 	return identity, nil
+}
+
+// calculateContextSize returns the total character count of all messages
+func calculateContextSize(messages []Message) int {
+	total := 0
+	for _, msg := range messages {
+		total += len(msg.Content)
+	}
+	return total
+}
+
+// getToolResultPreview extracts the first maxChars of tool result content from messages
+// Useful for debugging to see what tool results are being accumulated
+func getToolResultPreview(messages []Message, maxChars int) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		// Look for tool result messages (role=system with "Tool '...' result:" pattern)
+		if msg.Role == "system" && len(msg.Content) > 0 {
+			if len(msg.Content) <= maxChars {
+				return msg.Content
+			}
+			return msg.Content[:maxChars] + "..."
+		}
+	}
+	return "(no tool results found)"
+}
+
+// applySlidingWindow keeps only recent messages to prevent context accumulation
+// Strategy: Keep system prompt + original user message + last N tool exchanges
+// This prevents sending 100+200+300 accumulated messages, instead sending 100+100+100
+func applySlidingWindow(messages []Message, maxMessages int) []Message {
+	if len(messages) <= maxMessages {
+		return messages // No need to trim
+	}
+
+	// Identify system prompt (if exists at index 0)
+	hasSystemPrompt := len(messages) > 0 && messages[0].Role == "system"
+
+	// Find original user message (first "user" role after system prompt)
+	var systemMsg, userMsg *Message
+	userMsgIdx := -1
+
+	if hasSystemPrompt {
+		systemMsg = &messages[0]
+		// Find first user message after system
+		for i := 1; i < len(messages); i++ {
+			if messages[i].Role == "user" {
+				userMsg = &messages[i]
+				userMsgIdx = i
+				break
+			}
+		}
+	} else {
+		// No system prompt - first message should be user
+		if len(messages) > 0 && messages[0].Role == "user" {
+			userMsg = &messages[0]
+			userMsgIdx = 0
+		}
+	}
+
+	// Calculate how many recent messages to keep
+	reservedSlots := 0
+	if systemMsg != nil {
+		reservedSlots++
+	}
+	if userMsg != nil {
+		reservedSlots++
+	}
+
+	recentCount := maxMessages - reservedSlots
+	if recentCount < 0 {
+		recentCount = 0
+	}
+
+	// Build new message list
+	result := make([]Message, 0, maxMessages)
+
+	// Add system prompt if exists
+	if systemMsg != nil {
+		result = append(result, *systemMsg)
+	}
+
+	// Add original user message if exists
+	if userMsg != nil {
+		result = append(result, *userMsg)
+	}
+
+	// Add last N messages (tool exchanges)
+	if recentCount > 0 && len(messages) > userMsgIdx+1 {
+		// Get messages after the original user message
+		afterUserMsg := messages[userMsgIdx+1:]
+
+		// Take last recentCount messages
+		startIdx := len(afterUserMsg) - recentCount
+		if startIdx < 0 {
+			startIdx = 0
+		}
+
+		result = append(result, afterUserMsg[startIdx:]...)
+	}
+
+	log.Printf("[Sliding Window] Reduced from %d to %d messages (system: %v, user: %v, recent: %d)",
+		len(messages), len(result), systemMsg != nil, userMsg != nil, recentCount)
+
+	return result
 }

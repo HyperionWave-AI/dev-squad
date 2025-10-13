@@ -15,7 +15,8 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  Unified Hyper - Native Development Mode with Hot Reload  ║${NC}"
+echo -e "${BLUE}║  Unified Hyper - Go Backend Hot Reload (Backend Only)     ║${NC}"
+echo -e "${BLUE}║  For UI hot reload too, use: make dev-hot                 ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -56,12 +57,13 @@ if [ ! -f "$PROJECT_ROOT/.air.toml" ]; then
     exit 1
 fi
 
-echo -e "${BLUE}Starting Air hot reload for unified hyper binary...${NC}"
+echo -e "${BLUE}Starting Air hot reload for Go backend only...${NC}"
 echo -e "  Watching:   hyper/**/*.go"
-echo -e "  Binary:     bin/hyper (unified)"
-echo -e "  Mode:       http"
-echo -e "  UI:         http://localhost:${HTTP_PORT:-7095}/ui"
+echo -e "  Mode:       http (backend only)"
+echo -e "  API:        http://localhost:${HTTP_PORT:-7095}/api/v1"
+echo -e "  Health:     http://localhost:${HTTP_PORT:-7095}/api/v1/health"
 echo ""
+echo -e "${YELLOW}NOTE: UI is NOT served in this mode. Use 'make dev-hot' for full stack development.${NC}"
 echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
 echo ""
 

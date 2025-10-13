@@ -25,7 +25,7 @@ else
   # Copy UI to embed directory (Go embed doesn't support symlinks)
   rm -rf hyper/embed/ui
   mkdir -p hyper/embed/ui
-  cp -r coordinator/ui/dist hyper/embed/ui/
+  cp -r ui/dist hyper/embed/ui/
 
   # Build unified hyper binary with embedded UI
   cd hyper/cmd/coordinator

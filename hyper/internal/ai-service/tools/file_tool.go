@@ -24,7 +24,7 @@ type ReadFileTool struct{}
 
 // ReadFileInput represents the input schema for file reading
 type ReadFileInput struct {
-	FilePath string `json:"filePath"`
+	FilePath string `json:"path"`
 	MaxBytes int    `json:"maxBytes,omitempty"` // max bytes to read, default 10MB
 }
 
@@ -113,7 +113,7 @@ type WriteFileTool struct{}
 
 // WriteFileInput represents the input schema for file writing
 type WriteFileInput struct {
-	FilePath   string `json:"filePath"`
+	FilePath   string `json:"path"`
 	Content    string `json:"content"`
 	CreateDirs bool   `json:"createDirs,omitempty"` // create parent directories if they don't exist
 }
@@ -141,8 +141,8 @@ func (w *WriteFileTool) Call(ctx context.Context, input string) (string, error) 
 		return "", fmt.Errorf("invalid input format: %w", err)
 	}
 
-	// Validate path and convert to absolute
-	absPath, err := validatePath(writeInput.FilePath)
+	// Validate path and convert to absolute (don't check existence for write)
+	absPath, err := validatePathForWrite(writeInput.FilePath)
 	if err != nil {
 		return "", err
 	}
@@ -244,7 +244,8 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 	}
 
 	if !info.IsDir() {
-		return "", fmt.Errorf("path is not a directory")
+		parentDir := filepath.Dir(listInput.Path)
+		return "", fmt.Errorf("path '%s' is a FILE, not a directory. To read file contents, use read_file tool with this path. To list directory, provide the parent directory path: %s", listInput.Path, parentDir)
 	}
 
 	var entries []FileInfo
@@ -345,21 +346,30 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 }
 
 // validatePath validates file paths for security and returns the absolute path
+// This version checks that the path exists (for read/list operations)
 func validatePath(path string) (string, error) {
 	// Path must not be empty
 	if strings.TrimSpace(path) == "" {
-		return "", fmt.Errorf("path cannot be empty")
+		return "", fmt.Errorf("path parameter is required. Provide absolute or relative file/directory path (e.g., /path/to/file.txt or ./relative/path)")
 	}
 
 	// Check for path traversal before conversion
 	if strings.Contains(path, "..") {
-		return "", fmt.Errorf("path traversal not allowed")
+		return "", fmt.Errorf("path traversal (..) not allowed for security. Use absolute paths instead (e.g., /full/path/to/file)")
 	}
 
 	// Convert to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
+		return "", fmt.Errorf("invalid path format: %w. Provide a valid file or directory path", err)
+	}
+
+	// Check if path exists
+	if _, err := os.Stat(absPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("path does not exist: '%s'. Verify the path is correct and the file/directory exists", absPath)
+		}
+		return "", fmt.Errorf("cannot access path '%s': %w", absPath, err)
 	}
 
 	// Check allowed directories (if ALLOWED_DIRS env var is set)
@@ -373,7 +383,44 @@ func validatePath(path string) (string, error) {
 			}
 		}
 		if !allowed {
-			return "", fmt.Errorf("path outside allowed directories")
+			return "", fmt.Errorf("path '%s' is outside allowed directories. Access restricted to: %s", absPath, allowedDirs)
+		}
+	}
+
+	return absPath, nil
+}
+
+// validatePathForWrite validates file paths for write operations
+// Unlike validatePath, this does NOT check existence (files may not exist yet)
+func validatePathForWrite(path string) (string, error) {
+	// Path must not be empty
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path parameter is required. Provide absolute or relative file path (e.g., /path/to/file.txt or ./relative/path)")
+	}
+
+	// Check for path traversal before conversion
+	if strings.Contains(path, "..") {
+		return "", fmt.Errorf("path traversal (..) not allowed for security. Use absolute paths instead (e.g., /full/path/to/file)")
+	}
+
+	// Convert to absolute path
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("invalid path format: %w. Provide a valid file path", err)
+	}
+
+	// Check allowed directories (if ALLOWED_DIRS env var is set)
+	allowedDirs := os.Getenv("ALLOWED_DIRS")
+	if allowedDirs != "" {
+		allowed := false
+		for _, dir := range strings.Split(allowedDirs, ":") {
+			if strings.HasPrefix(absPath, dir) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", fmt.Errorf("path '%s' is outside allowed directories. Access restricted to: %s", absPath, allowedDirs)
 		}
 	}
 
