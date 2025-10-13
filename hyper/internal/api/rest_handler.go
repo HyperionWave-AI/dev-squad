@@ -129,6 +129,11 @@ type KnowledgeCollectionDTO struct {
 	Count    int    `json:"count"`
 }
 
+type PopularCollectionDTO struct {
+	Collection string `json:"collection"`
+	Count      int    `json:"count"`
+}
+
 type KnowledgeEntryDTO struct {
 	ID         string                 `json:"id"`
 	Collection string                 `json:"collection"`
@@ -142,10 +147,24 @@ type ListCollectionsResponse struct {
 	Collections []KnowledgeCollectionDTO `json:"collections"`
 }
 
+type PopularCollectionsResponse struct {
+	Collections []PopularCollectionDTO `json:"collections"`
+}
+
 type BrowseKnowledgeResponse struct {
 	Entries []KnowledgeEntryDTO `json:"entries"`
 	Count   int                 `json:"count"`
 	Limit   int                 `json:"limit"`
+}
+
+type QueryKnowledgeRequest struct {
+	Collection string `json:"collection" binding:"required"`
+	Query      string `json:"query" binding:"required"`
+	Limit      int    `json:"limit"`
+}
+
+type QueryKnowledgeResponse struct {
+	Entries []KnowledgeEntryDTO `json:"entries"`
 }
 
 // Code Index DTOs
@@ -571,6 +590,42 @@ func (h *RESTAPIHandler) ListCollections(c *gin.Context) {
 	})
 }
 
+// GetPopularCollections returns popular collections in frontend-compatible format
+// GET /api/knowledge/popular-collections?limit=20
+func (h *RESTAPIHandler) GetPopularCollections(c *gin.Context) {
+	// Parse limit parameter (default 20, max 100)
+	limit := 20
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 {
+			limit = val
+			if limit > 100 {
+				limit = 100
+			}
+		}
+	}
+
+	// Get popular collections from storage
+	collections, err := h.knowledgeStorage.GetPopularCollections(limit)
+	if err != nil {
+		h.logger.Error("Failed to get popular collections", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve popular collections"})
+		return
+	}
+
+	// Convert to frontend-compatible DTOs (collection field instead of name)
+	dtos := make([]PopularCollectionDTO, len(collections))
+	for i, col := range collections {
+		dtos[i] = PopularCollectionDTO{
+			Collection: col.Collection,
+			Count:      col.Count,
+		}
+	}
+
+	c.JSON(http.StatusOK, PopularCollectionsResponse{
+		Collections: dtos,
+	})
+}
+
 // BrowseKnowledge retrieves knowledge entries without search (browse mode)
 // GET /api/knowledge/browse?collection=...&limit=10
 func (h *RESTAPIHandler) BrowseKnowledge(c *gin.Context) {
@@ -639,6 +694,61 @@ func (h *RESTAPIHandler) BrowseKnowledge(c *gin.Context) {
 		Entries: allEntries,
 		Count:   len(allEntries),
 		Limit:   limit,
+	})
+}
+
+// QueryKnowledge searches the knowledge base with semantic search
+// POST /api/knowledge/query
+func (h *RESTAPIHandler) QueryKnowledge(c *gin.Context) {
+	var req QueryKnowledgeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// Set default limit
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 100 {
+		limit = 100 // Max limit
+	}
+
+	// Query knowledge storage
+	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit)
+	if err != nil {
+		h.logger.Error("Failed to query knowledge",
+			zap.String("collection", req.Collection),
+			zap.String("query", req.Query),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query knowledge base"})
+		return
+	}
+
+	// Transform QueryResult to DTOs
+	entries := make([]KnowledgeEntryDTO, 0, len(results))
+	for _, result := range results {
+		score := float64(result.Score)
+		dto := KnowledgeEntryDTO{
+			ID:         result.Entry.ID,
+			Collection: req.Collection,
+			Text:       result.Entry.Text,
+			Metadata:   result.Entry.Metadata,
+			CreatedAt:  result.Entry.CreatedAt.Format(time.RFC3339),
+			Score:      &score,
+		}
+		entries = append(entries, dto)
+	}
+
+	h.logger.Info("Query knowledge completed",
+		zap.String("collection", req.Collection),
+		zap.String("query", req.Query),
+		zap.Int("limit", limit),
+		zap.Int("results", len(entries)))
+
+	c.JSON(http.StatusOK, QueryKnowledgeResponse{
+		Entries: entries,
 	})
 }
 
@@ -1106,7 +1216,10 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	knowledge := r.Group("/api/knowledge")
 	{
 		knowledge.GET("/collections", h.ListCollections)
+		knowledge.GET("/popular-collections", h.GetPopularCollections)
 		knowledge.GET("/browse", h.BrowseKnowledge)
+		knowledge.POST("/query", h.QueryKnowledge)
+		
 	}
 
 	// Code Index
