@@ -339,6 +339,47 @@ func StartHTTPServer(
 		zap.String("systemPromptPath", "/api/v1/ai/system-prompt"),
 		zap.String("subagentsPath", "/api/v1/ai/subagents"))
 
+	// Register knowledge routes
+	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeStorage, logger)
+	knowledgeGroup := r.Group("/api/v1/knowledge")
+	{
+		knowledgeHandler.RegisterRoutes(knowledgeGroup)
+	}
+
+	logger.Info("Knowledge API routes registered",
+		zap.String("popularCollectionsPath", "/api/v1/knowledge/popular-collections"))
+
+	// Initialize subchat storage and handlers
+	subchatStorage := storage.NewSubchatStorage(mongoDatabase, logger)
+	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, logger)
+	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
+
+	// Register subchat routes
+	subchatGroup := r.Group("/api/v1/subchats")
+	{
+		subchatGroup.POST("", subchatHandler.CreateSubchat)
+		subchatGroup.GET("/:id", subchatHandler.GetSubchat)
+		subchatGroup.PUT("/:id/status", subchatHandler.UpdateSubchatStatus)
+	}
+
+	// Register chat-subchats routes
+	chatsGroup := r.Group("/api/v1/chats")
+	{
+		chatsGroup.GET("/:chatId/subchats", subchatHandler.GetSubchatsByParent)
+	}
+
+	// Register subagent routes
+	subagentGroup := r.Group("/api/v1/subagents")
+	{
+		subagentGroup.GET("", subagentHandler.ListSubagents)
+		subagentGroup.GET("/:name", subagentHandler.GetSubagent)
+	}
+
+	logger.Info("Subchat and Subagent API routes registered",
+		zap.String("subchatsPath", "/api/v1/subchats"),
+		zap.String("chatSubchatsPath", "/api/v1/chats/:chatId/subchats"),
+		zap.String("subagentsPath", "/api/v1/subagents"))
+
 	// Register HTTP tools routes
 	httpToolsGroup := r.Group("/api/v1/tools/http")
 	{

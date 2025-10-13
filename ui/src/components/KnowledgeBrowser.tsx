@@ -28,18 +28,23 @@ export const KnowledgeBrowser: React.FC = () => {
   const [collection, setCollection] = useState('All Collections');
   const [limit, setLimit] = useState(10);
   const [popularCollections, setPopularCollections] = useState<Array<{ collection: string; count: number }>>([]);
-
-  const collections = [
-    'All Collections',
-    'task',
-    'adr',
-    'data-contracts',
-    'technical-knowledge',
-    'workflow-context',
-    'team-coordination',
-  ];
+  const [collections, setCollections] = useState<string[]>(['All Collections']);
 
   useEffect(() => {
+    const loadAllCollections = async () => {
+      try {
+        const allCollections = await restClient.getAllCollections();
+        // Filter out task-specific collections (task:hyperion://...) and extract unique collection names
+        const nonTaskCollections = allCollections
+          .filter(c => !c.name.startsWith('task:hyperion://'))
+          .map(c => c.name);
+        const uniqueNames = ['All Collections', ...new Set(nonTaskCollections)];
+        setCollections(uniqueNames);
+      } catch (err) {
+        console.error('Failed to load collections:', err);
+      }
+    };
+
     const loadPopularCollections = async () => {
       try {
         const popular = await restClient.getPopularCollections(5);
@@ -61,6 +66,7 @@ export const KnowledgeBrowser: React.FC = () => {
       }
     };
 
+    loadAllCollections();
     loadPopularCollections();
     loadInitialKnowledge();
   }, [limit]);
@@ -292,16 +298,39 @@ export const KnowledgeBrowser: React.FC = () => {
               />
               <Divider />
               <CardContent>
-                <Typography
-                  variant="body2"
+                <Box
                   sx={{
-                    color: 'text.primary',
+                    maxHeight: '300px',
+                    overflowY: 'auto',
                     mb: 2,
-                    whiteSpace: 'pre-wrap',
+                    pr: 1,
+                    '&::-webkit-scrollbar': {
+                      width: '8px',
+                    },
+                    '&::-webkit-scrollbar-track': {
+                      backgroundColor: 'grey.100',
+                      borderRadius: '4px',
+                    },
+                    '&::-webkit-scrollbar-thumb': {
+                      backgroundColor: 'grey.400',
+                      borderRadius: '4px',
+                      '&:hover': {
+                        backgroundColor: 'grey.500',
+                      },
+                    },
                   }}
                 >
-                  {entry.text}
-                </Typography>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.primary',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {entry.text}
+                  </Typography>
+                </Box>
 
                 {/* Tags from metadata or direct tags field */}
                 {((entry.metadata?.tags as string[]) || entry.tags || []).length > 0 && (
@@ -320,46 +349,77 @@ export const KnowledgeBrowser: React.FC = () => {
 
                 <Box
                   sx={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
                     borderTop: '1px solid',
                     borderColor: 'divider',
                     pt: 1.5,
                   }}
                 >
-                  {entry.score !== undefined && (
-                    <Typography variant="caption" color="text.secondary">
-                      🎯 Relevance:{' '}
-                      <Typography component="span" fontWeight={500}>
-                        {(entry.score * 100).toFixed(0)}%
+                  {/* Info Row */}
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'flex-start',
+                      alignItems: 'center',
+                      gap: 3,
+                      flexWrap: 'wrap',
+                      mb: entry.metadata && Object.keys(entry.metadata).length > 0 ? 1.5 : 0,
+                    }}
+                  >
+                    {entry.score !== undefined && (
+                      <Typography variant="caption" color="text.secondary">
+                        🎯 Relevance:{' '}
+                        <Typography component="span" fontWeight={500}>
+                          {(entry.score * 100).toFixed(0)}%
+                        </Typography>
                       </Typography>
-                    </Typography>
-                  )}
+                    )}
 
-                  {entry.createdBy && (
-                    <Typography variant="caption" color="text.secondary">
-                      👤 Created by{' '}
-                      <Typography component="span" fontWeight={500}>
-                        {entry.createdBy}
+                    {entry.createdBy && (
+                      <Typography variant="caption" color="text.secondary">
+                        👤 Created by{' '}
+                        <Typography component="span" fontWeight={500}>
+                          {entry.createdBy}
+                        </Typography>
                       </Typography>
-                    </Typography>
-                  )}
+                    )}
+                  </Box>
 
+                  {/* Metadata Row */}
                   {entry.metadata && Object.keys(entry.metadata).length > 0 && (
                     <details>
-                      <summary className="cursor-pointer text-blue-600 text-xs">
-                        📋 View metadata
+                      <summary
+                        style={{
+                          cursor: 'pointer',
+                          color: '#2563eb',
+                          fontSize: '0.75rem',
+                          listStyle: 'none',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          userSelect: 'none',
+                        }}
+                      >
+                        <span>📋 View metadata</span>
                       </summary>
                       <Box
                         sx={{
                           mt: 1,
                           backgroundColor: 'grey.50',
                           borderRadius: 1,
-                          p: 1,
+                          p: 1.5,
+                          border: '1px solid',
+                          borderColor: 'divider',
                         }}
                       >
-                        <pre style={{ fontSize: 11, overflowX: 'auto' }}>
+                        <pre
+                          style={{
+                            fontSize: 11,
+                            overflowX: 'auto',
+                            margin: 0,
+                            fontFamily: 'monospace',
+                            color: '#374151',
+                          }}
+                        >
                           {JSON.stringify(entry.metadata, null, 2)}
                         </pre>
                       </Box>
