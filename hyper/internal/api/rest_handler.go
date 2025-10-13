@@ -157,6 +157,16 @@ type BrowseKnowledgeResponse struct {
 	Limit   int                 `json:"limit"`
 }
 
+type QueryKnowledgeRequest struct {
+	Collection string `json:"collection" binding:"required"`
+	Query      string `json:"query" binding:"required"`
+	Limit      int    `json:"limit"`
+}
+
+type QueryKnowledgeResponse struct {
+	Entries []KnowledgeEntryDTO `json:"entries"`
+}
+
 // Code Index DTOs
 type AddFolderRequest struct {
 	FolderPath  string `json:"folderPath" binding:"required"`
@@ -687,6 +697,61 @@ func (h *RESTAPIHandler) BrowseKnowledge(c *gin.Context) {
 	})
 }
 
+// QueryKnowledge searches the knowledge base with semantic search
+// POST /api/knowledge/query
+func (h *RESTAPIHandler) QueryKnowledge(c *gin.Context) {
+	var req QueryKnowledgeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// Set default limit
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 100 {
+		limit = 100 // Max limit
+	}
+
+	// Query knowledge storage
+	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit)
+	if err != nil {
+		h.logger.Error("Failed to query knowledge",
+			zap.String("collection", req.Collection),
+			zap.String("query", req.Query),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query knowledge base"})
+		return
+	}
+
+	// Transform QueryResult to DTOs
+	entries := make([]KnowledgeEntryDTO, 0, len(results))
+	for _, result := range results {
+		score := float64(result.Score)
+		dto := KnowledgeEntryDTO{
+			ID:         result.Entry.ID,
+			Collection: req.Collection,
+			Text:       result.Entry.Text,
+			Metadata:   result.Entry.Metadata,
+			CreatedAt:  result.Entry.CreatedAt.Format(time.RFC3339),
+			Score:      &score,
+		}
+		entries = append(entries, dto)
+	}
+
+	h.logger.Info("Query knowledge completed",
+		zap.String("collection", req.Collection),
+		zap.String("query", req.Query),
+		zap.Int("limit", limit),
+		zap.Int("results", len(entries)))
+
+	c.JSON(http.StatusOK, QueryKnowledgeResponse{
+		Entries: entries,
+	})
+}
+
 // Code Index Handlers
 
 // AddFolder adds a folder to the code index
@@ -1153,6 +1218,7 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		knowledge.GET("/collections", h.ListCollections)
 		knowledge.GET("/popular-collections", h.GetPopularCollections)
 		knowledge.GET("/browse", h.BrowseKnowledge)
+		knowledge.POST("/query", h.QueryKnowledge)
 	}
 
 	// Code Index
