@@ -21,3 +21,4 @@ bin/
 .env
 /hyper/.archived/coordinator-old/embed/ui
 /ui_____
+.env.hyperion
