@@ -339,6 +339,16 @@ func StartHTTPServer(
 		zap.String("systemPromptPath", "/api/v1/ai/system-prompt"),
 		zap.String("subagentsPath", "/api/v1/ai/subagents"))
 
+	// Register knowledge routes
+	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeStorage, logger)
+	knowledgeGroup := r.Group("/api/v1/knowledge")
+	{
+		knowledgeHandler.RegisterRoutes(knowledgeGroup)
+	}
+
+	logger.Info("Knowledge API routes registered",
+		zap.String("popularCollectionsPath", "/api/v1/knowledge/popular-collections"))
+
 	// Register HTTP tools routes
 	httpToolsGroup := r.Group("/api/v1/tools/http")
 	{
