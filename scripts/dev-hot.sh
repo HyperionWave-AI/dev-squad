@@ -66,9 +66,9 @@ fi
 echo -e "${GREEN}✓ Node.js installed${NC}"
 
 # Check node_modules
-if [ ! -d "coordinator/ui/node_modules" ]; then
+if [ ! -d "ui/node_modules" ]; then
     echo -e "${YELLOW}⚠ node_modules not found. Installing...${NC}"
-    cd coordinator/ui && npm install && cd ../..
+    cd ui && npm install && cd ..
 fi
 echo -e "${GREEN}✓ node_modules ready${NC}"
 
@@ -123,7 +123,7 @@ echo -e "${GREEN}✓ Backend started (PID: $BACKEND_PID)${NC}"
 echo ""
 echo -e "${BLUE}[Frontend] Starting Vite dev server with HMR...${NC}"
 (
-    cd coordinator/ui
+    cd ui
     # Prefix all frontend output with [Frontend]
     npm run dev 2>&1 | while IFS= read -r line; do
         echo -e "${GREEN}[Frontend]${NC} $line"

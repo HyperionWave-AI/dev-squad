@@ -1,0 +1,16 @@
+# Development Dockerfile with Vite hot-reload
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy package files and install dependencies
+# Source code comes from volume mount for hot-reload
+COPY package*.json ./
+RUN npm install
+
+# Expose Vite dev server port
+EXPOSE 5173
+
+# Run Vite dev server with hot-reload
+# Source files are mounted via docker-compose volume
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
