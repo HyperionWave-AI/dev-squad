@@ -197,6 +197,38 @@ func (h *ChatHandler) getOrCreateDefaultSession(c *gin.Context, userID, companyI
 	return session.ID, nil
 }
 
+// UpdateSession updates a chat session's title
+// PUT /api/v1/chat/sessions/:id
+func (h *ChatHandler) UpdateSession(c *gin.Context) {
+	userID, companyID, err := h.extractUserContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: " + err.Error()})
+		return
+	}
+
+	sessionIDStr := c.Param("id")
+	sessionID, err := primitive.ObjectIDFromHex(sessionIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID"})
+		return
+	}
+
+	var req models.UpdateSessionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	updatedSession, err := h.chatService.UpdateSession(c.Request.Context(), sessionID, userID, companyID, req.Title)
+	if err != nil {
+		h.logger.Error("Failed to update session", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"session": updatedSession})
+}
+
 // GetMessages retrieves messages for a session with pagination
 // GET /api/v1/chat/sessions/:id/messages?limit=50&offset=0
 func (h *ChatHandler) GetMessages(c *gin.Context) {
@@ -319,6 +351,7 @@ func (h *ChatHandler) RegisterChatRoutes(r *gin.RouterGroup) {
 	r.POST("/sessions", h.CreateSession)
 	r.GET("/sessions", h.ListUserSessions)
 	r.GET("/sessions/:id", h.GetSession)
+	r.PUT("/sessions/:id", h.UpdateSession)
 	r.DELETE("/sessions/:id", h.DeleteSession)
 	r.GET("/sessions/:id/messages", h.GetMessages)
 	r.PUT("/sessions/:id/subagent", h.SetSessionSubagent)

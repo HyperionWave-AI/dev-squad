@@ -8,7 +8,7 @@
 
 import type { HumanTask, AgentTask, TodoItem, KnowledgeEntry } from '../types/coordinator';
 
-const BASE_URL = '/api';
+const BASE_URL = '/api/v1';
 
 // API response types (raw from backend)
 interface APIHumanTask {
@@ -80,6 +80,12 @@ interface CreateAgentTaskParams {
 
 interface CollectionInfo {
   collection: string;
+  count: number;
+}
+
+interface AllCollectionInfo {
+  name: string;
+  category: string;
   count: number;
 }
 
@@ -391,6 +397,16 @@ class RestClient {
     const queryParam = limit ? `?limit=${limit}` : '';
     const data = await this.fetchJSON<{ collections: CollectionInfo[] }>(
       `/knowledge/popular-collections${queryParam}`
+    );
+    return data.collections || [];
+  }
+
+  /**
+   * Get all knowledge collections
+   */
+  async getAllCollections(): Promise<AllCollectionInfo[]> {
+    const data = await this.fetchJSON<{ collections: AllCollectionInfo[] }>(
+      '/knowledge/collections'
     );
     return data.collections || [];
   }
