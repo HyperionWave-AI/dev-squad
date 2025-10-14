@@ -46,7 +46,10 @@ export function ChatMessageView({
   const renderMessage = (message: ChatMessage) => {
     const isUser = message.role === 'user';
     const isSystem = message.role === 'system';
+    const isToolCall = message.role === 'tool_call';
+    const isToolResult = message.role === 'tool_result';
 
+    // Handle system messages
     if (isSystem) {
       return (
         <Box
@@ -71,6 +74,55 @@ export function ChatMessageView({
               {message.content}
             </Typography>
           </Paper>
+        </Box>
+      );
+    }
+
+    // Handle tool_call messages
+    if (isToolCall && message.toolCall) {
+      return (
+        <Box
+          key={message.id}
+          sx={{
+            display: 'flex',
+            justifyContent: 'flex-start',
+            mb: 2,
+            px: 2,
+          }}
+        >
+          <Box sx={{ maxWidth: '75%' }}>
+            <ToolCallCard
+              tool={message.toolCall.name}
+              args={message.toolCall.args}
+              id={message.toolCall.id}
+              timestamp={new Date(message.timestamp)}
+              isPending={false}
+            />
+          </Box>
+        </Box>
+      );
+    }
+
+    // Handle tool_result messages
+    if (isToolResult && message.toolResult) {
+      return (
+        <Box
+          key={message.id}
+          sx={{
+            display: 'flex',
+            justifyContent: 'flex-start',
+            mb: 2,
+            px: 2,
+          }}
+        >
+          <Box sx={{ maxWidth: '75%' }}>
+            <ToolResultCard
+              tool={message.toolResult.name}
+              result={message.toolResult.output}
+              error={message.toolResult.error}
+              durationMs={message.toolResult.durationMs}
+            />
+          </Box>
         </Box>
       );
     }

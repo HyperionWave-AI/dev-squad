@@ -25,11 +25,25 @@ export interface ChatSession {
 export interface ChatMessage {
   id: string;
   sessionId: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result';
   content: string;
   timestamp: string;
+  // Plural arrays for backward compatibility with WebSocket streaming
   toolCalls?: ToolCall[];
   toolResults?: Map<string, ToolResult>;
+  // Singular objects for API responses (tool_call and tool_result messages)
+  toolCall?: {
+    id: string;
+    name: string;
+    args: Record<string, any>;
+  };
+  toolResult?: {
+    id: string;
+    name: string;
+    output: any;
+    error: string | null;
+    durationMs: number;
+  };
 }
 
 export interface ToolCall {
