@@ -171,12 +171,22 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	textChan := make(chan string, 1000) // Larger buffer to prevent blocking
 	var toolCalls []ToolCall
 
-	// Prepare streaming function (non-blocking)
+	// Prepare streaming function (non-blocking) with tool call filtering
 	streamFunc := func(ctx context.Context, chunk []byte) error {
+		chunkStr := string(chunk)
+
+		// Filter out tool call JSON arrays that match the pattern:
+		// [{"id":"call_*","type":"function","function":{...}}]
+		// These are metadata that should not appear in the message content
+		if strings.HasPrefix(strings.TrimSpace(chunkStr), "[{\"id\":\"call_") {
+			// This looks like a tool call JSON array - skip it
+			return nil
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case textChan <- string(chunk):
+		case textChan <- chunkStr:
 			return nil
 		default:
 			// Channel full, skip chunk (non-blocking)
