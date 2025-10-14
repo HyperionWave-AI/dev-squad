@@ -355,6 +355,15 @@ func StartHTTPServer(
 
 	// Initialize subchat storage and handlers
 	subchatStorage := storage.NewSubchatStorage(mongoDatabase, logger)
+
+	// Automatically seed system subagents on startup (idempotent - safe to run every time)
+	logger.Info("Ensuring system subagents are seeded...")
+	if err := subchatStorage.EnsureSystemSubagents(); err != nil {
+		logger.Error("Failed to ensure system subagents", zap.Error(err))
+		// Don't fail startup - log warning and continue
+		logger.Warn("System subagents may not be available - some features may not work correctly")
+	}
+
 	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, logger)
 	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
 
