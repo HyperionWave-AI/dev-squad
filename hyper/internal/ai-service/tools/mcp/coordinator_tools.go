@@ -1264,7 +1264,7 @@ func (e *ExecuteToolExecutor) Name() string {
 }
 
 func (e *ExecuteToolExecutor) Description() string {
-	return "Execute an MCP tool by name with specified arguments. This tool calls the actual tool implementation via the MCP HTTP bridge. Use get_tool_schema first to understand required parameters."
+	return "Execute an MCP tool by name with specified arguments. This tool looks up the tool's server from the registry and makes an HTTP call to that server's MCP endpoint. Works with external MCP servers registered via mcp_add_server. Built-in tools cannot be executed via this tool. Use get_tool_schema first to understand required parameters."
 }
 
 func (e *ExecuteToolExecutor) InputSchema() map[string]interface{} {
