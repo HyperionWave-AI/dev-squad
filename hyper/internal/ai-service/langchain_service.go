@@ -230,22 +230,29 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		for toolCallCount < maxToolCalls {
 			iterationCount++
 
-			// Apply sliding window BEFORE calling LLM to prevent accumulation
-			// Keep: system prompt (if exists) + original user message + last 2 tool exchanges (4 messages)
-			currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
-
-			// Calculate request size and context size for logging
-			requestSize := 0
+			// Calculate context size BEFORE applying sliding window
 			contextSize := 0
 			for _, msg := range currentMessages {
-				msgSize := len(msg.Content)
-				requestSize += msgSize
-				contextSize += msgSize
+				contextSize += len(msg.Content)
+			}
+
+			// Apply sliding window ONLY if context exceeds 500KB (500,000 chars)
+			const maxContextSize = 500000 // 500KB threshold
+			if contextSize > maxContextSize {
+				log.Printf("[Sliding Window] Context size %d chars exceeds threshold %d chars, applying window",
+					contextSize, maxContextSize)
+				currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
+
+				// Recalculate after trimming
+				contextSize = 0
+				for _, msg := range currentMessages {
+					contextSize += len(msg.Content)
+				}
 			}
 
 			// Log iteration details
 			log.Printf("[AI Processing] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d",
-				iterationCount, requestSize, contextSize, toolCallCount)
+				iterationCount, contextSize, contextSize, toolCallCount)
 
 			// DEBUG: Log context details before LLM API call to identify accumulation
 			contextSize = calculateContextSize(currentMessages)
@@ -291,6 +298,11 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					eventChan <- StreamEvent{Type: StreamEventError, Error: fmt.Sprintf("maximum tool calls (%d) exceeded", maxToolCalls)}
 					return
 				}
+
+				// Log tool request with arguments
+				argsJSON, _ := json.Marshal(toolCall.Args)
+				log.Printf("[Tool Request] AI requested tool '%s' with args: %s",
+					toolCall.Name, string(argsJSON))
 
 				// Send tool call event
 				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
