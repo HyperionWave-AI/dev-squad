@@ -316,7 +316,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					Content: responseText,
 				})
 
-				// Add tool result to message history (TRUNCATED to prevent context overflow)
+				// Add tool result to message history
 				var toolResultMsg string
 				if result.Error != "" {
 					toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
@@ -326,19 +326,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					if err != nil {
 						toolResultMsg = fmt.Sprintf("Tool '%s' result: <serialization error: %v>", result.Name, err)
 					} else {
-						fullResult := fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
-
-						// Truncate large results to prevent context explosion (210KB → 2KB)
-						const maxToolResultChars = 2000
-						if len(fullResult) > maxToolResultChars {
-							truncated := fullResult[:maxToolResultChars]
-							toolResultMsg = fmt.Sprintf("%s... [TRUNCATED from %d to %d chars for context efficiency]",
-								truncated, len(fullResult), maxToolResultChars)
-							log.Printf("[Tool Result] Truncated '%s' result: %d → %d chars for context",
-								result.Name, len(fullResult), maxToolResultChars)
-						} else {
-							toolResultMsg = fullResult
-						}
+						toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
 					}
 				}
 
