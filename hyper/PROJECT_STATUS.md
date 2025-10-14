@@ -1,8 +1,10 @@
 # Hyper Project - Final Status Report
 
+> **Historical Note (October 14, 2025):** The HTTP bridge (`hyper/cmd/bridge`) referenced in this document was subsequently removed and simplified. The system now uses direct MCP server execution instead of HTTP bridge architecture. The bridge binary is no longer built.
+
 **Date:** October 12, 2025
-**Status:** ✅ PRODUCTION READY
-**Build:** All 4 binaries building successfully
+**Status:** ✅ PRODUCTION READY (Historical)
+**Build:** All 4 binaries building successfully (Note: bridge later removed)
 
 ---
 
