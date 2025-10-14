@@ -293,9 +293,27 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 
 	// If no subagent or subagent fetch failed, use global system prompt
 	if systemPromptText == "" {
-		systemPromptText, _ = h.aiSettingsService.GetSystemPrompt(ctx, session.UserID, companyID)
-		if systemPromptText != "" {
-			h.logger.Info("Using global system prompt", zap.String("userId", session.UserID))
+		h.logger.Debug("Attempting to retrieve global system prompt",
+			zap.String("userId", session.UserID),
+			zap.String("companyId", companyID),
+			zap.String("sessionId", sessionID.Hex()))
+
+		var promptErr error
+		systemPromptText, promptErr = h.aiSettingsService.GetSystemPrompt(ctx, session.UserID, companyID)
+
+		if promptErr != nil {
+			h.logger.Warn("Failed to retrieve system prompt",
+				zap.Error(promptErr),
+				zap.String("userId", session.UserID),
+				zap.String("companyId", companyID))
+		} else if systemPromptText != "" {
+			h.logger.Info("Using global system prompt",
+				zap.String("userId", session.UserID),
+				zap.Int("promptLength", len(systemPromptText)))
+		} else {
+			h.logger.Info("No system prompt configured for user",
+				zap.String("userId", session.UserID),
+				zap.String("companyId", companyID))
 		}
 	}
 
