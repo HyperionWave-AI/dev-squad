@@ -230,22 +230,29 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		for toolCallCount < maxToolCalls {
 			iterationCount++
 
-			// Apply sliding window BEFORE calling LLM to prevent accumulation
-			// Keep: system prompt (if exists) + original user message + last 2 tool exchanges (4 messages)
-			currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
-
-			// Calculate request size and context size for logging
-			requestSize := 0
+			// Calculate context size BEFORE applying sliding window
 			contextSize := 0
 			for _, msg := range currentMessages {
-				msgSize := len(msg.Content)
-				requestSize += msgSize
-				contextSize += msgSize
+				contextSize += len(msg.Content)
+			}
+
+			// Apply sliding window ONLY if context exceeds 500KB (500,000 chars)
+			const maxContextSize = 500000 // 500KB threshold
+			if contextSize > maxContextSize {
+				log.Printf("[Sliding Window] Context size %d chars exceeds threshold %d chars, applying window",
+					contextSize, maxContextSize)
+				currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
+
+				// Recalculate after trimming
+				contextSize = 0
+				for _, msg := range currentMessages {
+					contextSize += len(msg.Content)
+				}
 			}
 
 			// Log iteration details
 			log.Printf("[AI Processing] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d",
-				iterationCount, requestSize, contextSize, toolCallCount)
+				iterationCount, contextSize, contextSize, toolCallCount)
 
 			// DEBUG: Log context details before LLM API call to identify accumulation
 			contextSize = calculateContextSize(currentMessages)
@@ -292,6 +299,11 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					return
 				}
 
+				// Log tool request with arguments
+				argsJSON, _ := json.Marshal(toolCall.Args)
+				log.Printf("[Tool Request] AI requested tool '%s' with args: %s",
+					toolCall.Name, string(argsJSON))
+
 				// Send tool call event
 				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
 
@@ -316,7 +328,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					Content: responseText,
 				})
 
-				// Add tool result to message history (TRUNCATED to prevent context overflow)
+				// Add tool result to message history
 				var toolResultMsg string
 				if result.Error != "" {
 					toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
@@ -326,19 +338,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					if err != nil {
 						toolResultMsg = fmt.Sprintf("Tool '%s' result: <serialization error: %v>", result.Name, err)
 					} else {
-						fullResult := fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
-
-						// Truncate large results to prevent context explosion (210KB → 2KB)
-						const maxToolResultChars = 2000
-						if len(fullResult) > maxToolResultChars {
-							truncated := fullResult[:maxToolResultChars]
-							toolResultMsg = fmt.Sprintf("%s... [TRUNCATED from %d to %d chars for context efficiency]",
-								truncated, len(fullResult), maxToolResultChars)
-							log.Printf("[Tool Result] Truncated '%s' result: %d → %d chars for context",
-								result.Name, len(fullResult), maxToolResultChars)
-						} else {
-							toolResultMsg = fullResult
-						}
+						toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
 					}
 				}
 
