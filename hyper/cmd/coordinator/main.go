@@ -547,7 +547,7 @@ func createMCPServer(
 	coordinationPromptHandler := handlers.NewCoordinationPromptHandler()
 	documentationPromptHandler := handlers.NewDocumentationPromptHandler()
 	filesystemToolHandler := handlers.NewFilesystemToolHandler(logger)
-	toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage)
+	toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage, server)
 
 	// Set metadata registry on all tool handlers for automatic indexing
 	toolHandler.SetMetadataRegistry(toolMetadataRegistry)
