@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // ContextKey type for context keys
@@ -227,7 +228,14 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		iterationCount := 0
 		currentMessages := append([]Message{}, messages...) // Copy messages
 
-		for toolCallCount < maxToolCalls {
+		// Circuit breaker: track recent tool calls to detect infinite loops
+		recentToolCalls := make([]string, 0, 10)
+		toolCallSignature := func(name string, args map[string]interface{}) string {
+			argsJSON, _ := json.Marshal(args)
+			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
+		}
+
+		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
 			iterationCount++
 
 			// Calculate context size BEFORE applying sliding window
@@ -313,6 +321,31 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
+				// Circuit breaker: check for repeated tool calls
+				signature := toolCallSignature(toolCall.Name, toolCall.Args)
+				recentToolCalls = append(recentToolCalls, signature)
+				if len(recentToolCalls) > 10 {
+					recentToolCalls = recentToolCalls[1:]
+				}
+
+				// If same tool+args called 3+ times in last 5 calls, trigger circuit breaker
+				if len(recentToolCalls) >= 5 {
+					count := 0
+					for i := len(recentToolCalls) - 5; i < len(recentToolCalls); i++ {
+						if recentToolCalls[i] == signature {
+							count++
+						}
+					}
+					if count >= 3 {
+						log.Printf("[Circuit Breaker] Tool '%s' called %d times in last 5 calls - stopping infinite loop", toolCall.Name, count)
+						eventChan <- StreamEvent{
+							Type:  StreamEventError,
+							Error: fmt.Sprintf("Circuit breaker triggered: tool '%s' called repeatedly (%d times) with no progress. This usually means the tool cannot complete the requested operation.", toolCall.Name, count),
+						}
+						return
+					}
+				}
+
 				// Log tool execution
 				if result.Error != "" {
 					log.Printf("[ChatService] Tool '%s' failed - RequestID: %s - Error: %s - Duration: %dms",
@@ -331,14 +364,35 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				// Add tool result to message history
 				var toolResultMsg string
 				if result.Error != "" {
-					toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
+					// Check if this is a permanent failure that shouldn't be retried
+					errorLower := strings.ToLower(result.Error)
+					isPermanentError := strings.Contains(errorLower, "requires mcp endpoint") ||
+						strings.Contains(errorLower, "not supported") ||
+						strings.Contains(errorLower, "cannot be used") ||
+						strings.Contains(errorLower, "requires direct mcp")
+
+					if isPermanentError {
+						toolResultMsg = fmt.Sprintf("PERMANENT ERROR - Tool '%s' cannot be used in this context: %s. DO NOT retry this tool - it will not work.", result.Name, result.Error)
+					} else {
+						toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
+					}
 				} else {
 					// Marshal output to JSON for context
 					outputJSON, err := json.Marshal(result.Output)
 					if err != nil {
 						toolResultMsg = fmt.Sprintf("Tool '%s' result: <serialization error: %v>", result.Name, err)
 					} else {
-						toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
+						// Check if output contains an error field (common pattern for tools returning error in response)
+						if outputMap, ok := result.Output.(map[string]interface{}); ok {
+							if errorField, hasError := outputMap["error"]; hasError && errorField != nil {
+								errorStr := fmt.Sprintf("%v", errorField)
+								toolResultMsg = fmt.Sprintf("PERMANENT ERROR - Tool '%s' returned error: %s. DO NOT retry this tool.", result.Name, errorStr)
+							} else {
+								toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
+							}
+						} else {
+							toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
+						}
 					}
 				}
 
