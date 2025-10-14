@@ -357,7 +357,7 @@ func convertAgentTaskToDTO(task *storage.AgentTask) AgentTaskDTO {
 // REST API Handlers - Direct TaskStorage access (NO MCP proxying)
 
 // CreateHumanTask creates a new human task
-// POST /api/tasks
+// POST /api/v1/tasks
 func (h *RESTAPIHandler) CreateHumanTask(c *gin.Context) {
 	var req CreateHumanTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -377,7 +377,7 @@ func (h *RESTAPIHandler) CreateHumanTask(c *gin.Context) {
 }
 
 // ListHumanTasks returns all human tasks
-// GET /api/tasks
+// GET /api/v1/tasks
 func (h *RESTAPIHandler) ListHumanTasks(c *gin.Context) {
 	tasks := h.taskStorage.ListAllHumanTasks()
 
@@ -393,7 +393,7 @@ func (h *RESTAPIHandler) ListHumanTasks(c *gin.Context) {
 }
 
 // GetHumanTask returns a single human task by ID
-// GET /api/tasks/:id
+// GET /api/v1/tasks/:id
 func (h *RESTAPIHandler) GetHumanTask(c *gin.Context) {
 	taskID := c.Param("id")
 
@@ -407,7 +407,7 @@ func (h *RESTAPIHandler) GetHumanTask(c *gin.Context) {
 }
 
 // UpdateTaskStatus updates the status of a task (human or agent)
-// PUT /api/tasks/:id/status
+// PUT /api/v1/tasks/:id/status
 func (h *RESTAPIHandler) UpdateTaskStatus(c *gin.Context) {
 	taskID := c.Param("id")
 
@@ -430,7 +430,7 @@ func (h *RESTAPIHandler) UpdateTaskStatus(c *gin.Context) {
 }
 
 // CreateAgentTask creates a new agent task
-// POST /api/agent-tasks
+// POST /api/v1/agent-tasks
 func (h *RESTAPIHandler) CreateAgentTask(c *gin.Context) {
 	var req CreateAgentTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -459,7 +459,7 @@ func (h *RESTAPIHandler) CreateAgentTask(c *gin.Context) {
 }
 
 // ListAgentTasks returns agent tasks with optional filters
-// GET /api/agent-tasks?humanTaskId=...&agentName=...&offset=0&limit=50
+// GET /api/v1/agent-tasks?humanTaskId=...&agentName=...&offset=0&limit=50
 func (h *RESTAPIHandler) ListAgentTasks(c *gin.Context) {
 	humanTaskID := c.Query("humanTaskId")
 	agentName := c.Query("agentName")
@@ -524,7 +524,7 @@ func (h *RESTAPIHandler) ListAgentTasks(c *gin.Context) {
 }
 
 // GetAgentTask returns a single agent task by ID
-// GET /api/agent-tasks/:id
+// GET /api/v1/agent-tasks/:id
 func (h *RESTAPIHandler) GetAgentTask(c *gin.Context) {
 	taskID := c.Param("id")
 
@@ -540,7 +540,7 @@ func (h *RESTAPIHandler) GetAgentTask(c *gin.Context) {
 }
 
 // UpdateTodoStatus updates the status of a TODO item
-// PUT /api/agent-tasks/:agentTaskId/todos/:todoId/status
+// PUT /api/v1/agent-tasks/:agentTaskId/todos/:todoId/status
 func (h *RESTAPIHandler) UpdateTodoStatus(c *gin.Context) {
 	agentTaskID := c.Param("agentTaskId")
 	todoID := c.Param("todoId")
@@ -566,7 +566,7 @@ func (h *RESTAPIHandler) UpdateTodoStatus(c *gin.Context) {
 // Knowledge Handlers
 
 // ListCollections returns all knowledge collections with metadata
-// GET /api/knowledge/collections
+// GET /api/v1/knowledge/collections
 func (h *RESTAPIHandler) ListCollections(c *gin.Context) {
 	collections, err := h.knowledgeStorage.GetCollectionStatsWithMetadata()
 	if err != nil {
@@ -591,7 +591,7 @@ func (h *RESTAPIHandler) ListCollections(c *gin.Context) {
 }
 
 // GetPopularCollections returns popular collections in frontend-compatible format
-// GET /api/knowledge/popular-collections?limit=20
+// GET /api/v1/knowledge/popular-collections?limit=20
 func (h *RESTAPIHandler) GetPopularCollections(c *gin.Context) {
 	// Parse limit parameter (default 20, max 100)
 	limit := 20
@@ -627,7 +627,7 @@ func (h *RESTAPIHandler) GetPopularCollections(c *gin.Context) {
 }
 
 // BrowseKnowledge retrieves knowledge entries without search (browse mode)
-// GET /api/knowledge/browse?collection=...&limit=10
+// GET /api/v1/knowledge/browse?collection=...&limit=10
 func (h *RESTAPIHandler) BrowseKnowledge(c *gin.Context) {
 	collection := c.Query("collection")
 	limit := 10 // Default
@@ -698,7 +698,7 @@ func (h *RESTAPIHandler) BrowseKnowledge(c *gin.Context) {
 }
 
 // QueryKnowledge searches the knowledge base with semantic search
-// POST /api/knowledge/query
+// POST /api/v1/knowledge/query
 func (h *RESTAPIHandler) QueryKnowledge(c *gin.Context) {
 	var req QueryKnowledgeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -755,7 +755,7 @@ func (h *RESTAPIHandler) QueryKnowledge(c *gin.Context) {
 // Code Index Handlers
 
 // AddFolder adds a folder to the code index
-// POST /api/code-index/add-folder
+// POST /api/v1/code-index/add-folder
 func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 	var req AddFolderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -813,7 +813,7 @@ func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 }
 
 // RemoveFolder removes a folder from the code index
-// DELETE /api/code-index/remove-folder/:configId
+// DELETE /api/v1/code-index/remove-folder/:configId
 func (h *RESTAPIHandler) RemoveFolder(c *gin.Context) {
 	configID := c.Param("configId")
 
@@ -871,7 +871,7 @@ func (h *RESTAPIHandler) RemoveFolder(c *gin.Context) {
 }
 
 // ScanFolder triggers a scan of a folder
-// POST /api/code-index/scan
+// POST /api/v1/code-index/scan
 func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 	var req AddFolderRequest // Reuse same structure (only folderPath needed)
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1018,7 +1018,7 @@ func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 }
 
 // SearchCode searches the code index
-// POST /api/code-index/search
+// POST /api/v1/code-index/search
 func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 	var req SearchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1141,7 +1141,7 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 }
 
 // GetIndexStatus gets the current index status
-// GET /api/code-index/status
+// GET /api/v1/code-index/status
 func (h *RESTAPIHandler) GetIndexStatus(c *gin.Context) {
 	// Get index status
 	status, err := h.codeIndexStorage.GetIndexStatus()
@@ -1192,10 +1192,10 @@ func (h *RESTAPIHandler) GetIndexStatus(c *gin.Context) {
 	})
 }
 
-// RegisterRESTRoutes registers all REST API routes
+// RegisterRESTRoutes registers all REST API routes under /api/v1
 func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	// Human Tasks
-	tasks := r.Group("/api/tasks")
+	tasks := r.Group("/api/v1/tasks")
 	{
 		tasks.GET("", h.ListHumanTasks)
 		tasks.POST("", h.CreateHumanTask)
@@ -1204,7 +1204,7 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	}
 
 	// Agent Tasks
-	agentTasks := r.Group("/api/agent-tasks")
+	agentTasks := r.Group("/api/v1/agent-tasks")
 	{
 		agentTasks.GET("", h.ListAgentTasks)
 		agentTasks.POST("", h.CreateAgentTask)
@@ -1212,18 +1212,11 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		agentTasks.PUT("/:agentTaskId/todos/:todoId/status", h.UpdateTodoStatus)
 	}
 
-	// Knowledge
-	knowledge := r.Group("/api/knowledge")
-	{
-		knowledge.GET("/collections", h.ListCollections)
-		knowledge.GET("/popular-collections", h.GetPopularCollections)
-		knowledge.GET("/browse", h.BrowseKnowledge)
-		knowledge.POST("/query", h.QueryKnowledge)
-		
-	}
+	// Knowledge routes are registered separately in http_server.go
+	// to avoid duplication - see http_server.go line 344
 
 	// Code Index
-	codeIndex := r.Group("/api/code-index")
+	codeIndex := r.Group("/api/v1/code-index")
 	{
 		codeIndex.POST("/add-folder", h.AddFolder)
 		codeIndex.DELETE("/remove-folder/:configId", h.RemoveFolder)

@@ -14,8 +14,12 @@ import (
 
 // Message represents a chat message with role and content
 type Message struct {
-	Role    string `json:"role"`    // "user", "assistant", or "system"
+	Role    string `json:"role"`    // "user", "assistant", "system", "tool_call", or "tool_result"
 	Content string `json:"content"` // Message content
+
+	// Tool-related fields (optional, only for tool_call and tool_result roles)
+	ToolCall   *ToolCall   `json:"toolCall,omitempty"`
+	ToolResult *ToolResult `json:"toolResult,omitempty"`
 }
 
 // ChatProvider defines the interface for AI chat providers
