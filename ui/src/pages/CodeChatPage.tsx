@@ -38,6 +38,9 @@ export function CodeChatPage() {
   const [loading, setLoading] = useState(true);
   const [pendingToolCalls, setPendingToolCalls] = useState<Set<string>>(new Set());
   const [subchatsDrawerOpen, setSubchatsDrawerOpen] = useState(false);
+  // Real-time streaming tool calls/results (updated immediately, not just on stream end)
+  const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCall[]>([]);
+  const [streamingToolResults, setStreamingToolResults] = useState<Map<string, ToolResult>>(new Map());
 
   const wsConnectionRef = useRef<ChatStreamConnection | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -108,6 +111,8 @@ export function CodeChatPage() {
     streamingContentRef.current = '';
     currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
     setPendingToolCalls(new Set());
+    setStreamingToolCalls([]);
+    setStreamingToolResults(new Map());
 
     // Connect to WebSocket
     const connection = connectChatStream(sessionId, {
@@ -136,6 +141,8 @@ export function CodeChatPage() {
           setStreamingContent('');
           setIsStreaming(false);
           setPendingToolCalls(new Set());
+          setStreamingToolCalls([]);
+          setStreamingToolResults(new Map());
         } else {
           // Accumulate streaming content in both ref and state
           streamingContentRef.current += content;
@@ -153,6 +160,8 @@ export function CodeChatPage() {
         };
         currentMessageToolsRef.current.toolCalls.push(toolCall);
         setPendingToolCalls((prev) => new Set(prev).add(id));
+        // Update state immediately for real-time display
+        setStreamingToolCalls((prev) => [...prev, toolCall]);
       },
       onToolResult: (id: string, tool: string, result: any, error: string | null, durationMs: number) => {
         console.log('[CodeChatPage] Tool result received:', tool, id, error ? 'ERROR' : 'SUCCESS');
@@ -169,6 +178,8 @@ export function CodeChatPage() {
           updated.delete(id);
           return updated;
         });
+        // Update state immediately for real-time display
+        setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
       },
       onError: (err: Error) => {
         setError(`Connection error: ${err.message}`);
@@ -349,6 +360,8 @@ export function CodeChatPage() {
             isStreaming={isStreaming}
             streamingContent={streamingContent}
             pendingToolCalls={pendingToolCalls}
+            streamingToolCalls={streamingToolCalls}
+            streamingToolResults={streamingToolResults}
           />
         </Box>
 
