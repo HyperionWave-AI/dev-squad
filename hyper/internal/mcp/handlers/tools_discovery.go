@@ -18,14 +18,16 @@ import (
 // ToolsDiscoveryHandler manages MCP tools discovery operations
 type ToolsDiscoveryHandler struct {
 	toolsStorage     storage.ToolsStorageInterface
-	httpClient       *http.Client
 	metadataRegistry *ToolMetadataRegistry
+	mcpServer        *mcp.Server
+	httpClient       *http.Client // For discovering tools from external MCP servers
 }
 
 // NewToolsDiscoveryHandler creates a new tools discovery handler
-func NewToolsDiscoveryHandler(toolsStorage *storage.ToolsStorage) *ToolsDiscoveryHandler {
+func NewToolsDiscoveryHandler(toolsStorage *storage.ToolsStorage, mcpServer *mcp.Server) *ToolsDiscoveryHandler {
 	return &ToolsDiscoveryHandler{
 		toolsStorage: toolsStorage,
+		mcpServer:    mcpServer,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -155,7 +157,7 @@ func (h *ToolsDiscoveryHandler) registerGetToolSchema(server *mcp.Server) error 
 func (h *ToolsDiscoveryHandler) registerExecuteTool(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "execute_tool",
-		Description: "Execute an MCP tool by name with specified arguments. This tool calls the actual tool implementation via the MCP HTTP bridge. Use get_tool_schema first to understand required parameters.",
+		Description: "Execute an MCP tool by name with specified arguments. This tool looks up the tool's server from the registry and makes an HTTP call to that server's MCP endpoint. Works with external MCP servers registered via mcp_add_server. Built-in tools cannot be executed via this tool. Use get_tool_schema first to understand required parameters.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -279,66 +281,155 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 		return createErrorResult("args parameter is required and must be a JSON object"), nil, nil
 	}
 
-	// Call the tool via MCP HTTP bridge
-	// The bridge expects: POST to /api/mcp/tools/call with body: {"name": "toolName", "arguments": {...}}
-	bridgeURL := "http://localhost:7095/api/mcp/tools/call"
+	// Look up the tool metadata to find which server it belongs to
+	toolMetadata, err := h.toolsStorage.GetToolSchema(ctx, toolName)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("tool not found: %s", err.Error())), nil, nil
+	}
 
+	// Check if this is a built-in tool (mcp-builtin server)
+	if toolMetadata.ServerName == "mcp-builtin" {
+		return createErrorResult(fmt.Sprintf(
+			"Tool '%s' is a built-in tool and cannot be executed via execute_tool. "+
+				"Built-in tools are directly available in your MCP client.",
+			toolName,
+		)), nil, nil
+	}
+
+	// Get the server metadata to find the server URL
+	serverMetadata, err := h.toolsStorage.GetServer(ctx, toolMetadata.ServerName)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to get server info: %s", err.Error())), nil, nil
+	}
+
+	// Execute the tool on the remote MCP server
+	result, err := h.executeToolOnServer(ctx, serverMetadata.ServerURL, toolName, toolArgs)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to execute tool: %s", err.Error())), nil, nil
+	}
+
+	return result, result, nil
+}
+
+// executeToolOnServer makes an HTTP call to an MCP server to execute a tool
+func (h *ToolsDiscoveryHandler) executeToolOnServer(ctx context.Context, serverURL, toolName string, toolArgs map[string]interface{}) (*mcp.CallToolResult, error) {
+	// Create MCP tools/call request
 	requestBody := map[string]interface{}{
-		"name":      toolName,
-		"arguments": toolArgs,
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      toolName,
+			"arguments": toolArgs,
+		},
 	}
 
 	bodyJSON, err := json.Marshal(requestBody)
 	if err != nil {
-		return createErrorResult(fmt.Sprintf("failed to marshal request: %s", err.Error())), nil, nil
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", bridgeURL, bytes.NewReader(bodyJSON))
+	req, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewReader(bodyJSON))
 	if err != nil {
-		return createErrorResult(fmt.Sprintf("failed to create request: %s", err.Error())), nil, nil
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Request-ID", fmt.Sprintf("execute_tool_%d", time.Now().UnixNano()))
+	req.Header.Set("Accept", "application/json, text/event-stream")
 
 	// Execute request
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return createErrorResult(fmt.Sprintf("failed to execute tool: %s", err.Error())), nil, nil
+		return nil, fmt.Errorf("failed to connect to server: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Read response
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return createErrorResult(fmt.Sprintf("failed to read response: %s", err.Error())), nil, nil
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Check for HTTP error
 	if resp.StatusCode != http.StatusOK {
-		return createErrorResult(fmt.Sprintf("tool execution failed (status %d): %s", resp.StatusCode, string(respBody))), nil, nil
+		return nil, fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Parse response
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return createErrorResult(fmt.Sprintf("failed to parse response: %s", err.Error())), nil, nil
+	// Parse MCP response
+	var mcpResponse struct {
+		Result struct {
+			Content []json.RawMessage `json:"content"`
+			IsError bool              `json:"isError,omitempty"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 
-	// Format result
-	resultJSON, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return createErrorResult(fmt.Sprintf("failed to marshal result: %s", err.Error())), nil, nil
+	if err := json.Unmarshal(respBody, &mcpResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	resultText := fmt.Sprintf("Tool '%s' executed successfully:\n\n%s", toolName, string(resultJSON))
+	// Check for MCP error
+	if mcpResponse.Error != nil {
+		return nil, fmt.Errorf("MCP error %d: %s", mcpResponse.Error.Code, mcpResponse.Error.Message)
+	}
+
+	// Parse content items
+	var content []mcp.Content
+	for _, rawContent := range mcpResponse.Result.Content {
+		// Try to parse as TextContent first (most common)
+		var textContent struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(rawContent, &textContent); err == nil && textContent.Type == "text" {
+			content = append(content, &mcp.TextContent{Text: textContent.Text})
+			continue
+		}
+
+		// If not text, treat as generic content
+		// For now, just convert to text representation
+		content = append(content, &mcp.TextContent{Text: string(rawContent)})
+	}
+
+	// Build result
+	result := &mcp.CallToolResult{
+		Content: content,
+		IsError: mcpResponse.Result.IsError,
+	}
+
+	// If the tool execution failed, return error message
+	if result.IsError {
+		errorMsg := "tool execution failed"
+		if len(content) > 0 {
+			if textContent, ok := content[0].(*mcp.TextContent); ok {
+				errorMsg = textContent.Text
+			}
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: fmt.Sprintf("Tool '%s' execution failed: %s", toolName, errorMsg)},
+			},
+			IsError: true,
+		}, nil
+	}
+
+	// Format success result
+	resultText := fmt.Sprintf("Tool '%s' executed successfully", toolName)
+	if len(content) > 0 {
+		if textContent, ok := content[0].(*mcp.TextContent); ok {
+			resultText = fmt.Sprintf("Tool '%s' executed successfully:\n\n%s", toolName, textContent.Text)
+		}
+	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: resultText},
 		},
-	}, result, nil
+	}, nil
 }
 
 // registerMCPAddServer registers the mcp_add_server tool
