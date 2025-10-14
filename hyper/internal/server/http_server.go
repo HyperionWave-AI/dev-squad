@@ -179,8 +179,9 @@ func StartHTTPServer(
 	logger.Info("Tools storage initialized for HTTP tool management")
 
 	// Create tools discovery handler for MCP management tools
-	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage)
-	logger.Info("Tools discovery handler created for MCP management tools")
+	// Pass mcpServer instance for direct tool execution (no HTTP bridge needed)
+	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer)
+	logger.Info("Tools discovery handler created with direct MCP server access")
 
 	// Register MCP tools with the chat service
 	logger.Info("Starting MCP tools registration...")
@@ -572,7 +573,7 @@ func StartHTTPServer(
 			// Server didn't fail immediately, assume it started successfully
 			logger.Info("HTTP server listening",
 				zap.String("port", port),
-				zap.String("apiEndpoints", "/api/tasks, /api/agent-tasks, /api/code-index"),
+				zap.String("apiEndpoints", "/api/v1/tasks, /api/v1/agent-tasks, /api/v1/code-index, /api/v1/knowledge"),
 				zap.String("uiEndpoint", "/ui"))
 			startErr = nil
 			break
