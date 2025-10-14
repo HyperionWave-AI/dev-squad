@@ -192,8 +192,11 @@ type ListDirectoryTool struct{}
 // ListDirectoryInput represents the input schema for directory listing
 type ListDirectoryInput struct {
 	Path       string `json:"path"`
-	Recursive  bool   `json:"recursive,omitempty"`
-	ShowHidden bool   `json:"showHidden,omitempty"`
+	Recursive  bool   `json:"recursive,omitempty"`  // Recursive listing (default: false)
+	ShowHidden bool   `json:"showHidden,omitempty"` // Show hidden files starting with . (default: false)
+	Offset     int    `json:"offset,omitempty"`     // Starting index for pagination (default: 0)
+	MaxResults int    `json:"maxResults,omitempty"` // Maximum number of results to return (default: 100, max: 1000)
+	FileMask   string `json:"fileMask,omitempty"`   // Filter pattern (e.g., "*.js", "*.md", "test*") (default: all files)
 }
 
 // FileInfo represents a file or directory entry
@@ -208,9 +211,10 @@ type FileInfo struct {
 
 // ListDirectoryOutput represents the output from directory listing
 type ListDirectoryOutput struct {
-	Path    string     `json:"path"`
-	Entries []FileInfo `json:"entries"`
-	Count   int        `json:"count"`
+	Directory string   `json:"directory"` // Absolute path to the directory
+	Count     int      `json:"count"`     // Total number of files/directories
+	Summary   string   `json:"summary"`   // Human-readable summary (e.g., "Showing 1-100 of 523 files")
+	Files     []string `json:"files"`     // Array of file/directory names (paginated)
 }
 
 // Name returns the tool name
@@ -220,7 +224,7 @@ func (l *ListDirectoryTool) Name() string {
 
 // Description returns the tool description
 func (l *ListDirectoryTool) Description() string {
-	return "List files and directories with metadata. Returns absolute paths for all entries. Supports recursive listing and hidden files. Max 1000 entries. Metadata includes: name, path (absolute), size, isDir, modTime, permissions."
+	return "List files and directories in a directory. Returns file/directory names only (compact format). Supports pagination with 'offset' and 'maxResults' (default: 100, max: 1000). Optional 'fileMask' filter (e.g., '*.js', '*.md', 'test*') to match specific files. Recursive defaults to false. Use offset for pagination (0, 100, 200, etc.)."
 }
 
 // Call lists the directory
@@ -228,6 +232,17 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 	var listInput ListDirectoryInput
 	if err := json.Unmarshal([]byte(input), &listInput); err != nil {
 		return "", fmt.Errorf("invalid input format: %w", err)
+	}
+
+	// Set defaults for pagination
+	if listInput.MaxResults <= 0 {
+		listInput.MaxResults = 100
+	}
+	if listInput.MaxResults > maxDirEntries {
+		listInput.MaxResults = maxDirEntries
+	}
+	if listInput.Offset < 0 {
+		listInput.Offset = 0
 	}
 
 	// Validate path and convert to absolute
@@ -248,10 +263,11 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 		return "", fmt.Errorf("path '%s' is a FILE, not a directory. To read file contents, use read_file tool with this path. To list directory, provide the parent directory path: %s", listInput.Path, parentDir)
 	}
 
-	var entries []FileInfo
+	// Collect all file names (not full metadata)
+	var allNames []string
 
 	if listInput.Recursive {
-		// Recursive walk
+		// Recursive walk - collect up to maxDirEntries total
 		err = filepath.WalkDir(listInput.Path, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -265,23 +281,19 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 				return nil
 			}
 
-			// Get file info
-			info, err := d.Info()
-			if err != nil {
-				return err
+			// Apply file mask filter if provided
+			if listInput.FileMask != "" {
+				matched, err := filepath.Match(listInput.FileMask, d.Name())
+				if err != nil || !matched {
+					return nil // Skip non-matching files
+				}
 			}
 
-			entries = append(entries, FileInfo{
-				Name:        d.Name(),
-				Path:        path,
-				Size:        info.Size(),
-				IsDir:       d.IsDir(),
-				ModTime:     info.ModTime().Format("2006-01-02 15:04:05"),
-				Permissions: info.Mode().String(),
-			})
+			// Add name only
+			allNames = append(allNames, d.Name())
 
-			// Limit entries
-			if len(entries) >= maxDirEntries {
+			// Hard limit to prevent memory issues
+			if len(allNames) >= maxDirEntries {
 				return io.EOF
 			}
 
@@ -304,37 +316,53 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 				continue
 			}
 
-			info, err := d.Info()
-			if err != nil {
-				continue
+			// Apply file mask filter if provided
+			if listInput.FileMask != "" {
+				matched, err := filepath.Match(listInput.FileMask, d.Name())
+				if err != nil || !matched {
+					continue // Skip non-matching files
+				}
 			}
 
-			fullPath := filepath.Join(listInput.Path, d.Name())
-			entries = append(entries, FileInfo{
-				Name:        d.Name(),
-				Path:        fullPath,
-				Size:        info.Size(),
-				IsDir:       d.IsDir(),
-				ModTime:     info.ModTime().Format("2006-01-02 15:04:05"),
-				Permissions: info.Mode().String(),
-			})
+			allNames = append(allNames, d.Name())
 
-			// Limit entries
-			if len(entries) >= maxDirEntries {
+			// Hard limit to prevent memory issues
+			if len(allNames) >= maxDirEntries {
 				break
 			}
 		}
 	}
 
 	// Sort alphabetically
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name < entries[j].Name
-	})
+	sort.Strings(allNames)
+
+	// Apply pagination
+	totalCount := len(allNames)
+	start := listInput.Offset
+	if start > totalCount {
+		start = totalCount
+	}
+
+	end := start + listInput.MaxResults
+	if end > totalCount {
+		end = totalCount
+	}
+
+	paginatedNames := allNames[start:end]
+
+	// Create summary message
+	summary := fmt.Sprintf("Showing %d-%d of %d files", start+1, end, totalCount)
+	if totalCount == 0 {
+		summary = "Directory is empty"
+	} else if start >= totalCount {
+		summary = fmt.Sprintf("Offset %d exceeds total count %d", start, totalCount)
+	}
 
 	output := ListDirectoryOutput{
-		Path:    listInput.Path,
-		Entries: entries,
-		Count:   len(entries),
+		Directory: listInput.Path,
+		Count:     totalCount,
+		Summary:   summary,
+		Files:     paginatedNames,
 	}
 
 	result, err := json.Marshal(output)
