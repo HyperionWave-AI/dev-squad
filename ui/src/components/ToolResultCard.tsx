@@ -88,9 +88,23 @@ export function ToolResultCard({
     return langMap[ext || ''] || 'text';
   };
 
-  const renderBashOutput = (output: string) => {
+  const renderBashOutput = (output: any) => {
+    // Defensive parsing: handle JSON string or object
+    let outputStr = output;
+    if (typeof output === 'string') {
+      try {
+        const parsed = JSON.parse(output);
+        outputStr = parsed.stdout || parsed.output || parsed;
+      } catch {
+        // Already a string, use as-is
+        outputStr = output;
+      }
+    } else if (output && typeof output === 'object') {
+      outputStr = output.stdout || output.output || JSON.stringify(output);
+    }
+
     const ansi_up = new AnsiUp();
-    const html = ansi_up.ansi_to_html(output);
+    const html = ansi_up.ansi_to_html(String(outputStr));
 
     return (
       <Box
@@ -111,8 +125,19 @@ export function ToolResultCard({
   };
 
   const renderReadFile = (data: any) => {
-    const content = data.content || data;
-    const filePath = data.filePath || data.path || 'file';
+    // Defensive parsing: handle JSON string or object
+    let parsedData = data;
+    if (typeof data === 'string') {
+      try {
+        parsedData = JSON.parse(data);
+      } catch {
+        // Not JSON, treat as plain content
+        parsedData = { content: data };
+      }
+    }
+
+    const content = parsedData.content || parsedData;
+    const filePath = parsedData.filePath || parsedData.path || 'file';
     const language = detectLanguageFromPath(filePath);
 
     return (
@@ -139,8 +164,19 @@ export function ToolResultCard({
   };
 
   const renderWriteFile = (data: any) => {
-    const filePath = data.filePath || data.path || 'file';
-    const bytesWritten = data.bytesWritten || data.size || 0;
+    // Defensive parsing: handle JSON string or object
+    let parsedData = data;
+    if (typeof data === 'string') {
+      try {
+        parsedData = JSON.parse(data);
+      } catch {
+        // Not JSON, use default
+        parsedData = {};
+      }
+    }
+
+    const filePath = parsedData.filePath || parsedData.path || 'file';
+    const bytesWritten = parsedData.bytesWritten || parsedData.size || 0;
 
     return (
       <Alert severity="success" icon={<CheckCircle />}>
@@ -157,7 +193,18 @@ export function ToolResultCard({
   };
 
   const renderListDirectory = (data: any) => {
-    const files = Array.isArray(data) ? data : data.files || [];
+    // Defensive parsing: handle JSON string or object
+    let parsedData = data;
+    if (typeof data === 'string') {
+      try {
+        parsedData = JSON.parse(data);
+      } catch {
+        // Not JSON, treat as empty
+        parsedData = { files: [] };
+      }
+    }
+
+    const files = Array.isArray(parsedData) ? parsedData : parsedData.files || [];
 
     if (files.length === 0) {
       return (
@@ -178,32 +225,40 @@ export function ToolResultCard({
             </TableRow>
           </TableHead>
           <TableBody>
-            {files.map((file: any, idx: number) => (
-              <TableRow key={idx} hover>
-                <TableCell>
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontFamily: 'monospace',
-                      fontWeight: file.isDirectory ? 'bold' : 'normal',
-                    }}
-                  >
-                    {file.isDirectory ? '📁 ' : '📄 '}
-                    {file.name}
-                  </Typography>
-                </TableCell>
-                <TableCell align="right">
-                  <Typography variant="caption" color="text.secondary">
-                    {file.size ? `${(file.size / 1024).toFixed(1)} KB` : '-'}
-                  </Typography>
-                </TableCell>
-                <TableCell align="right">
-                  <Typography variant="caption" color="text.secondary">
-                    {file.modified ? new Date(file.modified).toLocaleDateString() : '-'}
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ))}
+            {files.map((file: any, idx: number) => {
+              // Handle both string arrays and object arrays
+              const fileName = typeof file === 'string' ? file : file.name;
+              const fileSize = typeof file === 'object' ? file.size : undefined;
+              const fileModified = typeof file === 'object' ? file.modified : undefined;
+              const isDirectory = typeof file === 'object' ? file.isDirectory : false;
+
+              return (
+                <TableRow key={idx} hover>
+                  <TableCell>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontFamily: 'monospace',
+                        fontWeight: isDirectory ? 'bold' : 'normal',
+                      }}
+                    >
+                      {isDirectory ? '📁 ' : '📄 '}
+                      {fileName}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography variant="caption" color="text.secondary">
+                      {fileSize ? `${(fileSize / 1024).toFixed(1)} KB` : '-'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography variant="caption" color="text.secondary">
+                      {fileModified ? new Date(fileModified).toLocaleDateString() : '-'}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </Box>
@@ -211,7 +266,20 @@ export function ToolResultCard({
   };
 
   const renderPatchDiff = (data: any) => {
-    const diffText = data.diff || data.patch || data;
+    // Defensive parsing: handle JSON string or object
+    let parsedData = data;
+    if (typeof data === 'string') {
+      try {
+        parsedData = JSON.parse(data);
+      } catch {
+        // Not JSON, treat as plain diff text
+        parsedData = data;
+      }
+    }
+
+    const diffText = typeof parsedData === 'object'
+      ? (parsedData.diff || parsedData.patch || JSON.stringify(parsedData, null, 2))
+      : parsedData;
 
     return (
       <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
