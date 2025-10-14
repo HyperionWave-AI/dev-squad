@@ -7,7 +7,7 @@ import type {
   SearchOptions,
 } from '../types/codeIndex';
 
-const BASE_URL = '/api/code-index';
+const BASE_URL = '/api/v1/code-index';
 
 class RestCodeClient {
   private async fetchJSON<T>(endpoint: string, options?: RequestInit): Promise<T> {
