@@ -190,13 +190,8 @@ func (t *CodeIndexScanTool) Execute(ctx context.Context, input map[string]interf
 	// - Embedding client to generate embeddings
 	// - Qdrant client to store vectors
 	//
-	// This is guidance to use MCP endpoint for full functionality
-	return map[string]interface{}{
-		"error":   "scan_requires_mcp_endpoint",
-		"message": "Code scanning requires direct MCP tool access for file system scanning and embedding generation. Use code_index_scan MCP tool via /mcp endpoint instead.",
-		"folderPath": folderPath,
-		"next_step": "POST to /mcp endpoint with code_index_scan tool",
-	}, nil
+	// Return an actual error to prevent AI from retrying
+	return nil, fmt.Errorf("code scanning requires direct MCP tool access for file system scanning and embedding generation - this tool cannot perform scanning operations in this context")
 }
 
 // CodeIndexStatusTool implements the ToolExecutor interface for index status
