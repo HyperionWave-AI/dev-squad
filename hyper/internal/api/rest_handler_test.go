@@ -222,10 +222,10 @@ func TestCreateHumanTask(t *testing.T) {
 
 			gin.SetMode(gin.TestMode)
 			router := gin.New()
-			router.POST("/api/tasks", handler.CreateHumanTask)
+			router.POST("/api/v1/tasks", handler.CreateHumanTask)
 
 			body, _ := json.Marshal(tt.requestBody)
-			req := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBuffer(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewBuffer(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
@@ -255,9 +255,9 @@ func TestListHumanTasks(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/api/tasks", handler.ListHumanTasks)
+	router.GET("/api/v1/tasks", handler.ListHumanTasks)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, req)
@@ -280,14 +280,14 @@ func TestUpdateTaskStatus(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.PUT("/api/tasks/:id/status", handler.UpdateTaskStatus)
+	router.PUT("/api/v1/tasks/:id/status", handler.UpdateTaskStatus)
 
 	body := UpdateTaskStatusRequest{
 		Status: "in_progress",
 		Notes:  "Working on it",
 	}
 	bodyBytes, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPut, "/api/tasks/task-123/status", bytes.NewBuffer(bodyBytes))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tasks/task-123/status", bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -313,9 +313,9 @@ func TestListCollections(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.GET("/api/knowledge/collections", handler.ListCollections)
+	router.GET("/api/v1/knowledge/collections", handler.ListCollections)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/knowledge/collections", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/knowledge/collections", nil)
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, req)
@@ -345,10 +345,10 @@ func TestRegisterRESTRoutes(t *testing.T) {
 	// Check for specific route patterns
 	foundTasksRoute := false
 	for _, route := range routes {
-		if route.Path == "/api/tasks" {
+		if route.Path == "/api/v1/tasks" {
 			foundTasksRoute = true
 			break
 		}
 	}
-	assert.True(t, foundTasksRoute, "Should register /api/tasks route")
+	assert.True(t, foundTasksRoute, "Should register /api/v1/tasks route")
 }

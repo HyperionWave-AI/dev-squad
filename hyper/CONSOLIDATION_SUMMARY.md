@@ -1,7 +1,9 @@
 # Go Services Consolidation - COMPLETED
 
-**Date:** October 12, 2025  
-**Agent:** go-dev  
+> **Historical Note (October 14, 2025):** The HTTP bridge referenced in this document was subsequently removed to simplify the architecture. The system now uses direct MCP server execution. The bridge directory and binary no longer exist.
+
+**Date:** October 12, 2025
+**Agent:** go-dev
 **Task:** Consolidate 4 Go modules into unified ./hyper package
 
 ## ✅ Success Summary
