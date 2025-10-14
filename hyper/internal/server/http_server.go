@@ -219,21 +219,24 @@ func StartHTTPServer(
 		logger.Debug("Registered Qdrant tool", zap.String("name", toolName))
 	}
 
-	// Register code index tools (code search and indexing)
-	logger.Info("Registering code index tools (code search and indexing)...")
-	beforeCount = len(toolRegistry.List())
-	if err := mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage); err != nil {
-		logger.Error("Failed to register code index tools", zap.Error(err))
-		return err
-	}
-	afterCount = len(toolRegistry.List())
-	codeIndexToolsCount := afterCount - beforeCount
-	logger.Info("Code index tools registered",
-		zap.Int("count", codeIndexToolsCount),
-		zap.Int("totalSoFar", afterCount))
-	for _, toolName := range toolRegistry.List()[beforeCount:afterCount] {
-		logger.Debug("Registered code index tool", zap.String("name", toolName))
-	}
+	// REMOVED: Code index tools (code_index_search, code_index_scan, code_index_add_folder)
+	// These tools are stubs that require MCP server dependencies (embedding client, Qdrant, file scanner)
+	// which are not available in the Chat context. They always fail with errors, confusing the AI.
+	// Code indexing functionality should be accessed via the direct MCP endpoint at /mcp instead.
+	// logger.Info("Registering code index tools (code search and indexing)...")
+	// beforeCount = len(toolRegistry.List())
+	// if err := mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage); err != nil {
+	// 	logger.Error("Failed to register code index tools", zap.Error(err))
+	// 	return err
+	// }
+	// afterCount = len(toolRegistry.List())
+	codeIndexToolsCount := 0 // Set to 0 since tools are no longer registered
+	// logger.Info("Code index tools registered",
+	// 	zap.Int("count", codeIndexToolsCount),
+	// 	zap.Int("totalSoFar", afterCount))
+	// for _, toolName := range toolRegistry.List()[beforeCount:afterCount] {
+	// 	logger.Debug("Registered code index tool", zap.String("name", toolName))
+	// }
 
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools (bash, file operations, patch application)...")
