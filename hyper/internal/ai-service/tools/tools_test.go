@@ -233,7 +233,9 @@ func TestWriteFileTool(t *testing.T) {
 				if result.BytesWritten != 12 {
 					t.Errorf("expected 12 bytes written, got: %d", result.BytesWritten)
 				}
-				content, _ := os.ReadFile(result.Path)
+				// Use original absolute path for verification since result.Path is now relative
+				absPath := filepath.Join(tmpDir, "new.txt")
+				content, _ := os.ReadFile(absPath)
 				if string(content) != "test content" {
 					t.Errorf("file content mismatch")
 				}
@@ -264,7 +266,11 @@ func TestWriteFileTool(t *testing.T) {
 				if err := json.Unmarshal([]byte(output), &result); err != nil {
 					t.Fatalf("failed to unmarshal: %v", err)
 				}
-				if _, err := os.Stat(result.Path); err != nil {
+				// Use original absolute path for verification since result.Path is now relative
+				absPath := filepath.Join(tmpDir, "subdir/nested/file.txt")
+				if _, err := os.Stat(absPath); err != nil {
+					t.Logf("Result path from tool: %s", result.Path)
+					t.Logf("Expected absolute path: %s", absPath)
 					t.Errorf("file not created: %v", err)
 				}
 			},
@@ -349,8 +355,8 @@ func TestListDirectoryTool(t *testing.T) {
 				}
 				// Should include nested.txt
 				found := false
-				for _, entry := range result.Entries {
-					if strings.Contains(entry.Name, "nested.txt") {
+				for _, name := range result.Files {
+					if strings.Contains(name, "nested.txt") {
 						found = true
 						break
 					}
@@ -370,8 +376,8 @@ func TestListDirectoryTool(t *testing.T) {
 					t.Fatalf("failed to unmarshal: %v", err)
 				}
 				found := false
-				for _, entry := range result.Entries {
-					if entry.Name == ".hidden" {
+				for _, name := range result.Files {
+					if name == ".hidden" {
 						found = true
 						break
 					}
@@ -453,7 +459,7 @@ line 5`
 	}{
 		{
 			name:      "valid patch",
-			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `"}`,
+			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -474,7 +480,7 @@ line 5`
 		},
 		{
 			name:      "invalid patch (context mismatch)",
-			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(invalidPatch, "\n", "\\n") + `"}`,
+			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(invalidPatch, "\n", "\\n") + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -491,7 +497,7 @@ line 5`
 		},
 		{
 			name:      "dry run mode",
-			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `","dryRun":true}`,
+			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `","dryRun":true}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -507,7 +513,7 @@ line 5`
 		},
 		{
 			name:      "file not found",
-			input:     `{"path":"` + filepath.Join(tmpDir, "nonexistent.txt") + `","patch":"` + validPatch + `"}`,
+			input:     `{"filePath":"` + filepath.Join(tmpDir, "nonexistent.txt") + `","patch":"` + validPatch + `"}`,
 			wantError: true,
 		},
 	}
