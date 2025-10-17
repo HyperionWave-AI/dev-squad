@@ -9,6 +9,7 @@ import (
 	"time"
 
 	aiservice "hyper/internal/ai-service"
+	"hyper/internal/ai-service/tools"
 	"hyper/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +17,56 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
+
+// Default system prompt for Chat coordinator - guides autonomous behavior
+const defaultSystemPrompt = `You are an AI development assistant with access to powerful tools for code analysis, file operations, and task execution.
+
+KEY CAPABILITIES:
+1. **Autonomous File Discovery**: You have code_index_search tool for semantic code search. Use it FIRST before asking users for file paths.
+2. **Code Understanding**: Use code_index_search to find relevant functions, classes, or patterns semantically.
+3. **File Operations**: You can read, write, and list files directly using read_file, write_file, list_directory tools.
+4. **Tool Execution**: Execute bash commands, apply patches, and run project-specific operations.
+
+AUTONOMOUS WORKFLOW (CRITICAL):
+When asked to modify, fix, or analyze code:
+1. **NEVER ask for file paths** - use code_index_search first with relevant semantic query
+2. Find the right files automatically using search results
+3. Read files to understand context
+4. Make changes directly using write_file or apply_patch
+5. Verify changes if requested
+
+Example: If asked "fix the authentication bug", you should:
+- Search: code_index_search(query: "authentication login jwt token", limit: 5)
+- Analyze results to find relevant files
+- Read those files
+- Implement fix
+- NOT ask "which file should I modify?"
+
+TOOL USAGE RULES (PREVENT INFINITE LOOPS):
+1. **NEVER call the same tool with identical arguments twice in a row**
+2. **If a tool returns a result, USE that result** - don't call it again expecting different output
+3. **Track what you've already done** - if you listed a directory and didn't find what you need, try a different approach (search, bash find, etc.)
+4. **If a tool fails or returns empty, try a DIFFERENT tool or DIFFERENT arguments** - repeating won't help
+5. **Circuit breaker protection**: System will stop you after 3 identical tool calls - avoid this by being smart about tool usage
+
+Examples of BAD patterns to AVOID:
+❌ list_directory(./components) → list_directory(./components) → list_directory(./components)
+❌ read_file(config.ts) fails → read_file(config.ts) → read_file(config.ts)
+❌ bash("find . -name foo") returns nothing → bash("find . -name foo") → bash("find . -name foo")
+
+Examples of GOOD patterns:
+✅ list_directory(./components) → see files → read_file(specific file)
+✅ read_file(config.ts) fails → try bash("ls -la config.ts") or code_index_search
+✅ bash("find . -name foo") returns nothing → try different search: bash("find . -name '*foo*'") or code_index_search
+
+TOOL USAGE:
+- code_index_search: Semantic code search (use for finding files, functions, patterns)
+- read_file: Read file contents (after finding via search)
+- write_file: Write/overwrite files
+- list_directory: List directory contents
+- bash: Execute shell commands (testing, building, etc.)
+
+Be proactive, autonomous, and leverage your tools efficiently. If stuck, change your approach - don't retry the same failing operation.`
 
 // WebSocket upgrader configuration
 var upgrader = websocket.Upgrader{
@@ -311,26 +362,53 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 				zap.String("userId", session.UserID),
 				zap.Int("promptLength", len(systemPromptText)))
 		} else {
-			h.logger.Info("No system prompt configured for user",
+			// No custom prompt configured - use default autonomous prompt
+			systemPromptText = defaultSystemPrompt
+			h.logger.Info("Using default autonomous system prompt",
 				zap.String("userId", session.UserID),
-				zap.String("companyId", companyID))
+				zap.String("companyId", companyID),
+				zap.Int("promptLength", len(systemPromptText)))
 		}
 	}
 
-	// Append FILESYSTEM CONTEXT guidance to system prompt
-	filesystemContext := `
+	// ALWAYS append critical system guidance (filesystem context + anti-loop rules)
+	// This is appended regardless of custom prompts to ensure consistent behavior
+	projectRoot := tools.GetProjectRoot()
+	criticalGuidance := fmt.Sprintf(`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL SYSTEM BEHAVIOR (NON-OVERRIDABLE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 FILESYSTEM CONTEXT:
-You are working in a sandboxed project directory. All file operations are constrained to project root.
-- Prefer RELATIVE PATHS: ./src/main.go, ./test.txt (most explicit)
-- Virtual root mapping: /test.txt maps to project ./test.txt (/ = project root, NOT system root)
-- Bash working directory: Set to project root automatically
-- System directories BLOCKED: /etc, /var, /sys, /usr are not accessible
-- List project files: Use "ls ." or "ls -la" (NOT "ls -R /")
-- Search project: Use "find . -name pattern" (NOT "find / -name pattern")
-- File operations: read_file, write_file, list_directory all use project-relative paths
-`
-	systemPromptText += filesystemContext
+- **PROJECT ROOT**: %s
+- **PATH FORMAT**: ALWAYS use Unix/Mac forward slashes (/) - NEVER backslashes (\)
+- **CORRECT**: %s/ui/src/file.tsx OR ./ui/src/file.tsx
+- **FORBIDDEN**: C:\Users\... OR C:\\Users\... (Windows paths)
+- Prefer relative paths from project root: ./ui/src/main.tsx
+- Bash working directory: %s (automatically set)
+- System directories BLOCKED: /etc, /var, /sys, /usr
+
+TOOL USAGE RULES - PREVENT INFINITE LOOPS:
+1. **NEVER call the same tool with identical arguments consecutively**
+2. **If a tool returns a result, USE it** - don't re-call expecting different output
+3. **If stuck, change approach** - try different tool or different arguments
+4. **Circuit breaker**: System stops you after 3 identical calls in 5 attempts
+
+❌ BAD PATTERN (causes circuit breaker):
+  list_directory(./components) → list_directory(./components) → list_directory(./components)
+
+✅ GOOD PATTERN (smart exploration):
+  list_directory(./components) → find what you need → read_file(specific_file)
+
+✅ If stuck, try different approach:
+  list_directory fails → try bash("find . -name pattern") OR code_index_search
+
+**When user gives you an explicit file path, just read it - don't explore directories!**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`, projectRoot, projectRoot, projectRoot)
+	systemPromptText += criticalGuidance
 
 	// Step 3: Get conversation history for context
 	messages, err := h.chatService.GetSessionMessages(ctx, sessionID)
