@@ -358,56 +358,107 @@ func (p *anthropicProvider) messagesToContent(messages []Message) string {
 
 // SupportsTools returns true for Anthropic models that support tool use
 func (p *anthropicProvider) SupportsTools() bool {
-	// Claude 3 models (Sonnet, Opus, Haiku) support tool use
+	// Claude 3+ models (Sonnet, Opus, Haiku) support tool use
+	// Includes: claude-3, claude-3.5, claude-sonnet-4, etc.
 	model := strings.ToLower(p.config.Model)
-	return strings.Contains(model, "claude-3") || strings.Contains(model, "claude-3.5")
+	return strings.Contains(model, "claude-3") ||
+		strings.Contains(model, "claude-3.5") ||
+		strings.Contains(model, "claude-sonnet-4") ||
+		strings.Contains(model, "claude-opus-4") ||
+		strings.Contains(model, "claude-4")
 }
 
-// StreamChatWithTools implements tool calling for Anthropic
+// StreamChatWithTools implements tool calling for Anthropic using GenerateContent
 func (p *anthropicProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
-	content := p.messagesToContent(messages)
+	// Convert messages to LangChain MessageContent format
+	msgContents := make([]llms.MessageContent, 0, len(messages))
+	for _, msg := range messages {
+		var msgType llms.ChatMessageType
+		switch msg.Role {
+		case "user":
+			msgType = llms.ChatMessageTypeHuman
+		case "assistant":
+			msgType = llms.ChatMessageTypeAI
+		case "system":
+			msgType = llms.ChatMessageTypeSystem
+		default:
+			msgType = llms.ChatMessageTypeHuman
+		}
+		msgContents = append(msgContents, llms.TextParts(msgType, msg.Content))
+	}
 
-	// Create text channel
-	textChan := make(chan string, 100)
+	// Create text channel for streaming
+	textChan := make(chan string, 1000)
+	var toolCalls []ToolCall
 
-	// Start streaming in goroutine
+	// Prepare streaming function
+	streamFunc := func(ctx context.Context, chunk []byte) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case textChan <- string(chunk):
+			return nil
+		default:
+			// Non-blocking to prevent GenerateContent from hanging
+			return nil
+		}
+	}
+
+	// Build options
+	opts := []llms.CallOption{
+		llms.WithTemperature(p.config.Temperature),
+		llms.WithTools(tools),
+		llms.WithStreamingFunc(streamFunc),
+	}
+
+	if p.config.MaxOutputTokens > 0 {
+		opts = append(opts, llms.WithMaxTokens(p.config.MaxOutputTokens))
+	}
+
+	// Call GenerateContent in goroutine
+	type generateResult struct {
+		resp *llms.ContentResponse
+		err  error
+	}
+	resultChan := make(chan generateResult, 1)
+
 	go func() {
-		defer close(textChan)
-
-		// Build call options with tools
-		callOpts := []llms.CallOption{
-			llms.WithTemperature(p.config.Temperature),
-			llms.WithTools(tools),
-			llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case textChan <- string(chunk):
-					return nil
-				}
-			}),
-		}
-
-		// Add max tokens if configured
-		if p.config.MaxOutputTokens > 0 {
-			callOpts = append(callOpts, llms.WithMaxTokens(p.config.MaxOutputTokens))
-		}
-
-		// Call with tools
-		_, err := p.llm.Call(ctx, content, callOpts...)
-		if err != nil && err != context.Canceled {
-			select {
-			case <-ctx.Done():
-			case textChan <- fmt.Sprintf("ERROR: %v", err):
-			}
-		}
+		resp, err := p.llm.GenerateContent(ctx, msgContents, opts...)
+		resultChan <- generateResult{resp: resp, err: err}
+		close(textChan)
 	}()
 
-	// TODO: Extract tool calls from response
-	// For now, return empty tool calls - will be implemented when we have access to response messages
+	// Wait for generation to complete
+	result := <-resultChan
+
+	if result.err != nil && result.err != context.Canceled {
+		return nil, fmt.Errorf("failed to generate content: %w", result.err)
+	}
+
+	// Extract tool calls from response (Anthropic format)
+	if result.resp != nil && len(result.resp.Choices) > 0 {
+		choice := result.resp.Choices[0]
+
+		// Check for tool calls in the response
+		if choice.ToolCalls != nil && len(choice.ToolCalls) > 0 {
+			for _, tc := range choice.ToolCalls {
+				var args map[string]interface{}
+				if tc.FunctionCall != nil && tc.FunctionCall.Arguments != "" {
+					if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err == nil {
+						toolCalls = append(toolCalls, ToolCall{
+							ID:   tc.ID,
+							Name: tc.FunctionCall.Name,
+							Args: args,
+						})
+					}
+				}
+			}
+		}
+	}
+
 	response := &ToolResponse{
 		TextChannel: textChan,
-		ToolCalls:   []ToolCall{},
+		ToolCalls:   toolCalls,
 	}
 
 	return response, nil

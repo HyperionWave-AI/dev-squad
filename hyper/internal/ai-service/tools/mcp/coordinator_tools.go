@@ -2,11 +2,17 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"hyper/internal/ai-service"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/models"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 // CoordinatorTools provides MCP coordinator tool executors for LangChain
@@ -1390,8 +1396,429 @@ func (e *McpRemoveServerExecutor) Execute(ctx context.Context, args map[string]i
 	return data, err
 }
 
+// ExecuteSubagentTool implements the ToolExecutor interface
+// This tool creates a subchat, links it to an agent task, and executes the subagent in background
+type ExecuteSubagentTool struct {
+	subchatStorage    *storage.SubchatStorage
+	taskStorage       storage.TaskStorage
+	aiService         AIServiceInterface
+	chatService       ChatServiceInterface
+	aiSettingsService AISettingsServiceInterface
+	logger            *zap.Logger
+}
+
+// AIServiceInterface defines methods needed from the AI chat service
+type AIServiceInterface interface {
+	StreamChatWithTools(ctx context.Context, messages []aiservice.Message, maxToolCalls int) (<-chan aiservice.StreamEvent, error)
+	GetConfig() *aiservice.AIConfig
+}
+
+// ChatServiceInterface defines methods needed from the chat service
+type ChatServiceInterface interface {
+	CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
+	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
+	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
+	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
+}
+
+// AISettingsServiceInterface defines methods needed from AI settings service
+type AISettingsServiceInterface interface {
+	GetSubagent(ctx context.Context, id primitive.ObjectID, companyID string) (*models.Subagent, error)
+}
+
+func (t *ExecuteSubagentTool) Name() string {
+	return "execute_subagent"
+}
+
+func (t *ExecuteSubagentTool) Description() string {
+	return "Execute a subagent to handle an agent task. Creates a subchat, links it to the task, and spawns the subagent in a separate execution context. The subagent will work independently and update task status. Returns immediately with subchat ID for tracking."
+}
+
+func (t *ExecuteSubagentTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"agentTaskId": map[string]interface{}{
+				"type":        "string",
+				"description": "Agent task ID (UUID) to execute",
+			},
+			"parentChatId": map[string]interface{}{
+				"type":        "string",
+				"description": "Parent chat session ID",
+			},
+		},
+		"required": []string{"agentTaskId", "parentChatId"},
+	}
+}
+
+func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	agentTaskID, ok := input["agentTaskId"].(string)
+	if !ok || agentTaskID == "" {
+		return nil, fmt.Errorf("agentTaskId is required and must be a string")
+	}
+
+	parentChatID, ok := input["parentChatId"].(string)
+	if !ok || parentChatID == "" {
+		return nil, fmt.Errorf("parentChatId is required and must be a string")
+	}
+
+	t.logger.Info("🚀 execute_subagent tool called",
+		zap.String("agentTaskId", agentTaskID),
+		zap.String("parentChatId", parentChatID))
+
+	// Get the agent task to extract subagent name and details
+	agentTask, err := t.taskStorage.GetAgentTask(agentTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get agent task: %w", err)
+	}
+
+	t.logger.Info("📋 Retrieved agent task",
+		zap.String("agentTaskId", agentTaskID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.Int("todoCount", len(agentTask.Todos)))
+
+	// Update task status to in_progress
+	err = t.taskStorage.UpdateTaskStatus(agentTaskID, storage.TaskStatusInProgress, "Subagent execution initiated")
+	if err != nil {
+		return nil, fmt.Errorf("failed to update task status: %w", err)
+	}
+
+	// Create subchat for this execution
+	subchat, err := t.subchatStorage.CreateSubchat(
+		parentChatID,
+		agentTask.AgentName,
+		&agentTaskID,
+		nil, // todoID
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create subchat: %w", err)
+	}
+
+	t.logger.Info("💬 Created subchat for background execution",
+		zap.String("subchatId", subchat.ID),
+		zap.String("agentName", agentTask.AgentName))
+
+	// Spawn background goroutine to execute the subagent
+	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID)
+
+	return map[string]interface{}{
+		"subchatId":    subchat.ID,
+		"agentName":    subchat.SubagentName,
+		"agentTaskId":  agentTaskID,
+		"status":       "executing",
+		"message":      fmt.Sprintf("Subchat created and %s is now executing in background. Check subchat messages for progress.", agentTask.AgentName),
+		"createdAt":    subchat.CreatedAt,
+	}, nil
+}
+
+// executeSubagentInBackground runs the subagent AI streaming in a background goroutine
+func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string) {
+	// Create a new background context with generous timeout for long-running tasks
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	t.logger.Info("⚡ Starting subagent execution in background goroutine",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.String("agentTaskId", agentTask.ID))
+
+	// Create a chat session for this subchat
+	companyID := "dev-company" // TODO: Extract from context
+	userID := "coordinator"    // Subagent executions are associated with the coordinator
+	sessionTitle := fmt.Sprintf("Subchat: %s - %s", agentTask.AgentName, agentTask.Role)
+
+	chatSession, err := t.chatService.CreateSession(ctx, userID, companyID, sessionTitle)
+	if err != nil {
+		t.logger.Error("Failed to create chat session for subchat",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to create chat session: %v", err))
+		return
+	}
+
+	t.logger.Info("💬 Created chat session for subchat",
+		zap.String("subchatId", subchatID),
+		zap.String("sessionId", chatSession.ID.Hex()))
+
+	// Update subchat with session ID for linking
+	sessionIDHex := chatSession.ID.Hex()
+	err = t.subchatStorage.UpdateSubchatSessionID(subchatID, sessionIDHex)
+	if err != nil {
+		t.logger.Warn("Failed to link chat session to subchat",
+			zap.String("subchatId", subchatID),
+			zap.String("sessionId", sessionIDHex),
+			zap.Error(err))
+		// Continue execution even if linking fails
+	}
+
+	// Build subagent prompt from agent task
+	subagentPrompt := t.buildSubagentPrompt(agentTask)
+
+	t.logger.Info("📜 Built subagent prompt",
+		zap.String("subchatId", subchatID),
+		zap.Int("promptLength", len(subagentPrompt)),
+		zap.Int("todoCount", len(agentTask.Todos)))
+
+	// Save initial user message
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "user", subagentPrompt, companyID)
+	if err != nil {
+		t.logger.Warn("Failed to save initial user message",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+		// Continue execution even if message save fails
+	}
+
+	// Create initial message with the task prompt
+	messages := []aiservice.Message{
+		{
+			Role:    "user",
+			Content: subagentPrompt,
+		},
+	}
+
+	// Stream AI response with tools
+	maxToolCalls := t.aiService.GetConfig().MaxToolCalls
+	aiStream, err := t.aiService.StreamChatWithTools(ctx, messages, maxToolCalls)
+	if err != nil {
+		t.logger.Error("Failed to start AI streaming for subagent",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI streaming failed: %v", err))
+		return
+	}
+
+	// Process stream events and save to subchat
+	fullResponse := ""
+	toolCallCount := 0
+	completedTodos := 0
+
+	t.logger.Info("📡 Subagent AI stream started - processing events...",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName))
+
+	for event := range aiStream {
+		select {
+		case <-ctx.Done():
+			t.logger.Warn("⏱️ Subagent execution cancelled by timeout",
+				zap.String("subchatId", subchatID))
+			t.handleExecutionFailure(agentTask.ID, "Execution timeout")
+			return
+		default:
+			switch event.Type {
+			case aiservice.StreamEventToken:
+				fullResponse += event.Content
+
+			case aiservice.StreamEventToolCall:
+				toolCallCount++
+				t.logger.Info("🔧 Subagent calling tool",
+					zap.String("subchatId", subchatID),
+					zap.String("agentName", agentTask.AgentName),
+					zap.String("toolName", event.ToolCall.Name),
+					zap.Int("toolCallNumber", toolCallCount))
+
+				// Save tool call to subchat messages
+				_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, companyID)
+				if err != nil {
+					t.logger.Error("Failed to save tool call",
+						zap.String("subchatId", subchatID),
+						zap.Error(err))
+				}
+
+				// Check if this is a todo status update - track completion
+				if event.ToolCall.Name == "coordinator_update_todo_status" {
+					if status, ok := event.ToolCall.Args["status"].(string); ok && status == "completed" {
+						completedTodos++
+						t.logger.Info("✅ TODO marked as completed",
+							zap.String("subchatId", subchatID),
+							zap.String("agentName", agentTask.AgentName),
+							zap.Int("completedCount", completedTodos),
+							zap.Int("totalTodos", len(agentTask.Todos)))
+					} else if status, ok := event.ToolCall.Args["status"].(string); ok && status == "in_progress" {
+						t.logger.Info("▶️ TODO started",
+							zap.String("subchatId", subchatID),
+							zap.String("agentName", agentTask.AgentName))
+					}
+				}
+
+			case aiservice.StreamEventToolResult:
+				// Save tool result to subchat messages
+				outputStr := ""
+				if event.ToolResult.Output != nil {
+					if str, ok := event.ToolResult.Output.(string); ok {
+						outputStr = str
+					} else {
+						outputBytes, _ := json.Marshal(event.ToolResult.Output)
+						outputStr = string(outputBytes)
+					}
+				}
+
+				// Log tool result with success/failure indicator
+				if event.ToolResult.Error != "" {
+					t.logger.Warn("❌ Tool call failed",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolResult.Name),
+						zap.String("error", event.ToolResult.Error))
+				} else {
+					t.logger.Info("✓ Tool call completed",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolResult.Name),
+						zap.Int64("durationMs", event.ToolResult.DurationMs))
+				}
+
+				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, outputStr, event.ToolResult.Error, event.ToolResult.DurationMs, companyID)
+				if err != nil {
+					t.logger.Error("Failed to save tool result",
+						zap.String("subchatId", subchatID),
+						zap.Error(err))
+				}
+
+			case aiservice.StreamEventError:
+				t.logger.Error("❌ AI service error during subagent execution",
+					zap.String("subchatId", subchatID),
+					zap.String("error", event.Error))
+				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI error: %s", event.Error))
+				return
+			}
+		}
+	}
+
+	t.logger.Info("📝 Saving final AI response to subchat",
+		zap.String("subchatId", subchatID),
+		zap.Int("responseLength", len(fullResponse)))
+
+	// Save final AI response to subchat
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", fullResponse, companyID)
+	if err != nil {
+		t.logger.Error("Failed to save subagent final response",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	// Update task status to completed with summary
+	summaryNotes := fmt.Sprintf("Subagent execution completed. Tools called: %d, TODOs completed: %d/%d",
+		toolCallCount, completedTodos, len(agentTask.Todos))
+
+	t.logger.Info("🎯 Updating task status to completed",
+		zap.String("agentTaskId", agentTask.ID),
+		zap.Int("toolCalls", toolCallCount),
+		zap.Int("completedTodos", completedTodos),
+		zap.Int("totalTodos", len(agentTask.Todos)))
+
+	err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusCompleted, summaryNotes)
+	if err != nil {
+		t.logger.Error("Failed to update task status to completed",
+			zap.String("agentTaskId", agentTask.ID),
+			zap.Error(err))
+	}
+
+	// Update subchat status to completed
+	err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusCompleted)
+	if err != nil {
+		t.logger.Error("Failed to update subchat status",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	t.logger.Info("🎉 Subagent execution completed successfully!",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.Int("toolCalls", toolCallCount),
+		zap.Int("completedTodos", completedTodos),
+		zap.Int("totalTodos", len(agentTask.Todos)))
+}
+
+// buildSubagentPrompt constructs a detailed prompt for the subagent based on the agent task
+func (t *ExecuteSubagentTool) buildSubagentPrompt(agentTask *storage.AgentTask) string {
+	prompt := fmt.Sprintf(`You are %s. You have been assigned a task to complete.
+
+ROLE: %s
+
+TASK CONTEXT:
+%s
+
+YOUR TODOs:
+`, agentTask.AgentName, agentTask.Role, agentTask.ContextSummary)
+
+	for i, todo := range agentTask.Todos {
+		status := "PENDING"
+		if todo.Status == "completed" {
+			status = "✓ DONE"
+		} else if todo.Status == "in_progress" {
+			status = "IN PROGRESS"
+		}
+
+		prompt += fmt.Sprintf("\n%d. [%s] %s", i+1, status, todo.Description)
+
+		if todo.FilePath != "" {
+			prompt += fmt.Sprintf("\n   File: %s", todo.FilePath)
+		}
+		if todo.FunctionName != "" {
+			prompt += fmt.Sprintf("\n   Function: %s", todo.FunctionName)
+		}
+		if todo.ContextHint != "" {
+			prompt += fmt.Sprintf("\n   Hint: %s", todo.ContextHint)
+		}
+		if todo.HumanPromptNotes != "" {
+			prompt += fmt.Sprintf("\n   Notes: %s", todo.HumanPromptNotes)
+		}
+	}
+
+	if len(agentTask.FilesModified) > 0 {
+		prompt += "\n\nFILES TO MODIFY:\n"
+		for _, file := range agentTask.FilesModified {
+			prompt += fmt.Sprintf("- %s\n", file)
+		}
+	}
+
+	if len(agentTask.QdrantCollections) > 0 {
+		prompt += "\n\nRELEVANT KNOWLEDGE COLLECTIONS:\n"
+		for _, coll := range agentTask.QdrantCollections {
+			prompt += fmt.Sprintf("- %s\n", coll)
+		}
+	}
+
+	if agentTask.HumanPromptNotes != "" {
+		prompt += fmt.Sprintf("\n\nADDITIONAL GUIDANCE:\n%s\n", agentTask.HumanPromptNotes)
+	}
+
+	prompt += fmt.Sprintf(`
+
+INSTRUCTIONS:
+1. Start working on the TODOs immediately - no planning phase needed
+2. Use coordinator_update_todo_status to mark each TODO as 'in_progress' when you start it
+3. Use coordinator_update_todo_status to mark each TODO as 'completed' when done
+4. Use tools like read_file, write_file, bash to complete your work
+5. Update coordinator_upsert_knowledge with key decisions and contracts for handoff
+6. When ALL TODOs are completed, summarize what you accomplished
+
+Task ID: %s
+Start now!`, agentTask.ID)
+
+	return prompt
+}
+
+// handleExecutionFailure marks the task as blocked with error details
+func (t *ExecuteSubagentTool) handleExecutionFailure(agentTaskID, errorMsg string) {
+	err := t.taskStorage.UpdateTaskStatus(agentTaskID, storage.TaskStatusBlocked, fmt.Sprintf("Execution failed: %s", errorMsg))
+	if err != nil {
+		t.logger.Error("Failed to update task status to blocked",
+			zap.String("agentTaskId", agentTaskID),
+			zap.Error(err))
+	}
+}
+
 // RegisterCoordinatorTools registers all coordinator tools with the tool registry
-func RegisterCoordinatorTools(registry *aiservice.ToolRegistry, taskStorage storage.TaskStorage, knowledgeStorage storage.KnowledgeStorage, toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler) error {
+func RegisterCoordinatorTools(
+	registry *aiservice.ToolRegistry,
+	taskStorage storage.TaskStorage,
+	knowledgeStorage storage.KnowledgeStorage,
+	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler,
+	subchatStorage *storage.SubchatStorage,
+	aiService AIServiceInterface,
+	chatService ChatServiceInterface,
+	aiSettingsService AISettingsServiceInterface,
+	logger *zap.Logger,
+) error {
 	tools := []aiservice.ToolExecutor{
 		// Existing tools
 		&CreateAgentTaskTool{storage: taskStorage},
@@ -1416,6 +1843,14 @@ func RegisterCoordinatorTools(registry *aiservice.ToolRegistry, taskStorage stor
 		// Subagent tools
 		&ListSubagentsTool{mongoDatabase: nil},
 		&SetCurrentSubagentTool{mongoDatabase: nil},
+		&ExecuteSubagentTool{
+			subchatStorage:    subchatStorage,
+			taskStorage:       taskStorage,
+			aiService:         aiService,
+			chatService:       chatService,
+			aiSettingsService: aiSettingsService,
+			logger:            logger,
+		},
 
 		// MCP tools discovery and management (6 new tools)
 		&DiscoverToolsExecutor{toolsDiscoveryHandler: toolsDiscoveryHandler},
