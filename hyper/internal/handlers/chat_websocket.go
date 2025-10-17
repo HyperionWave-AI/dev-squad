@@ -18,8 +18,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// Default system prompt for Chat coordinator - guides autonomous behavior
-const defaultSystemPrompt = `You are an AI development assistant with access to powerful tools for code analysis, file operations, and task execution.
+// DefaultSystemPrompt is the default system prompt for Chat coordinator - guides autonomous behavior
+// Exported for use by AI settings service
+const DefaultSystemPrompt = `You are an AI development assistant with access to powerful tools for code analysis, file operations, and task execution.
 
 KEY CAPABILITIES:
 1. **Autonomous File Discovery**: You have code_index_search tool for semantic code search. Use it FIRST before asking users for file paths.
@@ -363,7 +364,7 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 				zap.Int("promptLength", len(systemPromptText)))
 		} else {
 			// No custom prompt configured - use default autonomous prompt
-			systemPromptText = defaultSystemPrompt
+			systemPromptText = DefaultSystemPrompt
 			h.logger.Info("Using default autonomous system prompt",
 				zap.String("userId", session.UserID),
 				zap.String("companyId", companyID),
