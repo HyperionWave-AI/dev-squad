@@ -25,6 +25,7 @@ const (
 type Subchat struct {
 	ID             string        `bson:"_id" json:"id"`
 	ParentChatID   string        `bson:"parentChatId" json:"parentChatId"`
+	SessionID      *string       `bson:"sessionId,omitempty" json:"sessionId,omitempty"` // Chat session ID for message storage
 	SubagentName   string        `bson:"subagentName" json:"subagentName"`
 	AssignedTaskID *string       `bson:"assignedTaskId,omitempty" json:"assignedTaskId,omitempty"`
 	AssignedTodoID *string       `bson:"assignedTodoId,omitempty" json:"assignedTodoId,omitempty"`
@@ -230,6 +231,37 @@ func (s *SubchatStorage) UpdateSubchatAgentTask(subchatID string, agentTaskID *s
 	s.logger.Info("Updated subchat with agent task",
 		zap.String("subchatId", subchatID),
 		zap.Stringp("agentTaskId", agentTaskID))
+
+	return nil
+}
+
+// UpdateSubchatSessionID links a chat session ID to a subchat for message storage
+func (s *SubchatStorage) UpdateSubchatSessionID(subchatID string, sessionID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := s.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": subchatID},
+		bson.M{
+			"$set": bson.M{
+				"sessionId": sessionID,
+				"updatedAt": time.Now(),
+			},
+		},
+	)
+	if err != nil {
+		s.logger.Error("Failed to update subchat session ID", zap.String("subchatId", subchatID), zap.Error(err))
+		return fmt.Errorf("failed to update subchat session ID: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("subchat not found: %s", subchatID)
+	}
+
+	s.logger.Info("Updated subchat with session ID",
+		zap.String("subchatId", subchatID),
+		zap.String("sessionId", sessionID))
 
 	return nil
 }
