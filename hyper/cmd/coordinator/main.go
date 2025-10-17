@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hyper/embed"
+	"hyper/internal/ai-service/tools"
 	"hyper/internal/server"
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
@@ -100,6 +101,13 @@ func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient,
 }
 
 func main() {
+	// Initialize project root detection
+	if err := tools.InitProjectRoot(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to detect project root: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Project root: %s\n", tools.GetProjectRoot())
+
 	// Parse command-line flags
 	mode := flag.String("mode", "both", "Server mode: http, mcp, or both")
 	configPath := flag.String("config", "", "Path to config file (default: .env.hyper in executable or current dir)")
@@ -337,6 +345,42 @@ func main() {
 		logger.Fatal("Failed to ensure code index collection", zap.Error(err))
 	}
 
+	// Auto-index project root at startup
+	projectRoot := tools.GetProjectRoot()
+	logger.Info("Auto-indexing project root", zap.String("path", projectRoot))
+
+	// Check if project root already has a mapping
+	existingMapping, err := codeIndexStorage.GetPathMapping(projectRoot)
+	if err != nil {
+		logger.Warn("Failed to check existing path mapping", zap.Error(err))
+	}
+
+	if existingMapping == nil {
+		// No mapping exists - create collection and mapping
+		collectionName, err := qdrantClient.EnsureCollectionForPath(projectRoot, codeIndexStorage)
+		if err != nil {
+			logger.Warn("Failed to auto-index project root",
+				zap.String("path", projectRoot),
+				zap.Error(err))
+		} else {
+			logger.Info("Created code index collection for project root",
+				zap.String("path", projectRoot),
+				zap.String("collection", collectionName))
+
+			// Create folder metadata (for legacy compatibility)
+			_, err = codeIndexStorage.AddFolder(projectRoot, "Auto-indexed project root")
+			if err != nil {
+				logger.Warn("Failed to create folder metadata", zap.Error(err))
+			} else {
+				logger.Info("Folder metadata created for project root. Use code_index_scan to index files.")
+			}
+		}
+	} else {
+		logger.Info("Project root already indexed",
+			zap.String("path", projectRoot),
+			zap.String("collection", existingMapping.QdrantCollection))
+	}
+
 	// Initialize path mapper for Docker volume mapping
 	pathMappingsEnv := os.Getenv("CODE_INDEX_PATH_MAPPINGS")
 	pathMapper := watcher.NewPathMapper(pathMappingsEnv, logger)
@@ -354,10 +398,36 @@ func main() {
 	} else {
 		for _, folder := range folders {
 			if folder.Status == "active" {
-				if err := fileWatcher.AddFolder(folder); err != nil {
-					logger.Warn("Failed to add folder to file watcher",
+				// Convert relative paths to absolute paths before passing to file watcher
+				absPath, err := filepath.Abs(folder.Path)
+				if err != nil {
+					logger.Warn("Failed to convert folder path to absolute path",
 						zap.String("path", folder.Path),
 						zap.Error(err))
+					continue
+				}
+
+				// Create new folder struct with absolute path
+				folderWithAbsPath := &storage.IndexedFolder{
+					ID:          folder.ID,
+					Path:        absPath,
+					Description: folder.Description,
+					Status:      folder.Status,
+					AddedAt:     folder.AddedAt,
+					LastScanned: folder.LastScanned,
+					FileCount:   folder.FileCount,
+					Error:       folder.Error,
+				}
+
+				if err := fileWatcher.AddFolder(folderWithAbsPath); err != nil {
+					logger.Warn("Failed to add folder to file watcher",
+						zap.String("path", absPath),
+						zap.String("originalPath", folder.Path),
+						zap.Error(err))
+				} else {
+					logger.Info("Added folder to watch list",
+						zap.String("path", absPath),
+						zap.String("originalPath", folder.Path))
 				}
 			}
 		}

@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/scanner"
 	"hyper/internal/mcp/storage"
@@ -72,14 +72,6 @@ func (h *CodeToolsHandler) addToolWithMetadata(server *mcp.Server, tool *mcp.Too
 
 // RegisterCodeIndexTools registers all code indexing MCP tools
 func (h *CodeToolsHandler) RegisterCodeIndexTools(server *mcp.Server) error {
-	if err := h.registerAddFolder(server); err != nil {
-		return fmt.Errorf("failed to register code_index_add_folder tool: %w", err)
-	}
-
-	if err := h.registerRemoveFolder(server); err != nil {
-		return fmt.Errorf("failed to register code_index_remove_folder tool: %w", err)
-	}
-
 	if err := h.registerScan(server); err != nil {
 		return fmt.Errorf("failed to register code_index_scan tool: %w", err)
 	}
@@ -92,67 +84,7 @@ func (h *CodeToolsHandler) RegisterCodeIndexTools(server *mcp.Server) error {
 		return fmt.Errorf("failed to register code_index_status tool: %w", err)
 	}
 
-	h.logger.Info("Registered code indexing MCP tools", zap.Int("count", 5))
-	return nil
-}
-
-// registerAddFolder registers the code_index_add_folder tool
-func (h *CodeToolsHandler) registerAddFolder(server *mcp.Server) error {
-	tool := &mcp.Tool{
-		Name:        "code_index_add_folder",
-		Description: "Add a folder to the code index for semantic search. The folder will be scanned and all supported code files will be indexed. If folderPath is not provided, uses INDEX_SOURCE_PATH environment variable or current working directory.",
-		InputSchema: &jsonschema.Schema{
-			Type: "object",
-			Properties: map[string]*jsonschema.Schema{
-				"folderPath": {
-					Type:        "string",
-					Description: "Absolute path to the folder to index (optional: defaults to INDEX_SOURCE_PATH env var or current directory)",
-				},
-				"description": {
-					Type:        "string",
-					Description: "Optional description of the folder/project",
-				},
-			},
-			Required: []string{},
-		},
-	}
-
-	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args, err := h.extractArguments(req)
-		if err != nil {
-			return createCodeIndexErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
-		}
-		return h.handleAddFolder(ctx, args)
-	})
-
-	return nil
-}
-
-// registerRemoveFolder registers the code_index_remove_folder tool
-func (h *CodeToolsHandler) registerRemoveFolder(server *mcp.Server) error {
-	tool := &mcp.Tool{
-		Name:        "code_index_remove_folder",
-		Description: "Remove a folder from the code index. This will delete all indexed files and their vectors.",
-		InputSchema: &jsonschema.Schema{
-			Type: "object",
-			Properties: map[string]*jsonschema.Schema{
-				"folderPath": {
-					Type:        "string",
-					Description: "Absolute path to the folder to remove (must match the path used when adding)",
-				},
-			},
-			Required: []string{"folderPath"},
-		},
-	}
-
-	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args, err := h.extractArguments(req)
-		if err != nil {
-			return createCodeIndexErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
-		}
-		return h.handleRemoveFolder(ctx, args)
-	})
-
+	h.logger.Info("Registered code indexing MCP tools", zap.Int("count", 3))
 	return nil
 }
 
@@ -243,198 +175,26 @@ func (h *CodeToolsHandler) registerStatus(server *mcp.Server) error {
 	return nil
 }
 
-// handleAddFolder handles the code_index_add_folder tool
-func (h *CodeToolsHandler) handleAddFolder(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	folderPath, ok := args["folderPath"].(string)
-	if !ok || folderPath == "" {
-		// Use INDEX_SOURCE_PATH from environment if no folderPath provided
-		folderPath = os.Getenv("INDEX_SOURCE_PATH")
-		if folderPath == "" {
-			// Fallback to current working directory
-			var err error
-			folderPath, err = os.Getwd()
-			if err != nil {
-				return createCodeIndexErrorResult(fmt.Sprintf("failed to get current directory and INDEX_SOURCE_PATH not set: %s", err.Error())), nil
-			}
-		}
-	}
-
-	// Convert to absolute path
-	absPath, err := filepath.Abs(folderPath)
-	if err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("invalid folder path: %s", err.Error())), nil
-	}
-
-	// CRITICAL SAFETY: Validate path before doing ANYTHING else
-	if err := validateSafeIndexPath(absPath); err != nil {
-		h.logger.Error("REJECTED dangerous path in code_index_add_folder",
-			zap.String("path", absPath),
-			zap.Error(err))
-		return createCodeIndexErrorResult(fmt.Sprintf("FORBIDDEN: %s", err.Error())), nil
-	}
-
-	// Validate that the path exists and is a directory
-	info, err := os.Stat(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return createCodeIndexErrorResult(fmt.Sprintf("path does not exist: %s - check INDEX_SOURCE_PATH environment variable", absPath)), nil
-		}
-		return createCodeIndexErrorResult(fmt.Sprintf("failed to access path %s: %s", absPath, err.Error())), nil
-	}
-	if !info.IsDir() {
-		return createCodeIndexErrorResult(fmt.Sprintf("path is not a directory: %s", absPath)), nil
-	}
-
-	description := ""
-	if desc, ok := args["description"].(string); ok {
-		description = desc
-	}
-
-	// Check if folder already exists
-	existing, err := h.codeIndexStorage.GetFolderByPath(absPath)
-	if err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("failed to check existing folder: %s", err.Error())), nil
-	}
-	if existing != nil {
-		jsonData, _ := json.Marshal(map[string]interface{}{
-			"success": true,
-			"message": "Folder already indexed. File watcher is monitoring changes.",
-			"folder":  existing,
-		})
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: string(jsonData)},
-			},
-		}, nil
-	}
-
-	// Add folder to storage
-	folder, err := h.codeIndexStorage.AddFolder(absPath, description)
-	if err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("failed to add folder: %s", err.Error())), nil
-	}
-
-	// Add folder to file watcher
-	if h.fileWatcher != nil {
-		if err := h.fileWatcher.AddFolder(folder); err != nil {
-			h.logger.Warn("Failed to add folder to file watcher", zap.Error(err))
-		} else {
-			h.logger.Info("Added folder to file watcher", zap.String("path", absPath))
-		}
-	}
-
-	h.logger.Info("Added folder to code index",
-		zap.String("folderID", folder.ID),
-		zap.String("path", absPath))
-
-	jsonData, _ := json.Marshal(map[string]interface{}{
-		"success": true,
-		"message": "Folder added successfully. File watcher is now monitoring changes. Use code_index_scan to index existing files.",
-		"folder":  folder,
-	})
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: string(jsonData)},
-		},
-	}, nil
-}
-
-// handleRemoveFolder handles the code_index_remove_folder tool
-func (h *CodeToolsHandler) handleRemoveFolder(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	folderPath, ok := args["folderPath"].(string)
-	if !ok {
-		return createCodeIndexErrorResult("folderPath is required and must be a string"), nil
-	}
-
-	// Convert to absolute path
-	absPath, err := filepath.Abs(folderPath)
-	if err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("invalid folder path: %s", err.Error())), nil
-	}
-
-	// Get folder
-	folder, err := h.codeIndexStorage.GetFolderByPath(absPath)
-	if err != nil || folder == nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("folder not found: %s", absPath)), nil
-	}
-
-	// Get all files to delete their vectors
-	files, err := h.codeIndexStorage.ListFiles(folder.ID)
-	if err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("failed to list files: %s", err.Error())), nil
-	}
-
-	// Delete vectors from Qdrant
-	if len(files) > 0 {
-		err = h.qdrantClient.DeleteCodeIndexByFilter(map[string]interface{}{
-			"must": []map[string]interface{}{
-				{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
-			},
-		})
-		if err != nil {
-			h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
-		}
-	}
-
-	// Remove folder from file watcher
-	if h.fileWatcher != nil {
-		if err := h.fileWatcher.RemoveFolder(absPath); err != nil {
-			h.logger.Warn("Failed to remove folder from file watcher", zap.Error(err))
-		} else {
-			h.logger.Info("Removed folder from file watcher", zap.String("path", absPath))
-		}
-	}
-
-	// Remove folder from MongoDB (cascades to files and chunks)
-	if err := h.codeIndexStorage.RemoveFolder(folder.ID); err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("failed to remove folder: %s", err.Error())), nil
-	}
-
-	h.logger.Info("Removed folder from code index",
-		zap.String("folderID", folder.ID),
-		zap.String("path", absPath),
-		zap.Int("filesRemoved", len(files)))
-
-	jsonData, _ := json.Marshal(map[string]interface{}{
-		"success":      true,
-		"message":      "Folder removed successfully",
-		"filesRemoved": len(files),
-	})
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: string(jsonData)},
-		},
-	}, nil
-}
-
 // handleScan handles the code_index_scan tool
 func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	folderPath, ok := args["folderPath"].(string)
-	if !ok || folderPath == "" {
-		// Use INDEX_SOURCE_PATH from environment if no folderPath provided
-		folderPath = os.Getenv("INDEX_SOURCE_PATH")
-		if folderPath == "" {
-			// Fallback to current working directory
-			var err error
-			folderPath, err = os.Getwd()
-			if err != nil {
-				return createCodeIndexErrorResult(fmt.Sprintf("failed to get current directory and INDEX_SOURCE_PATH not set: %s", err.Error())), nil
-			}
-		}
-	}
+	// Always use project root (no manual folderPath parameter)
+	projectRoot := tools.GetProjectRoot()
 
-	// Convert to absolute path
-	absPath, err := filepath.Abs(folderPath)
+	// Lookup collection name from code_index_map
+	mapping, err := h.codeIndexStorage.GetPathMapping(projectRoot)
 	if err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("invalid folder path: %s", err.Error())), nil
+		return createCodeIndexErrorResult(fmt.Sprintf("failed to lookup collection mapping: %s", err.Error())), nil
+	}
+	if mapping == nil {
+		return createCodeIndexErrorResult(fmt.Sprintf("no code index found for project root '%s' - please restart coordinator to auto-index", projectRoot)), nil
 	}
 
-	// Get folder
-	folder, err := h.codeIndexStorage.GetFolderByPath(absPath)
+	collectionName := mapping.QdrantCollection
+
+	// Get folder (for legacy compatibility with MongoDB storage)
+	folder, err := h.codeIndexStorage.GetFolderByPath(projectRoot)
 	if err != nil || folder == nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("folder not found. Use code_index_add_folder first: %s", absPath)), nil
+		return createCodeIndexErrorResult(fmt.Sprintf("folder metadata not found for: %s", projectRoot)), nil
 	}
 
 	// Update folder status to scanning
@@ -443,7 +203,7 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 	}
 
 	// Scan directory for files
-	scannedFiles, err := h.fileScanner.ScanDirectory(absPath)
+	scannedFiles, err := h.fileScanner.ScanDirectory(projectRoot)
 	if err != nil {
 		h.codeIndexStorage.UpdateFolderStatus(folder.ID, "error", err.Error())
 		return createCodeIndexErrorResult(fmt.Sprintf("failed to scan directory: %s", err.Error())), nil
@@ -521,9 +281,9 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 			}
 		}
 
-		// Upload vectors to Qdrant
+		// Upload vectors to Qdrant (using the correct collection for this path)
 		if len(qdrantPoints) > 0 {
-			if err := h.qdrantClient.UpsertCodeIndexPoints(qdrantPoints); err != nil {
+			if err := h.qdrantClient.UpsertCodeIndexPoints(collectionName, qdrantPoints); err != nil {
 				h.logger.Warn("Failed to upsert vectors", zap.String("file", scannedFile.Path), zap.Error(err))
 			}
 		}
@@ -587,16 +347,30 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		}
 	}
 
+	// Get current project root
+	projectRoot := tools.GetProjectRoot()
+
+	// Lookup collection name from code_index_map
+	mapping, err := h.codeIndexStorage.GetPathMapping(projectRoot)
+	if err != nil {
+		return createCodeIndexErrorResult(fmt.Sprintf("failed to lookup collection mapping: %s", err.Error())), nil
+	}
+	if mapping == nil {
+		return createCodeIndexErrorResult(fmt.Sprintf("no code index found for project root '%s' - please restart coordinator to auto-index, or the path has not been indexed yet", projectRoot)), nil
+	}
+
+	collectionName := mapping.QdrantCollection
+
 	// Generate embedding for query
 	queryEmbedding, err := h.embeddingClient.CreateEmbedding(query)
 	if err != nil {
 		return createCodeIndexErrorResult(fmt.Sprintf("failed to create query embedding: %s", err.Error())), nil
 	}
 
-	// Search in Qdrant
-	searchResp, err := h.qdrantClient.SearchCodeIndex(queryEmbedding, limit)
+	// Search in Qdrant using the correct collection
+	searchResp, err := h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
 	if err != nil {
-		return createCodeIndexErrorResult(fmt.Sprintf("failed to search: %s", err.Error())), nil
+		return createCodeIndexErrorResult(fmt.Sprintf("failed to search in collection '%s': %s", collectionName, err.Error())), nil
 	}
 
 	// Build results
