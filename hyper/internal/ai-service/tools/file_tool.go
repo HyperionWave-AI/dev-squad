@@ -43,7 +43,7 @@ func (r *ReadFileTool) Name() string {
 
 // Description returns the tool description
 func (r *ReadFileTool) Description() string {
-	return "Read file contents with automatic encoding detection. Supports files up to 10MB. Returns file metadata including size and encoding (UTF-8 or binary)."
+	return "Read file contents. Use RELATIVE PATHS (e.g., ./src/main.go) or virtual paths (/ = project root). Supports files up to 10MB. System directories not accessible."
 }
 
 // Call reads the file
@@ -94,7 +94,7 @@ func (r *ReadFileTool) Call(ctx context.Context, input string) (string, error) {
 	}
 
 	output := ReadFileOutput{
-		Path:     readInput.FilePath,
+		Path:     StripProjectRoot(readInput.FilePath),
 		Content:  string(content),
 		Size:     info.Size(),
 		Encoding: encoding,
@@ -131,7 +131,7 @@ func (w *WriteFileTool) Name() string {
 
 // Description returns the tool description
 func (w *WriteFileTool) Description() string {
-	return "Create or overwrite file with content. Supports atomic writes (temp file + rename). Max content size 5MB. Can create parent directories if needed."
+	return "Create or overwrite file. Use RELATIVE PATHS (e.g., ./test.txt) or virtual paths (/ = project root). Atomic writes. Max 5MB."
 }
 
 // Call writes the file
@@ -174,7 +174,7 @@ func (w *WriteFileTool) Call(ctx context.Context, input string) (string, error) 
 	}
 
 	output := WriteFileOutput{
-		Path:         writeInput.FilePath,
+		Path:         StripProjectRoot(writeInput.FilePath),
 		BytesWritten: len(contentBytes),
 	}
 
@@ -224,7 +224,7 @@ func (l *ListDirectoryTool) Name() string {
 
 // Description returns the tool description
 func (l *ListDirectoryTool) Description() string {
-	return "List files and directories in a directory. Returns file/directory names only (compact format). Supports pagination with 'offset' and 'maxResults' (default: 100, max: 1000). Optional 'fileMask' filter (e.g., '*.js', '*.md', 'test*') to match specific files. Recursive defaults to false. Use offset for pagination (0, 100, 200, etc.)."
+	return "List files. Use RELATIVE PATHS (e.g., ./src) or virtual paths (/ = project root). Returns file/directory names only (compact format). Supports pagination with 'offset' and 'maxResults' (default: 100, max: 1000). Optional 'fileMask' filter (e.g., '*.js', '*.md', 'test*') to match specific files. Recursive defaults to false. Use offset for pagination (0, 100, 200, etc.)."
 }
 
 // Call lists the directory
@@ -359,7 +359,7 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 	}
 
 	output := ListDirectoryOutput{
-		Directory: listInput.Path,
+		Directory: StripProjectRoot(listInput.Path),
 		Count:     totalCount,
 		Summary:   summary,
 		Files:     paginatedNames,
@@ -386,8 +386,11 @@ func validatePath(path string) (string, error) {
 		return "", fmt.Errorf("path traversal (..) not allowed for security. Use absolute paths instead (e.g., /full/path/to/file)")
 	}
 
-	// Convert to absolute path
-	absPath, err := filepath.Abs(path)
+	// Map absolute paths to project-relative
+	mappedPath := MapPath(path)
+
+	// Convert to absolute path (now relative to project root)
+	absPath, err := filepath.Abs(mappedPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid path format: %w. Provide a valid file or directory path", err)
 	}
@@ -395,9 +398,9 @@ func validatePath(path string) (string, error) {
 	// Check if path exists
 	if _, err := os.Stat(absPath); err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("path does not exist: '%s'. Verify the path is correct and the file/directory exists", absPath)
+			return "", fmt.Errorf("path does not exist: '%s'. Verify the path is correct and the file/directory exists", StripProjectRoot(absPath))
 		}
-		return "", fmt.Errorf("cannot access path '%s': %w", absPath, err)
+		return "", fmt.Errorf("cannot access path '%s': %w", StripProjectRoot(absPath), err)
 	}
 
 	// Check allowed directories (if ALLOWED_DIRS env var is set)
@@ -411,7 +414,7 @@ func validatePath(path string) (string, error) {
 			}
 		}
 		if !allowed {
-			return "", fmt.Errorf("path '%s' is outside allowed directories. Access restricted to: %s", absPath, allowedDirs)
+			return "", fmt.Errorf("path '%s' is outside allowed directories. Access restricted to: %s", StripProjectRoot(absPath), allowedDirs)
 		}
 	}
 
@@ -431,8 +434,11 @@ func validatePathForWrite(path string) (string, error) {
 		return "", fmt.Errorf("path traversal (..) not allowed for security. Use absolute paths instead (e.g., /full/path/to/file)")
 	}
 
-	// Convert to absolute path
-	absPath, err := filepath.Abs(path)
+	// Map absolute paths to project-relative
+	mappedPath := MapPath(path)
+
+	// Convert to absolute path (now relative to project root)
+	absPath, err := filepath.Abs(mappedPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid path format: %w. Provide a valid file path", err)
 	}
@@ -448,7 +454,7 @@ func validatePathForWrite(path string) (string, error) {
 			}
 		}
 		if !allowed {
-			return "", fmt.Errorf("path '%s' is outside allowed directories. Access restricted to: %s", absPath, allowedDirs)
+			return "", fmt.Errorf("path '%s' is outside allowed directories. Access restricted to: %s", StripProjectRoot(absPath), allowedDirs)
 		}
 	}
 
