@@ -3,11 +3,15 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"hyper/internal/mcp/embeddings"
@@ -415,6 +419,30 @@ func GenerateID() string {
 	return uuid.New().String()
 }
 
+// GenerateCollectionName generates a unique, valid Qdrant collection name from a path
+// Returns a name like "code_index_a1b2c3d4" (alphanumeric + underscore only)
+func GenerateCollectionName(path string) string {
+	// Create SHA256 hash of the path
+	hash := sha256.Sum256([]byte(path))
+	hashStr := hex.EncodeToString(hash[:])
+
+	// Take first 8 characters of hash for uniqueness
+	shortHash := hashStr[:8]
+
+	// Construct valid collection name: prefix + hash
+	collectionName := fmt.Sprintf("code_index_%s", shortHash)
+
+	// Ensure it's valid Qdrant collection name (alphanumeric + underscore only)
+	// This regex replaces any non-alphanumeric/underscore chars with underscore
+	validNameRegex := regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	collectionName = validNameRegex.ReplaceAllString(collectionName, "_")
+
+	// Convert to lowercase for consistency
+	collectionName = strings.ToLower(collectionName)
+
+	return collectionName
+}
+
 // Ping checks Qdrant connectivity
 func (c *QdrantClient) Ping(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/", c.baseURL), nil)
@@ -680,8 +708,8 @@ func (c *QdrantClient) EnsureCodeIndexCollection(expectedDimensions ...int) erro
 	return nil
 }
 
-// UpsertCodeIndexPoints upserts code indexing points into the collection
-func (c *QdrantClient) UpsertCodeIndexPoints(points []CodeIndexPoint) error {
+// UpsertCodeIndexPoints upserts code indexing points into the specified collection
+func (c *QdrantClient) UpsertCodeIndexPoints(collectionName string, points []CodeIndexPoint) error {
 	requestBody := map[string]interface{}{
 		"points": points,
 	}
@@ -691,7 +719,7 @@ func (c *QdrantClient) UpsertCodeIndexPoints(points []CodeIndexPoint) error {
 		return fmt.Errorf("failed to marshal points: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/collections/%s/points?wait=true", c.baseURL, CodeIndexCollection)
+	url := fmt.Sprintf("%s/collections/%s/points?wait=true", c.baseURL, collectionName)
 	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -711,7 +739,7 @@ func (c *QdrantClient) UpsertCodeIndexPoints(points []CodeIndexPoint) error {
 		bodyStr := string(body)
 
 		// Check for dimension mismatch
-		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, CodeIndexCollection); dimErr != nil {
+		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, collectionName); dimErr != nil {
 			return dimErr
 		}
 
@@ -721,8 +749,8 @@ func (c *QdrantClient) UpsertCodeIndexPoints(points []CodeIndexPoint) error {
 	return nil
 }
 
-// SearchCodeIndex performs a vector similarity search for code
-func (c *QdrantClient) SearchCodeIndex(vector []float32, limit int) (*CodeIndexSearchResponse, error) {
+// SearchCodeIndex performs a vector similarity search for code in the specified collection
+func (c *QdrantClient) SearchCodeIndex(collectionName string, vector []float32, limit int) (*CodeIndexSearchResponse, error) {
 	searchReq := map[string]interface{}{
 		"vector":       vector,
 		"limit":        limit,
@@ -735,7 +763,7 @@ func (c *QdrantClient) SearchCodeIndex(vector []float32, limit int) (*CodeIndexS
 		return nil, fmt.Errorf("failed to marshal search request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/collections/%s/points/search", c.baseURL, CodeIndexCollection)
+	url := fmt.Sprintf("%s/collections/%s/points/search", c.baseURL, collectionName)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -755,7 +783,7 @@ func (c *QdrantClient) SearchCodeIndex(vector []float32, limit int) (*CodeIndexS
 		bodyStr := string(body)
 
 		// Check for dimension mismatch
-		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, CodeIndexCollection); dimErr != nil {
+		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, collectionName); dimErr != nil {
 			return nil, dimErr
 		}
 
@@ -770,8 +798,8 @@ func (c *QdrantClient) SearchCodeIndex(vector []float32, limit int) (*CodeIndexS
 	return &searchResp, nil
 }
 
-// DeleteCodeIndexByFilter deletes code index points matching a filter
-func (c *QdrantClient) DeleteCodeIndexByFilter(filter map[string]interface{}) error {
+// DeleteCodeIndexByFilter deletes code index points matching a filter in the specified collection
+func (c *QdrantClient) DeleteCodeIndexByFilter(collectionName string, filter map[string]interface{}) error {
 	requestBody := map[string]interface{}{
 		"filter": filter,
 	}
@@ -781,7 +809,7 @@ func (c *QdrantClient) DeleteCodeIndexByFilter(filter map[string]interface{}) er
 		return fmt.Errorf("failed to marshal delete request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", c.baseURL, CodeIndexCollection)
+	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", c.baseURL, collectionName)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -805,13 +833,14 @@ func (c *QdrantClient) DeleteCodeIndexByFilter(filter map[string]interface{}) er
 }
 
 // UpsertCodeIndexPoint upserts a single code index point (helper for file watcher)
+// Note: This uses the default CodeIndexCollection - use UpsertCodeIndexPoints for custom collections
 func (c *QdrantClient) UpsertCodeIndexPoint(id string, vector []float32, payload map[string]interface{}) error {
 	point := CodeIndexPoint{
 		ID:      id,
 		Vector:  vector,
 		Payload: payload,
 	}
-	return c.UpsertCodeIndexPoints([]CodeIndexPoint{point})
+	return c.UpsertCodeIndexPoints(CodeIndexCollection, []CodeIndexPoint{point})
 }
 
 // DeleteCodeIndexPoint deletes a single code index point (helper for file watcher)
@@ -846,4 +875,64 @@ func (c *QdrantClient) DeleteCodeIndexPoint(pointID string) error {
 	}
 
 	return nil
+}
+
+// EnsureCollectionForPath ensures a Qdrant collection exists for a specific path
+// Checks code_index_map for existing mapping, or creates new collection and mapping
+// Returns the collection name to use for this path
+func (c *QdrantClient) EnsureCollectionForPath(path string, codeIndexStorage *CodeIndexStorage) (string, error) {
+	// Check if mapping already exists
+	mapping, err := codeIndexStorage.GetPathMapping(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to check path mapping: %w", err)
+	}
+
+	if mapping != nil {
+		// Mapping exists, return the collection name
+		return mapping.QdrantCollection, nil
+	}
+
+	// No mapping exists, create new collection
+	collectionName := GenerateCollectionName(path)
+
+	// Create Qdrant collection with 768 dimensions (default for code indexing)
+	collectionConfig := map[string]interface{}{
+		"vectors": map[string]interface{}{
+			"size":     c.vectorDimension,
+			"distance": "Cosine",
+		},
+	}
+
+	jsonBody, err := json.Marshal(collectionConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal collection config: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s", c.baseURL, collectionName)
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to create collection: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Collection already exists is OK (status 200), or newly created (201)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to create collection (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Save mapping to MongoDB
+	if err := codeIndexStorage.AddPathMapping(path, collectionName); err != nil {
+		return "", fmt.Errorf("failed to save path mapping: %w", err)
+	}
+
+	return collectionName, nil
 }
