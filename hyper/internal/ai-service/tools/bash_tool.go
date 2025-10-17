@@ -65,6 +65,11 @@ func (b *BashTool) Call(ctx context.Context, input string) (string, error) {
 		}
 	}
 
+	// Block system paths
+	if IsSystemPath(bashInput.Command) {
+		return "", fmt.Errorf("access to system directories is blocked for security")
+	}
+
 	// Set timeout (default 30s)
 	timeout := time.Duration(bashInput.Timeout) * time.Second
 	if timeout == 0 {
@@ -77,6 +82,7 @@ func (b *BashTool) Call(ctx context.Context, input string) (string, error) {
 
 	start := time.Now()
 	cmd := exec.CommandContext(cmdCtx, "bash", "-c", bashInput.Command)
+	cmd.Dir = GetProjectRoot() // Set working directory to project root
 
 	stdout, err := cmd.Output()
 	duration := time.Since(start).Milliseconds()
