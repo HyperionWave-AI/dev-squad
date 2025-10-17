@@ -17,15 +17,17 @@ type CodeIndexStorage struct {
 	foldersCol      *mongo.Collection
 	filesCol        *mongo.Collection
 	chunksCol       *mongo.Collection
+	pathMappingsCol *mongo.Collection
 }
 
 // NewCodeIndexStorage creates a new MongoDB storage instance
 func NewCodeIndexStorage(db *mongo.Database) (*CodeIndexStorage, error) {
 	storage := &CodeIndexStorage{
-		db:         db,
-		foldersCol: db.Collection("indexed_folders"),
-		filesCol:   db.Collection("indexed_files"),
-		chunksCol:  db.Collection("file_chunks"),
+		db:              db,
+		foldersCol:      db.Collection("indexed_folders"),
+		filesCol:        db.Collection("indexed_files"),
+		chunksCol:       db.Collection("file_chunks"),
+		pathMappingsCol: db.Collection("code_index_map"),
 	}
 
 	// Create indexes
@@ -47,6 +49,15 @@ func (s *CodeIndexStorage) createIndexes() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create folder indexes: %w", err)
+	}
+
+	// Path mappings indexes
+	_, err = s.pathMappingsCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "path", Value: 1}}, Options: options.Index().SetUnique(true)},
+		{Keys: bson.D{{Key: "qdrantCollection", Value: 1}}},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create path mapping indexes: %w", err)
 	}
 
 	// Files indexes
@@ -446,4 +457,75 @@ func (s *CodeIndexStorage) GetIndexStatus() (*IndexStatus, error) {
 	}
 
 	return status, nil
+}
+
+// CodeIndexMapping represents a path-to-Qdrant-collection mapping
+type CodeIndexMapping struct {
+	Path              string    `bson:"path" json:"path"`
+	QdrantCollection  string    `bson:"qdrantCollection" json:"qdrantCollection"`
+	CreatedAt         time.Time `bson:"createdAt" json:"createdAt"`
+	LastIndexed       time.Time `bson:"lastIndexed" json:"lastIndexed"`
+}
+
+// AddPathMapping adds or updates a path-to-collection mapping
+func (s *CodeIndexStorage) AddPathMapping(path, qdrantCollection string) error {
+	mapping := &CodeIndexMapping{
+		Path:             path,
+		QdrantCollection: qdrantCollection,
+		CreatedAt:        time.Now(),
+		LastIndexed:      time.Now(),
+	}
+
+	opts := options.Update().SetUpsert(true)
+	filter := bson.M{"path": path}
+	update := bson.M{
+		"$set": bson.M{
+			"qdrantCollection": qdrantCollection,
+			"lastIndexed":      mapping.LastIndexed,
+		},
+		"$setOnInsert": bson.M{
+			"createdAt": mapping.CreatedAt,
+		},
+	}
+
+	_, err := s.pathMappingsCol.UpdateOne(context.Background(), filter, update, opts)
+	if err != nil {
+		return fmt.Errorf("failed to add path mapping: %w", err)
+	}
+
+	return nil
+}
+
+// GetPathMapping retrieves a mapping by path
+func (s *CodeIndexStorage) GetPathMapping(path string) (*CodeIndexMapping, error) {
+	var mapping CodeIndexMapping
+	err := s.pathMappingsCol.FindOne(context.Background(), bson.M{"path": path}).Decode(&mapping)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get path mapping: %w", err)
+	}
+	return &mapping, nil
+}
+
+// GetPathMappingByPath is an alias for GetPathMapping for clarity
+func (s *CodeIndexStorage) GetPathMappingByPath(path string) (*CodeIndexMapping, error) {
+	return s.GetPathMapping(path)
+}
+
+// ListPathMappings returns all path mappings
+func (s *CodeIndexStorage) ListPathMappings() ([]*CodeIndexMapping, error) {
+	cursor, err := s.pathMappingsCol.Find(context.Background(), bson.M{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list path mappings: %w", err)
+	}
+	defer cursor.Close(context.Background())
+
+	var mappings []*CodeIndexMapping
+	if err := cursor.All(context.Background(), &mappings); err != nil {
+		return nil, fmt.Errorf("failed to decode path mappings: %w", err)
+	}
+
+	return mappings, nil
 }
