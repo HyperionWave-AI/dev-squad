@@ -17,6 +17,8 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
+
+	"hyper/internal/ai-service/tools"
 )
 
 // FilesystemToolHandler handles MCP tool requests for filesystem operations
@@ -87,8 +89,11 @@ func (h *FilesystemToolHandler) validatePath(path string) (string, error) {
 		return "", fmt.Errorf("directory traversal detected in path: %s", path)
 	}
 
-	// Convert to absolute path
-	absPath, err := filepath.Abs(path)
+	// Map absolute paths to project-relative
+	mappedPath := tools.MapPath(path)
+
+	// Convert to absolute path (now relative to project root)
+	absPath, err := filepath.Abs(mappedPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid path: %w", err)
 	}
