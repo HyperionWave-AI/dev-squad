@@ -299,6 +299,21 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 		}
 	}
 
+	// Append FILESYSTEM CONTEXT guidance to system prompt
+	filesystemContext := `
+
+FILESYSTEM CONTEXT:
+You are working in a sandboxed project directory. All file operations are constrained to project root.
+- Prefer RELATIVE PATHS: ./src/main.go, ./test.txt (most explicit)
+- Virtual root mapping: /test.txt maps to project ./test.txt (/ = project root, NOT system root)
+- Bash working directory: Set to project root automatically
+- System directories BLOCKED: /etc, /var, /sys, /usr are not accessible
+- List project files: Use "ls ." or "ls -la" (NOT "ls -R /")
+- Search project: Use "find . -name pattern" (NOT "find / -name pattern")
+- File operations: read_file, write_file, list_directory all use project-relative paths
+`
+	systemPromptText += filesystemContext
+
 	// Step 3: Get conversation history for context
 	messages, err := h.chatService.GetSessionMessages(ctx, sessionID)
 	if err != nil {

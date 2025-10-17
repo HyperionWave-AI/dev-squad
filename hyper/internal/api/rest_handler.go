@@ -831,15 +831,18 @@ func (h *RESTAPIHandler) RemoveFolder(c *gin.Context) {
 		return
 	}
 
-	// Delete vectors from Qdrant
+	// Delete vectors from Qdrant - lookup collection from path mapping
 	if len(files) > 0 {
-		err = h.qdrantClient.DeleteCodeIndexByFilter(map[string]interface{}{
-			"must": []map[string]interface{}{
-				{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
-			},
-		})
-		if err != nil {
-			h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
+		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+		if mapping != nil {
+			err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
+				"must": []map[string]interface{}{
+					{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
+				},
+			})
+			if err != nil {
+				h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
+			}
 		}
 	}
 
@@ -980,9 +983,14 @@ func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 			}
 		}
 
-		// Upload vectors to Qdrant
+		// Upload vectors to Qdrant - lookup collection from path mapping
 		if len(qdrantPoints) > 0 {
-			if err := h.qdrantClient.UpsertCodeIndexPoints(qdrantPoints); err != nil {
+			mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+			collectionName := storage.CodeIndexCollection // fallback to default
+			if mapping != nil {
+				collectionName = mapping.QdrantCollection
+			}
+			if err := h.qdrantClient.UpsertCodeIndexPoints(collectionName, qdrantPoints); err != nil {
 				h.logger.Warn("Failed to upsert vectors", zap.String("file", scannedFile.Path), zap.Error(err))
 			}
 		}
@@ -1051,8 +1059,17 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		return
 	}
 
+	// Determine which collection to search - if folderPath provided, use its mapping
+	collectionName := storage.CodeIndexCollection // fallback to default
+	if req.FolderPath != "" {
+		mapping, _ := h.codeIndexStorage.GetPathMapping(req.FolderPath)
+		if mapping != nil {
+			collectionName = mapping.QdrantCollection
+		}
+	}
+
 	// Search in Qdrant
-	searchResp, err := h.qdrantClient.SearchCodeIndex(queryEmbedding, limit)
+	searchResp, err := h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search: " + err.Error()})
 		return
