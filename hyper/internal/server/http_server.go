@@ -187,10 +187,23 @@ func StartHTTPServer(
 	logger.Info("Starting MCP tools registration...")
 	toolRegistry := aiChatService.GetToolRegistry()
 
+	// Initialize subchat storage (needed for execute_subagent tool)
+	subchatStorage := storage.NewSubchatStorage(mongoDatabase, logger)
+
 	// Register coordinator tools (task management, knowledge base, MCP management)
 	logger.Info("Registering coordinator tools (task management, knowledge base, MCP management)...")
 	beforeCount := len(toolRegistry.List())
-	if err := mcptools.RegisterCoordinatorTools(toolRegistry, taskStorage, knowledgeStorage, toolsDiscoveryHandler); err != nil {
+	if err := mcptools.RegisterCoordinatorTools(
+		toolRegistry,
+		taskStorage,
+		knowledgeStorage,
+		toolsDiscoveryHandler,
+		subchatStorage,
+		aiChatService,  // AI service for sub-agent streaming
+		chatService,    // Chat service for message storage
+		aiSettingsService, // AI settings service for subagent prompts
+		logger,         // Logger for debugging
+	); err != nil {
 		logger.Error("Failed to register coordinator tools", zap.Error(err))
 		return err
 	}
@@ -353,8 +366,8 @@ func StartHTTPServer(
 	logger.Info("Knowledge API routes registered",
 		zap.String("popularCollectionsPath", "/api/v1/knowledge/popular-collections"))
 
-	// Initialize subchat storage and handlers
-	subchatStorage := storage.NewSubchatStorage(mongoDatabase, logger)
+	// Subchat storage already initialized earlier for execute_subagent tool
+	// Use it to seed system subagents and create handlers
 
 	// Automatically seed system subagents on startup (idempotent - safe to run every time)
 	logger.Info("Ensuring system subagents are seeded...")
