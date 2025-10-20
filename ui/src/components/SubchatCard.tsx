@@ -14,12 +14,17 @@ import {
   Chip,
   Box,
   Stack,
+  CircularProgress,
+  LinearProgress,
 } from '@mui/material';
 import {
   AccountTree as TaskIcon,
   CheckCircle as TodoIcon,
   Person as AgentIcon,
   Schedule as TimeIcon,
+  PlayArrow as RunningIcon,
+  CheckCircleOutline as CompletedIcon,
+  Error as ErrorIcon,
 } from '@mui/icons-material';
 import type { Subchat } from '../services/subchatService';
 
@@ -41,6 +46,13 @@ const STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'error'>
   active: 'primary',
   completed: 'success',
   failed: 'error',
+};
+
+// Status icons
+const STATUS_ICONS: Record<string, React.ElementType> = {
+  active: RunningIcon,
+  completed: CompletedIcon,
+  failed: ErrorIcon,
 };
 
 export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) => {
@@ -81,6 +93,8 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) =>
   const category = getSubagentCategory(subchat.subagentName);
   const categoryColor = CATEGORY_COLORS[category] || 'default';
   const statusColor = STATUS_COLORS[subchat.status] || 'default';
+  const StatusIcon = STATUS_ICONS[subchat.status] || RunningIcon;
+  const isRunning = subchat.status === 'active';
 
   return (
     <Card
@@ -91,6 +105,14 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) =>
           boxShadow: 3,
           transform: 'translateY(-2px)',
         },
+        // Add subtle pulse animation for running subchats
+        ...(isRunning && {
+          animation: 'pulse 2s ease-in-out infinite',
+          '@keyframes pulse': {
+            '0%, 100%': { borderColor: 'divider' },
+            '50%': { borderColor: 'primary.main', borderWidth: 2 },
+          },
+        }),
       }}
     >
       <CardActionArea onClick={handleClick} disabled={!onClick}>
@@ -109,14 +131,24 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) =>
               />
             </Box>
 
-            {/* Status badge */}
+            {/* Status badge with icon and progress indicator */}
             <Box>
-              <Chip
-                label={subchat.status}
-                color={statusColor}
-                size="small"
-                sx={{ textTransform: 'capitalize' }}
-              />
+              <Box display="flex" alignItems="center" gap={1} mb={isRunning ? 1 : 0}>
+                <Chip
+                  icon={<StatusIcon />}
+                  label={subchat.status}
+                  color={statusColor}
+                  size="small"
+                  sx={{ textTransform: 'capitalize' }}
+                />
+                {isRunning && (
+                  <CircularProgress size={16} thickness={5} />
+                )}
+              </Box>
+              {/* Progress bar for running subchats */}
+              {isRunning && (
+                <LinearProgress color="primary" />
+              )}
             </Box>
 
             {/* Assigned Task ID */}
