@@ -372,7 +372,7 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 		}
 	}
 
-	// ALWAYS append critical system guidance (filesystem context + anti-loop rules)
+	// ALWAYS append critical system guidance (filesystem context + anti-loop rules + session context)
 	// This is appended regardless of custom prompts to ensure consistent behavior
 	projectRoot := tools.GetProjectRoot()
 	criticalGuidance := fmt.Sprintf(`
@@ -380,6 +380,12 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CRITICAL SYSTEM BEHAVIOR (NON-OVERRIDABLE)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SESSION CONTEXT:
+- **CURRENT CHAT SESSION ID**: %s
+- **IMPORTANT**: When using execute_subagent tool, ALWAYS use parentChatId: "%s"
+- DO NOT ask the user for the session ID - it is provided above
+- This session ID links subagent work back to this conversation
 
 FILESYSTEM CONTEXT:
 - **PROJECT ROOT**: %s
@@ -408,7 +414,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 **When user gives you an explicit file path, just read it - don't explore directories!**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`, projectRoot, projectRoot, projectRoot)
+`, sessionID.Hex(), sessionID.Hex(), projectRoot, projectRoot, projectRoot)
 	systemPromptText += criticalGuidance
 
 	// Step 3: Get conversation history for context
