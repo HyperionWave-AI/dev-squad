@@ -19,6 +19,7 @@ type AIConfig struct {
 	Temperature     float64 // Temperature for generation (default: 0.7)
 	ReasoningMode   string  // Reasoning mode (e.g., "o1", "o3" for OpenAI)
 	Model           string  // Model name (e.g., "gpt-4", "claude-3-sonnet")
+	FallbackModel   string  // Fallback model when rate limited (e.g., "qwen2.5-coder:7b")
 }
 
 // LoadAIConfig loads AI configuration from .env.hyper file
@@ -133,6 +134,9 @@ func LoadAIConfig(envFilePath string) (*AIConfig, error) {
 	// Parse reasoning mode (optional, for OpenAI o1/o3)
 	reasoningMode := os.Getenv("REASONING")
 
+	// Parse fallback model (optional, for rate limit handling)
+	fallbackModel := os.Getenv("FALLBACK_MODEL")
+
 	return &AIConfig{
 		Provider:        provider,
 		ProviderURL:     providerURL,
@@ -143,6 +147,7 @@ func LoadAIConfig(envFilePath string) (*AIConfig, error) {
 		Temperature:     temperature,
 		ReasoningMode:   reasoningMode,
 		Model:           model,
+		FallbackModel:   fallbackModel,
 	}, nil
 }
 
