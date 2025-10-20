@@ -41,7 +41,7 @@ func (t *CreateAgentTaskTool) Name() string {
 }
 
 func (t *CreateAgentTaskTool) Description() string {
-	return "Create a new agent task linked to a human task. Returns task ID. Use this to assign work to specialist agents with context-rich task descriptions. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
+	return "Create a new agent task linked to a human task. Returns task ID. IMPORTANT: Provide specific file paths in filesModified (e.g., './ui/src/components/TaskCard.tsx') and detailed context in contextSummary including WHAT to change, WHERE (file:line), and HOW. The more specific your context, the less time agents waste exploring. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
 }
 
 func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
@@ -69,14 +69,14 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 			},
 			"contextSummary": map[string]interface{}{
 				"type":        "string",
-				"description": "200-word summary of what agent needs to know (business context, constraints, pattern references)",
+				"description": "200-word summary with SPECIFICS: What to change, where to change it (file paths, line numbers if known), how to implement it, what patterns to follow. Example: 'Add delete button to TaskCard.tsx around line 45, next to the edit button. Use the existing IconButton component with DeleteIcon. Wire it to deleteTask prop passed from parent. Follow the pattern used for edit button in same file.'",
 			},
 			"filesModified": map[string]interface{}{
 				"type": "array",
 				"items": map[string]interface{}{
 					"type": "string",
 				},
-				"description": "List of file paths this task will create or modify",
+				"description": "EXACT file paths that will be modified (e.g., ['./ui/src/components/TaskCard.tsx', './ui/src/components/KanbanTaskCard.tsx']). Be SPECIFIC - this reduces agent exploration time from minutes to seconds. Used for validation.",
 			},
 			"qdrantCollections": map[string]interface{}{
 				"type": "array",
@@ -2102,6 +2102,9 @@ YOUR TODOs:
 
 	prompt += fmt.Sprintf(`
 
+🎯 EXECUTION DEADLINE: You must START IMPLEMENTING within 2 MINUTES of reading this prompt.
+No planning phase. No extended exploration. Read context → Start coding → Complete TODOs.
+
 INSTRUCTIONS:
 1. Start working on the TODOs immediately - no planning phase needed
 2. Use coordinator_update_todo_status to mark each TODO as 'in_progress' when you start it
@@ -2110,17 +2113,31 @@ INSTRUCTIONS:
 5. Update coordinator_upsert_knowledge with key decisions and contracts for handoff
 6. When ALL TODOs are completed, summarize what you accomplished
 
-WORKFLOW GUIDANCE (CRITICAL - FOLLOW THIS):
-• After list_directory: Use read_file to open the target file you need to modify
-• After read_file: Make your changes using write_file or apply_patch
-• After write_file: Move to the next TODO or verify your changes
-• DO NOT call the same tool repeatedly with identical arguments
-• If list_directory already showed you the file list, DO NOT call it again
+🚨 CRITICAL ANTI-LOOP RULES (CIRCUIT BREAKER WILL STOP YOU):
+• NEVER call the same tool with identical arguments more than ONCE
+• If you call bash with "grep -R delete", use those results - DO NOT call it again
+• If you call list_directory on "./ui/src", use those results - DO NOT call it again
+• If you get results from a tool, USE THEM. Don't re-run hoping for different output
+• After 4 identical tool calls, you will be STOPPED and marked as FAILED
+• Tool results are stored in your context - refer back to them instead of re-calling
+
+🎯 WORKFLOW GUIDANCE (MANDATORY):
+• After list_directory: IMMEDIATELY use read_file on the target file - NO MORE EXPLORATION
+• After read_file: IMMEDIATELY make changes with write_file or apply_patch - NO MORE READING
+• After grep/search: USE THE RESULTS to guide your implementation - DO NOT SEARCH AGAIN
+• After write_file: Move to next TODO or verify - DO NOT re-read what you just wrote
 • Progress through: explore → read → modify → test → next TODO
-• Each tool call should move you closer to completing a TODO
+• Each tool call MUST move you closer to completing a TODO
+• If you find yourself calling the same tool repeatedly, STOP and use previous results
+
+⚡ FAST ITERATION REQUIREMENT:
+• Maximum 3 tool calls before first file modification
+• If you read more than 3 files before editing, you're over-exploring
+• Start implementing within 2 minutes - context is already provided above
+• Trust the context summary and TODO hints - they contain what you need
 
 Task ID: %s
-Start now!`, agentTask.ID)
+Start now! Remember: USE TOOL RESULTS, DON'T REPEAT CALLS`, agentTask.ID)
 
 	return prompt
 }
