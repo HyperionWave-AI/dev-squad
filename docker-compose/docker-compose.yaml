@@ -1,0 +1,89 @@
+version: '3.8'
+
+# Unified Coordinator Production Setup
+# Architecture: UI → REST API → Storage Layer (NO MCP proxying)
+#
+# Services:
+#   - hyperion-coordinator: Unified service (REST API + UI serving)
+#   - mongodb: Database for tasks, files, chunks
+#   - qdrant: Vector database (optional, can use cloud)
+#   - embedding-service: Text embeddings for code search
+
+services:
+  # Unified Coordinator (replaces mcp-server + http-bridge)
+
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    # No external port - internal communication only
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-admin123}
+      - MONGO_INITDB_DATABASE=${MONGODB_DATABASE:-coordinator_db}
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Qdrant Vector Database (Optional - only for local development)
+  # For production, use managed Qdrant Cloud instead
+  qdrant:
+    image: qdrant/qdrant:latest
+    profiles:
+      - local-qdrant  # Only starts with --profile local-qdrant
+    # No external ports - internal communication only
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Hugging Face Text Embeddings Inference (TEI) - Nomic Embed Text model
+  # Note: TEI runs on CPU-only mode. On ARM64 (Apple Silicon), uses platform emulation.
+  embedding-service:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    platform: linux/amd64
+    command: --model-id nomic-ai/nomic-embed-text-v1.5 --port 8080
+    # No external port - internal communication only
+    environment:
+      - HF_HUB_CACHE=/data
+    volumes:
+      - embedding_cache:/data
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  qdrant_data:
+    driver: local
+  embedding_cache:
+    driver: local
+
+networks:
+  hyperion-network:
+    driver: bridge
+    name: hyperion-network
