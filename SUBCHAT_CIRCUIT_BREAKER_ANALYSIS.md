@@ -458,5 +458,136 @@ func (s *ChatService) StreamChatWithTools(...) {
 
 ---
 
+## 🔍 UPDATE: Root Cause Investigation Results (2025-10-20)
+
+### Investigation Summary
+
+After implementing Phases 1-4 (code_index_search fix, tool caching, prompt updates), we discovered the **actual root cause** of why code_index_search returns 0 results:
+
+**CRITICAL FINDING:** The auto-indexing logic in `main.go:350-384` creates an empty Qdrant collection but **NEVER actually scans or indexes any files**.
+
+### The Broken Auto-Indexing Flow
+
+```go
+// hyper/cmd/coordinator/main.go:350-384
+if existingMapping == nil {
+    // Creates empty Qdrant collection + MongoDB mapping
+    collectionName, err := qdrantClient.EnsureCollectionForPath(projectRoot, codeIndexStorage)
+    logger.Info("Folder metadata created. Use code_index_scan to index files.")
+    // ❌ PROBLEM: Expects manual code_index_scan call, which is blocked for AI!
+} else {
+    logger.Info("Project root already indexed")  // ❌ MISLEADING!
+    // Does NOTHING - assumes files are already indexed (they're not!)
+}
+```
+
+### What's Actually Happening
+
+1. **First Startup:**
+   - Creates Qdrant collection `code_index_cc212e13`
+   - Creates MongoDB path mapping entry
+   - Creates MongoDB folder metadata
+   - Logs: "Use code_index_scan to index files"
+   - **Does NOT scan any files!**
+
+2. **Subsequent Startups:**
+   - Sees mapping exists in MongoDB
+   - Logs: "Project root already indexed" (FALSE!)
+   - Skips everything
+   - Qdrant collection remains **empty**
+
+3. **Search Queries:**
+   - AI calls `code_index_search("task component delete button")`
+   - Tool generates embedding correctly (768 dimensions)
+   - Searches empty Qdrant collection
+   - Returns 0 results ✅ (technically correct - collection IS empty!)
+
+### Evidence
+
+**MongoDB state:** Path mapping exists
+```json
+{
+  "path": "/Users/meghaneelamana/dev-squad",
+  "qdrantCollection": "code_index_cc212e13",
+  "createdAt": "2025-10-18T...",
+  "lastIndexed": "2025-10-18T..."
+}
+```
+
+**Qdrant state:** Collection exists but has 0 vectors
+```
+Collection: code_index_cc212e13
+Status: exists
+Points: 0  ← THE PROBLEM!
+Vectors: 0
+```
+
+**Server logs:**
+```
+INFO Project root already indexed {"collection": "code_index_cc212e13"}
+INFO Code search completed {"query": "task component", "results": 0}
+```
+
+### Impact
+
+- **100% of code_index_search calls return 0 results** (collection is empty)
+- AI falls back to manual exploration (`list_directory` + `read_file`)
+- Circuit breaker triggers after repeated search attempts
+- Tasks take 3-5x longer than expected
+
+### Solution Options
+
+**Option 1: Implement Actual Auto-Indexing (RECOMMENDED)**
+
+Modify `main.go:350-384` to actually scan and index files on startup:
+
+```go
+if existingMapping == nil {
+    collectionName, err := qdrantClient.EnsureCollectionForPath(projectRoot, codeIndexStorage)
+    // NEW: Actually scan files!
+    go func() {
+        logger.Info("Starting async file indexing...")
+        scanner := NewCodeScanner(codeIndexStorage, qdrantClient, embeddingClient, logger)
+        if err := scanner.ScanDirectory(projectRoot, collectionName); err != nil {
+            logger.Error("File indexing failed", zap.Error(err))
+        }
+        logger.Info("File indexing complete")
+    }()
+} else {
+    // NEW: Check if collection is empty, re-index if needed
+    stats, err := qdrantClient.GetCollectionInfo(existingMapping.QdrantCollection)
+    if err == nil && stats.PointsCount == 0 {
+        logger.Warn("Collection exists but is empty - triggering re-index")
+        // Trigger indexing...
+    }
+}
+```
+
+**Option 2: Manual Trigger via MCP**
+
+Keep current logic but provide admin tool to manually trigger indexing:
+- Call `code_index_scan` via direct MCP endpoint
+- Requires external script or admin UI
+
+**Option 3: Remove Auto-Indexing Entirely**
+
+Document that users must manually set up indexing via MCP tools
+
+### Recommended Next Actions
+
+1. **Immediate:** Implement Option 1 (actual auto-indexing)
+2. Add collection health check on startup (warn if empty)
+3. Add debug endpoint: `GET /api/v1/code-index/status` showing vector counts
+4. Update logs to be more accurate: "Collection created - indexing in progress" vs "indexed"
+5. Add progress tracking for long indexing operations
+
+### Files to Modify
+
+- `hyper/cmd/coordinator/main.go` (lines 350-384) - auto-indexing logic
+- `hyper/internal/mcp/indexer/` - create code scanner module
+- `hyper/internal/server/http_server.go` - add status endpoint
+
+---
+
 **Questions? Concerns? Feedback?**
-This analysis is based on code review of the circuit breaker, tool implementations, and system prompts. Let me know if you need clarification on any findings or want to discuss alternative solutions.
+This analysis is based on code review of the circuit breaker, tool implementations, system prompts, and detailed runtime investigation. Root cause confirmed via debug logging and Qdrant API inspection.

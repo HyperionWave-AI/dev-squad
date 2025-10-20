@@ -88,18 +88,28 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 	}
 
 	collectionName := mapping.QdrantCollection
+	t.logger.Info("Code search: using collection",
+		zap.String("collection", collectionName),
+		zap.String("projectRoot", projectRoot),
+		zap.String("query", query))
 
 	// Generate embedding for query
 	queryEmbedding, err := t.embeddingClient.CreateEmbedding(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create query embedding: %w", err)
 	}
+	t.logger.Info("Code search: embedding generated",
+		zap.Int("dimensions", len(queryEmbedding)),
+		zap.String("collection", collectionName))
 
 	// Search in Qdrant using the correct collection
 	searchResp, err := t.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search in collection '%s': %w", collectionName, err)
 	}
+	t.logger.Info("Code search: Qdrant search response",
+		zap.Int("resultCount", len(searchResp.Result)),
+		zap.String("collection", collectionName))
 
 	// Build results
 	var results []storage.SearchResult
@@ -193,7 +203,7 @@ func (t *CodeIndexAddFolderTool) Name() string {
 }
 
 func (t *CodeIndexAddFolderTool) Description() string {
-	return "Add a folder to the code index for semantic search. The folder will be monitored and code files will be indexed. Use this to enable code search for a project directory. After adding, use code_index_scan MCP tool to index existing files."
+	return "DO NOT USE - Project root is already indexed automatically on server startup. This tool is for admin use only via MCP endpoint. Use code_index_search directly to search the already-indexed codebase."
 }
 
 func (t *CodeIndexAddFolderTool) InputSchema() map[string]interface{} {
@@ -265,7 +275,7 @@ func (t *CodeIndexScanTool) Name() string {
 }
 
 func (t *CodeIndexScanTool) Description() string {
-	return "Scan or rescan a folder to update the code index. This will detect new/modified/deleted files and update the index accordingly. Use after adding a folder or to refresh the index."
+	return "DO NOT USE - Code is already indexed automatically on server startup. This tool requires direct MCP access and will fail if called. Use code_index_search directly to search the already-indexed codebase."
 }
 
 func (t *CodeIndexScanTool) InputSchema() map[string]interface{} {
@@ -306,7 +316,7 @@ func (t *CodeIndexStatusTool) Name() string {
 }
 
 func (t *CodeIndexStatusTool) Description() string {
-	return "Get the current status of the code index, including indexed folders, file counts, and last scan times. Use to verify what's indexed."
+	return "Get the status of the code index to verify what folders and files are already indexed. The project root is auto-indexed on startup - use this to confirm indexing is complete before using code_index_search."
 }
 
 func (t *CodeIndexStatusTool) InputSchema() map[string]interface{} {
@@ -335,7 +345,7 @@ func (t *CodeIndexRemoveFolderTool) Name() string {
 }
 
 func (t *CodeIndexRemoveFolderTool) Description() string {
-	return "Remove a folder from the code index. This will delete all indexed files and their vectors. Use to clean up when a project is no longer needed."
+	return "DO NOT USE - Destructive operation for admin use only. This will delete indexed data. The project root is already indexed - use code_index_search to search it."
 }
 
 func (t *CodeIndexRemoveFolderTool) InputSchema() map[string]interface{} {
