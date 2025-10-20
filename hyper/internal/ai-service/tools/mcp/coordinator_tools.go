@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"hyper/internal/ai-service"
@@ -1546,6 +1547,113 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 	}, nil
 }
 
+// FileOperationTracker tracks file operations and duplicate tool calls during subagent execution
+type FileOperationTracker struct {
+	DirectoriesListed map[string]int    // path -> count
+	FilesRead         map[string]int    // path -> count
+	FilesWritten      map[string]int    // path -> count
+	ToolCallHistory   []string          // chronological list of tool calls
+
+	// Track full argument sets for loop detection
+	ToolCallSignatures map[string]int   // signature (toolName + argsJSON) -> count
+}
+
+// NewFileOperationTracker creates a new tracker
+func NewFileOperationTracker() *FileOperationTracker {
+	return &FileOperationTracker{
+		DirectoriesListed:  make(map[string]int),
+		FilesRead:          make(map[string]int),
+		FilesWritten:       make(map[string]int),
+		ToolCallHistory:    make([]string, 0),
+		ToolCallSignatures: make(map[string]int),
+	}
+}
+
+// RecordOperation records a file operation and detects duplicate tool calls with identical arguments
+func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]interface{}) string {
+	warning := ""
+
+	// ENHANCED LOOP DETECTION: Track full argument sets for all tool calls
+	// Serialize arguments to JSON for signature comparison
+	argsJSON, err := json.Marshal(args)
+	if err == nil {
+		// Create signature: toolName + argsJSON
+		signature := toolName + ":" + string(argsJSON)
+
+		// Track this signature
+		f.ToolCallSignatures[signature]++
+
+		// Generate warning if this exact call (tool + args) was seen before
+		if f.ToolCallSignatures[signature] > 1 {
+			count := f.ToolCallSignatures[signature] - 1
+			warning = fmt.Sprintf("🔁 LOOP DETECTED: You already called '%s' with these exact arguments %d time(s). You are repeating the same operation. Use the results from previous calls instead of repeating.", toolName, count)
+		}
+	}
+
+	// SPECIFIC FILE OPERATION TRACKING: Keep detailed file path tracking for progress summaries
+	switch toolName {
+	case "list_directory":
+		if path, ok := args["path"].(string); ok {
+			f.DirectoriesListed[path]++
+			// Only show file-specific warning if no general loop warning was generated
+			if warning == "" && f.DirectoriesListed[path] > 1 {
+				warning = fmt.Sprintf("⚠️  WARNING: You already listed directory '%s' %d time(s). Review previous results before repeating.", path, f.DirectoriesListed[path]-1)
+			}
+		}
+	case "read_file":
+		if path, ok := args["filePath"].(string); ok {
+			f.FilesRead[path]++
+			// Only show file-specific warning if no general loop warning was generated
+			if warning == "" && f.FilesRead[path] > 1 {
+				warning = fmt.Sprintf("⚠️  WARNING: You already read file '%s' %d time(s). You should have the content from previous calls.", path, f.FilesRead[path]-1)
+			}
+		}
+	case "write_file", "apply_patch":
+		if path, ok := args["filePath"].(string); ok {
+			f.FilesWritten[path]++
+		}
+	}
+
+	f.ToolCallHistory = append(f.ToolCallHistory, toolName)
+	return warning
+}
+
+// GetProgressSummary returns a formatted summary of file operations
+func (f *FileOperationTracker) GetProgressSummary() string {
+	var summary strings.Builder
+
+	summary.WriteString("\n\n📊 PROGRESS TRACKING - Files You've Already Seen:\n")
+
+	if len(f.DirectoriesListed) > 0 {
+		summary.WriteString("\nDirectories Listed:\n")
+		for path, count := range f.DirectoriesListed {
+			summary.WriteString(fmt.Sprintf("  • %s (%d times)\n", path, count))
+		}
+	}
+
+	if len(f.FilesRead) > 0 {
+		summary.WriteString("\nFiles Read:\n")
+		for path, count := range f.FilesRead {
+			summary.WriteString(fmt.Sprintf("  • %s (%d times)\n", path, count))
+		}
+	}
+
+	if len(f.FilesWritten) > 0 {
+		summary.WriteString("\nFiles Written/Modified:\n")
+		for path, count := range f.FilesWritten {
+			summary.WriteString(fmt.Sprintf("  • %s (%d times)\n", path, count))
+		}
+	}
+
+	if len(f.DirectoriesListed) == 0 && len(f.FilesRead) == 0 && len(f.FilesWritten) == 0 {
+		summary.WriteString("  (No file operations yet)\n")
+	}
+
+	summary.WriteString("\n⚠️  IMPORTANT: Do not repeat operations on files you've already seen. Use the information from previous tool calls.\n")
+
+	return summary.String()
+}
+
 // executeSubagentInBackground runs the subagent AI streaming in a background goroutine
 func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string) {
 	// Create a new background context with generous timeout for long-running tasks
@@ -1556,6 +1664,9 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.String("subchatId", subchatID),
 		zap.String("agentName", agentTask.AgentName),
 		zap.String("agentTaskId", agentTask.ID))
+
+	// Initialize progress tracker
+	progressTracker := NewFileOperationTracker()
 
 	// Create a chat session for this subchat
 	companyID := "dev-company" // TODO: Extract from context
@@ -1645,6 +1756,24 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 
 			case aiservice.StreamEventToolCall:
 				toolCallCount++
+
+				// Record file operation and get warning if duplicate
+				warning := progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
+				if warning != "" {
+					t.logger.Warn("Duplicate file operation detected",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolCall.Name),
+						zap.String("warning", warning))
+
+					// Save warning as a visible assistant message in Chat UI
+					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", warning, companyID)
+					if err != nil {
+						t.logger.Warn("Failed to save duplicate operation warning to chat",
+							zap.String("subchatId", subchatID),
+							zap.Error(err))
+					}
+				}
+
 				t.logger.Info("🔧 Subagent calling tool",
 					zap.String("subchatId", subchatID),
 					zap.String("agentName", agentTask.AgentName),
@@ -1676,18 +1805,49 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				}
 
 			case aiservice.StreamEventToolResult:
-				// Save tool result to subchat messages
-				outputStr := ""
+				// Summarize tool result to prevent context bloat
+				var originalSize int
+				var summarizedOutput string
+
 				if event.ToolResult.Output != nil {
+					// Calculate original size for logging
 					if str, ok := event.ToolResult.Output.(string); ok {
-						outputStr = str
+						originalSize = len(str)
 					} else {
 						outputBytes, _ := json.Marshal(event.ToolResult.Output)
-						outputStr = string(outputBytes)
+						originalSize = len(outputBytes)
 					}
+
+					// Apply summarization
+					summarizedOutput = t.summarizeToolResult(event.ToolResult.Name, event.ToolResult.Output)
 				}
 
-				// Log tool result with success/failure indicator
+				// Use error message if tool call failed
+				if event.ToolResult.Error != "" {
+					summarizedOutput = fmt.Sprintf("Error: %s", event.ToolResult.Error)
+				}
+
+				// Inject progress summary every 3 tool calls for file operations
+				if toolCallCount%3 == 0 && (len(progressTracker.FilesRead) > 0 || len(progressTracker.DirectoriesListed) > 0) {
+					progressSummary := progressTracker.GetProgressSummary()
+					summarizedOutput += progressSummary
+
+					// Save progress summary as a visible assistant message in Chat UI
+					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", progressSummary, companyID)
+					if err != nil {
+						t.logger.Warn("Failed to save progress summary message to chat",
+							zap.String("subchatId", subchatID),
+							zap.Error(err))
+					}
+
+					t.logger.Info("📊 Injected progress tracking summary",
+						zap.String("subchatId", subchatID),
+						zap.Int("filesRead", len(progressTracker.FilesRead)),
+						zap.Int("dirsListed", len(progressTracker.DirectoriesListed)),
+						zap.Int("filesWritten", len(progressTracker.FilesWritten)))
+				}
+
+				// Log tool result with success/failure indicator and context size info
 				if event.ToolResult.Error != "" {
 					t.logger.Warn("❌ Tool call failed",
 						zap.String("subchatId", subchatID),
@@ -1697,10 +1857,12 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					t.logger.Info("✓ Tool call completed",
 						zap.String("subchatId", subchatID),
 						zap.String("toolName", event.ToolResult.Name),
-						zap.Int64("durationMs", event.ToolResult.DurationMs))
+						zap.Int64("durationMs", event.ToolResult.DurationMs),
+						zap.Int("originalSize", originalSize),
+						zap.Int("summarizedSize", len(summarizedOutput)))
 				}
 
-				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, outputStr, event.ToolResult.Error, event.ToolResult.DurationMs, companyID)
+				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, summarizedOutput, event.ToolResult.Error, event.ToolResult.DurationMs, companyID)
 				if err != nil {
 					t.logger.Error("Failed to save tool result",
 						zap.String("subchatId", subchatID),
@@ -1826,10 +1988,89 @@ INSTRUCTIONS:
 5. Update coordinator_upsert_knowledge with key decisions and contracts for handoff
 6. When ALL TODOs are completed, summarize what you accomplished
 
+WORKFLOW GUIDANCE (CRITICAL - FOLLOW THIS):
+• After list_directory: Use read_file to open the target file you need to modify
+• After read_file: Make your changes using write_file or apply_patch
+• After write_file: Move to the next TODO or verify your changes
+• DO NOT call the same tool repeatedly with identical arguments
+• If list_directory already showed you the file list, DO NOT call it again
+• Progress through: explore → read → modify → test → next TODO
+• Each tool call should move you closer to completing a TODO
+
 Task ID: %s
 Start now!`, agentTask.ID)
 
 	return prompt
+}
+
+// summarizeToolResult creates a concise summary of a tool result to prevent context bloat
+func (t *ExecuteSubagentTool) summarizeToolResult(toolName string, output interface{}) string {
+	const maxChars = 500 // Maximum characters to keep for most outputs
+
+	var outputStr string
+	if str, ok := output.(string); ok {
+		outputStr = str
+	} else {
+		outputBytes, _ := json.Marshal(output)
+		outputStr = string(outputBytes)
+	}
+
+	// Special handling for different tool types
+	switch toolName {
+	case "list_directory":
+		// Extract just file count and first few files
+		var result map[string]interface{}
+		if err := json.Unmarshal([]byte(outputStr), &result); err == nil {
+			if files, ok := result["files"].([]interface{}); ok {
+				count := len(files)
+				preview := files
+				if count > 10 {
+					preview = files[:10]
+				}
+				previewJSON, _ := json.Marshal(preview)
+				return fmt.Sprintf("Directory listing: %d files found. First 10: %s", count, string(previewJSON))
+			}
+		}
+
+	case "read_file":
+		// Summarize file reading - show first/last lines
+		lines := strings.Split(outputStr, "\n")
+		if len(lines) > 20 {
+			firstLines := strings.Join(lines[:10], "\n")
+			lastLines := strings.Join(lines[len(lines)-5:], "\n")
+			return fmt.Sprintf("File read (%d lines). First 10 lines:\n%s\n... (truncated %d lines) ...\nLast 5 lines:\n%s",
+				len(lines), firstLines, len(lines)-15, lastLines)
+		}
+
+	case "bash":
+		// Summarize bash output - show success/failure and brief output
+		if len(outputStr) > maxChars {
+			return fmt.Sprintf("Bash command completed. Output (truncated to %d chars): %s...", maxChars, outputStr[:maxChars])
+		}
+
+	case "coordinator_update_todo_status":
+		// Just confirm the update without full details
+		return "TODO status updated successfully"
+
+	case "coordinator_update_task_status":
+		// Just confirm the update
+		return "Task status updated successfully"
+
+	case "write_file":
+		// Confirm write without showing full content
+		return "File written successfully"
+
+	case "apply_patch":
+		// Confirm patch without showing full diff
+		return "Patch applied successfully"
+	}
+
+	// Default: truncate long outputs
+	if len(outputStr) > maxChars {
+		return outputStr[:maxChars] + fmt.Sprintf("... (truncated, original length: %d chars)", len(outputStr))
+	}
+
+	return outputStr
 }
 
 // handleExecutionFailure marks the task as blocked with error details
