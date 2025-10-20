@@ -270,9 +270,20 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
+		failedToolCalls := make(map[string]int) // Track failed attempts separately
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
 			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
+		}
+
+		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
+		circuitBreakerThresholds := map[string]int{
+			"read_file":       2, // Stop after 2 attempts (only 1 duplicate allowed)
+			"write_file":      1, // Never allow duplicate writes
+			"list_directory":  2, // Stop after 2 attempts
+			"bash":            3, // Allow more for command variations
+			"code_index_search": 3, // Allow query refinement
+			// Default for other tools: 4 attempts
 		}
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
@@ -449,6 +460,26 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
+				// CRITICAL: Track failed tool calls separately - stop immediately on retry of failed operation
+				if result.Error != "" {
+					failedToolCalls[signature]++
+					if failedToolCalls[signature] >= 2 {
+						// Second failure with same args - stop immediately!
+						log.Printf("[Circuit Breaker - Failed Tool] Tool '%s' failed twice with identical arguments - stopping", toolCall.Name)
+						eventChan <- StreamEvent{
+							Type: StreamEventError,
+							Error: fmt.Sprintf("❌ CRITICAL ERROR: Tool '%s' failed TWICE with identical arguments. Error: %s\n\n"+
+								"🛑 You are retrying a FAILED operation. This will never work!\n"+
+								"✅ Try a DIFFERENT approach:\n"+
+								"   - If file not found: check directory listing or search results for the ACTUAL file name\n"+
+								"   - If path wrong: try different path or create the file\n"+
+								"   - If tool incompatible: use a different tool\n\n"+
+								"DO NOT retry the same failed operation again!", toolCall.Name, result.Error),
+						}
+						return
+					}
+				}
+
 				// Circuit breaker: check for repeated tool calls AND warn the AI
 				recentToolCalls = append(recentToolCalls, signature)
 				if len(recentToolCalls) > 10 {
@@ -463,17 +494,23 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					}
 				}
 
+				// Get tool-specific threshold
+				threshold := circuitBreakerThresholds[toolCall.Name]
+				if threshold == 0 {
+					threshold = 4 // Default threshold
+				}
+
 				// Progressive warnings to AI (inject into context so AI sees them)
 				var loopWarning string
 				if totalCount == 2 {
 					// First duplicate - gentle warning
 					loopWarning = fmt.Sprintf("⚠️  WARNING: You already called '%s' with these exact arguments 1 time before. You should use the result from the previous call instead of repeating the same operation.", toolCall.Name)
-				} else if totalCount == 3 {
-					// Second duplicate - stronger warning
+				} else if totalCount == 3 && threshold > 3 {
+					// Second duplicate - stronger warning (only if threshold allows)
 					loopWarning = fmt.Sprintf("🔁 LOOP DETECTED: You called '%s' with identical arguments 2 times already. You are stuck in a loop! Use previous results or try a DIFFERENT approach - do NOT call this tool again with the same arguments.", toolCall.Name)
-				} else if totalCount >= 4 {
-					// Third duplicate - trigger circuit breaker
-					log.Printf("[Circuit Breaker] Tool '%s' called %d times - stopping infinite loop", toolCall.Name, totalCount)
+				} else if totalCount >= threshold {
+					// Threshold reached - trigger circuit breaker
+					log.Printf("[Circuit Breaker] Tool '%s' called %d times (threshold: %d) - stopping infinite loop", toolCall.Name, totalCount, threshold)
 					eventChan <- StreamEvent{
 						Type:  StreamEventError,
 						Error: fmt.Sprintf("Circuit breaker triggered: tool '%s' called repeatedly (%d times) with identical arguments. The AI is stuck in an infinite loop and cannot complete this task.", toolCall.Name, totalCount),
