@@ -185,11 +185,19 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.String("retrieveMode", retrieveMode),
 		zap.Int("results", len(results)))
 
+	// CRITICAL: Extract file paths into a prominent list so AI can't miss them
+	filePaths := make([]string, 0, len(results))
+	for _, result := range results {
+		filePaths = append(filePaths, result.FilePath)
+	}
+
 	return map[string]interface{}{
 		"success":     true,
 		"query":       query,
+		"FILE_PATHS_TO_USE": filePaths, // PROMINENT - AI must use these exact paths
 		"results":     results,
 		"resultCount": len(results),
+		"INSTRUCTIONS": "USE THE EXACT FILE PATHS FROM 'FILE_PATHS_TO_USE' ARRAY - DO NOT GUESS OR MODIFY THEM",
 	}, nil
 }
 
