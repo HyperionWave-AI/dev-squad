@@ -275,9 +275,64 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			toolProvider := s.provider.(ToolCapableProvider)
 			response, err := toolProvider.StreamChatWithTools(ctx, currentMessages, tools)
 			if err != nil {
-				log.Printf("[ChatService] ERROR - RequestID: %s - Tool call failed: %v", requestID, err)
-				eventChan <- StreamEvent{Type: StreamEventError, Error: err.Error()}
-				return
+				// Check if this is a rate limit error and we have a fallback model configured
+				if isRateLimitError(err) && s.config.FallbackModel != "" {
+					log.Printf("[Rate Limit] Detected rate limit error, switching to fallback model: %s → %s",
+						s.config.Model, s.config.FallbackModel)
+
+					// Notify user about fallback
+					fallbackMsg := fmt.Sprintf("\n\n⚠️  RATE LIMIT DETECTED: Primary model '%s' has hit its rate limit.\n"+
+						"🔄 Automatically switching to fallback model '%s' (local, no rate limits)...\n\n",
+						s.config.Model, s.config.FallbackModel)
+					eventChan <- StreamEvent{Type: StreamEventToken, Content: fallbackMsg}
+
+					// Save original model
+					originalModel := s.config.Model
+
+					// Switch to fallback model
+					s.config.Model = s.config.FallbackModel
+
+					// Recreate provider with fallback model
+					fallbackProvider, err := NewChatProvider(s.config)
+					if err != nil {
+						log.Printf("[ChatService] ERROR - RequestID: %s - Failed to create fallback provider: %v", requestID, err)
+						eventChan <- StreamEvent{Type: StreamEventError,
+							Error: fmt.Sprintf("Rate limit error and failed to switch to fallback model: %v", err)}
+						return
+					}
+
+					// Update provider
+					s.provider = fallbackProvider
+
+					// Retry with fallback provider
+					if toolProvider, ok := s.provider.(ToolCapableProvider); ok {
+						response, err = toolProvider.StreamChatWithTools(ctx, currentMessages, tools)
+						if err != nil {
+							log.Printf("[ChatService] ERROR - RequestID: %s - Fallback model also failed: %v", requestID, err)
+							eventChan <- StreamEvent{Type: StreamEventError,
+								Error: fmt.Sprintf("Both primary and fallback models failed: %v", err)}
+							return
+						}
+						log.Printf("[Rate Limit] Successfully switched to fallback model '%s'", s.config.FallbackModel)
+
+						// Send success notification
+						successMsg := fmt.Sprintf("✅ Successfully switched to '%s'. Continuing with your request...\n\n", s.config.FallbackModel)
+						eventChan <- StreamEvent{Type: StreamEventToken, Content: successMsg}
+
+						// Note: We keep using the fallback model for the rest of this session
+						// The original model is saved in case we need it later
+						_ = originalModel // Mark as used to avoid compiler warning
+					} else {
+						log.Printf("[ChatService] ERROR - Fallback provider doesn't support tools")
+						eventChan <- StreamEvent{Type: StreamEventError, Error: "Fallback provider doesn't support tools"}
+						return
+					}
+				} else {
+					// Not a rate limit error or no fallback configured - just fail
+					log.Printf("[ChatService] ERROR - RequestID: %s - Tool call failed: %v", requestID, err)
+					eventChan <- StreamEvent{Type: StreamEventError, Error: err.Error()}
+					return
+				}
 			}
 
 			// Stream response tokens
@@ -417,6 +472,18 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 					// PREPEND warning to tool result so AI sees it as part of the tool's output
 					toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+				}
+
+				// CRITICAL FIX: Truncate tool results that are too large to prevent token limit errors
+				// Individual tool results can be HUGE (e.g., bash ls -R output = 1.98MB)
+				// Even if sliding window triggers, if one recent message is huge, it doesn't help
+				const maxToolResultSize = 10000 // 10KB per tool result
+				if len(toolResultMsg) > maxToolResultSize {
+					originalSize := len(toolResultMsg)
+					// Keep first 9KB and add truncation notice
+					toolResultMsg = toolResultMsg[:maxToolResultSize-500] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars to prevent token limit. If you need more, use a more specific query or process the data in smaller chunks.] ...", originalSize, maxToolResultSize-500)
+					log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars to prevent token limit",
+						result.Name, originalSize, len(toolResultMsg))
 				}
 
 				currentMessages = append(currentMessages, Message{
@@ -588,4 +655,20 @@ func applySlidingWindow(messages []Message, maxMessages int) []Message {
 		len(messages), len(result), systemMsg != nil, userMsg != nil, recentCount)
 
 	return result
+}
+
+// isRateLimitError checks if an error is a rate limit error
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	// Check for common rate limit error patterns
+	return strings.Contains(errStr, "rate limit") ||
+		strings.Contains(errStr, "too many requests") ||
+		strings.Contains(errStr, "429") ||
+		strings.Contains(errStr, "402") || // Payment Required (Ollama rate limit)
+		strings.Contains(errStr, "quota exceeded") ||
+		strings.Contains(errStr, "usage limit") || // Matches "hourly usage limit", "daily usage limit", etc.
+		strings.Contains(errStr, "hourly limit")
 }
