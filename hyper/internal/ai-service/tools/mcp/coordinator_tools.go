@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -1654,6 +1655,48 @@ func (f *FileOperationTracker) GetProgressSummary() string {
 	return summary.String()
 }
 
+// validateFileModifications checks if expected files were actually modified using git diff
+func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.AgentTask) (bool, []string, error) {
+	// If no files expected to be modified, skip validation
+	if len(agentTask.FilesModified) == 0 {
+		return true, []string{}, nil
+	}
+
+	// Run: git diff --name-only HEAD
+	cmd := exec.Command("git", "diff", "--name-only", "HEAD")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, nil, fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
+	}
+
+	modifiedFilesStr := strings.TrimSpace(string(output))
+	if modifiedFilesStr == "" {
+		return false, []string{}, fmt.Errorf("expected files not modified: wanted %v, but git diff shows no changes", agentTask.FilesModified)
+	}
+
+	modifiedFiles := strings.Split(modifiedFilesStr, "\n")
+
+	// Check if any expected files were modified
+	expectedFiles := make(map[string]bool)
+	for _, file := range agentTask.FilesModified {
+		expectedFiles[file] = true
+	}
+
+	matchedFiles := []string{}
+	for _, modFile := range modifiedFiles {
+		if modFile != "" && expectedFiles[modFile] {
+			matchedFiles = append(matchedFiles, modFile)
+		}
+	}
+
+	// Require at least 1 expected file to be modified
+	if len(matchedFiles) == 0 {
+		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, got %v instead", agentTask.FilesModified, modifiedFiles)
+	}
+
+	return true, matchedFiles, nil
+}
+
 // executeSubagentInBackground runs the subagent AI streaming in a background goroutine
 func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string) {
 	// Create a new background context with generous timeout for long-running tasks
@@ -1891,15 +1934,94 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 			zap.Error(err))
 	}
 
-	// Update task status to completed with summary
-	summaryNotes := fmt.Sprintf("Subagent execution completed. Tools called: %d, TODOs completed: %d/%d",
-		toolCallCount, completedTodos, len(agentTask.Todos))
+	// ========================================
+	// VALIDATION LAYER 1: File Modification Validation
+	// ========================================
+	var modifiedFiles []string
+	if len(agentTask.FilesModified) > 0 {
+		filesOK, files, validationErr := t.validateFileModifications(agentTask)
+		modifiedFiles = files
 
-	t.logger.Info("🎯 Updating task status to completed",
+		if !filesOK {
+			t.logger.Warn("❌ File modification validation FAILED",
+				zap.String("subchatId", subchatID),
+				zap.String("agentTaskId", agentTask.ID),
+				zap.Error(validationErr))
+
+			// Mark as BLOCKED instead of completed
+			blockReason := fmt.Sprintf("Validation failed: %v. Tool calls: %d, Claimed TODOs: %d/%d",
+				validationErr, toolCallCount, completedTodos, len(agentTask.Todos))
+
+			err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusBlocked, blockReason)
+			if err != nil {
+				t.logger.Error("Failed to update task status to blocked",
+					zap.String("agentTaskId", agentTask.ID),
+					zap.Error(err))
+			}
+
+			err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusFailed)
+			if err != nil {
+				t.logger.Error("Failed to update subchat status to failed",
+					zap.String("subchatId", subchatID),
+					zap.Error(err))
+			}
+
+			t.logger.Error("🚨 PHANTOM COMPLETION PREVENTED",
+				zap.String("subchatId", subchatID),
+				zap.String("agentTaskId", agentTask.ID),
+				zap.String("reason", "no files modified"))
+			return
+		}
+
+		// Log proof of work
+		t.logger.Info("✅ File modification validation PASSED",
+			zap.String("subchatId", subchatID),
+			zap.String("agentTaskId", agentTask.ID),
+			zap.Strings("modifiedFiles", modifiedFiles))
+	}
+
+	// ========================================
+	// VALIDATION LAYER 2: TODO Completion Verification
+	// ========================================
+	if completedTodos < len(agentTask.Todos) {
+		t.logger.Warn("❌ TODO completion validation FAILED",
+			zap.String("subchatId", subchatID),
+			zap.String("agentTaskId", agentTask.ID),
+			zap.Int("completed", completedTodos),
+			zap.Int("total", len(agentTask.Todos)))
+
+		summaryNotes := fmt.Sprintf("Incomplete: %d/%d TODOs done, %d tool calls. Files modified: %v",
+			completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+		err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusInProgress, summaryNotes)
+		if err != nil {
+			t.logger.Error("Failed to update task status to in_progress",
+				zap.String("agentTaskId", agentTask.ID),
+				zap.Error(err))
+		}
+
+		err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusActive)
+		if err != nil {
+			t.logger.Error("Failed to update subchat status to active",
+				zap.String("subchatId", subchatID),
+				zap.Error(err))
+		}
+
+		return
+	}
+
+	// ========================================
+	// ALL VALIDATIONS PASSED - Safe to mark as completed
+	// ========================================
+	summaryNotes := fmt.Sprintf("✅ VALIDATED completion: %d/%d TODOs, %d tool calls, %d files modified: %v",
+		completedTodos, len(agentTask.Todos), toolCallCount, len(modifiedFiles), modifiedFiles)
+
+	t.logger.Info("🎉 Task completion validated successfully",
+		zap.String("subchatId", subchatID),
 		zap.String("agentTaskId", agentTask.ID),
 		zap.Int("toolCalls", toolCallCount),
 		zap.Int("completedTodos", completedTodos),
-		zap.Int("totalTodos", len(agentTask.Todos)))
+		zap.Strings("filesModified", modifiedFiles))
 
 	err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusCompleted, summaryNotes)
 	if err != nil {
