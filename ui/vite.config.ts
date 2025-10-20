@@ -4,8 +4,8 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // In dev mode, serve from root. In production, use /ui/ base
-  base: process.env.NODE_ENV === 'production' ? '/ui/' : '/',
+  // Always use /ui/ base path since UI is always served through Go proxy at /ui/ route
+  base: '/ui/',
   server: {
     proxy: {
       '/api/mcp': {
