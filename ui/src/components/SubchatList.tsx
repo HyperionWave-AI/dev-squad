@@ -5,7 +5,7 @@
  * Fetches subchats on mount and handles loading/empty states.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Button,
@@ -33,12 +33,11 @@ export const SubchatList: React.FC<SubchatListProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  useEffect(() => {
-    loadSubchats();
-  }, [parentChatId]);
-
-  const loadSubchats = async () => {
-    setLoading(true);
+  const loadSubchats = useCallback(async (isBackgroundRefresh = false) => {
+    // Don't show loading spinner for background refreshes
+    if (!isBackgroundRefresh) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const data = await subchatService.getSubchatsByParent(parentChatId);
@@ -46,9 +45,23 @@ export const SubchatList: React.FC<SubchatListProps> = ({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load subchats');
     } finally {
-      setLoading(false);
+      if (!isBackgroundRefresh) {
+        setLoading(false);
+      }
     }
-  };
+  }, [parentChatId]);
+
+  useEffect(() => {
+    loadSubchats();
+
+    // Set up auto-refresh polling every 5 seconds for real-time updates
+    const intervalId = setInterval(() => {
+      loadSubchats(true); // Pass true to indicate background refresh
+    }, 5000);
+
+    // Clean up interval on unmount or when parentChatId changes
+    return () => clearInterval(intervalId);
+  }, [loadSubchats]);
 
   const handleSubchatCreated = (subchatId: string) => {
     setDialogOpen(false);
@@ -71,6 +84,10 @@ export const SubchatList: React.FC<SubchatListProps> = ({
       </Box>
     );
   }
+
+  // Separate running/active subchats from completed/failed ones
+  const runningSubchats = subchats.filter((s) => s.status === 'active');
+  const completedSubchats = subchats.filter((s) => s.status !== 'active');
 
   return (
     <Box>
@@ -126,27 +143,61 @@ export const SubchatList: React.FC<SubchatListProps> = ({
         </Paper>
       )}
 
-      {/* Subchat grid */}
-      {subchats.length > 0 && (
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: {
-              xs: '1fr',
-              sm: 'repeat(2, 1fr)',
-              md: 'repeat(3, 1fr)',
-            },
-            gap: 2,
-          }}
-        >
-          {subchats.map((subchat) => (
-            <Box key={subchat.id}>
-              <SubchatCard
-                subchat={subchat}
-                onClick={handleCardClick}
-              />
-            </Box>
-          ))}
+      {/* Running Subchats Section */}
+      {runningSubchats.length > 0 && (
+        <Box mb={4}>
+          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', color: 'primary.main' }}>
+            Running ({runningSubchats.length})
+          </Typography>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: {
+                xs: '1fr',
+                sm: 'repeat(2, 1fr)',
+                md: 'repeat(3, 1fr)',
+              },
+              gap: 2,
+            }}
+          >
+            {runningSubchats.map((subchat) => (
+              <Box key={subchat.id}>
+                <SubchatCard
+                  subchat={subchat}
+                  onClick={handleCardClick}
+                />
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )}
+
+      {/* Completed/Failed Subchats Section */}
+      {completedSubchats.length > 0 && (
+        <Box>
+          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', color: 'text.secondary' }}>
+            Completed ({completedSubchats.length})
+          </Typography>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: {
+                xs: '1fr',
+                sm: 'repeat(2, 1fr)',
+                md: 'repeat(3, 1fr)',
+              },
+              gap: 2,
+            }}
+          >
+            {completedSubchats.map((subchat) => (
+              <Box key={subchat.id}>
+                <SubchatCard
+                  subchat={subchat}
+                  onClick={handleCardClick}
+                />
+              </Box>
+            ))}
+          </Box>
         </Box>
       )}
 
