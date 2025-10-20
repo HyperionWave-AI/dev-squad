@@ -244,8 +244,11 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				contextSize += len(msg.Content)
 			}
 
-			// Apply sliding window ONLY if context exceeds 500KB (500,000 chars)
-			const maxContextSize = 500000 // 500KB threshold
+			// Apply sliding window BEFORE context exceeds model's token limit
+			// Model token limit ≈ 32K total tokens (24K input + 8K output)
+			// 24K tokens × 4 chars/token ≈ 96K chars theoretical max
+			// Set threshold at 40K chars (≈10K tokens) to leave safety margin
+			const maxContextSize = 40000 // 40KB threshold (safe for most models)
 			if contextSize > maxContextSize {
 				log.Printf("[Sliding Window] Context size %d chars exceeds threshold %d chars, applying window",
 					contextSize, maxContextSize)
@@ -354,20 +357,6 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					return
 				}
 
-				// If we generated a warning, inject it into the AI's context
-				if loopWarning != "" {
-					log.Printf("[Loop Detection] %s", loopWarning)
-
-					// Send warning as a visible message to the user
-					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
-
-					// CRITICAL: Inject warning into AI's context so it sees it in the next iteration
-					currentMessages = append(currentMessages, Message{
-						Role:    "system",
-						Content: loopWarning,
-					})
-				}
-
 				// Log tool execution
 				if result.Error != "" {
 					log.Printf("[ChatService] Tool '%s' failed - RequestID: %s - Error: %s - Duration: %dms",
@@ -416,6 +405,18 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 							toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
 						}
 					}
+				}
+
+				// CRITICAL FIX: If we generated a loop warning, PREPEND it to the tool result
+				// This makes it much harder for the AI to ignore the warning
+				if loopWarning != "" {
+					log.Printf("[Loop Detection] %s", loopWarning)
+
+					// Send warning as a visible message to the user
+					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
+
+					// PREPEND warning to tool result so AI sees it as part of the tool's output
+					toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
 				}
 
 				currentMessages = append(currentMessages, Message{
