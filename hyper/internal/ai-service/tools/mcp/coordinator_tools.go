@@ -2121,12 +2121,19 @@ INSTRUCTIONS:
 • After 4 identical tool calls, you will be STOPPED and marked as FAILED
 • Tool results are stored in your context - refer back to them instead of re-calling
 
+🎯 EFFICIENT FILE DISCOVERY (ANTI-LOOP):
+• ✅ IF context/TODO specifies exact file path: read_file directly (NO exploration needed!)
+• ✅ IF file location unclear: Use code_index_search("feature name") ONCE, then read top result
+• ❌ NEVER start with list_directory - it leads to exploration loops
+• ❌ NEVER read same file twice - use the result from your first read
+
 🎯 WORKFLOW GUIDANCE (MANDATORY):
+• code_index_search: Read TOP result immediately - NO MORE SEARCHING
 • After list_directory: IMMEDIATELY use read_file on the target file - NO MORE EXPLORATION
 • After read_file: IMMEDIATELY make changes with write_file or apply_patch - NO MORE READING
 • After grep/search: USE THE RESULTS to guide your implementation - DO NOT SEARCH AGAIN
 • After write_file: Move to next TODO or verify - DO NOT re-read what you just wrote
-• Progress through: explore → read → modify → test → next TODO
+• Progress through: discover location → read → modify → test → next TODO
 • Each tool call MUST move you closer to completing a TODO
 • If you find yourself calling the same tool repeatedly, STOP and use previous results
 

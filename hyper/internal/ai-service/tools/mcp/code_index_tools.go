@@ -3,18 +3,23 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"hyper/internal/ai-service"
+	"hyper/internal/ai-service/tools"
+	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/storage"
+
+	"go.uber.org/zap"
 )
 
-// NOTE: Code index tools have complex dependencies (embedding client, file scanner, file watcher)
-// that require full handler initialization. For MVP, these tools provide basic functionality.
-// For full code search capabilities, use MCP tools directly via /mcp endpoint.
-
 // CodeIndexSearchTool implements the ToolExecutor interface for code search
+// NOW FULLY FUNCTIONAL with embedding and Qdrant clients
 type CodeIndexSearchTool struct {
 	codeIndexStorage *storage.CodeIndexStorage
+	embeddingClient  embeddings.EmbeddingClient
+	qdrantClient     *storage.QdrantClient
+	logger           *zap.Logger
 }
 
 func (t *CodeIndexSearchTool) Name() string {
@@ -53,31 +58,128 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("query is required and must be a string")
 	}
 
-	// NOTE: Full code search requires:
-	// - Embedding client to generate query embeddings
-	// - Qdrant client to search vector store
-	// - Complex result formatting and chunking logic
-	//
-	// This is a simplified wrapper that checks if folders are indexed.
-	// For full functionality, use code_index_search MCP tool via /mcp endpoint.
+	// Parse limit parameter (default: 10, max: 50)
+	limit := 10
+	if l, ok := input["limit"].(float64); ok {
+		limit = int(l)
+		if limit > 50 {
+			limit = 50
+		}
+	}
 
-	// Check if any folders are indexed
-	status, err := t.codeIndexStorage.GetIndexStatus()
+	// Get retrieve mode (default: "chunk")
+	retrieveMode := "chunk"
+	if mode, ok := input["retrieve"].(string); ok {
+		if mode == "full" || mode == "chunk" {
+			retrieveMode = mode
+		}
+	}
+
+	// Get current project root
+	projectRoot := tools.GetProjectRoot()
+
+	// Lookup collection name from code_index_map
+	mapping, err := t.codeIndexStorage.GetPathMapping(projectRoot)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get index status: %w", err)
+		return nil, fmt.Errorf("failed to lookup collection mapping: %w", err)
+	}
+	if mapping == nil {
+		return nil, fmt.Errorf("no code index found for project root '%s' - please restart coordinator to auto-index", projectRoot)
 	}
 
-	if status.TotalFolders == 0 {
-		return nil, fmt.Errorf("no folders indexed. Use code_index_add_folder MCP tool to index a project directory first")
+	collectionName := mapping.QdrantCollection
+
+	// Generate embedding for query
+	queryEmbedding, err := t.embeddingClient.CreateEmbedding(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create query embedding: %w", err)
 	}
 
-	// Return guidance to use MCP endpoint
+	// Search in Qdrant using the correct collection
+	searchResp, err := t.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search in collection '%s': %w", collectionName, err)
+	}
+
+	// Build results
+	var results []storage.SearchResult
+	for _, hit := range searchResp.Result {
+		result := storage.SearchResult{
+			Score: hit.Score,
+		}
+
+		// Extract payload fields
+		if fileID, ok := hit.Payload["fileId"].(string); ok {
+			result.FileID = fileID
+		}
+		if folderID, ok := hit.Payload["folderId"].(string); ok {
+			result.FolderID = folderID
+		}
+		if folderPath, ok := hit.Payload["folderPath"].(string); ok {
+			result.FolderPath = folderPath
+		}
+		if filePath, ok := hit.Payload["filePath"].(string); ok {
+			result.FilePath = filePath
+		}
+		if relativePath, ok := hit.Payload["relativePath"].(string); ok {
+			result.RelativePath = relativePath
+		}
+		if language, ok := hit.Payload["language"].(string); ok {
+			result.Language = language
+		}
+		if chunkNum, ok := hit.Payload["chunkNum"].(float64); ok {
+			result.ChunkNum = int(chunkNum)
+		}
+		if startLine, ok := hit.Payload["startLine"].(float64); ok {
+			result.StartLine = int(startLine)
+		}
+		if endLine, ok := hit.Payload["endLine"].(float64); ok {
+			result.EndLine = int(endLine)
+		}
+
+		// Handle content based on retrieve mode
+		if retrieveMode == "chunk" {
+			// Default: return just the matching chunk content from Qdrant
+			if content, ok := hit.Payload["content"].(string); ok {
+				result.Content = content
+			}
+		} else if retrieveMode == "full" {
+			// Fetch entire file content from MongoDB
+			if result.FileID != "" {
+				allChunks, err := t.codeIndexStorage.GetChunksByFileID(result.FileID)
+				if err != nil {
+					t.logger.Warn("Failed to fetch full file content",
+						zap.String("fileID", result.FileID),
+						zap.Error(err))
+					// Fallback to chunk content
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				} else {
+					// Concatenate all chunks to build full file content
+					var fullContent strings.Builder
+					for _, chunk := range allChunks {
+						fullContent.WriteString(chunk.Content)
+					}
+					result.Content = fullContent.String()
+					result.FullFileRetrieved = true
+				}
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	t.logger.Info("Code search completed",
+		zap.String("query", query),
+		zap.String("retrieveMode", retrieveMode),
+		zap.Int("results", len(results)))
+
 	return map[string]interface{}{
-		"error":   "code_search_requires_mcp_endpoint",
-		"message": "Code search requires direct MCP tool access for embedding generation and vector search. Use code_index_search MCP tool via /mcp endpoint instead.",
-		"indexed_folders": status.TotalFolders,
-		"indexed_files":   status.TotalFiles,
-		"query":           query,
+		"success":     true,
+		"query":       query,
+		"results":     results,
+		"resultCount": len(results),
 	}, nil
 }
 
@@ -278,9 +380,21 @@ func (t *CodeIndexRemoveFolderTool) Execute(ctx context.Context, input map[strin
 }
 
 // RegisterCodeIndexTools registers code index tools with the tool registry
-func RegisterCodeIndexTools(registry *aiservice.ToolRegistry, codeIndexStorage *storage.CodeIndexStorage) error {
+// NOW REQUIRES: embedding client and Qdrant client for full search functionality
+func RegisterCodeIndexTools(
+	registry *aiservice.ToolRegistry,
+	codeIndexStorage *storage.CodeIndexStorage,
+	embeddingClient embeddings.EmbeddingClient,
+	qdrantClient *storage.QdrantClient,
+	logger *zap.Logger,
+) error {
 	tools := []aiservice.ToolExecutor{
-		&CodeIndexSearchTool{codeIndexStorage: codeIndexStorage},
+		&CodeIndexSearchTool{
+			codeIndexStorage: codeIndexStorage,
+			embeddingClient:  embeddingClient,
+			qdrantClient:     qdrantClient,
+			logger:           logger,
+		},
 		&CodeIndexAddFolderTool{codeIndexStorage: codeIndexStorage},
 		&CodeIndexScanTool{codeIndexStorage: codeIndexStorage},
 		&CodeIndexStatusTool{codeIndexStorage: codeIndexStorage},
