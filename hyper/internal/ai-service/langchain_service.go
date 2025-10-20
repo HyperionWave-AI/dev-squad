@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 )
 
 // ContextKey type for context keys
@@ -51,6 +52,42 @@ type ChatService struct {
 	provider     ChatProvider
 	config       *AIConfig
 	toolRegistry *ToolRegistry
+}
+
+// ToolResultCache caches tool execution results by signature to prevent duplicate executions
+// Helps reduce circuit breaker hits by reusing results when the same tool is called with identical arguments
+type ToolResultCache struct {
+	cache map[string]*ToolResult
+	mu    sync.RWMutex
+}
+
+// NewToolResultCache creates a new tool result cache
+func NewToolResultCache() *ToolResultCache {
+	return &ToolResultCache{
+		cache: make(map[string]*ToolResult),
+	}
+}
+
+// Get retrieves a cached tool result if it exists
+func (c *ToolResultCache) Get(signature string) (*ToolResult, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result, found := c.cache[signature]
+	return result, found
+}
+
+// Set stores a tool result in the cache
+func (c *ToolResultCache) Set(signature string, result *ToolResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Create a deep copy to avoid mutation issues
+	cachedResult := &ToolResult{
+		Name:       result.Name,
+		Output:     result.Output,
+		Error:      result.Error,
+		DurationMs: result.DurationMs,
+	}
+	c.cache[signature] = cachedResult
 }
 
 // NewChatService creates a new ChatService with the given configuration
@@ -228,6 +265,9 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		iterationCount := 0
 		currentMessages := append([]Message{}, messages...) // Copy messages
 
+		// Tool result cache: prevent duplicate tool executions
+		resultCache := NewToolResultCache()
+
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
@@ -373,14 +413,43 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				// Send tool call event
 				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
 
-				// Execute tool
-				result := s.toolRegistry.ExecuteToolCall(ctx, toolCall)
+				// Generate signature for cache and circuit breaker
+				signature := toolCallSignature(toolCall.Name, toolCall.Args)
+
+				// Check tool result cache BEFORE execution
+				var result ToolResult
+				cachedResult, found := resultCache.Get(signature)
+				if found {
+					// Use cached result - avoid redundant execution
+					result = *cachedResult
+					log.Printf("[Tool Cache HIT] Using cached result for '%s' - skipping execution", toolCall.Name)
+
+					// Add cache hit notice to the result so AI knows it's cached
+					cacheNotice := fmt.Sprintf("🔁 CACHED RESULT: You already called '%s' with these exact arguments. Using previous result instead of re-executing.", toolCall.Name)
+
+					// Prepend cache notice to the output
+					if outputMap, ok := result.Output.(map[string]interface{}); ok {
+						// Clone the map to avoid mutating the cached version
+						newOutput := make(map[string]interface{})
+						for k, v := range outputMap {
+							newOutput[k] = v
+						}
+						newOutput["_cacheNotice"] = cacheNotice
+						result.Output = newOutput
+					}
+				} else {
+					// Execute tool (no cached result available)
+					result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
+					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
+
+					// Store in cache for future duplicate calls
+					resultCache.Set(signature, &result)
+				}
 
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
 				// Circuit breaker: check for repeated tool calls AND warn the AI
-				signature := toolCallSignature(toolCall.Name, toolCall.Args)
 				recentToolCalls = append(recentToolCalls, signature)
 				if len(recentToolCalls) > 10 {
 					recentToolCalls = recentToolCalls[1:]
