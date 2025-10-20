@@ -41,7 +41,7 @@ func (t *CreateAgentTaskTool) Name() string {
 }
 
 func (t *CreateAgentTaskTool) Description() string {
-	return "Create a new agent task linked to a human task. Returns task ID. IMPORTANT: Provide specific file paths in filesModified (e.g., './ui/src/components/TaskCard.tsx') and detailed context in contextSummary including WHAT to change, WHERE (file:line), and HOW. The more specific your context, the less time agents waste exploring. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
+	return "Create a new agent task linked to a human task. Returns task ID. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
 }
 
 func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
@@ -69,14 +69,14 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 			},
 			"contextSummary": map[string]interface{}{
 				"type":        "string",
-				"description": "200-word summary with SPECIFICS: What to change, where to change it (file paths, line numbers if known), how to implement it, what patterns to follow. Example: 'Add delete button to TaskCard.tsx around line 45, next to the edit button. Use the existing IconButton component with DeleteIcon. Wire it to deleteTask prop passed from parent. Follow the pattern used for edit button in same file.'",
+				"description": "200-word summary with specifics from code_index_search results: WHAT to change, WHERE (file paths + line numbers from search results), HOW (patterns/examples from search results). Example: 'Add delete button to ui/src/components/TaskCard.tsx lines 42-45 (found via code_index_search). Use IconButton pattern from same file line 38. Wire to deleteTask mutation.'",
 			},
 			"filesModified": map[string]interface{}{
 				"type": "array",
 				"items": map[string]interface{}{
 					"type": "string",
 				},
-				"description": "EXACT file paths that will be modified (e.g., ['./ui/src/components/TaskCard.tsx', './ui/src/components/KanbanTaskCard.tsx']). Be SPECIFIC - this reduces agent exploration time from minutes to seconds. Used for validation.",
+				"description": "File paths discovered from code_index_search results (e.g., ['./ui/src/components/TaskCard.tsx']). Extract file paths from search results and include them here. DO NOT ask user for paths - use code_index_search to find them automatically. Leave empty only if search returns no results.",
 			},
 			"qdrantCollections": map[string]interface{}{
 				"type": "array",

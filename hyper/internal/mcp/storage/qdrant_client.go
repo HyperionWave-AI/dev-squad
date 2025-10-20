@@ -708,6 +708,43 @@ func (c *QdrantClient) EnsureCodeIndexCollection(expectedDimensions ...int) erro
 	return nil
 }
 
+// GetCollectionPointCount returns the number of points in a collection
+func (c *QdrantClient) GetCollectionPointCount(collectionName string) (int, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/collections/%s", c.baseURL, collectionName), nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get collection info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("failed to get collection info (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var collectionInfo struct {
+		Result struct {
+			PointsCount int `json:"points_count"`
+		} `json:"result"`
+	}
+
+	if err := json.Unmarshal(body, &collectionInfo); err != nil {
+		return 0, fmt.Errorf("failed to parse collection info: %w", err)
+	}
+
+	return collectionInfo.Result.PointsCount, nil
+}
+
 // UpsertCodeIndexPoints upserts code indexing points into the specified collection
 func (c *QdrantClient) UpsertCodeIndexPoints(collectionName string, points []CodeIndexPoint) error {
 	requestBody := map[string]interface{}{
