@@ -175,10 +175,10 @@ func (l *ListDirectoryToolExecutor) InputSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "Directory path to list",
 			},
-			"recursive": map[string]interface{}{
-				"type":        "boolean",
-				"description": "List subdirectories recursively (default: false)",
-			},
+			// "recursive": map[string]interface{}{
+			// 	"type":        "boolean",
+			// 	"description": "List subdirectories recursively (default: false)",
+			// },
 		},
 		"required": []string{"path"},
 	}
