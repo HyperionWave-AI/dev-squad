@@ -501,6 +501,10 @@ func (t *CreateHumanTaskTool) InputSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "Original human request/prompt",
 			},
+			"forceCreate": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Set to true to create task despite similar existing tasks (default: false)",
+			},
 		},
 		"required": []string{"prompt"},
 	}
@@ -512,16 +516,47 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("prompt is required and must be a string")
 	}
 
+	forceCreate := false
+	if fc, ok := input["forceCreate"].(bool); ok {
+		forceCreate = fc
+	}
+
+	// Check for similar tasks unless forceCreate is true
+	if !forceCreate {
+		similarTasks, scores, err := t.storage.SearchSimilarHumanTasks(prompt, 5, 0.75)
+		if err == nil && len(similarTasks) > 0 {
+			// Found similar tasks - return them instead of creating
+			formattedTasks := make([]map[string]interface{}, len(similarTasks))
+			for i, task := range similarTasks {
+				formattedTasks[i] = map[string]interface{}{
+					"taskId":     task.ID,
+					"prompt":     task.Prompt,
+					"status":     task.Status,
+					"createdAt":  task.CreatedAt,
+					"similarity": scores[i],
+				}
+			}
+
+			return map[string]interface{}{
+				"similarTasksFound": true,
+				"similarTasks":      formattedTasks,
+				"message":           fmt.Sprintf("Found %d similar task(s). Set forceCreate=true to create anyway, or use an existing task.", len(similarTasks)),
+			}, nil
+		}
+	}
+
+	// No similar tasks or forceCreate=true - proceed with creation
 	task, err := t.storage.CreateHumanTask(prompt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create human task: %w", err)
 	}
 
 	return map[string]interface{}{
-		"taskId":    task.ID,
-		"status":    task.Status,
-		"prompt":    task.Prompt,
-		"createdAt": task.CreatedAt,
+		"similarTasksFound": false,
+		"taskId":            task.ID,
+		"status":            task.Status,
+		"prompt":            task.Prompt,
+		"createdAt":         task.CreatedAt,
 	}, nil
 }
 
