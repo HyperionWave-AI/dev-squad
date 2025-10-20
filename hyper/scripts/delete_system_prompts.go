@@ -34,20 +34,24 @@ func main() {
 
 	db := client.Database(database)
 
-	// Delete all system prompts
-	result, err := db.Collection("system_prompts").DeleteMany(ctx, bson.M{})
-	if err != nil {
-		log.Printf("Error deleting system prompts: %v\n", err)
-	} else {
-		fmt.Printf("✓ Deleted %d system prompts\n", result.DeletedCount)
-	}
+	// Delete from both collections (old and new versioned system)
+	collections := []string{"system_prompts", "system_prompt_versions"}
 
-	// Verify deletion
-	count, err := db.Collection("system_prompts").CountDocuments(ctx, bson.M{})
-	if err != nil {
-		log.Printf("Error counting system prompts: %v\n", err)
-	} else {
-		fmt.Printf("✓ Remaining system prompts: %d\n", count)
+	for _, collName := range collections {
+		result, err := db.Collection(collName).DeleteMany(ctx, bson.M{})
+		if err != nil {
+			log.Printf("Error deleting from %s: %v\n", collName, err)
+		} else {
+			fmt.Printf("✓ Deleted %d documents from %s\n", result.DeletedCount, collName)
+		}
+
+		// Verify deletion
+		count, err := db.Collection(collName).CountDocuments(ctx, bson.M{})
+		if err != nil {
+			log.Printf("Error counting in %s: %v\n", collName, err)
+		} else {
+			fmt.Printf("✓ Remaining in %s: %d\n", collName, count)
+		}
 	}
 
 	fmt.Println("\n✓ Database will now use DefaultSystemPrompt from chat_websocket.go!")
