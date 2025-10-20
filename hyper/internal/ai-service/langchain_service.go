@@ -321,29 +321,51 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
-				// Circuit breaker: check for repeated tool calls
+				// Circuit breaker: check for repeated tool calls AND warn the AI
 				signature := toolCallSignature(toolCall.Name, toolCall.Args)
 				recentToolCalls = append(recentToolCalls, signature)
 				if len(recentToolCalls) > 10 {
 					recentToolCalls = recentToolCalls[1:]
 				}
 
-				// If same tool+args called 3+ times in last 5 calls, trigger circuit breaker
-				if len(recentToolCalls) >= 5 {
-					count := 0
-					for i := len(recentToolCalls) - 5; i < len(recentToolCalls); i++ {
-						if recentToolCalls[i] == signature {
-							count++
-						}
+				// Count how many times this exact tool+args was called in ALL history
+				totalCount := 0
+				for _, sig := range recentToolCalls {
+					if sig == signature {
+						totalCount++
 					}
-					if count >= 3 {
-						log.Printf("[Circuit Breaker] Tool '%s' called %d times in last 5 calls - stopping infinite loop", toolCall.Name, count)
-						eventChan <- StreamEvent{
-							Type:  StreamEventError,
-							Error: fmt.Sprintf("Circuit breaker triggered: tool '%s' called repeatedly (%d times) with no progress. This usually means the tool cannot complete the requested operation.", toolCall.Name, count),
-						}
-						return
+				}
+
+				// Progressive warnings to AI (inject into context so AI sees them)
+				var loopWarning string
+				if totalCount == 2 {
+					// First duplicate - gentle warning
+					loopWarning = fmt.Sprintf("⚠️  WARNING: You already called '%s' with these exact arguments 1 time before. You should use the result from the previous call instead of repeating the same operation.", toolCall.Name)
+				} else if totalCount == 3 {
+					// Second duplicate - stronger warning
+					loopWarning = fmt.Sprintf("🔁 LOOP DETECTED: You called '%s' with identical arguments 2 times already. You are stuck in a loop! Use previous results or try a DIFFERENT approach - do NOT call this tool again with the same arguments.", toolCall.Name)
+				} else if totalCount >= 4 {
+					// Third duplicate - trigger circuit breaker
+					log.Printf("[Circuit Breaker] Tool '%s' called %d times - stopping infinite loop", toolCall.Name, totalCount)
+					eventChan <- StreamEvent{
+						Type:  StreamEventError,
+						Error: fmt.Sprintf("Circuit breaker triggered: tool '%s' called repeatedly (%d times) with identical arguments. The AI is stuck in an infinite loop and cannot complete this task.", toolCall.Name, totalCount),
 					}
+					return
+				}
+
+				// If we generated a warning, inject it into the AI's context
+				if loopWarning != "" {
+					log.Printf("[Loop Detection] %s", loopWarning)
+
+					// Send warning as a visible message to the user
+					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
+
+					// CRITICAL: Inject warning into AI's context so it sees it in the next iteration
+					currentMessages = append(currentMessages, Message{
+						Role:    "system",
+						Content: loopWarning,
+					})
 				}
 
 				// Log tool execution
