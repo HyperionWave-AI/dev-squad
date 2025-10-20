@@ -118,19 +118,22 @@ type TaskStorage interface {
 	UpdateTodoPromptNotes(agentTaskID string, todoID string, notes string) error
 	ClearTodoPromptNotes(agentTaskID string, todoID string) error
 	ClearAllTasks() (*ClearResult, error)
+	SearchSimilarHumanTasks(prompt string, limit int, minScore float64) ([]*HumanTask, []float64, error)
 }
 
 // MongoTaskStorage implements TaskStorage using MongoDB
 type MongoTaskStorage struct {
 	humanTasksCollection *mongo.Collection
 	agentTasksCollection *mongo.Collection
+	knowledgeStorage     KnowledgeStorage
 }
 
 // NewMongoTaskStorage creates a new MongoDB-backed task storage
-func NewMongoTaskStorage(db *mongo.Database) (*MongoTaskStorage, error) {
+func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage) (*MongoTaskStorage, error) {
 	storage := &MongoTaskStorage{
 		humanTasksCollection: db.Collection("human_tasks"),
 		agentTasksCollection: db.Collection("agent_tasks"),
+		knowledgeStorage:     knowledgeStorage,
 	}
 
 	// Create indexes
@@ -189,6 +192,21 @@ func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 	_, err := s.humanTasksCollection.InsertOne(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert human task: %w", err)
+	}
+
+	// Index task prompt in knowledge base for similarity search
+	if s.knowledgeStorage != nil {
+		collection := "human_tasks_search"
+		metadata := map[string]interface{}{
+			"taskId":    task.ID,
+			"status":    string(task.Status),
+			"createdAt": task.CreatedAt,
+		}
+		_, err := s.knowledgeStorage.Upsert(collection, task.Prompt, metadata)
+		if err != nil {
+			// Log error but don't fail task creation
+			fmt.Printf("Warning: failed to index human task in knowledge base: %v\n", err)
+		}
 	}
 
 	return task, nil
@@ -693,4 +711,43 @@ func (s *MongoTaskStorage) ClearAllTasks() (*ClearResult, error) {
 	result.AgentTasksDeleted = agentResult.DeletedCount
 
 	return result, nil
+}
+
+// SearchSimilarHumanTasks searches for similar human tasks using semantic similarity
+func (s *MongoTaskStorage) SearchSimilarHumanTasks(prompt string, limit int, minScore float64) ([]*HumanTask, []float64, error) {
+	// Query knowledge base for similar prompts
+	if s.knowledgeStorage == nil {
+		return nil, nil, fmt.Errorf("knowledge storage not configured")
+	}
+
+	results, err := s.knowledgeStorage.Query("human_tasks_search", prompt, limit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query similar tasks: %w", err)
+	}
+
+	// Filter by score and fetch full tasks
+	var tasks []*HumanTask
+	var scores []float64
+
+	for _, result := range results {
+		if result.Score < minScore {
+			continue
+		}
+
+		taskID, ok := result.Entry.Metadata["taskId"].(string)
+		if !ok {
+			continue
+		}
+
+		task, err := s.GetHumanTask(taskID)
+		if err != nil {
+			// Skip tasks that can't be retrieved
+			continue
+		}
+
+		tasks = append(tasks, task)
+		scores = append(scores, result.Score)
+	}
+
+	return tasks, scores, nil
 }
