@@ -456,24 +456,9 @@ func StartHTTPServer(
 				Director: func(req *http.Request) {
 					req.URL.Scheme = "http"
 					req.URL.Host = viteHost
-					// Strip /ui prefix - Vite serves from root in dev mode
-					req.URL.Path = strings.TrimPrefix(c.Request.URL.Path, "/ui")
 					if req.URL.Path == "" {
 						req.URL.Path = "/"
 					}
-					req.Host = viteHost
-				},
-			}
-			proxy.ServeHTTP(c.Writer, c.Request)
-		})
-
-		// Handle /ui/ explicitly to prevent redirect loop
-		r.GET("/ui/", func(c *gin.Context) {
-			proxy := &httputil.ReverseProxy{
-				Director: func(req *http.Request) {
-					req.URL.Scheme = "http"
-					req.URL.Host = viteHost
-					req.URL.Path = "/"
 					req.Host = viteHost
 				},
 			}
