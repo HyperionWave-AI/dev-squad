@@ -80,11 +80,14 @@ fi
 echo -e "${GREEN}✓ .air.toml found${NC}"
 
 # Check .env file
-if [ -f ".env.hyper" ]; then
+if [ -f ".env.hyper.hot" ]; then
+    echo -e "${GREEN}✓ .env.hyper.hot found${NC}"
+    set -a; source .env.hyper.hot; set +a
+elif [ -f ".env.hyper" ]; then
     echo -e "${GREEN}✓ .env.hyper found${NC}"
     set -a; source .env.hyper; set +a
 elif [ -f ".env" ]; then
-    echo -e "${YELLOW}⚠ Using .env (no .env.hyper found)${NC}"
+    echo -e "${YELLOW}⚠ Using .env (no .env.hyper.hot or .env.hyper found)${NC}"
     set -a; source .env; set +a
 else
     echo -e "${YELLOW}⚠ No .env file found. Using system environment variables.${NC}"

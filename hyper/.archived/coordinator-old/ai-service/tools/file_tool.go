@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	maxReadSize  = 10 * 1024 * 1024 // 10MB
-	maxWriteSize = 5 * 1024 * 1024  // 5MB
+	maxReadSize   = 10 * 1024 * 1024 // 10MB
+	maxWriteSize  = 5 * 1024 * 1024  // 5MB
 	maxDirEntries = 1000
 )
 
@@ -187,9 +187,9 @@ type ListDirectoryTool struct{}
 
 // ListDirectoryInput represents the input schema for directory listing
 type ListDirectoryInput struct {
-	Path       string `json:"path"`
-	Recursive  bool   `json:"recursive,omitempty"`
-	ShowHidden bool   `json:"showHidden,omitempty"`
+	Path string `json:"path"`
+	// Recursive  bool   `json:"recursive,omitempty"`
+	ShowHidden bool `json:"showHidden,omitempty"`
 }
 
 // FileInfo represents a file or directory entry
