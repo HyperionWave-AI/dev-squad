@@ -17,6 +17,7 @@ import (
 	"hyper/internal/server"
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
+	"hyper/internal/mcp/indexer"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
 
@@ -357,30 +358,105 @@ func main() {
 		logger.Warn("Failed to check existing path mapping", zap.Error(err))
 	}
 
+	// Create auto-indexer instance
+	autoIndexer := indexer.NewAutoIndexer(codeIndexStorage, qdrantClient, embeddingClient, logger)
+
+	var collectionName string
+	needsIndexing := false
+
 	if existingMapping == nil {
 		// No mapping exists - create collection and mapping
-		collectionName, err := qdrantClient.EnsureCollectionForPath(projectRoot, codeIndexStorage)
+		collectionName, err = qdrantClient.EnsureCollectionForPath(projectRoot, codeIndexStorage)
 		if err != nil {
-			logger.Warn("Failed to auto-index project root",
+			logger.Warn("Failed to create code index collection",
 				zap.String("path", projectRoot),
 				zap.Error(err))
 		} else {
 			logger.Info("Created code index collection for project root",
 				zap.String("path", projectRoot),
 				zap.String("collection", collectionName))
-
-			// Create folder metadata (for legacy compatibility)
-			_, err = codeIndexStorage.AddFolder(projectRoot, "Auto-indexed project root")
-			if err != nil {
-				logger.Warn("Failed to create folder metadata", zap.Error(err))
-			} else {
-				logger.Info("Folder metadata created for project root. Use code_index_scan to index files.")
-			}
+			needsIndexing = true
 		}
 	} else {
-		logger.Info("Project root already indexed",
+		collectionName = existingMapping.QdrantCollection
+		logger.Info("Project root mapping found",
 			zap.String("path", projectRoot),
-			zap.String("collection", existingMapping.QdrantCollection))
+			zap.String("collection", collectionName))
+
+		// Check if collection is empty (mapping exists but no vectors)
+		isEmpty, err := autoIndexer.CheckCollectionEmpty(context.Background(), collectionName)
+		if err != nil {
+			// If collection doesn't exist (404), re-create it and trigger indexing
+			logger.Warn("Collection check failed - will recreate and index",
+				zap.String("collection", collectionName),
+				zap.Error(err))
+
+			// Get folder to clear its file metadata
+			folder, err := codeIndexStorage.GetFolderByPath(projectRoot)
+			if err == nil && folder != nil {
+				logger.Info("Clearing stale file metadata before re-indexing",
+					zap.String("folderId", folder.ID))
+
+				// Clear all file and chunk records to force full re-index
+				if err := codeIndexStorage.RemoveFolder(folder.ID); err != nil {
+					logger.Warn("Failed to clear file metadata", zap.Error(err))
+				} else {
+					logger.Info("Cleared stale file metadata successfully")
+
+					// Recreate the folder entry
+					folder, err = codeIndexStorage.AddFolder(projectRoot, "Auto-indexed project root")
+					if err != nil {
+						logger.Error("Failed to recreate folder metadata", zap.Error(err))
+					}
+				}
+			}
+
+			// Recreate the specific collection for this path (768 = nomic-embed-text dimensions)
+			if err := qdrantClient.EnsureCollection(collectionName, 768); err != nil {
+				logger.Error("Failed to recreate collection", zap.Error(err))
+			} else {
+				logger.Info("Recreated collection successfully",
+					zap.String("collection", collectionName))
+				needsIndexing = true
+			}
+		} else if isEmpty {
+			logger.Warn("Collection exists but is empty - triggering indexing",
+				zap.String("collection", collectionName))
+			needsIndexing = true
+		} else {
+			logger.Info("Collection already has vectors - skipping indexing",
+				zap.String("collection", collectionName))
+		}
+	}
+
+	// Start indexing in background if needed
+	if needsIndexing {
+		logger.Info("Starting background file indexing...",
+			zap.String("path", projectRoot),
+			zap.String("collection", collectionName))
+
+		// Index in background goroutine to not block server startup
+		go func() {
+			startTime := time.Now()
+			result := autoIndexer.IndexProjectRoot(context.Background(), projectRoot, collectionName)
+
+			if result.Error != nil {
+				logger.Error("File indexing failed",
+					zap.String("path", projectRoot),
+					zap.String("collection", collectionName),
+					zap.Error(result.Error))
+			} else {
+				duration := time.Since(startTime)
+				logger.Info("File indexing complete",
+					zap.String("path", projectRoot),
+					zap.String("collection", collectionName),
+					zap.Int("filesIndexed", result.FilesIndexed),
+					zap.Int("filesUpdated", result.FilesUpdated),
+					zap.Int("filesSkipped", result.FilesSkipped),
+					zap.Int("totalFiles", result.TotalFiles),
+					zap.Duration("duration", duration))
+			}
+		}()
 	}
 
 	// Initialize path mapper for Docker volume mapping
