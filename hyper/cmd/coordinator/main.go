@@ -309,17 +309,19 @@ func main() {
 		zap.Int("vectorDimensions", embeddingClient.GetDimensions()))
 
 	// Initialize storage layers (NOW that qdrantClient is created with correct embeddings)
-	taskStorage, err := storage.NewMongoTaskStorage(db)
-	if err != nil {
-		logger.Fatal("Failed to initialize task storage", zap.Error(err))
-	}
-	logger.Info("Task storage initialized with MongoDB")
-
+	// First initialize knowledge storage
 	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db, qdrantClient)
 	if err != nil {
 		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
 	}
 	logger.Info("Knowledge storage initialized with MongoDB + Qdrant")
+
+	// Then initialize task storage with knowledge storage for duplicate detection
+	taskStorage, err := storage.NewMongoTaskStorage(db, knowledgeStorage)
+	if err != nil {
+		logger.Fatal("Failed to initialize task storage", zap.Error(err))
+	}
+	logger.Info("Task storage initialized with MongoDB and duplicate detection")
 
 	// Initialize code indexing components
 	codeIndexStorage, err := storage.NewCodeIndexStorage(db)
