@@ -111,11 +111,25 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Int("resultCount", len(searchResp.Result)),
 		zap.String("collection", collectionName))
 
-	// Build results
+	// Build results (filter out archived paths)
 	var results []storage.SearchResult
 	for _, hit := range searchResp.Result {
+		// Extract file path first to check for archived directories
+		var filePath string
+		if fp, ok := hit.Payload["filePath"].(string); ok {
+			filePath = fp
+		}
+
+		// FILTER: Skip archived/deprecated files
+		if strings.Contains(filePath, "/.archived/") || strings.Contains(filePath, "/.archive/") {
+			t.logger.Debug("Skipping archived file from code search results",
+				zap.String("filePath", filePath))
+			continue
+		}
+
 		result := storage.SearchResult{
-			Score: hit.Score,
+			Score:    hit.Score,
+			FilePath: filePath,
 		}
 
 		// Extract payload fields
@@ -127,9 +141,6 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		}
 		if folderPath, ok := hit.Payload["folderPath"].(string); ok {
 			result.FolderPath = folderPath
-		}
-		if filePath, ok := hit.Payload["filePath"].(string); ok {
-			result.FilePath = filePath
 		}
 		if relativePath, ok := hit.Payload["relativePath"].(string); ok {
 			result.RelativePath = relativePath
