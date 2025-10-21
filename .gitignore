@@ -8,7 +8,6 @@
 
 
 
-.env
 coordinator/mcp-http-bridge/hyperion-coordinator-bridge
 /.playwright-mcp
 
@@ -18,9 +17,13 @@ docker-compose.*.yml
 coordinator/embed/ui/
 bin/
 /hyper/embed/ui
-.env
 /hyper/.archived/coordinator-old/embed/ui
 /ui_____
-.env.hyperion
 /var
 hyper/scripts/delete_all_tasks.go
+var
+tmp
+hyper/tmp
+hyper/tmp/coordinator
+
+third_party
