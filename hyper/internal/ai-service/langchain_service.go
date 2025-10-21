@@ -42,10 +42,10 @@ const (
 // StreamEvent represents a streaming event (token, tool call, or tool result)
 type StreamEvent struct {
 	Type       StreamEventType `json:"type"`
-	Content    string          `json:"content,omitempty"`     // For token events
-	ToolCall   *ToolCall       `json:"toolCall,omitempty"`    // For tool_call events
-	ToolResult *ToolResult     `json:"toolResult,omitempty"`  // For tool_result events
-	Error      string          `json:"error,omitempty"`       // For error events
+	Content    string          `json:"content,omitempty"`    // For token events
+	ToolCall   *ToolCall       `json:"toolCall,omitempty"`   // For tool_call events
+	ToolResult *ToolResult     `json:"toolResult,omitempty"` // For tool_result events
+	Error      string          `json:"error,omitempty"`      // For error events
 }
 
 // ChatService manages AI chat operations with provider abstraction
@@ -279,10 +279,10 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
 		circuitBreakerThresholds := map[string]int{
-			"read_file":       2, // Stop after 2 attempts (only 1 duplicate allowed)
-			"write_file":      1, // Never allow duplicate writes
-			"list_directory":  2, // Stop after 2 attempts
-			"bash":            3, // Allow more for command variations
+			"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
+			"write_file":        1, // Never allow duplicate writes
+			"list_directory":    2, // Stop after 2 attempts
+			"bash":              3, // Allow more for command variations
 			"code_index_search": 3, // Allow query refinement
 			// Default for other tools: 4 attempts
 		}
@@ -322,6 +322,18 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			toolResultPreview := getToolResultPreview(currentMessages, 200)
 			log.Printf("[DEBUG Context] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
 				len(currentMessages), contextSize, toolResultPreview)
+
+			// DEBUG: Log tools being passed to LLM
+			log.Printf("[DEBUG Tools] Passing %d tools to LLM provider %s", len(tools), s.config.Provider)
+			if len(tools) > 0 {
+				toolNames := make([]string, 0, 3)
+				for i := 0; i < len(tools) && i < 3; i++ {
+					if tools[i].Function != nil {
+						toolNames = append(toolNames, tools[i].Function.Name)
+					}
+				}
+				log.Printf("[DEBUG Tools] Sample tools: %v", toolNames)
+			}
 
 			// Call provider with tools
 			toolProvider := s.provider.(ToolCapableProvider)
@@ -585,16 +597,33 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					}
 				}
 
-				// CRITICAL FIX: If we generated a loop warning, PREPEND it to the tool result
-				// This makes it much harder for the AI to ignore the warning
+				// CRITICAL FIX: If we generated a loop warning, EMBED it in JSON result
 				if loopWarning != "" {
 					log.Printf("[Loop Detection] %s", loopWarning)
 
 					// Send warning as a visible message to the user
 					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
 
-					// PREPEND warning to tool result so AI sees it as part of the tool's output
-					toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+					// Try to embed warning into the JSON result instead of prepending as text
+					if strings.HasPrefix(toolResultMsg, fmt.Sprintf("Tool '%s' result: ", result.Name)) {
+						jsonPart := strings.TrimPrefix(toolResultMsg, fmt.Sprintf("Tool '%s' result: ", result.Name))
+						var resultData map[string]interface{}
+						if err := json.Unmarshal([]byte(jsonPart), &resultData); err == nil {
+							resultData["_loopWarning"] = loopWarning
+							if newJSON, err := json.Marshal(resultData); err == nil {
+								toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(newJSON))
+							} else {
+								// fallback: text prepend if reserialization fails
+								toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+							}
+						} else {
+							// fallback: text prepend if JSON parse fails
+							toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+						}
+					} else {
+						// fallback: if message doesn’t match JSON result format
+						toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+					}
 				}
 
 				// CRITICAL FIX: Truncate tool results that are too large to prevent token limit errors
@@ -711,10 +740,10 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
 		circuitBreakerThresholds := map[string]int{
-			"read_file":       2, // Stop after 2 attempts (only 1 duplicate allowed)
-			"write_file":      1, // Never allow duplicate writes
-			"list_directory":  2, // Stop after 2 attempts
-			"bash":            3, // Allow more for command variations
+			"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
+			"write_file":        1, // Never allow duplicate writes
+			"list_directory":    2, // Stop after 2 attempts
+			"bash":              3, // Allow more for command variations
 			"code_index_search": 3, // Allow query refinement
 			// Default for other tools: 4 attempts
 		}
@@ -901,11 +930,33 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					}
 				}
 
-				// Prepend loop warning if present
+				// CRITICAL FIX: If we generated a loop warning, EMBED it in JSON result
 				if loopWarning != "" {
 					log.Printf("[Loop Detection] %s", loopWarning)
+
+					// Send warning as a visible message to the user
 					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
-					toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+
+					// Try to embed warning into the JSON result instead of prepending as text
+					if strings.HasPrefix(toolResultMsg, fmt.Sprintf("Tool '%s' result: ", result.Name)) {
+						jsonPart := strings.TrimPrefix(toolResultMsg, fmt.Sprintf("Tool '%s' result: ", result.Name))
+						var resultData map[string]interface{}
+						if err := json.Unmarshal([]byte(jsonPart), &resultData); err == nil {
+							resultData["_loopWarning"] = loopWarning
+							if newJSON, err := json.Marshal(resultData); err == nil {
+								toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(newJSON))
+							} else {
+								// fallback: text prepend if reserialization fails
+								toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+							}
+						} else {
+							// fallback: text prepend if JSON parse fails
+							toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+						}
+					} else {
+						// fallback: if message doesn't match JSON result format
+						toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+					}
 				}
 
 				// Truncate large tool results
