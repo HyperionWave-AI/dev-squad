@@ -14,12 +14,12 @@ import (
 
 	"hyper/embed"
 	"hyper/internal/ai-service/tools"
-	"hyper/internal/server"
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/indexer"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
+	"hyper/internal/server"
 
 	"github.com/joho/godotenv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
