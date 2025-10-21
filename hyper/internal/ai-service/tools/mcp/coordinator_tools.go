@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"hyper/internal/ai-service"
+	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
@@ -1447,6 +1448,7 @@ type ExecuteSubagentTool struct {
 // AIServiceInterface defines methods needed from the AI chat service
 type AIServiceInterface interface {
 	StreamChatWithTools(ctx context.Context, messages []aiservice.Message, maxToolCalls int) (<-chan aiservice.StreamEvent, error)
+	StreamChatWithToolsFiltered(ctx context.Context, messages []aiservice.Message, maxToolCalls int, allowedToolNames []string) (<-chan aiservice.StreamEvent, error)
 	GetConfig() *aiservice.AIConfig
 }
 
@@ -1655,43 +1657,63 @@ func (f *FileOperationTracker) GetProgressSummary() string {
 	return summary.String()
 }
 
-// validateFileModifications checks if expected files were actually modified using git diff
-func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.AgentTask) (bool, []string, error) {
+// validateFileModifications checks if expected files were actually modified using the session-scoped file operation tracker
+func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.AgentTask, progressTracker *FileOperationTracker) (bool, []string, error) {
 	// If no files expected to be modified, skip validation
 	if len(agentTask.FilesModified) == 0 {
 		return true, []string{}, nil
 	}
 
-	// Run: git diff --name-only HEAD
-	cmd := exec.Command("git", "diff", "--name-only", "HEAD")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return false, nil, fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
+	// Check if any files were written during this session
+	if len(progressTracker.FilesWritten) == 0 {
+		return false, []string{}, fmt.Errorf("expected files not modified: wanted %v, but no files were written during this session", agentTask.FilesModified)
 	}
 
-	modifiedFilesStr := strings.TrimSpace(string(output))
-	if modifiedFilesStr == "" {
-		return false, []string{}, fmt.Errorf("expected files not modified: wanted %v, but git diff shows no changes", agentTask.FilesModified)
-	}
+	// Get project root to normalize paths
+	projectRoot := tools.GetProjectRoot()
 
-	modifiedFiles := strings.Split(modifiedFilesStr, "\n")
-
-	// Check if any expected files were modified
+	// Normalize expected files to both absolute and relative paths for matching
 	expectedFiles := make(map[string]bool)
 	for _, file := range agentTask.FilesModified {
+		// Store the original path
 		expectedFiles[file] = true
+
+		// Also store relative path if this is absolute
+		if filepath.IsAbs(file) {
+			relPath, err := filepath.Rel(projectRoot, file)
+			if err == nil {
+				expectedFiles[relPath] = true
+			}
+		} else {
+			// Also store absolute path if this is relative
+			absPath := filepath.Join(projectRoot, file)
+			expectedFiles[absPath] = true
+		}
 	}
 
+	// Check which expected files were actually written
 	matchedFiles := []string{}
-	for _, modFile := range modifiedFiles {
-		if modFile != "" && expectedFiles[modFile] {
-			matchedFiles = append(matchedFiles, modFile)
+	for writtenPath := range progressTracker.FilesWritten {
+		// Normalize the written path
+		normalizedWritten := writtenPath
+		if !filepath.IsAbs(writtenPath) {
+			normalizedWritten = filepath.Join(projectRoot, writtenPath)
+		}
+
+		// Check both the original and normalized paths
+		if expectedFiles[writtenPath] || expectedFiles[normalizedWritten] {
+			matchedFiles = append(matchedFiles, writtenPath)
 		}
 	}
 
 	// Require at least 1 expected file to be modified
 	if len(matchedFiles) == 0 {
-		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, got %v instead", agentTask.FilesModified, modifiedFiles)
+		// Extract just the keys from FilesWritten for error message
+		writtenFiles := make([]string, 0, len(progressTracker.FilesWritten))
+		for path := range progressTracker.FilesWritten {
+			writtenFiles = append(writtenFiles, path)
+		}
+		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, but agent wrote %v instead (session-scoped tracking)", agentTask.FilesModified, writtenFiles)
 	}
 
 	return true, matchedFiles, nil
@@ -1765,9 +1787,26 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		},
 	}
 
-	// Stream AI response with tools
+	// Define allowed tools for subagents (ONLY implementation tools, NO coordinator tools)
+	// This prevents subagents from calling coordinator tools and forces them to actually write code
+	allowedTools := []string{
+		"read_file",                     // Read source files
+		"write_file",                    // Write/create files
+		"apply_patch",                   // Apply code patches
+		"bash",                          // Run commands, tests, syntax checks
+		"list_directory",                // List directory contents
+		"coordinator_update_todo_status", // Update TODO status
+		"coordinator_upsert_knowledge",   // Store knowledge/decisions
+		"code_index_search",              // Search code (if needed for context)
+	}
+
+	t.logger.Info("🔒 Filtering tools for subagent",
+		zap.Int("allowedTools", len(allowedTools)),
+		zap.Strings("tools", allowedTools))
+
+	// Stream AI response with FILTERED tools (only implementation tools, no coordinator tools)
 	maxToolCalls := t.aiService.GetConfig().MaxToolCalls
-	aiStream, err := t.aiService.StreamChatWithTools(ctx, messages, maxToolCalls)
+	aiStream, err := t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
 	if err != nil {
 		t.logger.Error("Failed to start AI streaming for subagent",
 			zap.String("subchatId", subchatID),
@@ -1939,7 +1978,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	// ========================================
 	var modifiedFiles []string
 	if len(agentTask.FilesModified) > 0 {
-		filesOK, files, validationErr := t.validateFileModifications(agentTask)
+		filesOK, files, validationErr := t.validateFileModifications(agentTask, progressTracker)
 		modifiedFiles = files
 
 		if !filesOK {
@@ -2105,13 +2144,33 @@ YOUR TODOs:
 🎯 EXECUTION DEADLINE: You must START IMPLEMENTING within 2 MINUTES of reading this prompt.
 No planning phase. No extended exploration. Read context → Start coding → Complete TODOs.
 
-INSTRUCTIONS:
-1. Start working on the TODOs immediately - no planning phase needed
-2. Use coordinator_update_todo_status to mark each TODO as 'in_progress' when you start it
-3. Use coordinator_update_todo_status to mark each TODO as 'completed' when done
-4. Use tools like read_file, write_file, bash to complete your work
-5. Update coordinator_upsert_knowledge with key decisions and contracts for handoff
-6. When ALL TODOs are completed, summarize what you accomplished
+⛔ CRITICAL: YOU ARE AN IMPLEMENTER - NOT A COORDINATOR ⛔
+
+❌ DO NOT CALL THESE TOOLS (they are for coordinators only):
+- list_agent_tasks (you are already IN a task!)
+- coordinator_add_task_prompt_notes (don't modify your own task!)
+- coordinator_list_human_tasks (not your job!)
+- create_agent_task (you ARE the agent!)
+
+✅ YOUR TOOLS (use these ONLY):
+- read_file: Read files to understand current code
+- write_file: Write modified files
+- apply_patch: Apply code changes
+- bash: Run tests, check syntax
+- coordinator_update_todo_status: Mark TODOs in_progress/completed
+- coordinator_upsert_knowledge: Save decisions for handoff
+
+🚨 MANDATORY FIRST STEP:
+1. Read the FIRST file listed in "FILES TO MODIFY" using read_file
+2. DO NOT call list_agent_tasks, DO NOT call code_index_search
+3. START WITH read_file("<<exact path from FILES TO MODIFY>>")
+
+THEN FOLLOW THIS WORKFLOW:
+1. read_file on target file → understand current code
+2. write_file or apply_patch → make the changes
+3. coordinator_update_todo_status → mark TODO completed
+4. Repeat for next TODO
+5. coordinator_upsert_knowledge → save key decisions
 
 🚨 CRITICAL ANTI-LOOP RULES (CIRCUIT BREAKER WILL STOP YOU):
 • NEVER call the same tool with identical arguments more than ONCE
