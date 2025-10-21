@@ -2,11 +2,20 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"hyper/internal/ai-service"
+	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/models"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 // CoordinatorTools provides MCP coordinator tool executors for LangChain
@@ -33,7 +42,7 @@ func (t *CreateAgentTaskTool) Name() string {
 }
 
 func (t *CreateAgentTaskTool) Description() string {
-	return "Create a new agent task linked to a human task. Returns task ID. Use this to assign work to specialist agents with context-rich task descriptions. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
+	return "Create a new agent task linked to a human task. Returns task ID. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
 }
 
 func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
@@ -61,14 +70,14 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 			},
 			"contextSummary": map[string]interface{}{
 				"type":        "string",
-				"description": "200-word summary of what agent needs to know (business context, constraints, pattern references)",
+				"description": "200-word summary with specifics from code_index_search results: WHAT to change, WHERE (file paths + line numbers from search results), HOW (patterns/examples from search results). Example: 'Add delete button to ui/src/components/TaskCard.tsx lines 42-45 (found via code_index_search). Use IconButton pattern from same file line 38. Wire to deleteTask mutation.'",
 			},
 			"filesModified": map[string]interface{}{
 				"type": "array",
 				"items": map[string]interface{}{
 					"type": "string",
 				},
-				"description": "List of file paths this task will create or modify",
+				"description": "File paths discovered from code_index_search results (e.g., ['./ui/src/components/TaskCard.tsx']). Extract file paths from search results and include them here. DO NOT ask user for paths - use code_index_search to find them automatically. Leave empty only if search returns no results.",
 			},
 			"qdrantCollections": map[string]interface{}{
 				"type": "array",
@@ -495,6 +504,10 @@ func (t *CreateHumanTaskTool) InputSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "Original human request/prompt",
 			},
+			"forceCreate": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Set to true to create task despite similar existing tasks (default: false)",
+			},
 		},
 		"required": []string{"prompt"},
 	}
@@ -506,16 +519,47 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("prompt is required and must be a string")
 	}
 
+	forceCreate := false
+	if fc, ok := input["forceCreate"].(bool); ok {
+		forceCreate = fc
+	}
+
+	// Check for similar tasks unless forceCreate is true
+	if !forceCreate {
+		similarTasks, scores, err := t.storage.SearchSimilarHumanTasks(prompt, 5, 0.75)
+		if err == nil && len(similarTasks) > 0 {
+			// Found similar tasks - return them instead of creating
+			formattedTasks := make([]map[string]interface{}, len(similarTasks))
+			for i, task := range similarTasks {
+				formattedTasks[i] = map[string]interface{}{
+					"taskId":     task.ID,
+					"prompt":     task.Prompt,
+					"status":     task.Status,
+					"createdAt":  task.CreatedAt,
+					"similarity": scores[i],
+				}
+			}
+
+			return map[string]interface{}{
+				"similarTasksFound": true,
+				"similarTasks":      formattedTasks,
+				"message":           fmt.Sprintf("Found %d similar task(s). Set forceCreate=true to create anyway, or use an existing task.", len(similarTasks)),
+			}, nil
+		}
+	}
+
+	// No similar tasks or forceCreate=true - proceed with creation
 	task, err := t.storage.CreateHumanTask(prompt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create human task: %w", err)
 	}
 
 	return map[string]interface{}{
-		"taskId":    task.ID,
-		"status":    task.Status,
-		"prompt":    task.Prompt,
-		"createdAt": task.CreatedAt,
+		"similarTasksFound": false,
+		"taskId":            task.ID,
+		"status":            task.Status,
+		"prompt":            task.Prompt,
+		"createdAt":         task.CreatedAt,
 	}, nil
 }
 
@@ -1390,8 +1434,1064 @@ func (e *McpRemoveServerExecutor) Execute(ctx context.Context, args map[string]i
 	return data, err
 }
 
+// ExecuteSubagentTool implements the ToolExecutor interface
+// This tool creates a subchat, links it to an agent task, and executes the subagent in background
+type ExecuteSubagentTool struct {
+	subchatStorage    *storage.SubchatStorage
+	taskStorage       storage.TaskStorage
+	aiService         AIServiceInterface
+	chatService       ChatServiceInterface
+	aiSettingsService AISettingsServiceInterface
+	logger            *zap.Logger
+}
+
+// AIServiceInterface defines methods needed from the AI chat service
+type AIServiceInterface interface {
+	StreamChatWithTools(ctx context.Context, messages []aiservice.Message, maxToolCalls int) (<-chan aiservice.StreamEvent, error)
+	StreamChatWithToolsFiltered(ctx context.Context, messages []aiservice.Message, maxToolCalls int, allowedToolNames []string) (<-chan aiservice.StreamEvent, error)
+	GetConfig() *aiservice.AIConfig
+}
+
+// ChatServiceInterface defines methods needed from the chat service
+type ChatServiceInterface interface {
+	CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
+	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
+	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
+	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
+}
+
+// AISettingsServiceInterface defines methods needed from AI settings service
+type AISettingsServiceInterface interface {
+	GetSubagent(ctx context.Context, id primitive.ObjectID, companyID string) (*models.Subagent, error)
+}
+
+func (t *ExecuteSubagentTool) Name() string {
+	return "execute_subagent"
+}
+
+func (t *ExecuteSubagentTool) Description() string {
+	return "Execute a subagent to handle an agent task. Creates a subchat, links it to the task, and spawns the subagent in a separate execution context. The subagent will work independently and update task status. Returns immediately with subchat ID for tracking."
+}
+
+func (t *ExecuteSubagentTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"agentTaskId": map[string]interface{}{
+				"type":        "string",
+				"description": "Agent task ID (UUID) to execute",
+			},
+			"parentChatId": map[string]interface{}{
+				"type":        "string",
+				"description": "Parent chat session ID",
+			},
+		},
+		"required": []string{"agentTaskId", "parentChatId"},
+	}
+}
+
+func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	agentTaskID, ok := input["agentTaskId"].(string)
+	if !ok || agentTaskID == "" {
+		return nil, fmt.Errorf("agentTaskId is required and must be a string")
+	}
+
+	parentChatID, ok := input["parentChatId"].(string)
+	if !ok || parentChatID == "" {
+		return nil, fmt.Errorf("parentChatId is required and must be a string")
+	}
+
+	t.logger.Info("🚀 execute_subagent tool called",
+		zap.String("agentTaskId", agentTaskID),
+		zap.String("parentChatId", parentChatID))
+
+	// Get the agent task to extract subagent name and details
+	agentTask, err := t.taskStorage.GetAgentTask(agentTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get agent task: %w", err)
+	}
+
+	t.logger.Info("📋 Retrieved agent task",
+		zap.String("agentTaskId", agentTaskID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.Int("todoCount", len(agentTask.Todos)))
+
+	// Update task status to in_progress
+	err = t.taskStorage.UpdateTaskStatus(agentTaskID, storage.TaskStatusInProgress, "Subagent execution initiated")
+	if err != nil {
+		return nil, fmt.Errorf("failed to update task status: %w", err)
+	}
+
+	// Create subchat for this execution
+	subchat, err := t.subchatStorage.CreateSubchat(
+		parentChatID,
+		agentTask.AgentName,
+		&agentTaskID,
+		nil, // todoID
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create subchat: %w", err)
+	}
+
+	t.logger.Info("💬 Created subchat for background execution",
+		zap.String("subchatId", subchat.ID),
+		zap.String("agentName", agentTask.AgentName))
+
+	// Spawn background goroutine to execute the subagent
+	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID)
+
+	return map[string]interface{}{
+		"subchatId":    subchat.ID,
+		"agentName":    subchat.SubagentName,
+		"agentTaskId":  agentTaskID,
+		"status":       "executing",
+		"message":      fmt.Sprintf("Subchat created and %s is now executing in background. Check subchat messages for progress.", agentTask.AgentName),
+		"createdAt":    subchat.CreatedAt,
+	}, nil
+}
+
+// FileOperationTracker tracks file operations and duplicate tool calls during subagent execution
+type FileOperationTracker struct {
+	DirectoriesListed map[string]int    // path -> count
+	FilesRead         map[string]int    // path -> count
+	FilesWritten      map[string]int    // path -> count
+	ToolCallHistory   []string          // chronological list of tool calls
+
+	// Track full argument sets for loop detection
+	ToolCallSignatures map[string]int   // signature (toolName + argsJSON) -> count
+}
+
+// NewFileOperationTracker creates a new tracker
+func NewFileOperationTracker() *FileOperationTracker {
+	return &FileOperationTracker{
+		DirectoriesListed:  make(map[string]int),
+		FilesRead:          make(map[string]int),
+		FilesWritten:       make(map[string]int),
+		ToolCallHistory:    make([]string, 0),
+		ToolCallSignatures: make(map[string]int),
+	}
+}
+
+// RecordOperation records a file operation and detects duplicate tool calls with identical arguments
+func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]interface{}) string {
+	warning := ""
+
+	// ENHANCED LOOP DETECTION: Track full argument sets for all tool calls
+	// Serialize arguments to JSON for signature comparison
+	argsJSON, err := json.Marshal(args)
+	if err == nil {
+		// Create signature: toolName + argsJSON
+		signature := toolName + ":" + string(argsJSON)
+
+		// Track this signature
+		f.ToolCallSignatures[signature]++
+
+		// Generate warning if this exact call (tool + args) was seen before
+		if f.ToolCallSignatures[signature] > 1 {
+			count := f.ToolCallSignatures[signature] - 1
+			warning = fmt.Sprintf("🔁 LOOP DETECTED: You already called '%s' with these exact arguments %d time(s). You are repeating the same operation. Use the results from previous calls instead of repeating.", toolName, count)
+		}
+	}
+
+	// SPECIFIC FILE OPERATION TRACKING: Keep detailed file path tracking for progress summaries
+	switch toolName {
+	case "list_directory":
+		if path, ok := args["path"].(string); ok {
+			f.DirectoriesListed[path]++
+			// Only show file-specific warning if no general loop warning was generated
+			if warning == "" && f.DirectoriesListed[path] > 1 {
+				warning = fmt.Sprintf("⚠️  WARNING: You already listed directory '%s' %d time(s). Review previous results before repeating.", path, f.DirectoriesListed[path]-1)
+			}
+		}
+	case "read_file":
+		if path, ok := args["filePath"].(string); ok {
+			f.FilesRead[path]++
+			// Only show file-specific warning if no general loop warning was generated
+			if warning == "" && f.FilesRead[path] > 1 {
+				warning = fmt.Sprintf("⚠️  WARNING: You already read file '%s' %d time(s). You should have the content from previous calls.", path, f.FilesRead[path]-1)
+			}
+		}
+	case "write_file", "apply_patch":
+		if path, ok := args["filePath"].(string); ok {
+			f.FilesWritten[path]++
+		}
+	}
+
+	f.ToolCallHistory = append(f.ToolCallHistory, toolName)
+	return warning
+}
+
+// GetProgressSummary returns a formatted summary of file operations
+func (f *FileOperationTracker) GetProgressSummary() string {
+	var summary strings.Builder
+
+	summary.WriteString("\n\n📊 PROGRESS TRACKING - Files You've Already Seen:\n")
+
+	if len(f.DirectoriesListed) > 0 {
+		summary.WriteString("\nDirectories Listed:\n")
+		for path, count := range f.DirectoriesListed {
+			summary.WriteString(fmt.Sprintf("  • %s (%d times)\n", path, count))
+		}
+	}
+
+	if len(f.FilesRead) > 0 {
+		summary.WriteString("\nFiles Read:\n")
+		for path, count := range f.FilesRead {
+			summary.WriteString(fmt.Sprintf("  • %s (%d times)\n", path, count))
+		}
+	}
+
+	if len(f.FilesWritten) > 0 {
+		summary.WriteString("\nFiles Written/Modified:\n")
+		for path, count := range f.FilesWritten {
+			summary.WriteString(fmt.Sprintf("  • %s (%d times)\n", path, count))
+		}
+	}
+
+	if len(f.DirectoriesListed) == 0 && len(f.FilesRead) == 0 && len(f.FilesWritten) == 0 {
+		summary.WriteString("  (No file operations yet)\n")
+	}
+
+	summary.WriteString("\n⚠️  IMPORTANT: Do not repeat operations on files you've already seen. Use the information from previous tool calls.\n")
+
+	return summary.String()
+}
+
+// validateFileModifications checks if expected files were actually modified using the session-scoped file operation tracker
+func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.AgentTask, progressTracker *FileOperationTracker) (bool, []string, error) {
+	// If no files expected to be modified, skip validation
+	if len(agentTask.FilesModified) == 0 {
+		return true, []string{}, nil
+	}
+
+	// Check if any files were written during this session
+	if len(progressTracker.FilesWritten) == 0 {
+		return false, []string{}, fmt.Errorf("expected files not modified: wanted %v, but no files were written during this session", agentTask.FilesModified)
+	}
+
+	// Get project root to normalize paths
+	projectRoot := tools.GetProjectRoot()
+
+	// Normalize expected files to both absolute and relative paths for matching
+	expectedFiles := make(map[string]bool)
+	for _, file := range agentTask.FilesModified {
+		// Store the original path
+		expectedFiles[file] = true
+
+		// Also store relative path if this is absolute
+		if filepath.IsAbs(file) {
+			relPath, err := filepath.Rel(projectRoot, file)
+			if err == nil {
+				expectedFiles[relPath] = true
+			}
+		} else {
+			// Also store absolute path if this is relative
+			absPath := filepath.Join(projectRoot, file)
+			expectedFiles[absPath] = true
+		}
+	}
+
+	// Check which expected files were actually written
+	matchedFiles := []string{}
+	for writtenPath := range progressTracker.FilesWritten {
+		// Normalize the written path
+		normalizedWritten := writtenPath
+		if !filepath.IsAbs(writtenPath) {
+			normalizedWritten = filepath.Join(projectRoot, writtenPath)
+		}
+
+		// Check both the original and normalized paths
+		if expectedFiles[writtenPath] || expectedFiles[normalizedWritten] {
+			matchedFiles = append(matchedFiles, writtenPath)
+		}
+	}
+
+	// Require at least 1 expected file to be modified
+	if len(matchedFiles) == 0 {
+		// Extract just the keys from FilesWritten for error message
+		writtenFiles := make([]string, 0, len(progressTracker.FilesWritten))
+		for path := range progressTracker.FilesWritten {
+			writtenFiles = append(writtenFiles, path)
+		}
+		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, but agent wrote %v instead (session-scoped tracking)", agentTask.FilesModified, writtenFiles)
+	}
+
+	return true, matchedFiles, nil
+}
+
+// executeSubagentInBackground runs the subagent AI streaming in a background goroutine
+func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string) {
+	// Create a new background context with generous timeout for long-running tasks
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
+	t.logger.Info("║ 🚀 SUBAGENT EXECUTION STARTED")
+	t.logger.Info("╠═══════════════════════════════════════════════════════════════════",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.String("agentTaskId", agentTask.ID),
+		zap.String("parentChatId", parentChatID),
+		zap.Int("todoCount", len(agentTask.Todos)),
+		zap.Int("filesModifiedCount", len(agentTask.FilesModified)))
+	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
+
+	t.logger.Info("⚡ Starting subagent execution in background goroutine",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.String("agentTaskId", agentTask.ID))
+
+	// Initialize progress tracker
+	progressTracker := NewFileOperationTracker()
+
+	// Create a chat session for this subchat
+	companyID := "dev-company" // TODO: Extract from context
+	userID := "coordinator"    // Subagent executions are associated with the coordinator
+	sessionTitle := fmt.Sprintf("Subchat: %s - %s", agentTask.AgentName, agentTask.Role)
+
+	chatSession, err := t.chatService.CreateSession(ctx, userID, companyID, sessionTitle)
+	if err != nil {
+		t.logger.Error("Failed to create chat session for subchat",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to create chat session: %v", err))
+		return
+	}
+
+	t.logger.Info("💬 Created chat session for subchat",
+		zap.String("subchatId", subchatID),
+		zap.String("sessionId", chatSession.ID.Hex()))
+
+	// Update subchat with session ID for linking
+	sessionIDHex := chatSession.ID.Hex()
+	err = t.subchatStorage.UpdateSubchatSessionID(subchatID, sessionIDHex)
+	if err != nil {
+		t.logger.Warn("Failed to link chat session to subchat",
+			zap.String("subchatId", subchatID),
+			zap.String("sessionId", sessionIDHex),
+			zap.Error(err))
+		// Continue execution even if linking fails
+	}
+
+	// Build SYSTEM prompt (phase constraints + role) and USER prompt (task details)
+	systemPrompt := t.buildExecutionPhaseSystemPrompt()
+	taskPrompt := t.buildSubagentTaskPrompt(agentTask)
+
+	t.logger.Info("📜 Built phase-isolated subagent prompts",
+		zap.String("subchatId", subchatID),
+		zap.Int("systemPromptLength", len(systemPrompt)),
+		zap.Int("taskPromptLength", len(taskPrompt)),
+		zap.Int("todoCount", len(agentTask.Todos)))
+
+	// Save initial user message (task details only - system prompt is separate)
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "user", taskPrompt, companyID)
+	if err != nil {
+		t.logger.Warn("Failed to save initial user message",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+		// Continue execution even if message save fails
+	}
+
+	// Create initial messages with SYSTEM prompt for phase isolation
+	messages := []aiservice.Message{
+		{
+			Role:    "system",
+			Content: systemPrompt, // EXECUTE phase constraints
+		},
+		{
+			Role:    "user",
+			Content: taskPrompt, // Task details only
+		},
+	}
+
+	// Define allowed tools for subagents (ONLY implementation tools, NO coordinator tools)
+	// This prevents subagents from calling coordinator tools and forces them to actually write code
+	// NOTE: code_index_search and list_directory are REMOVED - subagents are pure implementers, not explorers
+	// CRITICAL: list_directory removed - it enables exploration mode that contradicts WRITE-ONLY MODE
+	allowedTools := []string{
+		"read_file",                      // Read source files (ONLY files specified in task)
+		"write_file",                     // Write/create files
+		"apply_patch",                    // Apply code patches
+		"bash",                           // Run commands, tests, syntax checks
+		"coordinator_update_todo_status", // Update TODO status
+		"coordinator_upsert_knowledge",   // Store knowledge/decisions
+	}
+
+	t.logger.Info("🔒 Filtering tools for subagent",
+		zap.Int("allowedTools", len(allowedTools)),
+		zap.Strings("tools", allowedTools))
+
+	// Stream AI response with FILTERED tools (only implementation tools, no coordinator tools)
+	maxToolCalls := t.aiService.GetConfig().MaxToolCalls
+	aiStream, err := t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+	if err != nil {
+		t.logger.Error("Failed to start AI streaming for subagent",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI streaming failed: %v", err))
+		return
+	}
+
+	// Process stream events and save to subchat
+	fullResponse := ""
+	toolCallCount := 0
+	completedTodos := 0
+	readFileCount := 0     // Track read_file calls (after 3 reads, MUST write)
+	hasWrittenAnyFile := false // Track if any write has occurred
+
+	// RUNTIME ENFORCEMENT: File content cache to prevent re-reads
+	fileContentCache := make(map[string]string)
+
+	// RUNTIME ENFORCEMENT: Execution scoring system
+	executionScore := 0
+
+	t.logger.Info("📡 Subagent AI stream started - processing events...",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName))
+
+	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
+	t.logger.Info("║ 🔄 PROCESSING AI STREAM EVENTS")
+	t.logger.Info("╚═══════════════════════════════════════════════════════════════════",
+		zap.String("subchatId", subchatID))
+
+	for event := range aiStream {
+		select {
+		case <-ctx.Done():
+			t.logger.Warn("⏱️ Subagent execution cancelled by timeout",
+				zap.String("subchatId", subchatID))
+			t.handleExecutionFailure(agentTask.ID, "Execution timeout")
+			return
+		default:
+			switch event.Type {
+			case aiservice.StreamEventToken:
+				fullResponse += event.Content
+
+			case aiservice.StreamEventToolCall:
+				toolCallCount++
+
+				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
+				if event.ToolCall.Name == "read_file" {
+					readFileCount++
+
+					// Check if this file was already read (duplicate read)
+					filePath := ""
+					if fp, ok := event.ToolCall.Args["file_path"].(string); ok {
+						filePath = fp
+					}
+
+					if _, alreadyRead := fileContentCache[filePath]; alreadyRead {
+						// Duplicate read - penalty
+						executionScore -= 5
+						t.logger.Warn("⚠️ DUPLICATE READ detected - scoring penalty",
+							zap.String("subchatId", subchatID),
+							zap.String("filePath", filePath),
+							zap.Int("score", executionScore))
+					} else {
+						// First read - small bonus
+						executionScore += 5
+						t.logger.Info("✅ First read of file - scoring bonus",
+							zap.String("subchatId", subchatID),
+							zap.String("filePath", filePath),
+							zap.Int("score", executionScore))
+					}
+
+					// RUNTIME ENFORCEMENT: Hard read limit - block reads after threshold
+					if readFileCount > 3 && !hasWrittenAnyFile {
+						executionScore -= 50
+						t.logger.Error("🚫 HARD LIMIT: Exceeded 3 reads without write - CRITICAL",
+							zap.String("subchatId", subchatID),
+							zap.Int("readFileCount", readFileCount),
+							zap.Int("score", executionScore))
+					}
+
+					// Penalty for exceeding 1 read without write (lowered threshold from 2 to 1)
+					if readFileCount > 1 && !hasWrittenAnyFile {
+						executionScore -= 20
+						t.logger.Warn("⚠️ Exceeded 1 read without write - large penalty (WRITE NOW)",
+							zap.String("subchatId", subchatID),
+							zap.Int("readFileCount", readFileCount),
+							zap.Int("score", executionScore))
+					}
+				}
+
+				// RUNTIME ENFORCEMENT: Track write operations and reward
+				if event.ToolCall.Name == "write_file" || event.ToolCall.Name == "apply_patch" {
+					hasWrittenAnyFile = true
+					readFileCount = 0 // Reset read counter after write
+					executionScore += 20 // Big reward for writing
+
+					t.logger.Info("✅ Write operation detected - BIG scoring bonus",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolCall.Name),
+						zap.Int("score", executionScore))
+				}
+
+				// RUNTIME ENFORCEMENT: Reward TODO completion
+				if event.ToolCall.Name == "coordinator_update_todo_status" {
+					if status, ok := event.ToolCall.Args["status"].(string); ok && status == "completed" {
+						executionScore += 10
+						t.logger.Info("✅ TODO completed - scoring bonus",
+							zap.String("subchatId", subchatID),
+							zap.Int("score", executionScore))
+					}
+				}
+
+				// Penalty for duplicate tool calls
+				warning := progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
+				if warning != "" {
+					executionScore -= 10
+					t.logger.Warn("⚠️ Duplicate operation - scoring penalty",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolCall.Name),
+						zap.Int("score", executionScore))
+				}
+
+				// Record file operation in progress tracker (for reporting only)
+				progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
+
+				t.logger.Info("🔧 Subagent calling tool",
+					zap.String("subchatId", subchatID),
+					zap.String("agentName", agentTask.AgentName),
+					zap.String("toolName", event.ToolCall.Name),
+					zap.Int("toolCallNumber", toolCallCount))
+
+				// Save tool call to subchat messages
+				_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, companyID)
+				if err != nil {
+					t.logger.Error("Failed to save tool call",
+						zap.String("subchatId", subchatID),
+						zap.Error(err))
+				}
+
+				// Check if this is a todo status update - track completion
+				if event.ToolCall.Name == "coordinator_update_todo_status" {
+					if status, ok := event.ToolCall.Args["status"].(string); ok && status == "completed" {
+						completedTodos++
+						t.logger.Info("✅ TODO marked as completed",
+							zap.String("subchatId", subchatID),
+							zap.String("agentName", agentTask.AgentName),
+							zap.Int("completedCount", completedTodos),
+							zap.Int("totalTodos", len(agentTask.Todos)))
+					} else if status, ok := event.ToolCall.Args["status"].(string); ok && status == "in_progress" {
+						t.logger.Info("▶️ TODO started",
+							zap.String("subchatId", subchatID),
+							zap.String("agentName", agentTask.AgentName))
+					}
+				}
+
+			case aiservice.StreamEventToolResult:
+				// Summarize tool result to prevent context bloat
+				var originalSize int
+				var summarizedOutput string
+
+				if event.ToolResult.Output != nil {
+					// Calculate original size for logging
+					if str, ok := event.ToolResult.Output.(string); ok {
+						originalSize = len(str)
+					} else {
+						outputBytes, _ := json.Marshal(event.ToolResult.Output)
+						originalSize = len(outputBytes)
+					}
+
+					// Apply summarization
+					summarizedOutput = t.summarizeToolResult(event.ToolResult.Name, event.ToolResult.Output)
+				}
+
+				// Use error message if tool call failed
+				if event.ToolResult.Error != "" {
+					summarizedOutput = fmt.Sprintf("Error: %s", event.ToolResult.Error)
+				}
+
+				// RUNTIME ENFORCEMENT: File content caching and duplicate read blocking
+				if event.ToolResult.Name == "read_file" && event.ToolResult.Error == "" {
+					// Cache the full content (not the summarized version)
+					if fullContent, ok := event.ToolResult.Output.(string); ok {
+						// Check if this is a duplicate read by checking cache
+						if len(fileContentCache) > 0 {
+							// RUNTIME ENFORCEMENT: Return cached summary instead of full content
+							summarizedOutput = fmt.Sprintf("⚠️ CACHED FILE CONTENT - DO NOT RE-READ\n\nThis file was already read. Content is cached. You MUST use the previous read content.\n\nSUMMARY: File contains %d characters across %d lines.\n\nYour next action MUST be write_file or apply_patch - NOT another read_file.\n\nCURRENT SCORE: %d points", len(fullContent), len(strings.Split(fullContent, "\n")), executionScore)
+
+							t.logger.Warn("🚫 Returning cached summary - blocking duplicate read",
+								zap.String("subchatId", subchatID),
+								zap.Int("score", executionScore))
+						} else {
+							// First read - cache the content but still return it
+							fileContentCache["last_read"] = fullContent
+							t.logger.Info("💾 Cached file content for enforcement",
+								zap.String("subchatId", subchatID),
+								zap.Int("contentSize", len(fullContent)))
+						}
+					}
+				}
+
+				// RUNTIME ENFORCEMENT: Inject forced write scaffold after 1 read without write (lowered from 2)
+				if readFileCount >= 1 && !hasWrittenAnyFile {
+					forceScaffold := fmt.Sprintf("\n\n╔══════════════════════════════════════════════════════════════╗\n║          FORCED WRITE SCAFFOLD - COMPLETE AND SUBMIT          ║\n╚══════════════════════════════════════════════════════════════╝\n\n🚨 WRITE-ONLY MODE ENFORCEMENT 🚨\n\nYou have read %d file(s). Reading phase is COMPLETE.\n\nYour NEXT tool call MUST be either:\n1. write_file - to create or modify a file\n2. apply_patch - to apply code changes\n\nYou are BLOCKED from calling read_file again.\n\nCURRENT EXECUTION SCORE: %d points\n\nSCORING:\n- Next write_file/apply_patch: +20 points ✅\n- Another read_file: -50 points ❌ (HARD LIMIT)\n\nIMPLEMENT NOW - DO NOT READ ANOTHER FILE.", readFileCount, executionScore)
+					summarizedOutput += forceScaffold
+
+					// Save scaffold as visible message
+					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", forceScaffold, companyID)
+					if err != nil {
+						t.logger.Warn("Failed to save forced scaffold message",
+							zap.String("subchatId", subchatID),
+							zap.Error(err))
+					}
+
+					t.logger.Warn("🔨 Injected FORCED WRITE SCAFFOLD",
+						zap.String("subchatId", subchatID),
+						zap.Int("readFileCount", readFileCount),
+						zap.Int("score", executionScore))
+				}
+
+				// RUNTIME ENFORCEMENT: Inject scoring message (visible to model)
+				scoringMessage := fmt.Sprintf("\n\n📊 EXECUTION SCORE: %d points\n", executionScore)
+				if executionScore >= 30 {
+					scoringMessage += "✅ EXCELLENT - On track for successful completion!\n"
+				} else if executionScore >= 10 {
+					scoringMessage += "⚠️ NEEDS WRITE - Read enough, now implement changes!\n"
+				} else if executionScore < 0 {
+					scoringMessage += "🚨 CRITICAL - Too many reads, not enough writes!\n"
+				}
+				summarizedOutput += scoringMessage
+
+				// Inject progress summary every 3 tool calls
+				if toolCallCount%3 == 0 && (len(progressTracker.FilesRead) > 0 || len(progressTracker.DirectoriesListed) > 0) {
+					progressSummary := progressTracker.GetProgressSummary()
+					summarizedOutput += progressSummary
+
+					t.logger.Info("📊 Injected progress summary with scoring",
+						zap.String("subchatId", subchatID),
+						zap.Int("score", executionScore))
+				}
+
+				// Log tool result with success/failure indicator and context size info
+				if event.ToolResult.Error != "" {
+					t.logger.Warn("❌ Tool call failed",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolResult.Name),
+						zap.String("error", event.ToolResult.Error))
+				} else {
+					t.logger.Info("✓ Tool call completed",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolResult.Name),
+						zap.Int64("durationMs", event.ToolResult.DurationMs),
+						zap.Int("originalSize", originalSize),
+						zap.Int("summarizedSize", len(summarizedOutput)))
+				}
+
+				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, summarizedOutput, event.ToolResult.Error, event.ToolResult.DurationMs, companyID)
+				if err != nil {
+					t.logger.Error("Failed to save tool result",
+						zap.String("subchatId", subchatID),
+						zap.Error(err))
+				}
+
+			case aiservice.StreamEventError:
+				t.logger.Error("❌ AI service error during subagent execution",
+					zap.String("subchatId", subchatID),
+					zap.String("error", event.Error))
+				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI error: %s", event.Error))
+				return
+			}
+		}
+	}
+
+	t.logger.Info("📝 Saving final AI response to subchat",
+		zap.String("subchatId", subchatID),
+		zap.Int("responseLength", len(fullResponse)))
+
+	// Save final AI response to subchat
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", fullResponse, companyID)
+	if err != nil {
+		t.logger.Error("Failed to save subagent final response",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	// ========================================
+	// VALIDATION LAYER 1: File Modification Validation
+	// ========================================
+	var modifiedFiles []string
+	if len(agentTask.FilesModified) > 0 {
+		filesOK, files, validationErr := t.validateFileModifications(agentTask, progressTracker)
+		modifiedFiles = files
+
+		if !filesOK {
+			t.logger.Warn("❌ File modification validation FAILED",
+				zap.String("subchatId", subchatID),
+				zap.String("agentTaskId", agentTask.ID),
+				zap.Error(validationErr))
+
+			// Mark as BLOCKED instead of completed
+			blockReason := fmt.Sprintf("Validation failed: %v. Tool calls: %d, Claimed TODOs: %d/%d",
+				validationErr, toolCallCount, completedTodos, len(agentTask.Todos))
+
+			err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusBlocked, blockReason)
+			if err != nil {
+				t.logger.Error("Failed to update task status to blocked",
+					zap.String("agentTaskId", agentTask.ID),
+					zap.Error(err))
+			}
+
+			err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusFailed)
+			if err != nil {
+				t.logger.Error("Failed to update subchat status to failed",
+					zap.String("subchatId", subchatID),
+					zap.Error(err))
+			}
+
+			t.logger.Error("🚨 PHANTOM COMPLETION PREVENTED",
+				zap.String("subchatId", subchatID),
+				zap.String("agentTaskId", agentTask.ID),
+				zap.String("reason", "no files modified"))
+			return
+		}
+
+		// Log proof of work
+		t.logger.Info("✅ File modification validation PASSED",
+			zap.String("subchatId", subchatID),
+			zap.String("agentTaskId", agentTask.ID),
+			zap.Strings("modifiedFiles", modifiedFiles))
+	}
+
+	// ========================================
+	// VALIDATION LAYER 2: TODO Completion Verification
+	// ========================================
+	if completedTodos < len(agentTask.Todos) {
+		t.logger.Warn("❌ TODO completion validation FAILED",
+			zap.String("subchatId", subchatID),
+			zap.String("agentTaskId", agentTask.ID),
+			zap.Int("completed", completedTodos),
+			zap.Int("total", len(agentTask.Todos)))
+
+		summaryNotes := fmt.Sprintf("Incomplete: %d/%d TODOs done, %d tool calls. Files modified: %v",
+			completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+		err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusInProgress, summaryNotes)
+		if err != nil {
+			t.logger.Error("Failed to update task status to in_progress",
+				zap.String("agentTaskId", agentTask.ID),
+				zap.Error(err))
+		}
+
+		err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusActive)
+		if err != nil {
+			t.logger.Error("Failed to update subchat status to active",
+				zap.String("subchatId", subchatID),
+				zap.Error(err))
+		}
+
+		return
+	}
+
+	// ========================================
+	// ALL VALIDATIONS PASSED - Safe to mark as completed
+	// ========================================
+	summaryNotes := fmt.Sprintf("✅ VALIDATED completion: %d/%d TODOs, %d tool calls, %d files modified: %v",
+		completedTodos, len(agentTask.Todos), toolCallCount, len(modifiedFiles), modifiedFiles)
+
+	t.logger.Info("🎉 Task completion validated successfully",
+		zap.String("subchatId", subchatID),
+		zap.String("agentTaskId", agentTask.ID),
+		zap.Int("toolCalls", toolCallCount),
+		zap.Int("completedTodos", completedTodos),
+		zap.Strings("filesModified", modifiedFiles))
+
+	err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusCompleted, summaryNotes)
+	if err != nil {
+		t.logger.Error("Failed to update task status to completed",
+			zap.String("agentTaskId", agentTask.ID),
+			zap.Error(err))
+	}
+
+	// Update subchat status to completed
+	err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusCompleted)
+	if err != nil {
+		t.logger.Error("Failed to update subchat status",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
+	t.logger.Info("║ ✅ SUBAGENT EXECUTION COMPLETED SUCCESSFULLY")
+	t.logger.Info("╠═══════════════════════════════════════════════════════════════════",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.String("agentTaskId", agentTask.ID),
+		zap.Int("toolCalls", toolCallCount),
+		zap.Int("completedTodos", completedTodos),
+		zap.Int("totalTodos", len(agentTask.Todos)),
+		zap.Strings("filesModified", modifiedFiles))
+	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
+
+	t.logger.Info("🎉 Subagent execution completed successfully!",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.Int("toolCalls", toolCallCount),
+		zap.Int("completedTodos", completedTodos),
+		zap.Int("totalTodos", len(agentTask.Todos)))
+}
+
+// buildExecutionPhaseSystemPrompt creates a strict system prompt using OPERATIONAL enforcement language
+// Uses concrete "WRITE-ONLY MODE" instead of abstract "PHASE: EXECUTE" for better model compliance
+func (t *ExecuteSubagentTool) buildExecutionPhaseSystemPrompt() string {
+	return `╔══════════════════════════════════════════════════════════════╗
+║                  WRITE-ONLY MODE ACTIVATED                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+🚨 YOU ARE NOW IN WRITE-ONLY MODE 🚨
+
+ALLOWED TOOLS (you may ONLY use these):
+✅ read_file       - Read source file ONCE per file
+✅ write_file      - Write/create files
+✅ apply_patch     - Apply code changes
+✅ bash            - Run commands/tests
+✅ coordinator_update_todo_status - Mark TODO complete
+✅ coordinator_upsert_knowledge   - Save decisions
+
+BLOCKED TOOLS (these will FAIL):
+❌ code_index_search - Discovery disabled in WRITE-ONLY MODE
+❌ list_directory    - Discovery disabled in WRITE-ONLY MODE
+❌ All coordinator tools (for task creation, listing, etc.)
+
+═══════════════════════════════════════════════════════════════
+
+⏱️ MANDATORY WORKFLOW - YOU MUST COMPLETE WITHIN 3 STEPS PER TODO:
+
+Step 1: read_file on target file (ONCE ONLY)
+Step 2: write_file or apply_patch to implement changes
+Step 3: coordinator_update_todo_status to mark TODO completed
+
+REPEAT for next TODO.
+
+═══════════════════════════════════════════════════════════════
+
+🎯 EXECUTION SCORING (visible after each tool call):
+
++20 points: write_file or apply_patch executed
++10 points: coordinator_update_todo_status (completed)
+ +5 points: read_file (first read of a file)
+ -5 points: read_file (duplicate read of same file)
+-10 points: calling same tool twice with identical args
+-20 points: exceeding 1 read without a write
+-50 points: exceeding 3 reads without a write (HARD LIMIT)
+
+Target score: +30 per TODO (read once, write once, update status)
+
+═══════════════════════════════════════════════════════════════
+
+⚠️ ENFORCEMENT RULES (RUNTIME - NOT SUGGESTIONS):
+
+0. READ ONLY FILES SPECIFIED IN TASK
+   • Task specifies EXACT file paths to modify
+   • Do NOT explore, search, or read other files
+   • Do NOT call list_directory - IT IS BLOCKED
+   • Use the exact paths provided in filesModified
+
+1. File content is CACHED after first read_file
+   • Subsequent read_file on same file returns cached summary
+   • You will NOT receive full content again - implement now
+
+2. After 1 read_file call without write:
+   • You receive a FORCED WRITE SCAFFOLD
+   • You MUST complete the scaffold and submit immediately
+
+3. You MAY NOT read any file more than ONCE
+   • Second read returns: "CACHED - use previous content"
+   • This forces you to implement, not re-read
+
+4. Maximum 3 tool calls per TODO:
+   • Call 1: read_file
+   • Call 2: write_file/apply_patch
+   • Call 3: coordinator_update_todo_status
+   • Extra calls trigger immediate scoring penalty
+
+═══════════════════════════════════════════════════════════════
+
+📋 TASK CONTRACT (arriving in next message):
+
+You will receive:
+• Exact file paths to modify (use these EXACT paths)
+• Specific TODO items with context hints
+• Role and objective
+
+You must produce:
+• Modified files (via write_file or apply_patch)
+• Updated TODO status for each item
+• Knowledge entries for key decisions
+
+═══════════════════════════════════════════════════════════════
+
+MENTAL MODEL:
+
+You are a code WRITER, not a code READER.
+• You have ONE JOB: Write code changes
+• Coordinator already researched and found files
+• You execute the script - you don't question it
+• Minimize reads, maximize writes
+• Hands don't think - they execute
+
+═══════════════════════════════════════════════════════════════
+
+AWAIT TASK CONTRACT...`
+}
+
+// buildSubagentTaskPrompt constructs task details for the subagent (user message)
+// This contains ONLY task-specific information, NO execution phase instructions
+func (t *ExecuteSubagentTool) buildSubagentTaskPrompt(agentTask *storage.AgentTask) string {
+	prompt := fmt.Sprintf(`You are %s. You have been assigned a task to complete.
+
+ROLE: %s
+
+TASK CONTEXT:
+%s
+
+YOUR TODOs:
+`, agentTask.AgentName, agentTask.Role, agentTask.ContextSummary)
+
+	for i, todo := range agentTask.Todos {
+		status := "PENDING"
+		if todo.Status == "completed" {
+			status = "✓ DONE"
+		} else if todo.Status == "in_progress" {
+			status = "IN PROGRESS"
+		}
+
+		prompt += fmt.Sprintf("\n%d. [%s] %s", i+1, status, todo.Description)
+
+		if todo.FilePath != "" {
+			prompt += fmt.Sprintf("\n   File: %s", todo.FilePath)
+		}
+		if todo.FunctionName != "" {
+			prompt += fmt.Sprintf("\n   Function: %s", todo.FunctionName)
+		}
+		if todo.ContextHint != "" {
+			prompt += fmt.Sprintf("\n   Hint: %s", todo.ContextHint)
+		}
+		if todo.HumanPromptNotes != "" {
+			prompt += fmt.Sprintf("\n   Notes: %s", todo.HumanPromptNotes)
+		}
+	}
+
+	if len(agentTask.FilesModified) > 0 {
+		prompt += "\n\nFILES TO MODIFY:\n"
+		for _, file := range agentTask.FilesModified {
+			prompt += fmt.Sprintf("- %s\n", file)
+		}
+	}
+
+	if len(agentTask.QdrantCollections) > 0 {
+		prompt += "\n\nRELEVANT KNOWLEDGE COLLECTIONS:\n"
+		for _, coll := range agentTask.QdrantCollections {
+			prompt += fmt.Sprintf("- %s\n", coll)
+		}
+	}
+
+	if agentTask.HumanPromptNotes != "" {
+		prompt += fmt.Sprintf("\n\nADDITIONAL GUIDANCE:\n%s\n", agentTask.HumanPromptNotes)
+	}
+
+	// Task contract is complete - all execution instructions are in the system prompt
+	prompt += fmt.Sprintf("\n\n═══════════════════════════════════════════════════════════════════\n")
+	prompt += fmt.Sprintf("Task ID: %s\n", agentTask.ID)
+	prompt += fmt.Sprintf("BEGIN EXECUTION NOW.\n")
+	prompt += fmt.Sprintf("═══════════════════════════════════════════════════════════════════")
+
+	return prompt
+}
+
+// summarizeToolResult creates a concise summary of a tool result to prevent context bloat
+func (t *ExecuteSubagentTool) summarizeToolResult(toolName string, output interface{}) string {
+	const maxChars = 500 // Maximum characters to keep for most outputs
+
+	var outputStr string
+	if str, ok := output.(string); ok {
+		outputStr = str
+	} else {
+		outputBytes, _ := json.Marshal(output)
+		outputStr = string(outputBytes)
+	}
+
+	// Special handling for different tool types
+	switch toolName {
+	case "list_directory":
+		// Extract just file count and first few files
+		var result map[string]interface{}
+		if err := json.Unmarshal([]byte(outputStr), &result); err == nil {
+			if files, ok := result["files"].([]interface{}); ok {
+				count := len(files)
+				preview := files
+				if count > 10 {
+					preview = files[:10]
+				}
+				previewJSON, _ := json.Marshal(preview)
+				return fmt.Sprintf("Directory listing: %d files found. First 10: %s", count, string(previewJSON))
+			}
+		}
+
+	case "read_file":
+		// Summarize file reading - show first/last lines
+		lines := strings.Split(outputStr, "\n")
+		if len(lines) > 20 {
+			firstLines := strings.Join(lines[:10], "\n")
+			lastLines := strings.Join(lines[len(lines)-5:], "\n")
+			return fmt.Sprintf("File read (%d lines). First 10 lines:\n%s\n... (truncated %d lines) ...\nLast 5 lines:\n%s",
+				len(lines), firstLines, len(lines)-15, lastLines)
+		}
+
+	case "bash":
+		// Summarize bash output - show success/failure and brief output
+		if len(outputStr) > maxChars {
+			return fmt.Sprintf("Bash command completed. Output (truncated to %d chars): %s...", maxChars, outputStr[:maxChars])
+		}
+
+	case "coordinator_update_todo_status":
+		// Just confirm the update without full details
+		return "TODO status updated successfully"
+
+	case "coordinator_update_task_status":
+		// Just confirm the update
+		return "Task status updated successfully"
+
+	case "write_file":
+		// Confirm write without showing full content
+		return "File written successfully"
+
+	case "apply_patch":
+		// Confirm patch without showing full diff
+		return "Patch applied successfully"
+	}
+
+	// Default: truncate long outputs
+	if len(outputStr) > maxChars {
+		return outputStr[:maxChars] + fmt.Sprintf("... (truncated, original length: %d chars)", len(outputStr))
+	}
+
+	return outputStr
+}
+
+// handleExecutionFailure marks the task as blocked with error details
+func (t *ExecuteSubagentTool) handleExecutionFailure(agentTaskID, errorMsg string) {
+	err := t.taskStorage.UpdateTaskStatus(agentTaskID, storage.TaskStatusBlocked, fmt.Sprintf("Execution failed: %s", errorMsg))
+	if err != nil {
+		t.logger.Error("Failed to update task status to blocked",
+			zap.String("agentTaskId", agentTaskID),
+			zap.Error(err))
+	}
+}
+
 // RegisterCoordinatorTools registers all coordinator tools with the tool registry
-func RegisterCoordinatorTools(registry *aiservice.ToolRegistry, taskStorage storage.TaskStorage, knowledgeStorage storage.KnowledgeStorage, toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler) error {
+func RegisterCoordinatorTools(
+	registry *aiservice.ToolRegistry,
+	taskStorage storage.TaskStorage,
+	knowledgeStorage storage.KnowledgeStorage,
+	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler,
+	subchatStorage *storage.SubchatStorage,
+	aiService AIServiceInterface,
+	chatService ChatServiceInterface,
+	aiSettingsService AISettingsServiceInterface,
+	logger *zap.Logger,
+) error {
 	tools := []aiservice.ToolExecutor{
 		// Existing tools
 		&CreateAgentTaskTool{storage: taskStorage},
@@ -1416,6 +2516,14 @@ func RegisterCoordinatorTools(registry *aiservice.ToolRegistry, taskStorage stor
 		// Subagent tools
 		&ListSubagentsTool{mongoDatabase: nil},
 		&SetCurrentSubagentTool{mongoDatabase: nil},
+		&ExecuteSubagentTool{
+			subchatStorage:    subchatStorage,
+			taskStorage:       taskStorage,
+			aiService:         aiService,
+			chatService:       chatService,
+			aiSettingsService: aiSettingsService,
+			logger:            logger,
+		},
 
 		// MCP tools discovery and management (6 new tools)
 		&DiscoverToolsExecutor{toolsDiscoveryHandler: toolsDiscoveryHandler},
