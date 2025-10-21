@@ -9,7 +9,7 @@ import { useEffect, useRef } from 'react';
 import { Box, Typography, Paper, CircularProgress } from '@mui/material';
 import { Person, SmartToy } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
-import type { ChatMessage } from '../services/chatService';
+import type { ChatMessage, ToolCall, ToolResult } from '../services/chatService';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolResultCard } from './ToolResultCard';
 
@@ -18,6 +18,8 @@ interface ChatMessageViewProps {
   isStreaming: boolean;
   streamingContent?: string;
   pendingToolCalls?: Set<string>;
+  streamingToolCalls?: ToolCall[];
+  streamingToolResults?: Map<string, ToolResult>;
 }
 
 export function ChatMessageView({
@@ -25,14 +27,16 @@ export function ChatMessageView({
   isStreaming,
   streamingContent = '',
   pendingToolCalls = new Set(),
+  streamingToolCalls = [],
+  streamingToolResults = new Map(),
 }: ChatMessageViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive or tool calls update
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, streamingContent]);
+  }, [messages.length, streamingContent, streamingToolCalls.length, streamingToolResults.size]);
 
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
@@ -386,8 +390,38 @@ export function ChatMessageView({
               </Box>
             )}
 
+            {/* Streaming Tool Calls (Real-time) */}
+            {isStreaming && streamingToolCalls.length > 0 && (
+              <Box sx={{ px: 2, mb: 2 }}>
+                {streamingToolCalls.map((toolCall) => {
+                  const isPending = pendingToolCalls.has(toolCall.id);
+                  const toolResult = streamingToolResults.get(toolCall.id);
+
+                  return (
+                    <Box key={toolCall.id} sx={{ mb: 1 }}>
+                      <ToolCallCard
+                        tool={toolCall.tool}
+                        args={toolCall.args}
+                        id={toolCall.id}
+                        timestamp={toolCall.timestamp}
+                        isPending={isPending}
+                      />
+                      {toolResult && (
+                        <ToolResultCard
+                          tool={toolResult.tool}
+                          result={toolResult.result}
+                          error={toolResult.error}
+                          durationMs={toolResult.durationMs}
+                        />
+                      )}
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
+
             {/* Typing Indicator */}
-            {isStreaming && !streamingContent && (
+            {isStreaming && !streamingContent && streamingToolCalls.length === 0 && (
               <Box
                 sx={{
                   display: 'flex',

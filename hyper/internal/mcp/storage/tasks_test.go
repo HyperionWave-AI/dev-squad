@@ -29,7 +29,8 @@ func setupTestMongoDB(t *testing.T) (*MongoTaskStorage, func()) {
 	dbName := "test_coordinator_" + uuid.New().String()
 	db := client.Database(dbName)
 
-	storage, err := NewMongoTaskStorage(db)
+	// Create a mock knowledge storage (nil is acceptable for tests not using similarity)
+	storage, err := NewMongoTaskStorage(db, nil)
 	if err != nil {
 		t.Fatalf("Failed to create MongoTaskStorage: %v", err)
 	}

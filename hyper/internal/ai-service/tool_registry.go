@@ -176,6 +176,39 @@ func (r *ToolRegistry) GetToolsForLangChain() []llms.Tool {
 	return tools
 }
 
+// GetFilteredToolsForLangChain converts only specified tools to LangChain Go format
+// This is used to restrict which tools are available to subagents or other contexts
+// allowedNames: list of tool names to include (e.g., []string{"read_file", "write_file"})
+func (r *ToolRegistry) GetFilteredToolsForLangChain(allowedNames []string) []llms.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Create a set for O(1) lookup
+	allowedSet := make(map[string]bool, len(allowedNames))
+	for _, name := range allowedNames {
+		allowedSet[name] = true
+	}
+
+	tools := make([]llms.Tool, 0, len(allowedNames))
+
+	for name, tool := range r.tools {
+		// Only include if in allowed list
+		if allowedSet[name] {
+			langChainTool := llms.Tool{
+				Type: "function",
+				Function: &llms.FunctionDefinition{
+					Name:        tool.Name(),
+					Description: tool.Description(),
+					Parameters:  tool.InputSchema(),
+				},
+			}
+			tools = append(tools, langChainTool)
+		}
+	}
+
+	return tools
+}
+
 // ParseToolCallsFromResponse extracts tool calls from LangChain response
 // This handles the LangChain AIChatMessage format
 func ParseToolCallsFromResponse(msg llms.ChatMessage) ([]ToolCall, error) {
