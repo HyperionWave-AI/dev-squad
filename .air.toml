@@ -19,7 +19,7 @@ tmp_dir = "tmp"
   bin = "tmp/hyper"
 
   # Arguments passed to the binary
-  args_bin = ["--mode=http"]
+  args_bin = ["--mode=http", "--config=.env.hyper.hot"]
 
   # Rebuild delay (500ms for faster hot reload)
   delay = 500
