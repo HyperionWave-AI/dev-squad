@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 )
@@ -337,11 +338,27 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 						s.config.Model, s.config.FallbackModel)
 					eventChan <- StreamEvent{Type: StreamEventToken, Content: fallbackMsg}
 
-					// Save original model
+					// Save original model, provider, and API key
 					originalModel := s.config.Model
+					originalProvider := s.config.Provider
+					originalAPIKey := s.config.APIKey
 
 					// Switch to fallback model
 					s.config.Model = s.config.FallbackModel
+
+					// Switch to Anthropic provider for Claude models
+					if strings.Contains(strings.ToLower(s.config.FallbackModel), "claude") {
+						s.config.Provider = "anthropic"
+						// Load Anthropic API key from environment
+						anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+						if anthropicKey == "" {
+							log.Printf("[ChatService] ERROR - RequestID: %s - ANTHROPIC_API_KEY not found in environment", requestID)
+							eventChan <- StreamEvent{Type: StreamEventError,
+								Error: "Rate limit error and ANTHROPIC_API_KEY not configured for fallback"}
+							return
+						}
+						s.config.APIKey = anthropicKey
+					}
 
 					// Recreate provider with fallback model
 					fallbackProvider, err := NewChatProvider(s.config)
@@ -371,8 +388,8 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 						eventChan <- StreamEvent{Type: StreamEventToken, Content: successMsg}
 
 						// Note: We keep using the fallback model for the rest of this session
-						// The original model is saved in case we need it later
-						_ = originalModel // Mark as used to avoid compiler warning
+						// The original model, provider, and API key are saved in case we need them later
+						_, _, _ = originalModel, originalProvider, originalAPIKey // Mark as used to avoid compiler warning
 					} else {
 						log.Printf("[ChatService] ERROR - Fallback provider doesn't support tools")
 						eventChan <- StreamEvent{Type: StreamEventError, Error: "Fallback provider doesn't support tools"}
@@ -610,6 +627,305 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 		// Max iterations reached
 		log.Printf("[ChatService] Max tool calls reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
+			requestID, iterationCount, toolCallCount)
+	}()
+
+	return eventChan, nil
+}
+
+// StreamChatWithToolsFiltered sends messages to AI provider with restricted tool access
+// This is used for subagents to prevent them from calling coordinator tools
+// Only the specified tools in allowedToolNames will be available to the AI
+func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages []Message, maxToolCalls int, allowedToolNames []string) (<-chan StreamEvent, error) {
+	identity := s.getIdentityFromContext(ctx)
+	requestID := s.getRequestIDFromContext(ctx)
+
+	// Log the request
+	if identity != nil {
+		log.Printf("[ChatService] Tool-filtered request from %s (%s) - RequestID: %s - Provider: %s Model: %s - Allowed tools: %v",
+			identity.Name, identity.Type, requestID, s.config.Provider, s.config.Model, allowedToolNames)
+	} else {
+		log.Printf("[ChatService] Tool-filtered request (no identity) - RequestID: %s - Provider: %s Model: %s - Allowed tools: %v",
+			requestID, s.config.Provider, s.config.Model, allowedToolNames)
+	}
+
+	// Validate messages
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages cannot be empty")
+	}
+
+	// Default max tool calls to prevent loops
+	if maxToolCalls <= 0 {
+		maxToolCalls = 5
+	}
+
+	// Create output channel for events
+	eventChan := make(chan StreamEvent, 100)
+
+	// Get FILTERED tools for LangChain (only allowed tools)
+	tools := s.toolRegistry.GetFilteredToolsForLangChain(allowedToolNames)
+
+	log.Printf("[ChatService] Filtered %d tools for subagent (from allowlist of %d tools)", len(tools), len(allowedToolNames))
+
+	// Check if provider supports tools
+	supportsTools := false
+	if toolProvider, ok := s.provider.(ToolCapableProvider); ok {
+		supportsTools = toolProvider.SupportsTools()
+	}
+
+	if !supportsTools || len(tools) == 0 {
+		// Fallback to text-only streaming
+		log.Printf("[ChatService] Provider doesn't support tools or no tools registered - RequestID: %s", requestID)
+		go func() {
+			defer close(eventChan)
+			textChan, err := s.provider.StreamChat(ctx, messages)
+			if err != nil {
+				eventChan <- StreamEvent{Type: StreamEventError, Error: err.Error()}
+				return
+			}
+			for chunk := range textChan {
+				eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
+			}
+		}()
+		return eventChan, nil
+	}
+
+	// Start tool-enabled streaming
+	go func() {
+		defer close(eventChan)
+
+		toolCallCount := 0
+		iterationCount := 0
+		currentMessages := append([]Message{}, messages...) // Copy messages
+
+		// Tool result cache: prevent duplicate tool executions
+		resultCache := NewToolResultCache()
+
+		// Circuit breaker: track recent tool calls to detect infinite loops
+		recentToolCalls := make([]string, 0, 10)
+		failedToolCalls := make(map[string]int) // Track failed attempts separately
+		toolCallSignature := func(name string, args map[string]interface{}) string {
+			argsJSON, _ := json.Marshal(args)
+			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
+		}
+
+		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
+		circuitBreakerThresholds := map[string]int{
+			"read_file":       2, // Stop after 2 attempts (only 1 duplicate allowed)
+			"write_file":      1, // Never allow duplicate writes
+			"list_directory":  2, // Stop after 2 attempts
+			"bash":            3, // Allow more for command variations
+			"code_index_search": 3, // Allow query refinement
+			// Default for other tools: 4 attempts
+		}
+
+		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
+			iterationCount++
+
+			// Calculate context size BEFORE applying sliding window
+			contextSize := 0
+			for _, msg := range currentMessages {
+				contextSize += len(msg.Content)
+			}
+
+			// Apply sliding window BEFORE context exceeds model's token limit
+			const maxContextSize = 40000 // 40KB threshold (safe for most models)
+			if contextSize > maxContextSize {
+				log.Printf("[Sliding Window] Context size %d chars exceeds threshold %d chars, applying window",
+					contextSize, maxContextSize)
+				currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
+
+				// Recalculate after trimming
+				contextSize = 0
+				for _, msg := range currentMessages {
+					contextSize += len(msg.Content)
+				}
+			}
+
+			// Log iteration details
+			log.Printf("[AI Processing - Filtered Tools] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d",
+				iterationCount, contextSize, contextSize, toolCallCount)
+
+			// DEBUG: Log context details before LLM API call
+			contextSize = calculateContextSize(currentMessages)
+			toolResultPreview := getToolResultPreview(currentMessages, 200)
+			log.Printf("[DEBUG Context - Filtered] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
+				len(currentMessages), contextSize, toolResultPreview)
+
+			// Call provider with FILTERED tools
+			toolProvider := s.provider.(ToolCapableProvider)
+			response, err := toolProvider.StreamChatWithTools(ctx, currentMessages, tools)
+			if err != nil {
+				log.Printf("[ChatService] ERROR - RequestID: %s - Tool call failed: %v", requestID, err)
+				eventChan <- StreamEvent{Type: StreamEventError, Error: err.Error()}
+				return
+			}
+
+			// Stream response tokens
+			var responseText string
+			responseTokens := 0
+			for chunk := range response.TextChannel {
+				eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
+				responseText += chunk
+				responseTokens++
+			}
+
+			// Log iteration response details
+			log.Printf("[AI Processing - Filtered] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
+				iterationCount, responseTokens, len(response.ToolCalls))
+
+			// Check for tool calls
+			if len(response.ToolCalls) == 0 {
+				// No more tool calls, we're done
+				log.Printf("[ChatService - Filtered] Stream complete - RequestID: %s - Total iterations: %d, Tool calls: %d",
+					requestID, iterationCount, toolCallCount)
+				return
+			}
+
+			// Process each tool call
+			for _, toolCall := range response.ToolCalls {
+				toolCallCount++
+				if toolCallCount > maxToolCalls {
+					log.Printf("[ChatService - Filtered] Max tool calls reached (%d) - RequestID: %s", maxToolCalls, requestID)
+					eventChan <- StreamEvent{Type: StreamEventError, Error: fmt.Sprintf("maximum tool calls (%d) exceeded", maxToolCalls)}
+					return
+				}
+
+				// Log tool request with arguments
+				argsJSON, _ := json.Marshal(toolCall.Args)
+				log.Printf("[Tool Request - Filtered] AI requested tool '%s' with args: %s",
+					toolCall.Name, string(argsJSON))
+
+				// Send tool call event
+				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
+
+				// Generate signature for cache and circuit breaker
+				signature := toolCallSignature(toolCall.Name, toolCall.Args)
+
+				// Check tool result cache BEFORE execution
+				var result ToolResult
+				cachedResult, found := resultCache.Get(signature)
+				if found {
+					// Use cached result - avoid redundant execution
+					result = *cachedResult
+					log.Printf("[Tool Cache HIT] Using cached result for '%s' - skipping execution", toolCall.Name)
+
+					// Add cache hit notice to the result
+					cacheNotice := fmt.Sprintf("🔁 CACHED RESULT: You already called '%s' with these exact arguments. Using previous result instead of re-executing.", toolCall.Name)
+					if outputMap, ok := result.Output.(map[string]interface{}); ok {
+						newOutput := make(map[string]interface{})
+						for k, v := range outputMap {
+							newOutput[k] = v
+						}
+						newOutput["_cacheNotice"] = cacheNotice
+						result.Output = newOutput
+					}
+				} else {
+					// Execute tool (no cached result available)
+					result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
+					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
+
+					// Store in cache for future duplicate calls
+					resultCache.Set(signature, &result)
+				}
+
+				// Send tool result event
+				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
+
+				// CRITICAL: Track failed tool calls separately
+				if result.Error != "" {
+					failedToolCalls[signature]++
+					if failedToolCalls[signature] >= 2 {
+						log.Printf("[Circuit Breaker - Failed Tool] Tool '%s' failed twice with identical arguments - stopping", toolCall.Name)
+						eventChan <- StreamEvent{
+							Type: StreamEventError,
+							Error: fmt.Sprintf("❌ CRITICAL ERROR: Tool '%s' failed TWICE with identical arguments. Error: %s\n\n"+
+								"🛑 You are retrying a FAILED operation. This will never work!\n"+
+								"✅ Try a DIFFERENT approach - DO NOT retry the same failed operation!", toolCall.Name, result.Error),
+						}
+						return
+					}
+				}
+
+				// Circuit breaker: check for repeated tool calls
+				recentToolCalls = append(recentToolCalls, signature)
+				if len(recentToolCalls) > 10 {
+					recentToolCalls = recentToolCalls[1:]
+				}
+
+				// Count duplicates
+				totalCount := 0
+				for _, sig := range recentToolCalls {
+					if sig == signature {
+						totalCount++
+					}
+				}
+
+				// Get tool-specific threshold
+				threshold := circuitBreakerThresholds[toolCall.Name]
+				if threshold == 0 {
+					threshold = 4 // Default threshold
+				}
+
+				// Progressive warnings
+				var loopWarning string
+				if totalCount == 2 {
+					loopWarning = fmt.Sprintf("⚠️  WARNING: You already called '%s' with these exact arguments 1 time before. Use the previous result instead of repeating.", toolCall.Name)
+				} else if totalCount == 3 && threshold > 3 {
+					loopWarning = fmt.Sprintf("🔁 LOOP DETECTED: You called '%s' with identical arguments 2 times already. You are stuck in a loop! Use previous results or try a DIFFERENT approach.", toolCall.Name)
+				} else if totalCount >= threshold {
+					log.Printf("[Circuit Breaker] Tool '%s' called %d times (threshold: %d) - stopping infinite loop", toolCall.Name, totalCount, threshold)
+					eventChan <- StreamEvent{
+						Type:  StreamEventError,
+						Error: fmt.Sprintf("Circuit breaker triggered: tool '%s' called repeatedly (%d times) with identical arguments. The AI is stuck in an infinite loop.", toolCall.Name, totalCount),
+					}
+					return
+				}
+
+				// Add assistant response to history
+				currentMessages = append(currentMessages, Message{
+					Role:    "assistant",
+					Content: responseText,
+				})
+
+				// Add tool result to message history
+				var toolResultMsg string
+				if result.Error != "" {
+					toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
+				} else {
+					outputJSON, err := json.Marshal(result.Output)
+					if err != nil {
+						toolResultMsg = fmt.Sprintf("Tool '%s' result: <serialization error: %v>", result.Name, err)
+					} else {
+						toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
+					}
+				}
+
+				// Prepend loop warning if present
+				if loopWarning != "" {
+					log.Printf("[Loop Detection] %s", loopWarning)
+					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
+					toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+				}
+
+				// Truncate large tool results
+				const maxToolResultSize = 10000
+				if len(toolResultMsg) > maxToolResultSize {
+					originalSize := len(toolResultMsg)
+					toolResultMsg = toolResultMsg[:maxToolResultSize-500] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars] ...", originalSize, maxToolResultSize-500)
+					log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars",
+						result.Name, originalSize, len(toolResultMsg))
+				}
+
+				currentMessages = append(currentMessages, Message{
+					Role:    "system",
+					Content: toolResultMsg,
+				})
+			}
+		}
+
+		// Max iterations reached
+		log.Printf("[ChatService - Filtered] Max tool calls reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
 			requestID, iterationCount, toolCallCount)
 	}()
 

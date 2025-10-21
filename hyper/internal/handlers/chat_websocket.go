@@ -220,6 +220,7 @@ type ChatServiceInterface interface {
 // AIServiceInterface defines the interface for AI service operations
 type AIServiceInterface interface {
 	StreamChatWithTools(ctx context.Context, messages []aiservice.Message, maxToolCalls int) (<-chan aiservice.StreamEvent, error)
+	StreamChatWithToolsFiltered(ctx context.Context, messages []aiservice.Message, maxToolCalls int, allowedToolNames []string) (<-chan aiservice.StreamEvent, error)
 	GetConfig() *aiservice.AIConfig
 }
 
