@@ -18,12 +18,12 @@ import (
 	mcptools "hyper/internal/ai-service/tools/mcp"
 	"hyper/internal/api"
 	"hyper/internal/handlers"
-	"hyper/internal/middleware"
-	"hyper/internal/services"
 	"hyper/internal/mcp/embeddings"
 	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
+	"hyper/internal/middleware"
+	"hyper/internal/services"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -296,17 +296,17 @@ func StartHTTPServer(
 	// Configure CORS for frontend
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowOrigins = []string{
-		"http://localhost:5173",  // Vite dev server
-		"http://localhost:5177",  // Alt Vite port
-		"http://localhost:5178",  // Alt Vite port
-		"http://localhost:7777",  // Main dev UI port
-		"http://localhost:7779",  // Dev UI port
-		"http://localhost:7780",  // Dev UI port (auto-assigned)
-		"http://localhost:9173",  // Custom UI port
-		"http://localhost:3000",  // React dev server
-		"http://localhost",       // Docker UI
-		"http://hyperion-ui",     // Docker internal network
-		"http://hyperion-ui:80",  // Docker internal network with port
+		"http://localhost:5173", // Vite dev server
+		"http://localhost:5177", // Alt Vite port
+		"http://localhost:5178", // Alt Vite port
+		"http://localhost:7777", // Main dev UI port
+		"http://localhost:7779", // Dev UI port
+		"http://localhost:7780", // Dev UI port (auto-assigned)
+		"http://localhost:9173", // Custom UI port
+		"http://localhost:3000", // React dev server
+		"http://localhost",      // Docker UI
+		"http://hyperion-ui",    // Docker internal network
+		"http://hyperion-ui:80", // Docker internal network with port
 	}
 	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "X-Request-ID", "Authorization"}
@@ -464,7 +464,13 @@ func StartHTTPServer(
 		})
 	} else {
 		// Development mode: proxy to Vite dev server for hot reload
-		viteURL := "http://localhost:5173"
+		// Get Vite port from env, default to 5173
+		vitePort := os.Getenv("VITE_DEV_PORT")
+		if vitePort == "" {
+			vitePort = "5173"
+		}
+		viteURL := fmt.Sprintf("http://localhost:%s", vitePort)
+		viteHost := fmt.Sprintf("localhost:%s", vitePort)
 		logger.Info("Proxying UI to Vite dev server (development mode)", zap.String("viteURL", viteURL))
 
 		// Proxy all /ui requests to Vite dev server
@@ -472,13 +478,11 @@ func StartHTTPServer(
 			proxy := &httputil.ReverseProxy{
 				Director: func(req *http.Request) {
 					req.URL.Scheme = "http"
-					req.URL.Host = "localhost:5173"
-					// Strip /ui prefix - Vite serves from root in dev mode
-					req.URL.Path = strings.TrimPrefix(c.Request.URL.Path, "/ui")
+					req.URL.Host = viteHost
 					if req.URL.Path == "" {
 						req.URL.Path = "/"
 					}
-					req.Host = "localhost:5173"
+					req.Host = viteHost
 				},
 			}
 			proxy.ServeHTTP(c.Writer, c.Request)
@@ -489,10 +493,10 @@ func StartHTTPServer(
 			proxy := &httputil.ReverseProxy{
 				Director: func(req *http.Request) {
 					req.URL.Scheme = "http"
-					req.URL.Host = "localhost:5173"
+					req.URL.Host = viteHost
 					// Vite serves from root in dev mode
 					req.URL.Path = "/"
-					req.Host = "localhost:5173"
+					req.Host = viteHost
 				},
 			}
 			proxy.ServeHTTP(c.Writer, c.Request)

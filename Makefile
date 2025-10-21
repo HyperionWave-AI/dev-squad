@@ -31,7 +31,7 @@ install: ## Install all dependencies (Go + Node)
 	@echo "✓ All dependencies installed"
 
 install-air: ## Install Air hot-reload tool locally
-	@if command -v air &> /dev/null; then \
+	@if command -v air > /dev/null; then \
 		echo "✓ Air already installed (version: $$(air -v))"; \
 	else \
 		echo "Installing Air..."; \
