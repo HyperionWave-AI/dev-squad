@@ -1,9 +1,13 @@
 package aiservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +24,10 @@ type Message struct {
 	// Tool-related fields (optional, only for tool_call and tool_result roles)
 	ToolCall   *ToolCall   `json:"toolCall,omitempty"`
 	ToolResult *ToolResult `json:"toolResult,omitempty"`
+
+	// Provider tracks which AI provider generated this message (for cross-model fallback handling)
+	// Values: "openai", "anthropic", etc. Empty for user/system messages.
+	Provider string `json:"provider,omitempty"`
 }
 
 // ChatProvider defines the interface for AI chat providers
@@ -368,100 +376,263 @@ func (p *anthropicProvider) SupportsTools() bool {
 		strings.Contains(model, "claude-4")
 }
 
-// StreamChatWithTools implements tool calling for Anthropic using GenerateContent
+// StreamChatWithTools implements tool calling for Anthropic using direct API calls
+// This bypasses langchaingo's broken tool parsing and uses Anthropic's native content blocks
 func (p *anthropicProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
-	// Convert messages to LangChain MessageContent format
-	msgContents := make([]llms.MessageContent, 0, len(messages))
-	for _, msg := range messages {
-		var msgType llms.ChatMessageType
-		switch msg.Role {
-		case "user":
-			msgType = llms.ChatMessageTypeHuman
-		case "assistant":
-			msgType = llms.ChatMessageTypeAI
-		case "system":
-			msgType = llms.ChatMessageTypeSystem
-		default:
-			msgType = llms.ChatMessageTypeHuman
+	// Make direct API call to Anthropic to properly handle tool use content blocks
+	return p.callAnthropicDirectly(ctx, messages, tools)
+}
+
+var invalidToolIDChars = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+// sanitizeToolID ensures the ID matches Anthropic's pattern: ^[a-zA-Z0-9_-]+$
+// Anthropic is strict about tool_use_id format and rejects IDs with other characters
+func sanitizeToolID(id string) string {
+	// Replace invalid characters with underscores
+	sanitized := invalidToolIDChars.ReplaceAllString(id, "_")
+	// Ensure we have at least some ID
+	if sanitized == "" {
+		sanitized = "tool_0"
+	}
+	return sanitized
+}
+
+// callAnthropicDirectly makes a direct HTTP call to Anthropic's Messages API
+// This is necessary because langchaingo doesn't properly parse Anthropic's tool_use content blocks
+func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
+	// Build Anthropic API request
+	apiMessages := make([]map[string]interface{}, 0, len(messages))
+	var systemPrompt string
+
+	// Find the last user message index to determine which tool messages to keep
+	// We only keep tool messages that come AFTER the last user message
+	// This prevents cross-model tool message errors when falling back from gpt-oss to Anthropic
+	lastUserMessageIndex := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserMessageIndex = i
+			break
 		}
-		msgContents = append(msgContents, llms.TextParts(msgType, msg.Content))
 	}
 
-	// Create text channel for streaming
+	for i, msg := range messages {
+		if msg.Role == "system" {
+			systemPrompt = msg.Content
+			continue
+		}
+
+		// IMPORTANT: Only keep tool messages that come AFTER the most recent user message
+		// When falling back from gpt-oss to Anthropic:
+		// - Skip tool messages from BEFORE the last user message (these are from gpt-oss)
+		// - Keep tool messages AFTER the last user message (these are from Anthropic in this conversation)
+		// This prevents "unexpected tool_use_id" errors while preserving Anthropic's own tool call history
+		if msg.Role == "tool_call" {
+			if i < lastUserMessageIndex {
+				// Skip tool messages from before the last user message
+				continue
+			}
+			// Format tool_call (assistant message with tool_use blocks) for Anthropic
+			if msg.ToolCall != nil {
+				// Build content array for assistant message with tool_use
+				contentBlocks := []map[string]interface{}{}
+
+				// Add text content if present
+				if msg.Content != "" {
+					contentBlocks = append(contentBlocks, map[string]interface{}{
+						"type": "text",
+						"text": strings.TrimRight(msg.Content, " \t\n\r"),
+					})
+				}
+
+				// Add tool_use block
+				contentBlocks = append(contentBlocks, map[string]interface{}{
+					"type":  "tool_use",
+					"id":    sanitizeToolID(msg.ToolCall.ID),
+					"name":  msg.ToolCall.Name,
+					"input": msg.ToolCall.Args,
+				})
+
+				apiMessages = append(apiMessages, map[string]interface{}{
+					"role":    "assistant",
+					"content": contentBlocks,
+				})
+			}
+			continue
+		}
+
+		if msg.Role == "tool_result" {
+			if i < lastUserMessageIndex {
+				// Skip tool messages from before the last user message
+				continue
+			}
+			// Format tool_result (user message with tool result) for Anthropic
+			if msg.ToolResult != nil {
+				resultContent := msg.ToolResult.Output
+				if msg.ToolResult.Error != "" {
+					resultContent = map[string]interface{}{
+						"error": msg.ToolResult.Error,
+					}
+				}
+
+				// Convert result to string if needed
+				var resultStr string
+				switch v := resultContent.(type) {
+				case string:
+					resultStr = v
+				default:
+					resultBytes, _ := json.Marshal(v)
+					resultStr = string(resultBytes)
+				}
+
+				apiMessages = append(apiMessages, map[string]interface{}{
+					"role": "user",
+					"content": []map[string]interface{}{
+						{
+							"type":       "tool_result",
+							"tool_use_id": sanitizeToolID(msg.ToolResult.ID),
+							"content":    resultStr,
+						},
+					},
+				})
+			}
+			continue
+		}
+
+		// Regular messages (user/assistant)
+		// Anthropic requires that assistant content cannot end with trailing whitespace
+		content := strings.TrimRight(msg.Content, " \t\n\r")
+
+		apiMessages = append(apiMessages, map[string]interface{}{
+			"role":    msg.Role,
+			"content": content,
+		})
+	}
+
+	// Convert tools to Anthropic format
+	apiTools := make([]map[string]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function == nil {
+			continue
+		}
+		apiTools = append(apiTools, map[string]interface{}{
+			"name":         tool.Function.Name,
+			"description":  tool.Function.Description,
+			"input_schema": tool.Function.Parameters,
+		})
+	}
+
+	// Anthropic requires max_tokens to be set
+	maxTokens := p.config.MaxOutputTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096 // Default
+	}
+
+	reqBody := map[string]interface{}{
+		"model":      p.config.Model,
+		"messages":   apiMessages,
+		"max_tokens": maxTokens,
+	}
+
+	if systemPrompt != "" {
+		reqBody["system"] = systemPrompt
+	}
+	if len(apiTools) > 0 {
+		reqBody["tools"] = apiTools
+		reqBody["tool_choice"] = map[string]interface{}{
+			"type": "auto",
+		}
+	}
+	if p.config.Temperature > 0 {
+		reqBody["temperature"] = p.config.Temperature
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Debug: Print the actual JSON being sent to Anthropic
+	fmt.Printf("[DEBUG Anthropic Request] JSON: %s\n", string(bodyBytes))
+
+	// Make HTTP request
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", p.config.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Anthropic API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Anthropic API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var anthropicResp struct {
+		ID         string `json:"id"`
+		Type       string `json:"type"`
+		Role       string `json:"role"`
+		Content    []struct {
+			Type  string                 `json:"type"`
+			Text  string                 `json:"text,omitempty"`
+			ID    string                 `json:"id,omitempty"`
+			Name  string                 `json:"name,omitempty"`
+			Input map[string]interface{} `json:"input,omitempty"`
+		} `json:"content"`
+		StopReason string `json:"stop_reason"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Extract text and tool calls from content blocks
 	textChan := make(chan string, 1000)
 	var toolCalls []ToolCall
+	var textContent string
 
-	// Prepare streaming function
-	streamFunc := func(ctx context.Context, chunk []byte) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case textChan <- string(chunk):
-			return nil
-		default:
-			// Non-blocking to prevent GenerateContent from hanging
-			return nil
+	for _, block := range anthropicResp.Content {
+		switch block.Type {
+		case "thinking":
+			// Include thinking content as part of the text output so users can see the reasoning
+			if block.Text != "" {
+				textContent += "[Thinking] " + block.Text + "\n\n"
+			}
+		case "text":
+			textContent += block.Text
+		case "tool_use":
+			toolCalls = append(toolCalls, ToolCall{
+				ID:   block.ID,
+				Name: block.Name,
+				Args: block.Input,
+			})
+			fmt.Printf("[DEBUG] Extracted tool call: %s (id=%s)\n", block.Name, block.ID)
 		}
 	}
 
-	// Build options
-	opts := []llms.CallOption{
-		llms.WithTemperature(p.config.Temperature),
-		llms.WithTools(tools),
-		llms.WithStreamingFunc(streamFunc),
-	}
-
-	if p.config.MaxOutputTokens > 0 {
-		opts = append(opts, llms.WithMaxTokens(p.config.MaxOutputTokens))
-	}
-
-	// Call GenerateContent in goroutine
-	type generateResult struct {
-		resp *llms.ContentResponse
-		err  error
-	}
-	resultChan := make(chan generateResult, 1)
-
+	// Send text content to channel and close immediately (non-streaming for now)
 	go func() {
-		resp, err := p.llm.GenerateContent(ctx, msgContents, opts...)
-		resultChan <- generateResult{resp: resp, err: err}
+		if textContent != "" {
+			textChan <- textContent
+		}
 		close(textChan)
 	}()
 
-	// Wait for generation to complete
-	result := <-resultChan
+	fmt.Printf("[DEBUG Anthropic Direct] StopReason: %s, ToolCalls: %d, Text: %d chars\n",
+		anthropicResp.StopReason, len(toolCalls), len(textContent))
 
-	if result.err != nil && result.err != context.Canceled {
-		return nil, fmt.Errorf("failed to generate content: %w", result.err)
-	}
-
-	// Extract tool calls from response (Anthropic format)
-	if result.resp != nil && len(result.resp.Choices) > 0 {
-		choice := result.resp.Choices[0]
-
-		// Check for tool calls in the response
-		if choice.ToolCalls != nil && len(choice.ToolCalls) > 0 {
-			for _, tc := range choice.ToolCalls {
-				var args map[string]interface{}
-				if tc.FunctionCall != nil && tc.FunctionCall.Arguments != "" {
-					if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err == nil {
-						toolCalls = append(toolCalls, ToolCall{
-							ID:   tc.ID,
-							Name: tc.FunctionCall.Name,
-							Args: args,
-						})
-					}
-				}
-			}
-		}
-	}
-
-	response := &ToolResponse{
+	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
-	}
-
-	return response, nil
+	}, nil
 }
 
 // customProvider is a placeholder for custom HTTP endpoint providers
