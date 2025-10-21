@@ -42,6 +42,25 @@ export interface ImportClaudeAgentsResult {
   success: boolean;
 }
 
+export interface SystemPromptVersion {
+  id: string;
+  userId: string;
+  companyId: string;
+  version: number;
+  prompt: string;
+  description?: string;
+  isActive: boolean;
+  isDefault: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+export interface CreateVersionParams {
+  prompt: string;
+  description?: string;
+  activate?: boolean;
+}
+
 /**
  * AI Service Client class
  */
@@ -200,6 +219,65 @@ class AIService {
       body: JSON.stringify({ subagentId }),
     });
     return { success: true };
+  }
+
+  // ============================================================
+  // SYSTEM PROMPT VERSION CONTROL
+  // ============================================================
+
+  /**
+   * List all system prompt versions for the user
+   */
+  async listSystemPromptVersions(): Promise<SystemPromptVersion[]> {
+    const data = await this.fetchJSON<{ versions: SystemPromptVersion[]; count: number }>('/system-prompt/versions');
+    return data.versions || [];
+  }
+
+  /**
+   * Get a specific system prompt version by ID
+   */
+  async getSystemPromptVersion(id: string): Promise<SystemPromptVersion> {
+    const data = await this.fetchJSON<{ version: SystemPromptVersion }>(`/system-prompt/versions/${id}`);
+    return data.version;
+  }
+
+  /**
+   * Create a new system prompt version
+   */
+  async createSystemPromptVersion(params: CreateVersionParams): Promise<SystemPromptVersion> {
+    const data = await this.fetchJSON<{ version: SystemPromptVersion }>('/system-prompt/versions', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return data.version;
+  }
+
+  /**
+   * Activate a specific version
+   */
+  async activateSystemPromptVersion(id: string): Promise<{ success: boolean }> {
+    await this.fetchJSON<{ success: boolean }>(`/system-prompt/versions/${id}/activate`, {
+      method: 'PUT',
+    });
+    return { success: true };
+  }
+
+  /**
+   * Delete a system prompt version
+   */
+  async deleteSystemPromptVersion(id: string): Promise<{ success: boolean }> {
+    await this.fetchJSON<{ success: boolean }>(`/system-prompt/versions/${id}`, {
+      method: 'DELETE',
+    });
+    return { success: true };
+  }
+
+  /**
+   * Get the default system prompt (read-only)
+   */
+  async getDefaultSystemPrompt(): Promise<string> {
+    const data = await this.fetchJSON<{ prompt: string }>('/system-prompt/default');
+    return data.prompt || '';
   }
 }
 
