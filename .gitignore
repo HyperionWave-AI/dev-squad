@@ -18,8 +18,6 @@ coordinator/embed/ui/
 bin/
 /hyper/embed/ui
 /hyper/.archived/coordinator-old/embed/ui
-/ui_____
-/var
 hyper/scripts/delete_all_tasks.go
 var
 tmp
