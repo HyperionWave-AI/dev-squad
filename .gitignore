@@ -16,8 +16,9 @@ coordinator/mcp-http-bridge/hyperion-coordinator-bridge
 docker-compose.*.yml
 coordinator/embed/ui/
 bin/
-hyper/embed/ui
-hyper/.archived/coordinator-old/embed/ui
+/hyper/embed/ui
+/hyper/.archived/coordinator-old/embed/ui
+hyper/scripts/delete_all_tasks.go
 var
 tmp
 hyper/tmp
