@@ -33,18 +33,20 @@ export default defineConfig({
 
   // Shared settings for all projects
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:7095',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
 
-  // Web server configuration (start dev server before tests)
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
+  // Web server configuration (expects backend running on 7095)
+  // Note: Start the backend separately with `make dev` or `make dev-hot`
+  // before running tests, or configure webServer to start it
+  webServer: process.env.SKIP_WEB_SERVER ? undefined : {
+    command: 'echo "Please start backend with: make dev or make dev-hot"',
+    url: 'http://localhost:7095',
+    reuseExistingServer: true,
+    timeout: 5 * 1000,
   },
 
   // Test projects for different browsers and viewports
