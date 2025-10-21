@@ -1806,13 +1806,13 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 
 	// Define allowed tools for subagents (ONLY implementation tools, NO coordinator tools)
 	// This prevents subagents from calling coordinator tools and forces them to actually write code
-	// NOTE: code_index_search is REMOVED - subagents are pure implementers, not researchers
+	// NOTE: code_index_search and list_directory are REMOVED - subagents are pure implementers, not explorers
+	// CRITICAL: list_directory removed - it enables exploration mode that contradicts WRITE-ONLY MODE
 	allowedTools := []string{
-		"read_file",                      // Read source files
+		"read_file",                      // Read source files (ONLY files specified in task)
 		"write_file",                     // Write/create files
 		"apply_patch",                    // Apply code patches
 		"bash",                           // Run commands, tests, syntax checks
-		"list_directory",                 // List directory contents
 		"coordinator_update_todo_status", // Update TODO status
 		"coordinator_upsert_knowledge",   // Store knowledge/decisions
 	}
@@ -1895,10 +1895,19 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 							zap.Int("score", executionScore))
 					}
 
-					// Penalty for exceeding 2 reads without write
-					if readFileCount > 2 && !hasWrittenAnyFile {
+					// RUNTIME ENFORCEMENT: Hard read limit - block reads after threshold
+					if readFileCount > 3 && !hasWrittenAnyFile {
+						executionScore -= 50
+						t.logger.Error("🚫 HARD LIMIT: Exceeded 3 reads without write - CRITICAL",
+							zap.String("subchatId", subchatID),
+							zap.Int("readFileCount", readFileCount),
+							zap.Int("score", executionScore))
+					}
+
+					// Penalty for exceeding 1 read without write (lowered threshold from 2 to 1)
+					if readFileCount > 1 && !hasWrittenAnyFile {
 						executionScore -= 20
-						t.logger.Warn("⚠️ Exceeded 2 reads without write - large penalty",
+						t.logger.Warn("⚠️ Exceeded 1 read without write - large penalty (WRITE NOW)",
 							zap.String("subchatId", subchatID),
 							zap.Int("readFileCount", readFileCount),
 							zap.Int("score", executionScore))
@@ -2015,9 +2024,9 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					}
 				}
 
-				// RUNTIME ENFORCEMENT: Inject forced write scaffold after 2 reads without write
-				if readFileCount == 2 && !hasWrittenAnyFile {
-					forceScaffold := fmt.Sprintf("\n\n╔══════════════════════════════════════════════════════════════╗\n║          FORCED WRITE SCAFFOLD - COMPLETE AND SUBMIT          ║\n╚══════════════════════════════════════════════════════════════╝\n\n🚨 WRITE-ONLY MODE ENFORCEMENT 🚨\n\nYou have read 2 files. Reading phase is COMPLETE.\n\nYour NEXT tool call MUST be either:\n1. write_file - to create or modify a file\n2. apply_patch - to apply code changes\n\nYou are BLOCKED from calling read_file again.\n\nCURRENT EXECUTION SCORE: %d points\n\nSCORING:\n- Next write_file/apply_patch: +20 points ✅\n- Any other tool call: -20 points ❌\n\nIMPLEMENT NOW - DO NOT READ ANOTHER FILE.", readFileCount, executionScore)
+				// RUNTIME ENFORCEMENT: Inject forced write scaffold after 1 read without write (lowered from 2)
+				if readFileCount >= 1 && !hasWrittenAnyFile {
+					forceScaffold := fmt.Sprintf("\n\n╔══════════════════════════════════════════════════════════════╗\n║          FORCED WRITE SCAFFOLD - COMPLETE AND SUBMIT          ║\n╚══════════════════════════════════════════════════════════════╝\n\n🚨 WRITE-ONLY MODE ENFORCEMENT 🚨\n\nYou have read %d file(s). Reading phase is COMPLETE.\n\nYour NEXT tool call MUST be either:\n1. write_file - to create or modify a file\n2. apply_patch - to apply code changes\n\nYou are BLOCKED from calling read_file again.\n\nCURRENT EXECUTION SCORE: %d points\n\nSCORING:\n- Next write_file/apply_patch: +20 points ✅\n- Another read_file: -50 points ❌ (HARD LIMIT)\n\nIMPLEMENT NOW - DO NOT READ ANOTHER FILE.", readFileCount, executionScore)
 					summarizedOutput += forceScaffold
 
 					// Save scaffold as visible message
@@ -2264,7 +2273,8 @@ REPEAT for next TODO.
  +5 points: read_file (first read of a file)
  -5 points: read_file (duplicate read of same file)
 -10 points: calling same tool twice with identical args
--20 points: exceeding 2 reads without a write
+-20 points: exceeding 1 read without a write
+-50 points: exceeding 3 reads without a write (HARD LIMIT)
 
 Target score: +30 per TODO (read once, write once, update status)
 
@@ -2272,13 +2282,19 @@ Target score: +30 per TODO (read once, write once, update status)
 
 ⚠️ ENFORCEMENT RULES (RUNTIME - NOT SUGGESTIONS):
 
+0. READ ONLY FILES SPECIFIED IN TASK
+   • Task specifies EXACT file paths to modify
+   • Do NOT explore, search, or read other files
+   • Do NOT call list_directory - IT IS BLOCKED
+   • Use the exact paths provided in filesModified
+
 1. File content is CACHED after first read_file
    • Subsequent read_file on same file returns cached summary
    • You will NOT receive full content again - implement now
 
-2. After 2 read_file calls without write:
+2. After 1 read_file call without write:
    • You receive a FORCED WRITE SCAFFOLD
-   • You MUST complete the scaffold and submit
+   • You MUST complete the scaffold and submit immediately
 
 3. You MAY NOT read any file more than ONCE
    • Second read returns: "CACHED - use previous content"
