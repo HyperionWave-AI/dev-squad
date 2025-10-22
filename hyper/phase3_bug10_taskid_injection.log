@@ -1,0 +1,104 @@
+Project root: /Users/meghaneelamana/dev-squad
+Debug: Failed to load /Users/meghaneelamana/dev-squad/hyper/bin/.env.hyper: open /Users/meghaneelamana/dev-squad/hyper/bin/.env.hyper: no such file or directory
+✓ Loaded configuration from: ./.env.hyper
+2025-10-22T15:55:05.344+0100	INFO	coordinator/main.go:160	Starting Unified Hyperion Coordinator	{"mode": "http"}
+2025-10-22T15:55:05.344+0100	INFO	coordinator/main.go:174	Connecting to MongoDB Atlas	{"database": "hyper_hyperion_megha"}
+2025-10-22T15:55:05.717+0100	INFO	coordinator/main.go:197	Successfully connected to MongoDB Atlas
+2025-10-22T15:55:05.718+0100	INFO	coordinator/main.go:225	Initializing embedding client	{"mode": "ollama"}
+2025-10-22T15:55:05.772+0100	INFO	coordinator/main.go:249	Using Ollama embeddings (GPU-accelerated via llama.cpp)	{"url": "http://localhost:11434", "model": "nomic-embed-text", "dimensions": 768, "backend": "Metal/CUDA/Vulkan (auto-detected by Ollama)"}
+2025-10-22T15:55:05.772+0100	INFO	coordinator/main.go:307	Qdrant client initialized with embedding client	{"url": "https://2445de59-e696-4952-8934-a89c7c7cfec0.us-east4-0.gcp.cloud.qdrant.io:6333", "knowledgeCollection": "hyper_knowledge_hyperion_megha ", "vectorDimensions": 768}
+2025-10-22T15:55:05.837+0100	INFO	coordinator/main.go:318	Knowledge storage initialized with MongoDB + Qdrant
+2025-10-22T15:55:05.928+0100	INFO	coordinator/main.go:325	Task storage initialized with MongoDB and duplicate detection
+2025-10-22T15:55:06.096+0100	INFO	coordinator/main.go:332	Code index storage initialized
+2025-10-22T15:55:06.205+0100	INFO	coordinator/main.go:339	Tools storage initialized	{"embeddingMode": "ollama", "vectorDimensions": 768}
+2025-10-22T15:55:06.205+0100	INFO	coordinator/main.go:343	Code index collection configured	{"collection": "hyper_code_hyperion_megha"}
+2025-10-22T15:55:06.581+0100	INFO	coordinator/main.go:37	Code index collection ready	{"collection": "hyper_code_hyperion_megha", "dimensions": 768}
+2025-10-22T15:55:06.581+0100	INFO	coordinator/main.go:353	Auto-indexing project root	{"path": "/Users/meghaneelamana/dev-squad"}
+2025-10-22T15:55:06.602+0100	INFO	coordinator/main.go:382	Project root mapping found	{"path": "/Users/meghaneelamana/dev-squad", "collection": "code_index_full_reindex"}
+2025-10-22T15:55:06.704+0100	INFO	indexer/auto_indexer.go:208	Collection point count check	{"collection": "code_index_full_reindex", "pointCount": 445}
+2025-10-22T15:55:06.704+0100	INFO	coordinator/main.go:427	Collection already has vectors - skipping indexing	{"collection": "code_index_full_reindex"}
+2025-10-22T15:55:06.704+0100	INFO	watcher/path_mapper.go:23	No path mappings configured - paths will be used as-is
+2025-10-22T15:55:06.727+0100	INFO	watcher/file_watcher.go:185	Path validation passed	{"path": "/Users/meghaneelamana/dev-squad", "depth": 3}
+2025-10-22T15:55:06.727+0100	INFO	watcher/file_watcher.go:216	Watching path	{"path": "/Users/meghaneelamana/dev-squad"}
+2025-10-22T15:55:06.750+0100	INFO	watcher/file_watcher.go:251	Added folder to watch list	{"path": "/Users/meghaneelamana/dev-squad", "folderId": "68f8c3fc8bc366a624bcc423", "pathMapped": false}
+2025-10-22T15:55:06.750+0100	INFO	coordinator/main.go:506	Added folder to watch list	{"path": "/Users/meghaneelamana/dev-squad", "originalPath": "/Users/meghaneelamana/dev-squad"}
+2025-10-22T15:55:06.773+0100	INFO	watcher/file_watcher.go:107	File watcher started	{"watchedFolders": 1}
+2025-10-22T15:55:06.773+0100	INFO	coordinator/main.go:554	File watcher started successfully
+2025-10-22T15:55:06.818+0100	INFO	handlers/code_tools.go:87	Registered code indexing MCP tools	{"count": 3}
+2025-10-22T15:55:06.818+0100	INFO	handlers/filesystem_tools.go:81	Registered filesystem MCP tools	{"count": 4}
+2025-10-22T15:55:06.818+0100	INFO	coordinator/main.go:729	MCP server configured with all handlers
+2025-10-22T15:55:06.818+0100	INFO	coordinator/main.go:732	Indexing MCP tools for semantic discovery...
+2025-10-22T15:55:06.818+0100	INFO	handlers/tools_indexer.go:83	Starting MCP tool indexing for discovery...	{"toolCount": 34}
+2025-10-22T15:55:16.979+0100	INFO	handlers/tools_indexer.go:107	MCP tool indexing complete	{"indexed": 34, "failed": 0, "total": 34}
+2025-10-22T15:55:16.979+0100	INFO	coordinator/main.go:736	MCP tools indexed successfully	{"count": 34, "collection": "mcp-tools"}
+2025-10-22T15:55:16.979+0100	INFO	coordinator/main.go:570	Embedded UI detected (single-binary mode)
+2025-10-22T15:55:16.979+0100	INFO	coordinator/main.go:590	Starting in HTTP-only mode	{"port": "5555"}
+2025-10-22T15:55:17.109+0100	INFO	services/chat_service.go:65	Chat service initialized with MongoDB indexes
+2025-10-22T15:55:17.238+0100	INFO	services/ai_settings_service.go:149	AI settings service initialized with MongoDB indexes
+2025-10-22T15:55:17.238+0100	INFO	server/http_server.go:160	AI configuration loaded	{"provider": "anthropic", "model": "claude-sonnet-4-20250514", "temperature": 0.2}
+2025-10-22T15:55:17.239+0100	INFO	server/http_server.go:170	AI chat service initialized successfully	{"provider": "anthropic"}
+2025-10-22T15:55:17.347+0100	INFO	server/http_server.go:179	Tools storage initialized for HTTP tool management
+2025-10-22T15:55:17.347+0100	INFO	server/http_server.go:184	Tools discovery handler created with direct MCP server access
+2025-10-22T15:55:17.347+0100	INFO	server/http_server.go:187	Starting MCP tools registration...
+2025-10-22T15:55:17.347+0100	INFO	server/http_server.go:194	Registering coordinator tools (task management, knowledge base, MCP management)...
+2025-10-22T15:55:17.349+0100	INFO	server/http_server.go:212	Coordinator tools registered	{"count": 26, "totalSoFar": 26}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_add_task_prompt_notes"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_update_task_prompt_notes"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "execute_tool"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "mcp_rediscover_server"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_create_human_task"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_clear_todo_prompt_notes"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "list_subagents"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "get_tool_schema"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "mcp_add_server"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "mcp_remove_server"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "list_agent_tasks"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "query_knowledge"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_upsert_knowledge"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_update_task_status"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_update_todo_status"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_list_human_tasks"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_find_similar_tasks"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_update_todo_prompt_notes"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "create_agent_task"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_get_popular_collections"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_get_agent_task"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_clear_task_prompt_notes"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "coordinator_add_todo_prompt_notes"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "set_current_subagent"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "execute_subagent"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:216	Registered coordinator tool	{"name": "discover_tools"}
+2025-10-22T15:55:17.349+0100	INFO	server/http_server.go:220	Registering Qdrant tools (semantic search and storage)...
+2025-10-22T15:55:17.349+0100	INFO	server/http_server.go:228	Qdrant tools registered	{"count": 2, "totalSoFar": 28}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:232	Registered Qdrant tool	{"name": "coordinator_create_human_task"}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:232	Registered Qdrant tool	{"name": "coordinator_clear_todo_prompt_notes"}
+2025-10-22T15:55:17.349+0100	INFO	server/http_server.go:237	Registering code index tools (semantic code search and indexing)...
+2025-10-22T15:55:17.349+0100	INFO	server/http_server.go:245	Code index tools registered	{"count": 5, "totalSoFar": 33}
+2025-10-22T15:55:17.349+0100	DEBUG	server/http_server.go:249	Registered code index tool	{"name": "coordinator_find_similar_tasks"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:249	Registered code index tool	{"name": "coordinator_update_todo_prompt_notes"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:249	Registered code index tool	{"name": "set_current_subagent"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:249	Registered code index tool	{"name": "code_index_search"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:249	Registered code index tool	{"name": "execute_tool"}
+2025-10-22T15:55:17.350+0100	INFO	server/http_server.go:253	Registering filesystem tools (bash, file operations, patch application)...
+2025-10-22T15:55:17.350+0100	INFO	server/http_server.go:261	Filesystem tools registered	{"count": 5, "totalSoFar": 38}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:265	Registered filesystem tool	{"name": "coordinator_get_agent_task"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:265	Registered filesystem tool	{"name": "coordinator_add_todo_prompt_notes"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:265	Registered filesystem tool	{"name": "execute_subagent"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:265	Registered filesystem tool	{"name": "mcp_rediscover_server"}
+2025-10-22T15:55:17.350+0100	DEBUG	server/http_server.go:265	Registered filesystem tool	{"name": "code_index_remove_folder"}
+2025-10-22T15:55:17.350+0100	INFO	server/http_server.go:270	Chat service ready with MCP tools	{"totalTools": 38, "coordinatorTools": 26, "qdrantTools": 2, "codeIndexTools": 5, "filesystemTools": 5}
+2025-10-22T15:55:17.350+0100	INFO	server/http_server.go:276	All registered tools	{"availableTools": ["code_index_scan", "coordinator_clear_task_prompt_notes", "discover_tools", "code_index_status", "bash", "coordinator_add_task_prompt_notes", "coordinator_update_task_prompt_notes", "code_index_add_folder", "coordinator_clear_todo_prompt_notes", "knowledge_store", "read_file", "mcp_add_server", "list_agent_tasks", "query_knowledge", "coordinator_list_human_tasks", "coordinator_find_similar_tasks", "coordinator_update_todo_prompt_notes", "set_current_subagent", "code_index_search", "execute_tool", "create_agent_task", "coordinator_get_popular_collections", "coordinator_get_agent_task", "coordinator_add_todo_prompt_notes", "execute_subagent", "mcp_rediscover_server", "code_index_remove_folder", "apply_patch", "coordinator_create_human_task", "list_subagents", "get_tool_schema", "write_file", "list_directory", "mcp_remove_server", "knowledge_find", "coordinator_upsert_knowledge", "coordinator_update_task_status", "coordinator_update_todo_status"]}
+{"level":"info","ts":1761144917.4170392,"caller":"middleware/auth.go:25","msg":"JWT authentication DISABLED - using dev mock values"}
+2025-10-22T15:55:17.417+0100	INFO	server/http_server.go:343	Chat API routes registered	{"restPath": "/api/v1/chat/sessions", "websocketPath": "/api/v1/chat/stream"}
+2025-10-22T15:55:17.417+0100	INFO	server/http_server.go:353	AI Settings API routes registered	{"systemPromptPath": "/api/v1/ai/system-prompt", "subagentsPath": "/api/v1/ai/subagents"}
+2025-10-22T15:55:17.417+0100	INFO	server/http_server.go:364	Knowledge API routes registered	{"popularCollectionsPath": "/api/v1/knowledge/popular-collections"}
+2025-10-22T15:55:17.417+0100	INFO	server/http_server.go:371	Ensuring system subagents are seeded...
+2025-10-22T15:55:17.440+0100	INFO	storage/subchat_storage.go:419	System subagents already exist	{"count": 16, "expected": 16}
+2025-10-22T15:55:17.440+0100	INFO	server/http_server.go:402	Subchat and Subagent API routes registered	{"subchatsPath": "/api/v1/subchats", "chatSubchatsPath": "/api/v1/chats/:chatId/subchats", "subagentsPath": "/api/v1/subagents"}
+2025-10-22T15:55:17.440+0100	INFO	server/http_server.go:413	HTTP Tools API routes registered	{"createPath": "/api/v1/tools/http", "listPath": "/api/v1/tools/http", "deletePath": "/api/v1/tools/http/:id"}
+2025-10-22T15:55:17.440+0100	INFO	server/http_server.go:440	MCP HTTP transport initialized	{"endpoint": "/mcp", "transport": "StreamableHTTP", "protocol": "2024-11-05"}
+2025-10-22T15:55:17.440+0100	INFO	server/http_server.go:449	Serving embedded UI from binary (production mode)
+2025-10-22T15:55:17.440+0100	INFO	server/http_server.go:525	HTTP server starting	{"port": "5555", "attempt": 1, "maxRetries": 3}
+2025-10-22T15:55:17.941+0100	INFO	server/http_server.go:601	HTTP server listening	{"port": "5555", "apiEndpoints": "/api/v1/tasks, /api/v1/agent-tasks, /api/v1/code-index, /api/v1/knowledge", "uiEndpoint": "/ui"}
+2025-10-22T15:55:18.658+0100	INFO	handlers/chat_websocket.go:535	WebSocket connection established	{"sessionId": "68f8ef65b4136d0355782932", "userId": "dev-user"}
+2025-10-22T15:57:40.387+0100	INFO	coordinator/main.go:643	Shutdown signal received, stopping servers...
