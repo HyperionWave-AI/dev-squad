@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"hyper/internal/ai-service"
+	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
@@ -96,10 +97,24 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 }
 
 func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	// Extract and validate required fields
+	// Extract humanTaskId - auto-inject from context if not provided
 	humanTaskID, ok := input["humanTaskId"].(string)
+
+	// If not provided or empty, try to get from context (workflow state)
 	if !ok || humanTaskID == "" {
-		return nil, fmt.Errorf("humanTaskId is required and must be a string")
+		if stateID := ctx.Value("lastHumanTaskId"); stateID != nil {
+			if taskID, ok := stateID.(string); ok && taskID != "" {
+				humanTaskID = taskID
+				zap.L().Info("Auto-injected humanTaskId from workflow state",
+					zap.String("humanTaskId", humanTaskID),
+					zap.String("source", "context"))
+			}
+		}
+	}
+
+	// Validate required field
+	if humanTaskID == "" {
+		return nil, fmt.Errorf("humanTaskId is required (provide explicitly or create human task first)")
 	}
 
 	agentName, ok := input["agentName"].(string)
@@ -168,6 +183,24 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 			if str, ok := c.(string); ok {
 				qdrantCollections[i] = str
 			}
+		}
+	}
+
+	// Validate file paths exist before creating task (Claude optimization)
+	// This prevents subagents from being launched with invalid file paths
+	if len(filesModified) > 0 {
+		var missingFiles []string
+		for _, filePath := range filesModified {
+			if filePath == "" {
+				continue // Skip empty paths
+			}
+			// Check if file exists
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				missingFiles = append(missingFiles, filePath)
+			}
+		}
+		if len(missingFiles) > 0 {
+			return nil, fmt.Errorf("file validation failed: the following files do not exist:\n%s\n\nPlease verify the file paths from code_index_search results and ensure they are copied exactly", strings.Join(missingFiles, "\n"))
 		}
 	}
 
@@ -765,6 +798,97 @@ func (t *GetAgentTaskTool) Execute(ctx context.Context, input map[string]interfa
 	}, nil
 }
 
+// FindSimilarTasksTool implements the ToolExecutor interface for finding similar existing tasks
+// This helps prevent duplicate task creation (Claude optimization)
+type FindSimilarTasksTool struct {
+	storage storage.TaskStorage
+}
+
+func (t *FindSimilarTasksTool) Name() string {
+	return "coordinator_find_similar_tasks"
+}
+
+func (t *FindSimilarTasksTool) Description() string {
+	return "Search for existing tasks similar to a given prompt. Returns tasks with similarity scores (0-1). Use BEFORE creating a new task to avoid duplicates. Higher scores indicate more similar tasks."
+}
+
+func (t *FindSimilarTasksTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"prompt": map[string]interface{}{
+				"type":        "string",
+				"description": "The task description to search for similar tasks",
+			},
+			"limit": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum number of results to return (default: 5, max: 10)",
+			},
+			"minScore": map[string]interface{}{
+				"type":        "number",
+				"description": "Minimum similarity score threshold 0-1 (default: 0.7)",
+			},
+		},
+		"required": []string{"prompt"},
+	}
+}
+
+func (t *FindSimilarTasksTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	// Extract required prompt
+	prompt, ok := input["prompt"].(string)
+	if !ok || prompt == "" {
+		return nil, fmt.Errorf("prompt is required and must be a non-empty string")
+	}
+
+	// Extract optional limit (default: 5, max: 10)
+	limit := 5
+	if l, ok := input["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+		if limit > 10 {
+			limit = 10
+		}
+	}
+
+	// Extract optional minScore (default: 0.7)
+	minScore := 0.7
+	if s, ok := input["minScore"].(float64); ok && s >= 0 && s <= 1 {
+		minScore = s
+	}
+
+	// Search for similar tasks
+	tasks, scores, err := t.storage.SearchSimilarHumanTasks(prompt, limit, minScore)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search similar tasks: %w", err)
+	}
+
+	// Format results
+	type SimilarTask struct {
+		TaskID    string  `json:"taskId"`
+		Prompt    string  `json:"prompt"`
+		Status    string  `json:"status"`
+		CreatedAt string  `json:"createdAt"`
+		Score     float64 `json:"score"`
+	}
+
+	results := make([]SimilarTask, len(tasks))
+	for i, task := range tasks {
+		results[i] = SimilarTask{
+			TaskID:    task.ID,
+			Prompt:    task.Prompt,
+			Status:    string(task.Status),
+			CreatedAt: task.CreatedAt.Format("2006-01-02 15:04:05"),
+			Score:     scores[i],
+		}
+	}
+
+	return map[string]interface{}{
+		"similarTasks": results,
+		"count":        len(results),
+		"searchPrompt": prompt,
+		"minScore":     minScore,
+	}, nil
+}
+
 // AddTaskPromptNotesTool implements the ToolExecutor interface
 type AddTaskPromptNotesTool struct {
 	storage storage.TaskStorage
@@ -1202,22 +1326,22 @@ func (t *SetCurrentSubagentTool) Execute(ctx context.Context, input map[string]i
 
 	// Validate subagent name against known list
 	validSubagents := map[string]bool{
-		"go-dev":                             true,
-		"go-mcp-dev":                         true,
-		"Backend Services Specialist":        true,
-		"Event Systems Specialist":           true,
-		"Data Platform Specialist":           true,
-		"ui-dev":                             true,
-		"ui-tester":                          true,
-		"Frontend Experience Specialist":     true,
-		"AI Integration Specialist":          true,
-		"Real-time Systems Specialist":       true,
-		"sre":                                true,
-		"k8s-deployment-expert":              true,
+		"go-dev":                               true,
+		"go-mcp-dev":                           true,
+		"Backend Services Specialist":          true,
+		"Event Systems Specialist":             true,
+		"Data Platform Specialist":             true,
+		"ui-dev":                               true,
+		"ui-tester":                            true,
+		"Frontend Experience Specialist":       true,
+		"AI Integration Specialist":            true,
+		"Real-time Systems Specialist":         true,
+		"sre":                                  true,
+		"k8s-deployment-expert":                true,
 		"Infrastructure Automation Specialist": true,
-		"Security & Auth Specialist":         true,
-		"Observability Specialist":           true,
-		"End-to-End Testing Coordinator":     true,
+		"Security & Auth Specialist":           true,
+		"Observability Specialist":             true,
+		"End-to-End Testing Coordinator":       true,
 	}
 
 	if !validSubagents[subagentName] {
@@ -1541,24 +1665,25 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID)
 
 	return map[string]interface{}{
-		"subchatId":    subchat.ID,
-		"agentName":    subchat.SubagentName,
-		"agentTaskId":  agentTaskID,
-		"status":       "executing",
-		"message":      fmt.Sprintf("Subchat created and %s is now executing in background. Check subchat messages for progress.", agentTask.AgentName),
-		"createdAt":    subchat.CreatedAt,
+		"subchatId":   subchat.ID,
+		"agentName":   subchat.SubagentName,
+		"agentTaskId": agentTaskID,
+		"status":      "executing",
+		"message":     fmt.Sprintf("Subchat created and %s is now executing in background. Check subchat messages for progress.", agentTask.AgentName),
+		"createdAt":   subchat.CreatedAt,
 	}, nil
 }
 
 // FileOperationTracker tracks file operations and duplicate tool calls during subagent execution
 type FileOperationTracker struct {
-	DirectoriesListed map[string]int    // path -> count
-	FilesRead         map[string]int    // path -> count
-	FilesWritten      map[string]int    // path -> count
-	ToolCallHistory   []string          // chronological list of tool calls
+	DirectoriesListed map[string]int // path -> count
+	FilesRead         map[string]int // path -> count
+	FilesWritten      map[string]int // path -> count
+	BashCalls         map[string]int // command -> count
+	ToolCallHistory   []string       // chronological list of tool calls
 
 	// Track full argument sets for loop detection
-	ToolCallSignatures map[string]int   // signature (toolName + argsJSON) -> count
+	ToolCallSignatures map[string]int // signature (toolName + argsJSON) -> count
 }
 
 // NewFileOperationTracker creates a new tracker
@@ -1567,6 +1692,7 @@ func NewFileOperationTracker() *FileOperationTracker {
 		DirectoriesListed:  make(map[string]int),
 		FilesRead:          make(map[string]int),
 		FilesWritten:       make(map[string]int),
+		BashCalls:          make(map[string]int),
 		ToolCallHistory:    make([]string, 0),
 		ToolCallSignatures: make(map[string]int),
 	}
@@ -1611,9 +1737,37 @@ func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]
 				warning = fmt.Sprintf("⚠️  WARNING: You already read file '%s' %d time(s). You should have the content from previous calls.", path, f.FilesRead[path]-1)
 			}
 		}
-	case "write_file", "apply_patch":
+	case "write_file":
 		if path, ok := args["filePath"].(string); ok {
 			f.FilesWritten[path]++
+		}
+	case "apply_patch":
+		// For apply_patch, the file path is embedded in the patch content
+		// Format: "*** Update File: path/to/file.ext"
+		if patchContent, ok := args["patch"].(string); ok {
+			// Extract file path from patch
+			if strings.Contains(patchContent, "*** Update File:") {
+				lines := strings.Split(patchContent, "\n")
+				for _, line := range lines {
+					if strings.HasPrefix(line, "*** Update File:") {
+						filePath := strings.TrimSpace(strings.TrimPrefix(line, "*** Update File:"))
+						f.FilesWritten[filePath]++
+						break
+					}
+				}
+			} else {
+				// Fallback: mark as generic write if we can't extract path
+				f.FilesWritten["<patch-unknown-file>"]++
+			}
+		}
+	case "bash":
+		if command, ok := args["command"].(string); ok {
+			// Track bash command (truncate if too long for map key)
+			cmdKey := command
+			if len(cmdKey) > 100 {
+				cmdKey = cmdKey[:100] + "..."
+			}
+			f.BashCalls[cmdKey]++
 		}
 	}
 
@@ -1836,7 +1990,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	fullResponse := ""
 	toolCallCount := 0
 	completedTodos := 0
-	readFileCount := 0     // Track read_file calls (after 3 reads, MUST write)
+	readFileCount := 0         // Track read_file calls (after 3 reads, MUST write)
 	hasWrittenAnyFile := false // Track if any write has occurred
 
 	// RUNTIME ENFORCEMENT: File content cache to prevent re-reads
@@ -1868,6 +2022,14 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 
 			case aiservice.StreamEventToolCall:
 				toolCallCount++
+
+				// 📊 COMPREHENSIVE LOGGING: Log every tool call with timestamp and details
+				t.logger.Info("🔧 TOOL CALL",
+					zap.String("subchatId", subchatID),
+					zap.Int("callNumber", toolCallCount),
+					zap.String("toolName", event.ToolCall.Name),
+					zap.Any("args", event.ToolCall.Args),
+					zap.Time("timestamp", time.Now()))
 
 				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
 				if event.ToolCall.Name == "read_file" {
@@ -1917,7 +2079,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				// RUNTIME ENFORCEMENT: Track write operations and reward
 				if event.ToolCall.Name == "write_file" || event.ToolCall.Name == "apply_patch" {
 					hasWrittenAnyFile = true
-					readFileCount = 0 // Reset read counter after write
+					readFileCount = 0    // Reset read counter after write
 					executionScore += 20 // Big reward for writing
 
 					t.logger.Info("✅ Write operation detected - BIG scoring bonus",
@@ -2095,6 +2257,29 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 			}
 		}
 	}
+
+	// 📊 COMPREHENSIVE LOGGING: Final execution summary
+	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
+	t.logger.Info("║ 📊 FINAL EXECUTION SUMMARY",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName))
+	t.logger.Info("╠═══════════════════════════════════════════════════════════════════")
+	t.logger.Info("║ Tool Calls",
+		zap.Int("total", toolCallCount),
+		zap.Int("reads", readFileCount),
+		zap.Int("writes", len(progressTracker.FilesWritten)),
+		zap.Int("bash", len(progressTracker.BashCalls)))
+	t.logger.Info("║ TODOs",
+		zap.Int("completed", completedTodos),
+		zap.Int("total", len(agentTask.Todos)))
+	t.logger.Info("║ Score",
+		zap.Int("finalScore", executionScore),
+		zap.Bool("hasWritten", hasWrittenAnyFile))
+	t.logger.Info("║ Files",
+		zap.Int("filesRead", len(progressTracker.FilesRead)),
+		zap.Int("filesWritten", len(progressTracker.FilesWritten)),
+		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)))
+	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
 
 	t.logger.Info("📝 Saving final AI response to subchat",
 		zap.String("subchatId", subchatID),
@@ -2506,6 +2691,7 @@ func RegisterCoordinatorTools(
 		&UpdateTodoStatusTool{storage: taskStorage},
 		&ListHumanTasksTool{storage: taskStorage},
 		&GetAgentTaskTool{storage: taskStorage},
+		&FindSimilarTasksTool{storage: taskStorage}, // Claude optimization: prevent duplicate tasks
 		&AddTaskPromptNotesTool{storage: taskStorage},
 		&UpdateTaskPromptNotesTool{storage: taskStorage},
 		&ClearTaskPromptNotesTool{storage: taskStorage},

@@ -65,7 +65,7 @@ type TodoItemInput struct {
 
 // HumanTask represents a task created by a human user
 type HumanTask struct {
-	ID        string     `json:"id" bson:"taskId"`
+	ID        string     `json:"taskId" bson:"taskId"`
 	Prompt    string     `json:"prompt" bson:"prompt"`
 	CreatedAt time.Time  `json:"createdAt" bson:"createdAt"`
 	UpdatedAt time.Time  `json:"updatedAt" bson:"updatedAt"`
@@ -75,7 +75,7 @@ type HumanTask struct {
 
 // AgentTask represents a task assigned to an agent
 type AgentTask struct {
-	ID                string     `json:"id" bson:"taskId"`
+	ID                string     `json:"taskId" bson:"taskId"`
 	HumanTaskID       string     `json:"humanTaskId" bson:"humanTaskId"`
 	AgentName         string     `json:"agentName" bson:"agentName"`
 	Role              string     `json:"role" bson:"role"`

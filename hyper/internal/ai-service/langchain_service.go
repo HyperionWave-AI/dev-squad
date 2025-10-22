@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
+
+	"github.com/tmc/langchaingo/llms"
 )
 
 // ContextKey type for context keys
@@ -53,6 +56,228 @@ type ChatService struct {
 	provider     ChatProvider
 	config       *AIConfig
 	toolRegistry *ToolRegistry
+
+	// Original configuration for fallback recovery
+	originalModel    string
+	originalProvider string
+	originalAPIKey   string
+	usingFallback    bool
+}
+
+// getClaudeSystemPrompt returns the Claude-optimized system prompt
+// This is the same prompt used in chat_websocket.go for Claude models
+// Uses outcome-focused language, real response examples, and concrete guidance
+func getClaudeSystemPrompt() string {
+	return `# Task Coordination System
+
+You are a development task coordinator. Your goal: **Get user requests completed by delegating to specialist agents**.
+
+## Your Role
+
+**Coordinate, don't implement.** You create tasks and delegate to specialists who write the actual code.
+
+### What You Do:
+1. Understand what the user wants
+2. Create tasks to track the work
+3. Find relevant files using code search
+4. Create detailed instructions for specialists
+5. Launch the specialist agent to do the work
+
+### What You Don't Do:
+- Write implementation code yourself
+- Read multiple files trying to understand the codebase
+- Retry searches hoping for better results
+- Explore directories without a specific goal
+
+## Workflow
+
+There's no strict step order, but typically:
+
+1. **Check for existing work** (optional): coordinator_list_human_tasks
+2. **Record the request**: coordinator_create_human_task
+3. **Find relevant files** (if needed): code_index_search
+4. **Create agent task**: create_agent_task
+5. **Launch specialist**: execute_subagent
+
+### Key Principles:
+- **Trust first results**: Accept what tools return on first call
+- **One search only**: Do ONE code search, use those results
+- **Exact file paths**: Copy paths directly from tool responses
+- **Delegate quickly**: After gathering context, hand off to specialist
+
+## Tool Response Examples
+
+### code_index_search Returns:
+` + "```json" + `
+{
+  "results": [
+    {
+      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
+      "content": "export function Settings() { ... }",
+      "score": 0.92,
+      "startLine": 15,
+      "endLine": 45
+    },
+    {
+      "filePath": "/Users/name/project/ui/src/hooks/useDarkMode.ts",
+      "content": "export const useDarkMode = () => { ... }",
+      "score": 0.87,
+      "startLine": 8,
+      "endLine": 25
+    }
+  ],
+  "query": "settings dark mode",
+  "totalResults": 2
+}
+` + "```" + `
+
+**How to use in create_agent_task:**
+` + "```json" + `
+{
+  "filesModified": [
+    "/Users/name/project/ui/src/components/Settings.tsx",
+    "/Users/name/project/ui/src/hooks/useDarkMode.ts"
+  ],
+  "todos": [
+    {
+      "description": "Add dark mode toggle to Settings component",
+      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
+      "contextHint": "Line 15-45: Add toggle button, connect to useDarkMode hook"
+    }
+  ]
+}
+` + "```" + `
+
+**Important**: Copy the filePath values EXACTLY. Don't shorten, modify, or "fix" them.
+
+### coordinator_create_human_task Returns:
+` + "```json" + `
+{
+  "taskId": "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789",
+  "prompt": "Add dark mode toggle to settings",
+  "status": "pending",
+  "createdAt": "2025-01-15T10:30:00Z"
+}
+` + "```" + `
+
+**CRITICAL: Extract the EXACT "taskId" UUID value from the response above.**
+- DO NOT generate, make up, or create your own task ID
+- DO NOT use descriptive strings like "add-dark-mode" or "change-button-color"
+- COPY the exact UUID (e.g., "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789") from the tool response
+- USE that exact taskId value as "humanTaskId" when calling create_agent_task
+
+Example: If the response shows "taskId": "f0205882-473b-49bf-b3ba-adc30ab82fc3", then use EXACTLY "humanTaskId": "f0205882-473b-49bf-b3ba-adc30ab82fc3" in create_agent_task.
+
+### create_agent_task Expects:
+` + "```json" + `
+{
+  "humanTaskId": "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789",
+  "agentName": "ui-dev",
+  "role": "Add dark mode toggle to Settings page",
+  "contextSummary": "User wants a dark mode toggle in the Settings component. Files found: Settings.tsx (lines 15-45 contain main component), useDarkMode.ts (lines 8-25 contain the hook). Need to add toggle UI element and wire it to the existing useDarkMode hook.",
+  "filesModified": [
+    "/Users/name/project/ui/src/components/Settings.tsx",
+    "/Users/name/project/ui/src/hooks/useDarkMode.ts"
+  ],
+  "todos": [
+    {
+      "description": "Add dark mode toggle button to Settings component UI",
+      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
+      "contextHint": "Line 15-45: Add <ToggleSwitch> component, place in settings grid. Follow existing pattern for other toggle switches in the file."
+    },
+    {
+      "description": "Connect toggle to useDarkMode hook state",
+      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
+      "contextHint": "Import useDarkMode from hooks file, destructure { darkMode, setDarkMode }, pass setDarkMode to toggle onChange handler."
+    }
+  ]
+}
+` + "```" + `
+
+## Common Scenarios
+
+### Scenario 1: Simple Feature Addition
+` + "```" + `
+User: "Add a save button to the editor"
+
+Your approach:
+1. coordinator_list_human_tasks (check if similar task exists)
+2. coordinator_create_human_task (record request → get task ID)
+3. code_index_search("editor save button") → get file paths
+4. create_agent_task (humanTaskId from step 2, files from step 3)
+5. execute_subagent (launch ui-dev)
+6. Done! Specialist takes over from here.
+` + "```" + `
+
+### Scenario 2: Bug Fix
+` + "```" + `
+User: "The login form doesn't validate email format"
+
+Your approach:
+1. coordinator_list_human_tasks
+2. coordinator_create_human_task → task ID
+3. code_index_search("login form email validation")
+4. create_agent_task with bug context: "Email validation missing from login form. Found LoginForm.tsx with form logic. Need to add email format regex check before submit."
+5. execute_subagent
+` + "```" + `
+
+### Scenario 3: Search Returns No Results
+` + "```" + `
+User: "Update the API endpoint in auth service"
+
+code_index_search("auth service API endpoint") → { results: [], totalResults: 0 }
+
+Your options:
+a) Try one more search with different terms: code_index_search("authentication API")
+b) Ask user: "I couldn't find auth service files. Can you tell me where they're located?"
+c) Create agent task anyway with instruction: "Find auth service API endpoints and update them"
+
+DON'T: Keep searching with variations (auth, authentication, login, etc.) - that triggers circuit breaker
+` + "```" + `
+
+## Error Recovery
+
+### Tool Fails Once
+Try again with different parameters:
+` + "```" + `
+code_index_search("dark mode settings") → ERROR: timeout
+→ Try: code_index_search("dark mode")
+` + "```" + `
+
+### Tool Fails Twice (Same Parameters)
+Stop and inform user:
+` + "```" + `
+"The code search tool failed twice. This might be a system issue. Should I:
+a) Try creating the task without file paths (agent will search)
+b) Skip this request for now"
+` + "```" + `
+
+### File Path Errors
+If create_agent_task fails with "file not found":
+` + "```" + `
+Error: "path does not exist: /old/path/Settings.tsx"
+
+→ Don't retry with same path!
+→ Do: Tell user "The search found an outdated path. Can you tell me where Settings.tsx is now?"
+` + "```" + `
+
+## Agent Specializations
+
+- **ui-dev**: React/TypeScript UI components, pages, styling
+- **go-dev**: Go backend services, APIs, business logic
+- **sre**: Deployment, infrastructure, monitoring
+- **go-mcp-dev**: MCP protocol implementation in Go
+- **ui-tester**: Playwright tests, UI automation
+
+Choose based on the file types and work needed.
+
+## Remember
+
+- **Fast delegation** beats perfect planning
+- **First search results** are usually good enough
+- **Exact file paths** prevent 90% of errors
+- **Clear context** in agent tasks helps specialists succeed
+- **You coordinate**, specialists implement`
 }
 
 // ToolResultCache caches tool execution results by signature to prevent duplicate executions
@@ -104,9 +329,13 @@ func NewChatService(config *AIConfig) (*ChatService, error) {
 	toolRegistry := NewToolRegistry()
 
 	return &ChatService{
-		provider:     provider,
-		config:       config,
-		toolRegistry: toolRegistry,
+		provider:         provider,
+		config:           config,
+		toolRegistry:     toolRegistry,
+		originalModel:    config.Model,
+		originalProvider: config.Provider,
+		originalAPIKey:   config.APIKey,
+		usingFallback:    false,
 	}, nil
 }
 
@@ -119,9 +348,13 @@ func NewChatServiceWithTools(config *AIConfig, toolRegistry *ToolRegistry) (*Cha
 	}
 
 	return &ChatService{
-		provider:     provider,
-		config:       config,
-		toolRegistry: toolRegistry,
+		provider:         provider,
+		config:           config,
+		toolRegistry:     toolRegistry,
+		originalModel:    config.Model,
+		originalProvider: config.Provider,
+		originalAPIKey:   config.APIKey,
+		usingFallback:    false,
 	}, nil
 }
 
@@ -224,6 +457,27 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		return nil, fmt.Errorf("messages cannot be empty")
 	}
 
+	// Try to switch back to primary model if we're using fallback
+	if s.usingFallback {
+		log.Printf("[Rate Limit Recovery] Attempting to switch back to primary model: %s", s.originalModel)
+
+		// Restore original configuration
+		s.config.Model = s.originalModel
+		s.config.Provider = s.originalProvider
+		s.config.APIKey = s.originalAPIKey
+
+		// Recreate provider with original config
+		primaryProvider, err := NewChatProvider(s.config)
+		if err != nil {
+			log.Printf("[Rate Limit Recovery] Failed to recreate primary provider, staying on fallback: %v", err)
+		} else {
+			// Update provider and mark as no longer using fallback
+			s.provider = primaryProvider
+			s.usingFallback = false
+			log.Printf("[Rate Limit Recovery] Successfully switched back to primary model: %s", s.originalModel)
+		}
+	}
+
 	// Default max tool calls to prevent loops
 	if maxToolCalls <= 0 {
 		maxToolCalls = 5
@@ -271,24 +525,116 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
-		failedToolCalls := make(map[string]int) // Track failed attempts separately
+		failedToolCalls := make(map[string]int)        // Track failed attempts separately
+		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
+		taskIdValidationAttempts := 0                   // Track taskId validation attempts for create_agent_task (max 3)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
 			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
 		}
 
+		// WORKFLOW STATE ENFORCEMENT: Track coordinator workflow progress (fallback model only)
+		workflowState := map[string]interface{}{
+			"step":            0,     // 0=initial, 1=listed, 2=created, 3=searched, 4=agent_task, 5=done
+			"humanTaskId":     "",    // Store taskId from step 2
+			"searchCompleted": false, // Prevent multiple searches
+			"agentTaskId":     "",    // Store agentTaskId from step 4
+		}
+
+		// Function to validate workflow tool calls (only enforced for fallback model)
+		validateWorkflowTool := func(toolName string) (bool, string) {
+			if !s.usingFallback {
+				return true, "" // No enforcement for primary model
+			}
+
+			step := workflowState["step"].(int)
+			humanTaskId := workflowState["humanTaskId"].(string)
+			searchCompleted := workflowState["searchCompleted"].(bool)
+
+			switch toolName {
+			case "coordinator_list_human_tasks":
+				if step == 0 || step == 1 || step == 2 {
+					// Allow listing tasks at any early step to retrieve exact taskId
+					return true, ""
+				}
+				return false, "❌ BLOCKED: You already have taskId. NEXT: Call appropriate tool for current step."
+
+			case "coordinator_create_human_task":
+				if step == 1 && humanTaskId == "" {
+					return true, ""
+				}
+				if humanTaskId != "" {
+					// State-aware guidance based on workflow progress
+					if searchCompleted {
+						return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'create_agent_task'.", humanTaskId)
+					}
+					return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'code_index_search'.", humanTaskId)
+				}
+				return false, "❌ BLOCKED: Call 'coordinator_list_human_tasks' first."
+
+			case "code_index_search":
+				if step == 2 && humanTaskId != "" && !searchCompleted {
+					return true, ""
+				}
+				if searchCompleted {
+					return false, "❌ BLOCKED: Search done. NEXT: Call 'create_agent_task'."
+				}
+				return false, "❌ BLOCKED: Create human task first."
+
+			case "create_agent_task":
+				if step == 3 && humanTaskId != "" && searchCompleted {
+					return true, ""
+				}
+				return false, "❌ BLOCKED: Run 'code_index_search' first to get file paths."
+
+			case "execute_subagent":
+				agentTaskId := workflowState["agentTaskId"].(string)
+				if step == 4 && agentTaskId != "" {
+					return true, ""
+				}
+				return false, "❌ BLOCKED: Call 'create_agent_task' first."
+			}
+
+			return true, ""
+		}
+
 		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
-		circuitBreakerThresholds := map[string]int{
-			"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
-			"write_file":        1, // Never allow duplicate writes
-			"list_directory":    2, // Stop after 2 attempts
-			"bash":              3, // Allow more for command variations
-			"code_index_search": 3, // Allow query refinement
-			// Default for other tools: 4 attempts
+		// Claude models get higher thresholds as they're better at adapting
+		isClaudeModel := strings.Contains(strings.ToLower(s.config.Model), "claude") ||
+			strings.Contains(strings.ToLower(s.config.Provider), "anthropic")
+
+		var circuitBreakerThresholds map[string]int
+		if isClaudeModel {
+			// Claude-optimized thresholds: More lenient to allow legitimate multi-file operations
+			circuitBreakerThresholds = map[string]int{
+				"read_file":         5, // Allow reading multiple files
+				"write_file":        2, // Allow one retry for writes
+				"list_directory":    4, // Allow exploring directories
+				"bash":              5, // Allow command variations
+				"code_index_search": 2, // Strict: one search + one retry max
+				"create_agent_task": 1, // Should only create once
+				// Default for other tools: 6 attempts
+			}
+			log.Printf("[Circuit Breaker] Using Claude-optimized thresholds (more lenient)")
+		} else {
+			// GPT thresholds: More conservative
+			circuitBreakerThresholds = map[string]int{
+				"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
+				"write_file":        1, // Never allow duplicate writes
+				"list_directory":    2, // Stop after 2 attempts
+				"bash":              3, // Allow more for command variations
+				"code_index_search": 3, // Allow query refinement
+				// Default for other tools: 4 attempts
+			}
+			log.Printf("[Circuit Breaker] Using GPT thresholds (conservative)")
 		}
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
 			iterationCount++
+
+			// CRITICAL: Reload full tools array at start of each iteration
+			// This prevents the filtered tools from previous iteration being reused
+			tools = s.toolRegistry.GetToolsForLangChain()
 
 			// Calculate context size BEFORE applying sliding window
 			contextSize := 0
@@ -297,14 +643,24 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			}
 
 			// Apply sliding window BEFORE context exceeds model's token limit
-			// Model token limit ≈ 32K total tokens (24K input + 8K output)
-			// 24K tokens × 4 chars/token ≈ 96K chars theoretical max
-			// Set threshold at 40K chars (≈10K tokens) to leave safety margin
-			const maxContextSize = 40000 // 40KB threshold (safe for most models)
+			// Claude: 200K tokens (≈800KB text) - use 150KB threshold
+			// GPT: 32K tokens (≈128KB text) - use 40KB threshold to be safe
+			var maxContextSize int
+			var maxMessages int
+			if isClaudeModel {
+				maxContextSize = 150000 // 150KB for Claude (≈37K tokens, leaves room for output)
+				maxMessages = 20        // Keep more messages for Claude
+				log.Printf("[Context Window] Using Claude limits: %d chars, max %d messages", maxContextSize, maxMessages)
+			} else {
+				maxContextSize = 40000 // 40KB for GPT (≈10K tokens)
+				maxMessages = 6        // Conservative for GPT
+				log.Printf("[Context Window] Using GPT limits: %d chars, max %d messages", maxContextSize, maxMessages)
+			}
+
 			if contextSize > maxContextSize {
 				log.Printf("[Sliding Window] Context size %d chars exceeds threshold %d chars, applying window",
 					contextSize, maxContextSize)
-				currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
+				currentMessages = applySlidingWindow(currentMessages, maxMessages)
 
 				// Recalculate after trimming
 				contextSize = 0
@@ -323,6 +679,56 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			log.Printf("[DEBUG Context] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
 				len(currentMessages), contextSize, toolResultPreview)
 
+			// PHASE 3: PRESCRIPTIVE STATE MACHINE - Only allow ONE tool per workflow step
+			// This forces Claude into a linear workflow with zero ambiguity
+			// Each step unlocks exactly ONE required tool - Claude has no choice but to follow the sequence
+			isClaudeModel := strings.Contains(strings.ToLower(s.config.Model), "claude")
+			if s.usingFallback || isClaudeModel {
+				step := workflowState["step"].(int)
+				originalCount := len(tools)
+
+				// Define allowed tools per step (WHITELIST approach)
+				var allowedTools []string
+				switch step {
+				case 0: // Step 0: ONLY allow coordinator_list_human_tasks
+					allowedTools = []string{"coordinator_list_human_tasks"}
+				case 1: // Step 1: ONLY allow coordinator_create_human_task
+					allowedTools = []string{"coordinator_create_human_task"}
+				case 2: // Step 2: ONLY allow code_index_search
+					allowedTools = []string{"code_index_search"}
+				case 3: // Step 3: ONLY allow create_agent_task
+					allowedTools = []string{"create_agent_task"}
+				case 4: // Step 4: ONLY allow execute_subagent
+					allowedTools = []string{"execute_subagent"}
+				case 5: // Step 5: Workflow complete - allow ALL tools
+					allowedTools = nil // nil means allow all
+				default:
+					allowedTools = nil // Unknown step, allow all
+				}
+
+				// Filter tools using whitelist
+				if allowedTools != nil {
+					// Create set for O(1) lookup
+					allowedSet := make(map[string]bool)
+					for _, name := range allowedTools {
+						allowedSet[name] = true
+					}
+
+					filteredTools := make([]llms.Tool, 0, len(allowedTools))
+					for _, tool := range tools {
+						if tool.Function != nil && allowedSet[tool.Function.Name] {
+							filteredTools = append(filteredTools, tool)
+						}
+					}
+					tools = filteredTools
+				}
+
+				if originalCount != len(tools) {
+					log.Printf("[Phase 3 Prescriptive Filter] Step %d: Filtered %d → %d tools (allowed: %v)",
+						step, originalCount, len(tools), allowedTools)
+				}
+			}
+
 			// DEBUG: Log tools being passed to LLM
 			log.Printf("[DEBUG Tools] Passing %d tools to LLM provider %s", len(tools), s.config.Provider)
 			if len(tools) > 0 {
@@ -333,6 +739,60 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					}
 				}
 				log.Printf("[DEBUG Tools] Sample tools: %v", toolNames)
+			}
+
+			// WORKFLOW STATE GUIDANCE: Inject iteration and tool call progress into system prompt
+			// This helps the LLM understand where it is in the workflow and avoid loops
+			if len(currentMessages) > 0 && currentMessages[0].Role == "system" {
+				// Build workflow state summary
+				workflowGuidance := fmt.Sprintf(`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WORKFLOW PROGRESS (Iteration %d)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Current Iteration: %d / %d
+Total Tool Calls Made: %d / %d
+
+⚠️  IMPORTANT: If you see "BLOCKED" or "NEXT:" in recent tool results,
+    those messages contain CRITICAL guidance about what to do next.
+    You MUST follow the "NEXT:" instructions - they tell you exactly which tool to call.
+
+⚠️  AVOID LOOPS: Do NOT retry the same tool that was just BLOCKED.
+    Follow the "NEXT:" guidance instead.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`, iterationCount, iterationCount, s.config.MaxIterations, toolCallCount, maxToolCalls)
+
+				// INJECT CAPTURED HUMAN TASK ID: If we captured a humanTaskId from coordinator_create_human_task,
+				// inject it directly into the system prompt so Claude can use it without extraction
+				if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+					taskIDGuidance := fmt.Sprintf(`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 CAPTURED TASK ID
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The human task has been created/found. Use this EXACT taskId value:
+
+**humanTaskId**: "%s"
+
+When calling create_agent_task, use EXACTLY:
+{
+  "humanTaskId": "%s",
+  ...
+}
+
+DO NOT generate or make up a different task ID. Use the value shown above.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`, humanTaskID, humanTaskID)
+					workflowGuidance += taskIDGuidance
+					log.Printf("[Workflow State] Injected humanTaskId into system prompt: %s", humanTaskID)
+				}
+
+				// Append to existing system prompt (don't replace it)
+				currentMessages[0].Content = currentMessages[0].Content + workflowGuidance
+				log.Printf("[Workflow Guidance] Injected iteration %d progress into system prompt", iterationCount)
 			}
 
 			// Call provider with tools
@@ -381,8 +841,47 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 						return
 					}
 
-					// Update provider
+					// Update provider and mark as using fallback
 					s.provider = fallbackProvider
+					s.usingFallback = true
+
+					// CRITICAL FIX: If we fell back to Claude, swap to Claude-optimized system prompt and circuit breakers
+					if strings.Contains(strings.ToLower(s.config.FallbackModel), "claude") {
+						log.Printf("[Rate Limit] Detected Claude fallback - swapping to Claude-optimized system prompt and thresholds")
+
+						// Replace the system prompt in currentMessages with Claude-optimized version
+						for i := range currentMessages {
+							if currentMessages[i].Role == "system" {
+								// Swap out FILE_PATHS_TO_USE fiction for real JSON examples
+								claudePrompt := getClaudeSystemPrompt()
+
+								// Extract session context from old prompt (the critical guidance section)
+								oldPrompt := currentMessages[i].Content
+								sessionContextStart := strings.Index(oldPrompt, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCRITICAL SYSTEM BEHAVIOR")
+								if sessionContextStart > 0 {
+									sessionContext := oldPrompt[sessionContextStart:]
+									currentMessages[i].Content = claudePrompt + "\n\n" + sessionContext
+								} else {
+									currentMessages[i].Content = claudePrompt
+								}
+
+								log.Printf("[Rate Limit] Swapped system prompt: %d chars → %d chars", len(oldPrompt), len(currentMessages[i].Content))
+								break
+							}
+						}
+
+						// Re-calculate circuit breaker thresholds for Claude (more lenient)
+						circuitBreakerThresholds = map[string]int{
+							"read_file":         5, // Allow reading multiple files
+							"write_file":        2, // Allow one retry for writes
+							"list_directory":    4, // Allow exploring directories
+							"bash":              5, // Allow command variations
+							"code_index_search": 2, // Strict: one search + one retry max
+							"create_agent_task": 1, // Should only create once
+							// Default for other tools: 6 attempts
+						}
+						log.Printf("[Circuit Breaker] Re-applied Claude thresholds after fallback")
+					}
 
 					// Retry with fallback provider
 					if toolProvider, ok := s.provider.(ToolCapableProvider); ok {
@@ -396,11 +895,11 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 						log.Printf("[Rate Limit] Successfully switched to fallback model '%s'", s.config.FallbackModel)
 
 						// Send success notification
-						successMsg := fmt.Sprintf("✅ Successfully switched to '%s'. Continuing with your request...\n\n", s.config.FallbackModel)
+						successMsg := fmt.Sprintf("✅ Successfully switched to '%s'. Will automatically retry primary model on next request...\n\n", s.config.FallbackModel)
 						eventChan <- StreamEvent{Type: StreamEventToken, Content: successMsg}
 
-						// Note: We keep using the fallback model for the rest of this session
-						// The original model, provider, and API key are saved in case we need them later
+						// Note: We will automatically try to switch back to the primary model on the next request
+						// The original configuration is saved in s.originalModel, s.originalProvider, s.originalAPIKey
 						_, _, _ = originalModel, originalProvider, originalAPIKey // Mark as used to avoid compiler warning
 					} else {
 						log.Printf("[ChatService] ERROR - Fallback provider doesn't support tools")
@@ -450,6 +949,39 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				log.Printf("[Tool Request] AI requested tool '%s' with args: %s",
 					toolCall.Name, string(argsJSON))
 
+				// WORKFLOW VALIDATION: Check if this tool call is allowed in current workflow state
+				var result ToolResult
+				if s.usingFallback {
+					allowed, blockMessage := validateWorkflowTool(toolCall.Name)
+					if !allowed {
+						log.Printf("[Workflow Enforcer] BLOCKED tool '%s' - %s", toolCall.Name, blockMessage)
+
+						// Create a blocking error result so model understands the tool failed
+						result = ToolResult{
+							Name:       toolCall.Name,
+							Output:     nil,
+							Error:      blockMessage,
+							DurationMs: 0,
+						}
+
+						// Send the error result to the model
+						eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
+
+						// Add tool result to message history as an error
+						currentMessages = append(currentMessages, Message{
+							Role:    "assistant",
+							Content: fmt.Sprintf("I attempted to call '%s' but it was blocked.", toolCall.Name),
+						})
+						currentMessages = append(currentMessages, Message{
+							Role:    "system",
+							Content: fmt.Sprintf("TOOL ERROR from '%s': %s", toolCall.Name, blockMessage),
+						})
+
+						// Continue to next iteration - don't execute the blocked tool
+						continue
+					}
+				}
+
 				// Send tool call event
 				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
 
@@ -457,7 +989,6 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				signature := toolCallSignature(toolCall.Name, toolCall.Args)
 
 				// Check tool result cache BEFORE execution
-				var result ToolResult
 				cachedResult, found := resultCache.Get(signature)
 				if found {
 					// Use cached result - avoid redundant execution
@@ -479,11 +1010,192 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					}
 				} else {
 					// Execute tool (no cached result available)
-					result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
+					// Inject humanTaskId from workflowState into context for auto-population
+					toolCtx := ctx
+					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+					}
+					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
 					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
 
 					// Store in cache for future duplicate calls
 					resultCache.Set(signature, &result)
+				}
+
+				// GPT FILE PATH VALIDATION: For code_index_search, validate file paths before proceeding
+				// This ONLY applies to GPT models, NOT Claude (Claude has its own file validation in create_agent_task)
+				if toolCall.Name == "code_index_search" && result.Error == "" && !s.usingFallback {
+					isGPTModel := !strings.Contains(strings.ToLower(s.config.Model), "claude")
+
+					if isGPTModel {
+						// Extract file paths from search results
+						filePaths := extractFilePathsFromCodeIndexResult(result)
+
+						if len(filePaths) > 0 {
+							validPaths, invalidPaths := validateFilePaths(filePaths)
+
+							log.Printf("[GPT Path Validator] code_index_search returned %d paths: %d valid, %d invalid",
+								len(filePaths), len(validPaths), len(invalidPaths))
+
+							if len(invalidPaths) > 0 {
+								// Some paths are invalid - check if this is already a retry
+								retryAttemptKey := fmt.Sprintf("code_index_search_retry_%v", toolCall.Args["query"])
+								hasRetried := pathValidationRetries[retryAttemptKey]
+
+								if hasRetried {
+									// Already retried once - stop execution with clear error
+									log.Printf("[GPT Path Validator] code_index_search retry also returned invalid paths - stopping execution")
+
+									errorMsg := fmt.Sprintf("❌ CRITICAL ERROR: code_index_search returned invalid file paths (files don't exist on filesystem):\n\n"+
+										"INVALID PATHS:\n"+
+										"%s\n\n"+
+										"🛑 Even after retrying the search, the code index is returning paths to files that don't exist.\n"+
+										"✅ This means:\n"+
+										"   1. The code index may be stale or out of sync with the filesystem\n"+
+										"   2. The files may have been moved or deleted\n"+
+										"   3. The search query may be finding old/archived files\n\n"+
+										"🔍 NEXT STEPS:\n"+
+										"   - Ask the user to verify the file locations\n"+
+										"   - Try a different search query\n"+
+										"   - Check if files exist in a different directory\n"+
+										"   - Consider re-indexing the codebase\n\n"+
+										"DO NOT proceed with create_agent_task using these invalid paths!",
+										strings.Join(invalidPaths, "\n"))
+
+									eventChan <- StreamEvent{Type: StreamEventError, Error: errorMsg}
+									return
+								} else {
+									// First time encountering invalid paths - try automatic retry with refined query
+									log.Printf("[GPT Path Validator] First invalid path detection - attempting automatic retry with refined query")
+
+									// Mark this as a retry attempt
+									pathValidationRetries[retryAttemptKey] = true
+
+									// Send warning to user about automatic retry
+									warningMsg := fmt.Sprintf("\n\n⚠️  FILE PATH VALIDATION WARNING:\n"+
+										"code_index_search returned %d invalid file paths (files don't exist).\n"+
+										"🔄 Automatically retrying search with refined query...\n\n"+
+										"Invalid paths found:\n%s\n\n",
+										len(invalidPaths), strings.Join(invalidPaths, "\n"))
+									eventChan <- StreamEvent{Type: StreamEventToken, Content: warningMsg}
+
+									// Modify the tool result to indicate validation failure
+									// Inject validation warning into result so GPT knows to refine the search
+									if outputMap, ok := result.Output.(map[string]interface{}); ok {
+										outputMap["_validationWarning"] = fmt.Sprintf(
+											"⚠️ VALIDATION FAILED: %d out of %d file paths are INVALID (files don't exist on filesystem). "+
+											"You MUST retry code_index_search with a different query to find the CORRECT file paths. "+
+											"DO NOT proceed with create_agent_task using these invalid paths. "+
+											"Invalid paths: %s",
+											len(invalidPaths), len(filePaths), strings.Join(invalidPaths, "\n"))
+										outputMap["invalidPaths"] = invalidPaths
+										outputMap["validPaths"] = validPaths
+										result.Output = outputMap
+									}
+
+									log.Printf("[GPT Path Validator] Injected validation warning into result - GPT should retry search")
+								}
+							} else {
+								log.Printf("[GPT Path Validator] All paths valid - proceeding normally")
+							}
+						}
+					}
+				}
+
+				// TASK ID VALIDATION: For create_agent_task, validate humanTaskId exists before proceeding
+				if toolCall.Name == "create_agent_task" && result.Error == "" {
+					// Extract humanTaskId from arguments
+					var humanTaskId string
+					if id, ok := toolCall.Args["humanTaskId"].(string); ok {
+						humanTaskId = id
+					}
+
+					// Validate humanTaskId if provided
+					if humanTaskId != "" {
+						// Call coordinator_list_human_tasks to get all tasks
+						listTasksCall := ToolCall{
+							ID:   "taskid_validation",
+							Name: "coordinator_list_human_tasks",
+							Args: map[string]interface{}{},
+						}
+						listResult := s.toolRegistry.ExecuteToolCall(ctx, listTasksCall)
+
+						taskExists := false
+						if listResult.Error == "" {
+							if outputMap, ok := listResult.Output.(map[string]interface{}); ok {
+								if tasks, ok := outputMap["tasks"].([]interface{}); ok {
+									for _, task := range tasks {
+										if taskMap, ok := task.(map[string]interface{}); ok {
+											if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
+												taskExists = true
+												break
+											}
+										}
+									}
+								}
+							}
+						}
+
+						if !taskExists {
+							// TaskId is invalid - increment attempt counter
+							taskIdValidationAttempts++
+							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' - Attempt %d/3", humanTaskId, taskIdValidationAttempts)
+
+							if taskIdValidationAttempts >= 3 {
+								// After 3 attempts, stop execution with clear error
+								log.Printf("[TaskId Validator] Failed 3 times - stopping execution")
+								errorMsg := fmt.Sprintf("❌ CRITICAL ERROR: create_agent_task called with INVALID humanTaskId 3 times.\n\n"+
+									"INVALID humanTaskId PROVIDED: '%s'\n\n"+
+									"🛑 The humanTaskId you are providing DOES NOT EXIST in the database.\n"+
+									"✅ This means:\n"+
+									"   1. You are hallucinating or generating the task ID instead of copying it from tool responses\n"+
+									"   2. The task ID may have been typed incorrectly\n"+
+									"   3. The task may have been deleted\n\n"+
+									"🔍 CORRECT APPROACH:\n"+
+									"   1. Call coordinator_list_human_tasks to see ALL existing tasks\n"+
+									"   2. Find the task that matches the user's request\n"+
+									"   3. COPY the EXACT 'taskId' field from the task object\n"+
+									"   4. Use that EXACT UUID as 'humanTaskId' when calling create_agent_task\n\n"+
+									"❌ DO NOT:\n"+
+									"   - Generate UUIDs yourself\n"+
+									"   - Use descriptive names like 'add-feature' or 'fix-bug'\n"+
+									"   - Try to guess or construct the task ID\n\n"+
+									"⚠️ Execution stopped after 3 invalid attempts. Please review the instructions above and try again.",
+									humanTaskId)
+
+								eventChan <- StreamEvent{Type: StreamEventError, Error: errorMsg}
+								return
+							}
+
+							// First or second attempt - inject warning and ask model to list tasks
+							warningMsg := fmt.Sprintf("\n\n⚠️  TASK ID VALIDATION ERROR (Attempt %d/3):\n"+
+								"The humanTaskId '%s' DOES NOT EXIST in the database.\n"+
+								"🔄 You MUST call coordinator_list_human_tasks to get the correct taskId.\n\n",
+								taskIdValidationAttempts, humanTaskId)
+							eventChan <- StreamEvent{Type: StreamEventToken, Content: warningMsg}
+
+							// Replace the result with an error result
+							result = ToolResult{
+								ID:   result.ID,
+								Name: "create_agent_task",
+								Args: result.Args,
+								Output: map[string]interface{}{
+									"_validationError": "BLOCKED",
+									"_reason": fmt.Sprintf("Invalid humanTaskId: '%s' does not exist", humanTaskId),
+									"NEXT":    "Call coordinator_list_human_tasks to see all tasks, find the correct task, and COPY its exact 'taskId' field",
+								},
+								Error: fmt.Sprintf("❌ BLOCKED: humanTaskId '%s' is INVALID (does not exist). "+
+									"You MUST call coordinator_list_human_tasks to get all tasks and find the EXACT taskId. "+
+									"DO NOT hallucinate or generate task IDs. COPY the exact UUID from the tool response. "+
+									"This is attempt %d/3. After 3 failures, execution will stop.",
+									humanTaskId, taskIdValidationAttempts),
+							}
+
+							log.Printf("[TaskId Validator] Blocked create_agent_task - injected error asking model to list tasks")
+						} else {
+							log.Printf("[TaskId Validator] humanTaskId '%s' is valid - proceeding", humanTaskId)
+						}
+					}
 				}
 
 				// Send tool result event (full result to client for display)
@@ -547,13 +1259,22 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					return
 				}
 
-				// Log tool execution
+				// Log tool execution with comprehensive response data (Claude optimization)
 				if result.Error != "" {
 					log.Printf("[ChatService] Tool '%s' failed - RequestID: %s - Error: %s - Duration: %dms",
 						result.Name, requestID, result.Error, result.DurationMs)
+					// Log complete error response for analysis
+					argsJSON, _ := json.Marshal(toolCall.Args)
+					log.Printf("[Tool Response - ERROR] Tool: %s | Args: %s | Error: %s",
+						result.Name, string(argsJSON), result.Error)
 				} else {
 					log.Printf("[ChatService] Tool '%s' succeeded - RequestID: %s - Duration: %dms",
 						result.Name, requestID, result.DurationMs)
+					// Log complete success response for analysis
+					argsJSON, _ := json.Marshal(toolCall.Args)
+					outputJSON, _ := json.Marshal(result.Output)
+					log.Printf("[Tool Response - SUCCESS] Tool: %s | Args: %s | Output: %s",
+						result.Name, string(argsJSON), string(outputJSON))
 				}
 
 				// Add assistant response to history (brief)
@@ -629,11 +1350,16 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				// CRITICAL FIX: Truncate tool results that are too large to prevent token limit errors
 				// Individual tool results can be HUGE (e.g., bash ls -R output = 1.98MB)
 				// Even if sliding window triggers, if one recent message is huge, it doesn't help
-				const maxToolResultSize = 10000 // 10KB per tool result
+				// For fallback model (Haiku), use higher limit to preserve more context
+				maxToolResultSize := 10000 // 10KB per tool result (default)
+				if s.usingFallback {
+					maxToolResultSize = 30000 // 30KB for fallback model - preserve more context
+				}
 				if len(toolResultMsg) > maxToolResultSize {
 					originalSize := len(toolResultMsg)
-					// Keep first 9KB and add truncation notice
-					toolResultMsg = toolResultMsg[:maxToolResultSize-500] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars to prevent token limit. If you need more, use a more specific query or process the data in smaller chunks.] ...", originalSize, maxToolResultSize-500)
+					// Keep first portion and add truncation notice
+					truncatedSize := maxToolResultSize - 500
+					toolResultMsg = toolResultMsg[:truncatedSize] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars to prevent token limit. If you need more, use a more specific query or process the data in smaller chunks.] ...", originalSize, truncatedSize)
 					log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars to prevent token limit",
 						result.Name, originalSize, len(toolResultMsg))
 				}
@@ -642,6 +1368,69 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					Role:    "system",
 					Content: toolResultMsg,
 				})
+
+				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution
+				// Must match the same condition as tool filtering (s.usingFallback || isClaudeModel)
+				if (s.usingFallback || isClaudeModel) && result.Error == "" {
+					switch toolCall.Name {
+					case "coordinator_list_human_tasks":
+						if workflowState["step"].(int) == 0 {
+							workflowState["step"] = 1
+							log.Printf("[Workflow State] Step 1 complete: listed tasks")
+						}
+
+					case "coordinator_create_human_task":
+						if outputMap, ok := result.Output.(map[string]interface{}); ok {
+							if taskID, hasTaskID := outputMap["taskId"].(string); hasTaskID && taskID != "" {
+								workflowState["step"] = 2
+								workflowState["humanTaskId"] = taskID
+								log.Printf("[Workflow State] Step 2 complete: created human task %s", taskID)
+							}
+					} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
+						// Case 2: Similar task found - use existing task instead of creating new one
+						if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
+							if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
+								if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
+									workflowState["step"] = 2
+									workflowState["humanTaskId"] = existingTaskID
+									log.Printf("[Workflow State] Step 2 complete: using existing similar task %s", existingTaskID)
+								}
+							}
+						}
+						}
+
+					case "code_index_search":
+						workflowState["step"] = 3
+						workflowState["searchCompleted"] = true
+						log.Printf("[Workflow State] Step 3 complete: code search done")
+
+					case "create_agent_task":
+						if outputMap, ok := result.Output.(map[string]interface{}); ok {
+							if agentTaskID, hasAgentTaskID := outputMap["taskId"].(string); hasAgentTaskID && agentTaskID != "" {
+								workflowState["step"] = 4
+								workflowState["agentTaskId"] = agentTaskID
+								log.Printf("[Workflow State] Step 4 complete: created agent task %s", agentTaskID)
+							}
+						}
+
+					case "execute_subagent":
+						workflowState["step"] = 5
+						log.Printf("[Workflow State] Step 5 complete: subagent launched")
+					}
+				}
+
+				// FALLBACK MODEL ENHANCEMENT: Add explicit state tracking for workflow comprehension
+				// Haiku (smaller model) benefits from explicit guidance on workflow state and next steps
+				if s.usingFallback {
+					stateGuidance := s.generateWorkflowStateGuidance(toolCall.Name, result, toolCallCount)
+					if stateGuidance != "" {
+						log.Printf("[Fallback State Tracking] Injecting workflow guidance after tool '%s'", toolCall.Name)
+						currentMessages = append(currentMessages, Message{
+							Role:    "system",
+							Content: stateGuidance,
+						})
+					}
+				}
 
 				log.Printf("[AI Processing] Context after tool %d: %d messages, %d total chars",
 					toolCallCount, len(currentMessages), func() int {
@@ -732,20 +1521,107 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
-		failedToolCalls := make(map[string]int) // Track failed attempts separately
+		failedToolCalls := make(map[string]int)        // Track failed attempts separately
+		// pathValidationRetries not needed in fallback model (Claude handles its own validation)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
 			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
 		}
 
+		// WORKFLOW STATE ENFORCEMENT: Track coordinator workflow progress (fallback model only)
+		workflowState := map[string]interface{}{
+			"step":            0,     // 0=initial, 1=listed, 2=created, 3=searched, 4=agent_task, 5=done
+			"humanTaskId":     "",    // Store taskId from step 2
+			"searchCompleted": false, // Prevent multiple searches
+			"agentTaskId":     "",    // Store agentTaskId from step 4
+		}
+
+		// Function to validate workflow tool calls (only enforced for fallback model)
+		validateWorkflowTool := func(toolName string) (bool, string) {
+			if !s.usingFallback {
+				return true, "" // No enforcement for primary model
+			}
+
+			step := workflowState["step"].(int)
+			humanTaskId := workflowState["humanTaskId"].(string)
+			searchCompleted := workflowState["searchCompleted"].(bool)
+
+			switch toolName {
+			case "coordinator_list_human_tasks":
+				if step == 0 || step == 1 || step == 2 {
+					// Allow listing tasks at any early step to retrieve exact taskId
+					return true, ""
+				}
+				return false, "❌ BLOCKED: You already have taskId. NEXT: Call appropriate tool for current step."
+
+			case "coordinator_create_human_task":
+				if step == 1 && humanTaskId == "" {
+					return true, ""
+				}
+				if humanTaskId != "" {
+					// State-aware guidance based on workflow progress
+					if searchCompleted {
+						return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'create_agent_task'.", humanTaskId)
+					}
+					return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'code_index_search'.", humanTaskId)
+				}
+				return false, "❌ BLOCKED: Call 'coordinator_list_human_tasks' first."
+
+			case "code_index_search":
+				if step == 2 && humanTaskId != "" && !searchCompleted {
+					return true, ""
+				}
+				if searchCompleted {
+					return false, "❌ BLOCKED: Search done. NEXT: Call 'create_agent_task'."
+				}
+				return false, "❌ BLOCKED: Create human task first."
+
+			case "create_agent_task":
+				if step == 3 && humanTaskId != "" && searchCompleted {
+					return true, ""
+				}
+				return false, "❌ BLOCKED: Run 'code_index_search' first to get file paths."
+
+			case "execute_subagent":
+				agentTaskId := workflowState["agentTaskId"].(string)
+				if step == 4 && agentTaskId != "" {
+					return true, ""
+				}
+				return false, "❌ BLOCKED: Call 'create_agent_task' first."
+			}
+
+			return true, ""
+		}
+
 		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
-		circuitBreakerThresholds := map[string]int{
-			"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
-			"write_file":        1, // Never allow duplicate writes
-			"list_directory":    2, // Stop after 2 attempts
-			"bash":              3, // Allow more for command variations
-			"code_index_search": 3, // Allow query refinement
-			// Default for other tools: 4 attempts
+		// Claude models get higher thresholds as they're better at adapting
+		isClaudeModel := strings.Contains(strings.ToLower(s.config.Model), "claude") ||
+			strings.Contains(strings.ToLower(s.config.Provider), "anthropic")
+
+		var circuitBreakerThresholds map[string]int
+		if isClaudeModel {
+			// Claude-optimized thresholds: More lenient to allow legitimate multi-file operations
+			circuitBreakerThresholds = map[string]int{
+				"read_file":         5, // Allow reading multiple files
+				"write_file":        2, // Allow one retry for writes
+				"list_directory":    4, // Allow exploring directories
+				"bash":              5, // Allow command variations
+				"code_index_search": 2, // Strict: one search + one retry max
+				"create_agent_task": 1, // Should only create once
+				// Default for other tools: 6 attempts
+			}
+			log.Printf("[Circuit Breaker] Using Claude-optimized thresholds (more lenient)")
+		} else {
+			// GPT thresholds: More conservative
+			circuitBreakerThresholds = map[string]int{
+				"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
+				"write_file":        1, // Never allow duplicate writes
+				"list_directory":    2, // Stop after 2 attempts
+				"bash":              3, // Allow more for command variations
+				"code_index_search": 3, // Allow query refinement
+				// Default for other tools: 4 attempts
+			}
+			log.Printf("[Circuit Breaker] Using GPT thresholds (conservative)")
 		}
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
@@ -758,11 +1634,22 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 			}
 
 			// Apply sliding window BEFORE context exceeds model's token limit
-			const maxContextSize = 40000 // 40KB threshold (safe for most models)
+			// Claude: 200K tokens (≈800KB text) - use 150KB threshold
+			// GPT: 32K tokens (≈128KB text) - use 40KB threshold to be safe
+			var maxContextSize int
+			var maxMessages int
+			if isClaudeModel {
+				maxContextSize = 150000 // 150KB for Claude (≈37K tokens, leaves room for output)
+				maxMessages = 20        // Keep more messages for Claude
+			} else {
+				maxContextSize = 40000 // 40KB for GPT (≈10K tokens)
+				maxMessages = 6        // Conservative for GPT
+			}
+
 			if contextSize > maxContextSize {
-				log.Printf("[Sliding Window] Context size %d chars exceeds threshold %d chars, applying window",
+				log.Printf("[Sliding Window - Filtered] Context size %d chars exceeds threshold %d chars, applying window",
 					contextSize, maxContextSize)
-				currentMessages = applySlidingWindow(currentMessages, 6) // max 6 messages total
+				currentMessages = applySlidingWindow(currentMessages, maxMessages)
 
 				// Recalculate after trimming
 				contextSize = 0
@@ -825,6 +1712,39 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				log.Printf("[Tool Request - Filtered] AI requested tool '%s' with args: %s",
 					toolCall.Name, string(argsJSON))
 
+				// WORKFLOW VALIDATION: Check if this tool call is allowed in current workflow state
+				var result ToolResult
+				if s.usingFallback {
+					allowed, blockMessage := validateWorkflowTool(toolCall.Name)
+					if !allowed {
+						log.Printf("[Workflow Enforcer - Filtered] BLOCKED tool '%s' - %s", toolCall.Name, blockMessage)
+
+						// Create a blocking error result so model understands the tool failed
+						result = ToolResult{
+							Name:       toolCall.Name,
+							Output:     nil,
+							Error:      blockMessage,
+							DurationMs: 0,
+						}
+
+						// Send the error result to the model
+						eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
+
+						// Add tool result to message history as an error
+						currentMessages = append(currentMessages, Message{
+							Role:    "assistant",
+							Content: fmt.Sprintf("I attempted to call '%s' but it was blocked.", toolCall.Name),
+						})
+						currentMessages = append(currentMessages, Message{
+							Role:    "system",
+							Content: fmt.Sprintf("TOOL ERROR from '%s': %s", toolCall.Name, blockMessage),
+						})
+
+						// Continue to next iteration - don't execute the blocked tool
+						continue
+					}
+				}
+
 				// Send tool call event
 				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
 
@@ -832,7 +1752,6 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				signature := toolCallSignature(toolCall.Name, toolCall.Args)
 
 				// Check tool result cache BEFORE execution
-				var result ToolResult
 				cachedResult, found := resultCache.Get(signature)
 				if found {
 					// Use cached result - avoid redundant execution
@@ -851,7 +1770,12 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					}
 				} else {
 					// Execute tool (no cached result available)
-					result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
+					// Inject humanTaskId from workflowState into context for auto-population
+					toolCtx := ctx
+					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+					}
+					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
 					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
 
 					// Store in cache for future duplicate calls
@@ -860,6 +1784,24 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 				// Send tool result event
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
+
+				// Log tool execution with comprehensive response data (Claude optimization)
+				if result.Error != "" {
+					log.Printf("[ChatService - Filtered] Tool '%s' failed - RequestID: %s - Error: %s - Duration: %dms",
+						result.Name, requestID, result.Error, result.DurationMs)
+					// Log complete error response for analysis
+					argsJSON, _ := json.Marshal(toolCall.Args)
+					log.Printf("[Tool Response - ERROR - Filtered] Tool: %s | Args: %s | Error: %s",
+						result.Name, string(argsJSON), result.Error)
+				} else {
+					log.Printf("[ChatService - Filtered] Tool '%s' succeeded - RequestID: %s - Duration: %dms",
+						result.Name, requestID, result.DurationMs)
+					// Log complete success response for analysis
+					argsJSON, _ := json.Marshal(toolCall.Args)
+					outputJSON, _ := json.Marshal(result.Output)
+					log.Printf("[Tool Response - SUCCESS - Filtered] Tool: %s | Args: %s | Output: %s",
+						result.Name, string(argsJSON), string(outputJSON))
+				}
 
 				// CRITICAL: Track failed tool calls separately
 				if result.Error != "" {
@@ -972,6 +1914,44 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					Role:    "system",
 					Content: toolResultMsg,
 				})
+
+				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution (filtered function)
+				if s.usingFallback && result.Error == "" {
+					switch toolCall.Name {
+					case "coordinator_list_human_tasks":
+						if workflowState["step"].(int) == 0 {
+							workflowState["step"] = 1
+							log.Printf("[Workflow State - Filtered] Step 1 complete: listed tasks")
+						}
+
+					case "coordinator_create_human_task":
+						if outputMap, ok := result.Output.(map[string]interface{}); ok {
+							if taskID, hasTaskID := outputMap["taskId"].(string); hasTaskID && taskID != "" {
+								workflowState["step"] = 2
+								workflowState["humanTaskId"] = taskID
+								log.Printf("[Workflow State - Filtered] Step 2 complete: created human task %s", taskID)
+							}
+						}
+
+					case "code_index_search":
+						workflowState["step"] = 3
+						workflowState["searchCompleted"] = true
+						log.Printf("[Workflow State - Filtered] Step 3 complete: code search done")
+
+					case "create_agent_task":
+						if outputMap, ok := result.Output.(map[string]interface{}); ok {
+							if agentTaskID, hasAgentTaskID := outputMap["taskId"].(string); hasAgentTaskID && agentTaskID != "" {
+								workflowState["step"] = 4
+								workflowState["agentTaskId"] = agentTaskID
+								log.Printf("[Workflow State - Filtered] Step 4 complete: created agent task %s", agentTaskID)
+							}
+						}
+
+					case "execute_subagent":
+						workflowState["step"] = 5
+						log.Printf("[Workflow State - Filtered] Step 5 complete: subagent launched")
+					}
+				}
 			}
 		}
 
@@ -1050,16 +2030,113 @@ func getToolResultPreview(messages []Message, maxChars int) string {
 	return "(no tool results found)"
 }
 
+// MessagePriority represents the importance of a message for context preservation
+type MessagePriority int
+
+const (
+	PriorityVeryLow  MessagePriority = 10  // list operations - trim first
+	PriorityLow      MessagePriority = 25  // status checks, directory listings
+	PriorityMedium   MessagePriority = 50  // read_file, write_file, coordinator ops
+	PriorityHigh     MessagePriority = 75  // code_index_search, create_agent_task
+	PriorityCritical MessagePriority = 100 // system prompts, user messages - NEVER trim
+)
+
+// getMessagePriority classifies messages by importance for context preservation
+func getMessagePriority(msg Message) MessagePriority {
+	// CRITICAL: Workflow enforcer error messages - contain guidance for next steps
+	// These messages guide the LLM on what to do next and must NEVER be trimmed
+	if strings.Contains(msg.Content, "BLOCKED") || strings.Contains(msg.Content, "NEXT:") {
+		return PriorityCritical
+	}
+
+	// CRITICAL: Tool error messages - indicate failures that LLM must respond to
+	if strings.Contains(msg.Content, "TOOL ERROR") || strings.Contains(msg.Content, "error:") {
+		return PriorityCritical
+	}
+
+	// System prompts and user messages are critical - never trim
+	if msg.Role == "system" {
+		// Check if it's a tool result
+		if strings.HasPrefix(msg.Content, "Tool '") {
+			// Extract tool name from "Tool 'toolname' result: ..."
+			if idx := strings.Index(msg.Content, "' result:"); idx > 6 {
+				toolName := msg.Content[6:idx]
+				return getToolResultPriority(toolName)
+			}
+			return PriorityMedium // Default for unparseable tool results
+		}
+		return PriorityCritical // System prompts are critical
+	}
+	if msg.Role == "user" {
+		return PriorityCritical
+	}
+
+	// Assistant messages - check content for tool calls
+	if msg.Role == "assistant" {
+		// Assistant messages are medium priority by default
+		return PriorityMedium
+	}
+
+	return PriorityLow
+}
+
+// getToolResultPriority assigns priority to tool results based on tool name
+func getToolResultPriority(toolName string) MessagePriority {
+	// HIGH PRIORITY: Critical for workflow - preserve strongly
+	highPriorityTools := map[string]bool{
+		"code_index_search":           true, // File discovery results - critical for agent tasks
+		"create_agent_task":           true, // Agent task creation - core workflow
+		"coordinator_create_human_task": true, // Human task creation - core workflow
+		"execute_subagent":            true, // Subagent execution - core workflow
+	}
+
+	// MEDIUM PRIORITY: Important but can be re-retrieved if needed
+	mediumPriorityTools := map[string]bool{
+		"read_file":                   true,
+		"write_file":                  true,
+		"apply_patch":                 true,
+		"coordinator_update_todo_status": true,
+		"coordinator_update_task_status": true,
+		"coordinator_get_agent_task":  true,
+		"bash":                        true,
+	}
+
+	// LOW PRIORITY: Informational - can be trimmed
+	lowPriorityTools := map[string]bool{
+		"list_directory":              true,
+		"code_index_status":           true,
+		"coordinator_get_popular_collections": true,
+		"coordinator_find_similar_tasks": true,
+	}
+
+	if highPriorityTools[toolName] {
+		return PriorityHigh
+	}
+	if mediumPriorityTools[toolName] {
+		return PriorityMedium
+	}
+	if lowPriorityTools[toolName] {
+		return PriorityLow
+	}
+
+	// VERY LOW PRIORITY: List operations - trim first
+	if strings.HasPrefix(toolName, "list_") || strings.HasPrefix(toolName, "coordinator_list_") {
+		return PriorityVeryLow
+	}
+
+	return PriorityMedium // Default for unknown tools
+}
+
 // applySlidingWindow keeps only recent messages to prevent context accumulation
-// Strategy: Keep system prompt + original user message + last N tool exchanges
-// This prevents sending 100+200+300 accumulated messages, instead sending 100+100+100
+// ENHANCED: Uses priority-based trimming to preserve critical tool results
+// Strategy: Keep high-priority messages (code_index_search) and trim low-priority first
 func applySlidingWindow(messages []Message, maxMessages int) []Message {
 	if len(messages) <= maxMessages {
 		return messages // No need to trim
 	}
 
 	// Identify system prompt (if exists at index 0)
-	hasSystemPrompt := len(messages) > 0 && messages[0].Role == "system"
+	hasSystemPrompt := len(messages) > 0 && messages[0].Role == "system" && !strings.HasPrefix(messages[0].Content, "Tool '")
 
 	// Find original user message (first "user" role after system prompt)
 	var systemMsg, userMsg *Message
@@ -1083,7 +2160,7 @@ func applySlidingWindow(messages []Message, maxMessages int) []Message {
 		}
 	}
 
-	// Calculate how many recent messages to keep
+	// Calculate how many slots we need for critical messages
 	reservedSlots := 0
 	if systemMsg != nil {
 		reservedSlots++
@@ -1092,12 +2169,30 @@ func applySlidingWindow(messages []Message, maxMessages int) []Message {
 		reservedSlots++
 	}
 
-	recentCount := maxMessages - reservedSlots
-	if recentCount < 0 {
-		recentCount = 0
+	// Get messages after the original user message (the conversation)
+	var conversationMsgs []Message
+	startIdx := userMsgIdx + 1
+	if startIdx < len(messages) {
+		conversationMsgs = messages[startIdx:]
 	}
 
-	// Build new message list
+	// Calculate target size for conversation messages
+	targetConversationSize := maxMessages - reservedSlots
+	if targetConversationSize < 0 {
+		targetConversationSize = 0
+	}
+
+	// SMART TRIMMING: If we need to reduce conversation messages, use priority-based selection
+	var selectedConversationMsgs []Message
+	if len(conversationMsgs) <= targetConversationSize {
+		// No trimming needed for conversation
+		selectedConversationMsgs = conversationMsgs
+	} else {
+		// Need to trim - use priority-based selection
+		selectedConversationMsgs = selectMessagesByPriority(conversationMsgs, targetConversationSize)
+	}
+
+	// Build final message list
 	result := make([]Message, 0, maxMessages)
 
 	// Add system prompt if exists
@@ -1110,24 +2205,107 @@ func applySlidingWindow(messages []Message, maxMessages int) []Message {
 		result = append(result, *userMsg)
 	}
 
-	// Add last N messages (tool exchanges)
-	if recentCount > 0 && len(messages) > userMsgIdx+1 {
-		// Get messages after the original user message
-		afterUserMsg := messages[userMsgIdx+1:]
+	// Add selected conversation messages
+	result = append(result, selectedConversationMsgs...)
 
-		// Take last recentCount messages
-		startIdx := len(afterUserMsg) - recentCount
-		if startIdx < 0 {
-			startIdx = 0
-		}
-
-		result = append(result, afterUserMsg[startIdx:]...)
-	}
-
-	log.Printf("[Sliding Window] Reduced from %d to %d messages (system: %v, user: %v, recent: %d)",
-		len(messages), len(result), systemMsg != nil, userMsg != nil, recentCount)
+	log.Printf("[Smart Sliding Window] Reduced from %d to %d messages (system: %v, user: %v, conversation: %d, preserved high-priority: %d)",
+		len(messages), len(result), systemMsg != nil, userMsg != nil, len(selectedConversationMsgs),
+		countHighPriorityMessages(selectedConversationMsgs))
 
 	return result
+}
+
+// selectMessagesByPriority selects messages using priority-based algorithm
+// Keeps: recent messages + high-priority messages (code_index_search, create_agent_task)
+func selectMessagesByPriority(messages []Message, targetSize int) []Message {
+	if len(messages) <= targetSize {
+		return messages
+	}
+
+	// Classify messages by priority
+	type indexedMessage struct {
+		msg      Message
+		index    int
+		priority MessagePriority
+	}
+
+	indexed := make([]indexedMessage, len(messages))
+	for i, msg := range messages {
+		indexed[i] = indexedMessage{
+			msg:      msg,
+			index:    i,
+			priority: getMessagePriority(msg),
+		}
+	}
+
+	// Strategy: Always keep last N messages + highest priority older messages
+	// This ensures recent context + critical historical context (code_index_search)
+
+	// Keep last 40% of target as recent messages (maintains conversation flow)
+	recentCount := targetSize * 4 / 10
+	if recentCount < 2 {
+		recentCount = 2 // Minimum recent messages
+	}
+	if recentCount > len(messages) {
+		recentCount = len(messages)
+	}
+
+	// Reserve remaining slots for high-priority older messages
+	prioritySlots := targetSize - recentCount
+
+	// Always include last N messages (recent context)
+	recentStartIdx := len(messages) - recentCount
+	selected := make(map[int]bool)
+	for i := recentStartIdx; i < len(messages); i++ {
+		selected[i] = true
+	}
+
+	// Add high-priority older messages (not already selected)
+	if prioritySlots > 0 {
+		// Sort older messages by priority (descending)
+		olderMessages := indexed[:recentStartIdx]
+		sort.Slice(olderMessages, func(i, j int) bool {
+			// First by priority (higher first), then by recency (later first)
+			if olderMessages[i].priority != olderMessages[j].priority {
+				return olderMessages[i].priority > olderMessages[j].priority
+			}
+			return olderMessages[i].index > olderMessages[j].index
+		})
+
+		// Add top priority messages up to available slots
+		added := 0
+		for _, im := range olderMessages {
+			if added >= prioritySlots {
+				break
+			}
+			// Only add high or critical priority messages
+			if im.priority >= PriorityHigh {
+				selected[im.index] = true
+				added++
+			}
+		}
+	}
+
+	// Build result maintaining original order
+	result := make([]Message, 0, targetSize)
+	for i, msg := range messages {
+		if selected[i] {
+			result = append(result, msg)
+		}
+	}
+
+	return result
+}
+
+// countHighPriorityMessages counts messages with HIGH or CRITICAL priority
+func countHighPriorityMessages(messages []Message) int {
+	count := 0
+	for _, msg := range messages {
+		if p := getMessagePriority(msg); p >= PriorityHigh {
+			count++
+		}
+	}
+	return count
 }
 
 // isRateLimitError checks if an error is a rate limit error
@@ -1144,4 +2322,159 @@ func isRateLimitError(err error) bool {
 		strings.Contains(errStr, "quota exceeded") ||
 		strings.Contains(errStr, "usage limit") || // Matches "hourly usage limit", "daily usage limit", etc.
 		strings.Contains(errStr, "hourly limit")
+}
+
+// extractFilePathsFromCodeIndexResult extracts file paths from code_index_search result
+func extractFilePathsFromCodeIndexResult(result ToolResult) []string {
+	if result.Error != "" {
+		return nil
+	}
+
+	outputMap, ok := result.Output.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	resultsArray, ok := outputMap["results"].([]interface{})
+	if !ok {
+		return nil
+	}
+
+	var paths []string
+	for _, item := range resultsArray {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		if path, ok := itemMap["path"].(string); ok && path != "" {
+			paths = append(paths, path)
+		}
+	}
+
+	return paths
+}
+
+// validateFilePaths checks if all provided file paths exist on the filesystem
+// Returns: (validPaths, invalidPaths)
+func validateFilePaths(paths []string) ([]string, []string) {
+	var validPaths []string
+	var invalidPaths []string
+
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			validPaths = append(validPaths, path)
+		} else {
+			invalidPaths = append(invalidPaths, path)
+		}
+	}
+
+	return validPaths, invalidPaths
+}
+
+// generateWorkflowStateGuidance creates explicit state tracking messages for the fallback model
+// to help it understand the 5-step coordinator workflow and what to do next.
+// This is crucial for smaller models like Haiku that need more explicit guidance.
+func (s *ChatService) generateWorkflowStateGuidance(toolName string, result ToolResult, toolCallCount int) string {
+	// Skip guidance if tool failed
+	if result.Error != "" {
+		return ""
+	}
+
+	// Extract data from tool result for guidance
+	var guidance string
+
+	switch toolName {
+	case "coordinator_list_human_tasks":
+		// Step 1 complete - guide to Step 2
+		guidance = "✅ STEP 1 COMPLETE: You checked existing tasks.\n" +
+			"➡️ NEXT ACTION: Call 'coordinator_create_human_task' with the user's exact request.\n" +
+			"   Example: {\"prompt\": \"<user's exact words>\"}\n" +
+			"🔒 DO NOT call coordinator_list_human_tasks again - you already have the results."
+
+	case "coordinator_create_human_task":
+		// Step 2 complete - extract taskId and guide to Step 3
+		if outputMap, ok := result.Output.(map[string]interface{}); ok {
+			taskID, hasTaskID := outputMap["taskId"].(string)
+			similarTasksFound, _ := outputMap["similarTasksFound"].(bool)
+
+			if similarTasksFound {
+				// Duplicate detected - AI should use forceCreate or stop
+				guidance = "⚠️ DUPLICATE TASK DETECTED: A similar task already exists.\n" +
+					"➡️ NEXT ACTION: Either:\n" +
+					"   1. Set forceCreate=true to create anyway, OR\n" +
+					"   2. Use the existing task instead\n" +
+					"🔒 DO NOT call coordinator_create_human_task again with the same prompt - you'll get the same result."
+			} else if hasTaskID {
+				// Task created successfully - guide to Step 3
+				guidance = fmt.Sprintf("✅ STEP 2 COMPLETE: Human task created successfully.\n"+
+					"📝 SAVE THIS: humanTaskId = \"%s\"\n"+
+					"➡️ NEXT ACTION: Call 'code_index_search' ONCE to find relevant files.\n"+
+					"   Example: {\"query\": \"<what user wants to change>\", \"limit\": 15}\n"+
+					"🔒 DO NOT call coordinator_create_human_task again - you already have the taskId.\n"+
+					"🔒 You will need this taskId for Step 4 (create_agent_task).", taskID)
+			}
+		}
+
+	case "code_index_search":
+		// Step 3 complete - extract file paths and guide to Step 4
+		if outputMap, ok := result.Output.(map[string]interface{}); ok {
+			filePathsRaw, hasFilePaths := outputMap["FILE_PATHS_TO_USE"]
+			_, hasResults := outputMap["results"]
+
+			if hasFilePaths || hasResults {
+				filePathsCount := 0
+				if filePaths, ok := filePathsRaw.([]interface{}); ok {
+					filePathsCount = len(filePaths)
+				}
+
+				guidance = fmt.Sprintf("✅ STEP 3 COMPLETE: Code search returned %d file(s).\n"+
+					"📝 EXTRACT: Copy file paths from FILE_PATHS_TO_USE array above.\n"+
+					"➡️ NEXT ACTION: Call 'create_agent_task' with:\n"+
+					"   - humanTaskId: \"<taskId from Step 2>\"\n"+
+					"   - agentName: \"ui-dev\" (for UI changes) or \"go-dev\" (for backend)\n"+
+					"   - role: \"Brief mission description\"\n"+
+					"   - contextSummary: \"WHAT to change, WHERE (file:line from search), HOW\"\n"+
+					"   - filesModified: [\"<COPY exact paths from FILE_PATHS_TO_USE>\"]\n"+
+					"   - todos: [{description, filePath, contextHint}]\n"+
+					"🔒 DO NOT call code_index_search again - you already have the file paths.\n"+
+					"🔒 Use EXACT paths from FILE_PATHS_TO_USE array - do NOT type paths manually!", filePathsCount)
+			}
+		}
+
+	case "create_agent_task":
+		// Step 4 complete - extract agent task ID and guide to Step 5
+		if outputMap, ok := result.Output.(map[string]interface{}); ok {
+			agentTaskID, hasAgentTaskID := outputMap["taskId"].(string)
+			agentName, _ := outputMap["agentName"].(string)
+
+			if hasAgentTaskID {
+				guidance = fmt.Sprintf("✅ STEP 4 COMPLETE: Agent task created successfully.\n"+
+					"📝 Agent Task ID: \"%s\"\n"+
+					"➡️ NEXT ACTION (FINAL): Call 'execute_subagent' to launch the agent:\n"+
+					"   {\"agentTaskId\": \"%s\", \"parentChatId\": \"<from session context>\"}\n"+
+					"🔒 DO NOT call create_agent_task again - the task is created.\n"+
+					"✅ After execute_subagent, the %s agent will implement the changes - YOU ARE DONE!", agentTaskID, agentTaskID, agentName)
+			}
+		}
+
+	case "execute_subagent":
+		// Step 5 complete - workflow finished!
+		guidance = "✅ STEP 5 COMPLETE: Subagent launched successfully!\n" +
+			"🎉 WORKFLOW COMPLETE: The specialist agent is now working on the task.\n" +
+			"📊 You can monitor progress by calling 'list_agent_tasks' if needed.\n" +
+			"🔒 DO NOT call any more coordinator tools - the agent will handle implementation.\n" +
+			"✅ Inform the user that the task has been delegated to a specialist agent."
+	}
+
+	// If we generated guidance, add a clear separator
+	if guidance != "" {
+		guidance = "\n" + strings.Repeat("━", 70) + "\n" +
+			"🤖 WORKFLOW STATE TRACKER (for your guidance)\n" +
+			strings.Repeat("━", 70) + "\n" +
+			guidance + "\n" +
+			strings.Repeat("━", 70)
+	}
+
+	return guidance
 }
