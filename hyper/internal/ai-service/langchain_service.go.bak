@@ -160,13 +160,7 @@ There's no strict step order, but typically:
 }
 ` + "```" + `
 
-**CRITICAL: Extract the EXACT "taskId" UUID value from the response above.**
-- DO NOT generate, make up, or create your own task ID
-- DO NOT use descriptive strings like "add-dark-mode" or "change-button-color"
-- COPY the exact UUID (e.g., "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789") from the tool response
-- USE that exact taskId value as "humanTaskId" when calling create_agent_task
-
-Example: If the response shows "taskId": "f0205882-473b-49bf-b3ba-adc30ab82fc3", then use EXACTLY "humanTaskId": "f0205882-473b-49bf-b3ba-adc30ab82fc3" in create_agent_task.
+**Save the "taskId" field** - you'll need it for create_agent_task as "humanTaskId".
 
 ### create_agent_task Expects:
 ` + "```json" + `
@@ -527,7 +521,6 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		recentToolCalls := make([]string, 0, 10)
 		failedToolCalls := make(map[string]int)        // Track failed attempts separately
 		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
-		taskIdValidationAttempts := 0                   // Track taskId validation attempts for create_agent_task (max 3)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
 			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
@@ -553,11 +546,10 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 			switch toolName {
 			case "coordinator_list_human_tasks":
-				if step == 0 || step == 1 || step == 2 {
-					// Allow listing tasks at any early step to retrieve exact taskId
+				if step == 0 {
 					return true, ""
 				}
-				return false, "❌ BLOCKED: You already have taskId. NEXT: Call appropriate tool for current step."
+				return false, "❌ BLOCKED: You already checked tasks. NEXT: Call 'coordinator_create_human_task'."
 
 			case "coordinator_create_human_task":
 				if step == 1 && humanTaskId == "" {
@@ -694,8 +686,8 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					allowedTools = []string{"coordinator_list_human_tasks"}
 				case 1: // Step 1: ONLY allow coordinator_create_human_task
 					allowedTools = []string{"coordinator_create_human_task"}
-				case 2: // Step 2: ONLY allow code_index_search
-					allowedTools = []string{"code_index_search"}
+				case 2: // Step 2: ONLY allow code_index_search (+ bash as fallback)
+					allowedTools = []string{"code_index_search", "bash"}
 				case 3: // Step 3: ONLY allow create_agent_task
 					allowedTools = []string{"create_agent_task"}
 				case 4: // Step 4: ONLY allow execute_subagent
@@ -763,32 +755,6 @@ Total Tool Calls Made: %d / %d
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 `, iterationCount, iterationCount, s.config.MaxIterations, toolCallCount, maxToolCalls)
-
-				// INJECT CAPTURED HUMAN TASK ID: If we captured a humanTaskId from coordinator_create_human_task,
-				// inject it directly into the system prompt so Claude can use it without extraction
-				if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
-					taskIDGuidance := fmt.Sprintf(`
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 CAPTURED TASK ID
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-The human task has been created/found. Use this EXACT taskId value:
-
-**humanTaskId**: "%s"
-
-When calling create_agent_task, use EXACTLY:
-{
-  "humanTaskId": "%s",
-  ...
-}
-
-DO NOT generate or make up a different task ID. Use the value shown above.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`, humanTaskID, humanTaskID)
-					workflowGuidance += taskIDGuidance
-					log.Printf("[Workflow State] Injected humanTaskId into system prompt: %s", humanTaskID)
-				}
 
 				// Append to existing system prompt (don't replace it)
 				currentMessages[0].Content = currentMessages[0].Content + workflowGuidance
@@ -1010,12 +976,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 				} else {
 					// Execute tool (no cached result available)
-					// Inject humanTaskId from workflowState into context for auto-population
-					toolCtx := ctx
-					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
-						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
-					}
-					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
+					result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
 					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
 
 					// Store in cache for future duplicate calls
@@ -1098,102 +1059,6 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 							} else {
 								log.Printf("[GPT Path Validator] All paths valid - proceeding normally")
 							}
-						}
-					}
-				}
-
-				// TASK ID VALIDATION: For create_agent_task, validate humanTaskId exists before proceeding
-				if toolCall.Name == "create_agent_task" && result.Error == "" {
-					// Extract humanTaskId from arguments
-					var humanTaskId string
-					if id, ok := toolCall.Args["humanTaskId"].(string); ok {
-						humanTaskId = id
-					}
-
-					// Validate humanTaskId if provided
-					if humanTaskId != "" {
-						// Call coordinator_list_human_tasks to get all tasks
-						listTasksCall := ToolCall{
-							ID:   "taskid_validation",
-							Name: "coordinator_list_human_tasks",
-							Args: map[string]interface{}{},
-						}
-						listResult := s.toolRegistry.ExecuteToolCall(ctx, listTasksCall)
-
-						taskExists := false
-						if listResult.Error == "" {
-							if outputMap, ok := listResult.Output.(map[string]interface{}); ok {
-								if tasks, ok := outputMap["tasks"].([]interface{}); ok {
-									for _, task := range tasks {
-										if taskMap, ok := task.(map[string]interface{}); ok {
-											if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
-												taskExists = true
-												break
-											}
-										}
-									}
-								}
-							}
-						}
-
-						if !taskExists {
-							// TaskId is invalid - increment attempt counter
-							taskIdValidationAttempts++
-							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' - Attempt %d/3", humanTaskId, taskIdValidationAttempts)
-
-							if taskIdValidationAttempts >= 3 {
-								// After 3 attempts, stop execution with clear error
-								log.Printf("[TaskId Validator] Failed 3 times - stopping execution")
-								errorMsg := fmt.Sprintf("❌ CRITICAL ERROR: create_agent_task called with INVALID humanTaskId 3 times.\n\n"+
-									"INVALID humanTaskId PROVIDED: '%s'\n\n"+
-									"🛑 The humanTaskId you are providing DOES NOT EXIST in the database.\n"+
-									"✅ This means:\n"+
-									"   1. You are hallucinating or generating the task ID instead of copying it from tool responses\n"+
-									"   2. The task ID may have been typed incorrectly\n"+
-									"   3. The task may have been deleted\n\n"+
-									"🔍 CORRECT APPROACH:\n"+
-									"   1. Call coordinator_list_human_tasks to see ALL existing tasks\n"+
-									"   2. Find the task that matches the user's request\n"+
-									"   3. COPY the EXACT 'taskId' field from the task object\n"+
-									"   4. Use that EXACT UUID as 'humanTaskId' when calling create_agent_task\n\n"+
-									"❌ DO NOT:\n"+
-									"   - Generate UUIDs yourself\n"+
-									"   - Use descriptive names like 'add-feature' or 'fix-bug'\n"+
-									"   - Try to guess or construct the task ID\n\n"+
-									"⚠️ Execution stopped after 3 invalid attempts. Please review the instructions above and try again.",
-									humanTaskId)
-
-								eventChan <- StreamEvent{Type: StreamEventError, Error: errorMsg}
-								return
-							}
-
-							// First or second attempt - inject warning and ask model to list tasks
-							warningMsg := fmt.Sprintf("\n\n⚠️  TASK ID VALIDATION ERROR (Attempt %d/3):\n"+
-								"The humanTaskId '%s' DOES NOT EXIST in the database.\n"+
-								"🔄 You MUST call coordinator_list_human_tasks to get the correct taskId.\n\n",
-								taskIdValidationAttempts, humanTaskId)
-							eventChan <- StreamEvent{Type: StreamEventToken, Content: warningMsg}
-
-							// Replace the result with an error result
-							result = ToolResult{
-								ID:   result.ID,
-								Name: "create_agent_task",
-								Args: result.Args,
-								Output: map[string]interface{}{
-									"_validationError": "BLOCKED",
-									"_reason": fmt.Sprintf("Invalid humanTaskId: '%s' does not exist", humanTaskId),
-									"NEXT":    "Call coordinator_list_human_tasks to see all tasks, find the correct task, and COPY its exact 'taskId' field",
-								},
-								Error: fmt.Sprintf("❌ BLOCKED: humanTaskId '%s' is INVALID (does not exist). "+
-									"You MUST call coordinator_list_human_tasks to get all tasks and find the EXACT taskId. "+
-									"DO NOT hallucinate or generate task IDs. COPY the exact UUID from the tool response. "+
-									"This is attempt %d/3. After 3 failures, execution will stop.",
-									humanTaskId, taskIdValidationAttempts),
-							}
-
-							log.Printf("[TaskId Validator] Blocked create_agent_task - injected error asking model to list tasks")
-						} else {
-							log.Printf("[TaskId Validator] humanTaskId '%s' is valid - proceeding", humanTaskId)
 						}
 					}
 				}
@@ -1386,17 +1251,6 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 								workflowState["humanTaskId"] = taskID
 								log.Printf("[Workflow State] Step 2 complete: created human task %s", taskID)
 							}
-					} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
-						// Case 2: Similar task found - use existing task instead of creating new one
-						if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
-							if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
-								if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
-									workflowState["step"] = 2
-									workflowState["humanTaskId"] = existingTaskID
-									log.Printf("[Workflow State] Step 2 complete: using existing similar task %s", existingTaskID)
-								}
-							}
-						}
 						}
 
 					case "code_index_search":
@@ -1548,11 +1402,10 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 			switch toolName {
 			case "coordinator_list_human_tasks":
-				if step == 0 || step == 1 || step == 2 {
-					// Allow listing tasks at any early step to retrieve exact taskId
+				if step == 0 {
 					return true, ""
 				}
-				return false, "❌ BLOCKED: You already have taskId. NEXT: Call appropriate tool for current step."
+				return false, "❌ BLOCKED: You already checked tasks. NEXT: Call 'coordinator_create_human_task'."
 
 			case "coordinator_create_human_task":
 				if step == 1 && humanTaskId == "" {
@@ -1770,12 +1623,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					}
 				} else {
 					// Execute tool (no cached result available)
-					// Inject humanTaskId from workflowState into context for auto-population
-					toolCtx := ctx
-					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
-						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
-					}
-					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
+					result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
 					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
 
 					// Store in cache for future duplicate calls
