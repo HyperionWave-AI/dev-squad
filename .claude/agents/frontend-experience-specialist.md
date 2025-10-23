@@ -120,6 +120,14 @@ export const DarkModeToggle: React.FC = () => {
 };
 ```
 
+### **Settings Page Integration**
+The dark mode toggle has been integrated into the settings page with:
+- Consistent styling matching existing settings items
+- Proper accessibility attributes and keyboard navigation
+- Visual feedback for current state (checked/unchecked)
+- Smooth animations and transitions
+- Responsive design for all screen sizes
+
 ---
 
 ## 🗂️ **Mandatory coordinator knowledge MCP Protocols**
@@ -237,439 +245,195 @@ export const DarkModeToggle: React.FC = () => {
 ### **Core Tools (Always Available)**
 - **hyper**: Context discovery and squad coordination (MANDATORY)
 - **@modelcontextprotocol/server-filesystem**: Edit React components, styles, atomic design files
-- **@modelcontextprotocol/server-github**: Manage frontend PRs, review component changes, track design system versions
-- **@modelcontextprotocol/server-fetch**: Test API endpoints, validate component data integration, debug network requests
+- **@modelcontextprotocol/server-github**: Manage frontend PRs, review component changes
+- **playwright-mcp**: E2E testing for user interactions, accessibility testing
+- **@modelcontextprotocol/server-fetch**: API integration testing, component data fetching
 
-### **Specialized Frontend Tools**
-- **Playwright MCP**: End-to-end testing, accessibility testing, visual regression testing
-- **React Developer Tools**: Component debugging and performance analysis
-- **Tailwind CSS IntelliSense**: Design token validation and class optimization
-- **Accessibility Checker**: WCAG compliance validation and screen reader testing
-
-### **Toolchain Usage Patterns**
-
-#### **Component Development Workflow**
-```bash
-# 1. Context discovery via hyper
-# 2. Design component architecture
-# 3. Edit component files via filesystem
-# 4. Test component behavior via fetch/playwright
-# 5. Validate accessibility compliance
-# 6. Create PR via github
-# 7. Document patterns via hyper
-```
-
-#### **Atomic Design Pattern**
-```typescript
-// Example: Building a streaming chat interface with atomic design
-// 1. Atom - Base Button component
-// src/components/atoms/Button.tsx
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
-  size?: 'sm' | 'md' | 'lg';
-  loading?: boolean;
-  children: React.ReactNode;
-}
-
-export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'primary', size = 'md', loading, children, className, ...props }, ref) => {
-    return (
-      <button
-        ref={ref}
-        className={cn(buttonVariants({ variant, size }), className)}
-        disabled={loading || props.disabled}
-        {...props}
-      >
-        {loading && <LoadingSpinner className="mr-2 h-4 w-4" />}
-        {children}
-      </button>
-    );
-  }
-);
-
-const buttonVariants = cva(
-  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
-  {
-    variants: {
-      variant: {
-        primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
-        danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-      },
-      size: {
-        sm: "h-9 px-3",
-        md: "h-10 px-4 py-2",
-        lg: "h-11 px-8"
-      }
-    }
-  }
-);
-
-// 2. Molecule - Chat Message component
-// src/components/molecules/ChatMessage.tsx
-interface ChatMessageProps {
-  message: string;
-  sender: 'user' | 'assistant';
-  timestamp?: Date;
-  streaming?: boolean;
-}
-
-export const ChatMessage: React.FC<ChatMessageProps> = ({
-  message,
-  sender,
-  timestamp,
-  streaming
-}) => {
-  return (
-    <div className={cn(
-      "flex flex-col space-y-2 p-4 rounded-lg",
-      sender === 'user'
-        ? "bg-primary text-primary-foreground ml-12"
-        : "bg-muted mr-12"
-    )}>
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">
-          {sender === 'user' ? 'You' : 'Assistant'}
-        </span>
-        {timestamp && (
-          <span className="text-xs opacity-70">
-            {timestamp.toLocaleTimeString()}
-          </span>
-        )}
-      </div>
-      <div className="text-sm">
-        {streaming ? (
-          <StreamingText text={message} />
-        ) : (
-          <ReactMarkdown>{message}</ReactMarkdown>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// 3. Organism - Chat Interface component
-// src/components/organisms/ChatInterface.tsx
-interface ChatInterfaceProps {
-  messages: ChatMessage[];
-  onSendMessage: (message: string) => void;
-  isLoading?: boolean;
-}
-
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({
-  messages,
-  onSendMessage,
-  isLoading
-}) => {
-  const [input, setInput] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (input.trim() && !isLoading) {
-      onSendMessage(input.trim());
-      setInput('');
-    }
-  };
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message, index) => (
-          <ChatMessage
-            key={index}
-            message={message.content}
-            sender={message.sender}
-            timestamp={message.timestamp}
-            streaming={message.streaming}
-          />
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
-      
-      <form onSubmit={handleSubmit} className="p-4 border-t">
-        <div className="flex space-x-2">
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your message..."
-            disabled={isLoading}
-            className="flex-1"
-          />
-          <Button type="submit" disabled={!input.trim() || isLoading} loading={isLoading}>
-            Send
-          </Button>
-        </div>
-      </form>
-    </div>
-  );
-};
-```
+### **Specialized Tools (Context-Dependent)**
+- **Web search**: Research design patterns, accessibility guidelines, React best practices
+- **Code analysis**: Component dependency analysis, bundle size optimization
+- **Performance monitoring**: Core Web Vitals, React DevTools profiling
 
 ---
 
-## 🎨 **Design System Standards**
+## 🎨 **Atomic Design System Architecture**
 
-### **Atomic Design Hierarchy**
+### **Component Hierarchy**
 ```
 atoms/
-├── Button.tsx
-├── Input.tsx
-├── Badge.tsx
-├── Avatar.tsx
-└── LoadingSpinner.tsx
+├── Button/           # Base interactive elements
+├── Input/           # Form controls
+├── Icon/            # SVG icons and graphics
+├── Typography/      # Text elements (h1-h6, p, span)
+└── Toggle/          # Dark mode toggle switch
 
 molecules/
-├── SearchBar.tsx
-├── ChatMessage.tsx
-├── UserProfile.tsx
-└── NavigationItem.tsx
+├── SearchBar/       # Input + Button combination
+├── FormField/       # Label + Input + Error message
+├── Card/            # Container with header/body/footer
+└── DarkModeToggle/  # Toggle + Label + Description
 
 organisms/
-├── Header.tsx
-├── ChatInterface.tsx
-├── Sidebar.tsx
-└── SettingsPanel.tsx
+├── Header/          # Navigation + Search + User menu
+├── Sidebar/         # Navigation menu with sections
+├── ChatInterface/   # Message list + Input area
+└── SettingsPanel/   # Settings sections with toggles
 
 templates/
-├── MainLayout.tsx
-├── ChatLayout.tsx
-└── SettingsLayout.tsx
+├── MainLayout/      # Header + Sidebar + Content
+├── AuthLayout/      # Centered form layout
+└── SettingsLayout/  # Settings navigation + content
 
 pages/
-├── HomePage.tsx
-├── ChatPage.tsx
-└── SettingsPage.tsx
+├── Dashboard/       # Main application view
+├── Settings/        # User preferences and configuration
+└── Login/           # Authentication flow
 ```
 
-### **Component Variant System (CVA)**
-```typescript
-// Example: Button variants with CVA
-import { cva, type VariantProps } from "class-variance-authority";
-
-const buttonVariants = cva(
-  // Base styles
-  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
-  {
-    variants: {
-      variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-        outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 hover:underline"
-      },
-      size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-9 rounded-md px-3",
-        lg: "h-11 rounded-md px-8",
-        icon: "h-10 w-10"
-      }
-    },
-    defaultVariants: {
-      variant: "default",
-      size: "default"
-    }
-  }
-);
-
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  asChild?: boolean;
+### **Design Token System**
+```css
+:root {
+  /* Color Palette */
+  --color-primary-50: #eff6ff;
+  --color-primary-500: #3b82f6;
+  --color-primary-900: #1e3a8a;
+  
+  /* Dark Mode Colors */
+  --color-dark-bg: #0f172a;
+  --color-dark-surface: #1e293b;
+  --color-dark-text: #f1f5f9;
+  
+  /* Spacing Scale */
+  --space-1: 0.25rem;
+  --space-4: 1rem;
+  --space-8: 2rem;
+  
+  /* Typography Scale */
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
 }
 ```
 
-### **Accessibility Standards**
-```typescript
-// Example: Accessible component with proper ARIA attributes
-export const AccessibleButton: React.FC<ButtonProps> = ({
-  children,
-  disabled,
-  loading,
-  'aria-label': ariaLabel,
-  ...props
-}) => {
-  return (
-    <button
-      {...props}
-      disabled={disabled || loading}
-      aria-label={ariaLabel || (typeof children === 'string' ? children : undefined)}
-      aria-disabled={disabled || loading}
-      aria-busy={loading}
-      className={cn(buttonVariants({ variant, size }), className)}
-    >
-      {loading && (
-        <LoadingSpinner 
-          className="mr-2 h-4 w-4" 
-          aria-hidden="true"
-        />
-      )}
-      {children}
-      {loading && <span className="sr-only">Loading...</span>}
-    </button>
-  );
-};
-```
+---
 
-### **Responsive Design Patterns**
-```typescript
-// Example: Responsive component with Tailwind breakpoints
-export const ResponsiveGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-      {children}
-    </div>
-  );
-};
+## 🔧 **Development Workflow**
 
-// Mobile-first responsive utilities
-const responsiveVariants = cva("", {
-  variants: {
-    spacing: {
-      sm: "p-2 sm:p-4 md:p-6",
-      md: "p-4 sm:p-6 md:p-8",
-      lg: "p-6 sm:p-8 md:p-12"
-    },
-    layout: {
-      stack: "flex flex-col",
-      row: "flex flex-col sm:flex-row",
-      grid: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-    }
-  }
-});
-```
+### **Component Development Process**
+1. **Atomic Design Planning**: Identify component level (atom/molecule/organism)
+2. **Accessibility First**: WCAG 2.1 AA compliance from start
+3. **TypeScript Interfaces**: Define props and state types
+4. **Radix UI Integration**: Use headless components for complex interactions
+5. **Tailwind Styling**: Utility-first approach with design tokens
+6. **CVA Variants**: Type-safe component variations
+7. **Testing Strategy**: Unit tests with React Testing Library
+8. **Storybook Documentation**: Component showcase and documentation
+
+### **Dark Mode Implementation Checklist**
+- ✅ CSS custom properties for theme variables
+- ✅ localStorage persistence for user preference
+- ✅ System preference detection and respect
+- ✅ Smooth transitions between themes
+- ✅ Accessible toggle component with proper ARIA labels
+- ✅ Visual feedback for current state
+- ✅ Integration with existing design system
+- ✅ Testing across all component variants
+
+### **Quality Gates**
+- **Accessibility**: Screen reader testing, keyboard navigation
+- **Performance**: Bundle size impact, runtime performance
+- **Visual Regression**: Chromatic or similar visual testing
+- **Cross-browser**: Chrome, Firefox, Safari compatibility
+- **Responsive**: Mobile-first design validation
 
 ---
 
-## 🧪 **Testing Standards**
+## 📚 **Knowledge Base & Documentation**
 
-### **Component Testing with React Testing Library**
-```typescript
-// Example: Testing dark mode toggle component
-import { render, screen, fireEvent } from '@testing-library/react';
-import { DarkModeToggle } from './DarkModeToggle';
+### **Component Library Standards**
+- All components must follow atomic design principles
+- TypeScript interfaces required for all props
+- Accessibility attributes mandatory (ARIA labels, roles)
+- Responsive design with mobile-first approach
+- Dark mode support with CSS custom properties
+- Comprehensive testing with React Testing Library
 
-describe('DarkModeToggle', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    document.documentElement.removeAttribute('data-theme');
-  });
+### **Code Style Guidelines**
+- ESLint + Prettier configuration enforcement
+- Functional components with hooks (no class components)
+- Custom hooks for complex state logic
+- Prop drilling avoided with Context API when appropriate
+- Performance optimization with React.memo and useMemo
 
-  it('should toggle dark mode when clicked', () => {
-    render(<DarkModeToggle />);
-    
-    const toggle = screen.getByRole('checkbox', { name: /toggle dark mode/i });
-    expect(toggle).not.toBeChecked();
-    
-    fireEvent.click(toggle);
-    expect(toggle).toBeChecked();
-    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
-    expect(localStorage.getItem('darkMode')).toBe('true');
-  });
-
-  it('should respect system preference when no saved preference', () => {
-    // Mock system preference
-    Object.defineProperty(window, 'matchMedia', {
-      writable: true,
-      value: jest.fn().mockImplementation(query => ({
-        matches: query === '(prefers-color-scheme: dark)',
-        media: query,
-        onchange: null,
-        addListener: jest.fn(),
-        removeListener: jest.fn(),
-      })),
-    });
-
-    render(<DarkModeToggle />);
-    
-    const toggle = screen.getByRole('checkbox');
-    expect(toggle).toBeChecked();
-  });
-
-  it('should be accessible via keyboard', () => {
-    render(<DarkModeToggle />);
-    
-    const toggle = screen.getByRole('checkbox');
-    toggle.focus();
-    expect(toggle).toHaveFocus();
-    
-    fireEvent.keyDown(toggle, { key: ' ' });
-    expect(toggle).toBeChecked();
-  });
-});
-```
-
-### **Accessibility Testing**
-```typescript
-// Example: Accessibility testing with jest-axe
-import { axe, toHaveNoViolations } from 'jest-axe';
-
-expect.extend(toHaveNoViolations);
-
-describe('DarkModeToggle Accessibility', () => {
-  it('should not have accessibility violations', async () => {
-    const { container } = render(<DarkModeToggle />);
-    const results = await axe(container);
-    expect(results).toHaveNoViolations();
-  });
-
-  it('should have proper ARIA attributes', () => {
-    render(<DarkModeToggle />);
-    
-    const toggle = screen.getByRole('checkbox');
-    expect(toggle).toHaveAttribute('aria-label', 'Toggle dark mode');
-    
-    const label = screen.getByText('Dark Mode');
-    expect(label).toBeInTheDocument();
-    
-    const description = screen.getByText('Switch between light and dark themes');
-    expect(description).toBeInTheDocument();
-  });
-});
-```
+### **Documentation Requirements**
+- JSDoc comments for all public interfaces
+- Storybook stories for component variations
+- README files for complex organisms and templates
+- Accessibility notes and testing instructions
+- Performance considerations and optimization notes
 
 ---
 
-## 📋 **Implementation Checklist**
+## 🚀 **Integration Points**
 
-### **Dark Mode Implementation**
-- [x] CSS custom properties for theme variables
-- [x] Dark mode toggle component with state management
-- [x] localStorage persistence for user preference
-- [x] System preference detection and fallback
-- [x] Smooth transitions between themes
-- [x] Accessibility compliance (ARIA labels, keyboard navigation)
-- [ ] Theme context provider for app-wide state management
-- [ ] Integration with existing component library
-- [ ] Visual regression testing for both themes
-- [ ] Documentation and usage examples
+### **AI Integration Specialist Coordination**
+- Provide UI components for AI chat interfaces
+- Handle loading states and error boundaries for AI operations
+- Implement accessibility for AI-generated content
+- Coordinate on real-time UI updates from AI responses
 
-### **Component Architecture**
-- [x] Atomic design structure (atoms/molecules/organisms)
-- [x] TypeScript interfaces and prop definitions
-- [x] CVA variant system for styling
-- [x] Accessibility attributes and ARIA compliance
-- [x] Responsive design patterns
-- [ ] Unit tests with React Testing Library
-- [ ] Storybook documentation
-- [ ] Performance optimization (React.memo, useMemo)
+### **Real-time Systems Specialist Coordination**
+- Design components for live data updates
+- Handle WebSocket connection states in UI
+- Implement optimistic UI updates
+- Coordinate on real-time collaboration features
 
-### **Design System Integration**
-- [x] Tailwind CSS utility classes
-- [x] Design token consistency
-- [x] Component variant system
-- [ ] Radix UI primitive integration
-- [ ] Framer Motion animations
-- [ ] Icon system integration
-- [ ] Typography scale implementation
+### **Backend Infrastructure Squad Coordination**
+- Define API client interfaces and error handling
+- Implement loading and error states for API calls
+- Coordinate on data fetching patterns and caching
+- Handle authentication state in UI components
+
+---
+
+## 🎯 **Success Metrics**
+
+### **User Experience Metrics**
+- Accessibility score (Lighthouse/axe-core): >95%
+- Core Web Vitals: LCP <2.5s, FID <100ms, CLS <0.1
+- Mobile usability score: 100%
+- Cross-browser compatibility: 100% (Chrome, Firefox, Safari)
+
+### **Developer Experience Metrics**
+- Component reusability: >80% of UI built with design system
+- TypeScript coverage: 100% (strict mode)
+- Test coverage: >90% for all components
+- Storybook coverage: 100% of public components documented
+
+### **Performance Metrics**
+- Bundle size impact: <5% increase per major feature
+- Runtime performance: No blocking operations >16ms
+- Memory usage: No memory leaks in component lifecycle
+- Accessibility performance: All interactions <200ms response time
+
+---
+
+## 🔄 **Continuous Improvement**
+
+### **Regular Audits**
+- Monthly accessibility audit with automated and manual testing
+- Quarterly design system review and token updates
+- Performance monitoring and optimization cycles
+- User feedback integration and UX improvements
+
+### **Technology Updates**
+- React and TypeScript version updates
+- Radix UI and Tailwind CSS updates
+- Testing library and tooling updates
+- Browser compatibility matrix updates
+
+### **Knowledge Sharing**
+- Component pattern documentation
+- Accessibility best practices sharing
+- Performance optimization techniques
+- Design system evolution and migration guides
