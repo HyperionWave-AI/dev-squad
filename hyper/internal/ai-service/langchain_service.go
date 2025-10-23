@@ -615,7 +615,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				"list_directory":    4, // Allow exploring directories
 				"bash":              5, // Allow command variations
 				"code_index_search": 2, // Strict: one search + one retry max
-				"create_agent_task": 1, // Should only create once
+				"create_agent_task": 4, // Allow retries for parameter refinement
 				// Default for other tools: 6 attempts
 			}
 			log.Printf("[Circuit Breaker] Using Claude-optimized thresholds (more lenient)")
@@ -728,8 +728,10 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					allowedTools = []string{"create_agent_task"}
 				case 4: // Step 4: ONLY allow execute_subagent
 					allowedTools = []string{"execute_subagent"}
-				case 5: // Step 5: Workflow complete - allow ALL tools
-					allowedTools = nil // nil means allow all
+				case 5: // Step 5: Workflow complete - NO TOOLS NEEDED (subagent is executing)
+					// DO NOT provide list_agent_tasks - it causes hallucinated humanTaskIds
+					// The subagent is executing in background, coordinator should inform user and STOP
+					allowedTools = []string{}
 				default:
 					allowedTools = nil // Unknown step, allow all
 				}
@@ -905,7 +907,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 							"list_directory":    4, // Allow exploring directories
 							"bash":              5, // Allow command variations
 							"code_index_search": 2, // Strict: one search + one retry max
-							"create_agent_task": 1, // Should only create once
+							"create_agent_task": 4, // Allow retries for parameter refinement
 							// Default for other tools: 6 attempts
 						}
 						log.Printf("[Circuit Breaker] Re-applied Claude thresholds after fallback")
@@ -1419,18 +1421,18 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 								workflowState["step"] = 2
 								workflowState["humanTaskId"] = taskID
 								log.Printf("[Workflow State] Step 2 complete: created human task %s", taskID)
-							}
-					} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
-						// Case 2: Similar task found - use existing task instead of creating new one
-						if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
-							if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
-								if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
-									workflowState["step"] = 2
-									workflowState["humanTaskId"] = existingTaskID
-									log.Printf("[Workflow State] Step 2 complete: using existing similar task %s", existingTaskID)
+							} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
+								// Case 2: Similar task found - use existing task instead of creating new one
+								if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
+									if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
+										if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
+											workflowState["step"] = 2
+											workflowState["humanTaskId"] = existingTaskID
+											log.Printf("[Workflow State] Step 2 complete: using existing similar task %s", existingTaskID)
+										}
+									}
 								}
 							}
-						}
 						}
 
 					case "code_index_search":
@@ -1641,7 +1643,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				"list_directory":    4, // Allow exploring directories
 				"bash":              5, // Allow command variations
 				"code_index_search": 2, // Strict: one search + one retry max
-				"create_agent_task": 1, // Should only create once
+				"create_agent_task": 4, // Allow retries for parameter refinement
 				// Default for other tools: 6 attempts
 			}
 			log.Printf("[Circuit Breaker] Using Claude-optimized thresholds (more lenient)")
@@ -1965,6 +1967,17 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 								workflowState["step"] = 2
 								workflowState["humanTaskId"] = taskID
 								log.Printf("[Workflow State - Filtered] Step 2 complete: created human task %s", taskID)
+							} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
+								// Case 2: Similar task found - use existing task instead of creating new one
+								if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
+									if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
+										if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
+											workflowState["step"] = 2
+											workflowState["humanTaskId"] = existingTaskID
+											log.Printf("[Workflow State - Filtered] Step 2 complete: using existing similar task %s", existingTaskID)
+										}
+									}
+								}
 							}
 						}
 
@@ -2565,12 +2578,30 @@ func (s *ChatService) generateWorkflowStateGuidance(toolName string, result Tool
 			similarTasksFound, _ := outputMap["similarTasksFound"].(bool)
 
 			if similarTasksFound {
-				// Duplicate detected - AI should use forceCreate or stop
-				guidance = "⚠️ DUPLICATE TASK DETECTED: A similar task already exists.\n" +
-					"➡️ NEXT ACTION: Either:\n" +
-					"   1. Set forceCreate=true to create anyway, OR\n" +
-					"   2. Use the existing task instead\n" +
-					"🔒 DO NOT call coordinator_create_human_task again with the same prompt - you'll get the same result."
+				// Duplicate detected - extract first similar task's ID and proceed
+				var firstTaskID string
+				if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
+					if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
+						if taskID, ok := firstTask["taskId"].(string); ok {
+							firstTaskID = taskID
+						}
+					}
+				}
+
+				if firstTaskID != "" {
+					// Found a similar task - use it and proceed to Step 2
+					guidance = fmt.Sprintf("⚠️ SIMILAR TASK FOUND: A task with similar intent already exists.\n"+
+						"📝 SAVE THIS: humanTaskId = \"%s\" (using existing similar task)\n"+
+						"➡️ NEXT ACTION: Call 'code_index_search' ONCE to find relevant files.\n"+
+						"   Example: {\"query\": \"<what user wants to change>\", \"limit\": 15}\n"+
+						"🔒 DO NOT call coordinator_create_human_task again - you already have a taskId.\n"+
+						"💡 To create a NEW task instead, call coordinator_create_human_task with forceCreate=true", firstTaskID)
+				} else {
+					// No task ID found in similar tasks - tell model to force create
+					guidance = "⚠️ DUPLICATE TASK DETECTED: Similar tasks exist but no ID was found.\n" +
+						"➡️ NEXT ACTION: Call coordinator_create_human_task with forceCreate=true to create anyway.\n" +
+						"   Example: {\"prompt\": \"<user's exact words>\", \"forceCreate\": true}"
+				}
 			} else if hasTaskID {
 				// Task created successfully - guide to Step 3
 				guidance = fmt.Sprintf("✅ STEP 2 COMPLETE: Human task created successfully.\n"+
@@ -2625,12 +2656,37 @@ func (s *ChatService) generateWorkflowStateGuidance(toolName string, result Tool
 		}
 
 	case "execute_subagent":
-		// Step 5 complete - workflow finished!
-		guidance = "✅ STEP 5 COMPLETE: Subagent launched successfully!\n" +
-			"🎉 WORKFLOW COMPLETE: The specialist agent is now working on the task.\n" +
-			"📊 You can monitor progress by calling 'list_agent_tasks' if needed.\n" +
-			"🔒 DO NOT call any more coordinator tools - the agent will handle implementation.\n" +
-			"✅ Inform the user that the task has been delegated to a specialist agent."
+		// Step 5 complete - extract agentTaskId and tell coordinator to STOP
+		if outputMap, ok := result.Output.(map[string]interface{}); ok {
+			agentTaskID, hasAgentTaskID := outputMap["agentTaskId"].(string)
+			agentName, _ := outputMap["agentName"].(string)
+			subchatID, _ := outputMap["subchatId"].(string)
+
+			if hasAgentTaskID {
+				guidance = fmt.Sprintf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"+
+					"✅ WORKFLOW COMPLETE - YOUR JOB IS DONE!\n"+
+					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"+
+					"The %s agent is executing your request in background.\n"+
+					"   • Agent Task ID: %s\n"+
+					"   • Subchat ID: %s\n\n"+
+					"🛑 STOP HERE - DO NOT CALL ANY MORE TOOLS\n"+
+					"🛑 DO NOT call list_agent_tasks, coordinator_get_agent_task, or any monitoring tools\n"+
+					"🛑 DO NOT try to check status - the agent is working independently\n\n"+
+					"✅ YOUR ONLY ACTION: Inform the user that work has begun.\n"+
+					"   Example: \"I've delegated this to the %s agent. They're working on it now.\"\n\n"+
+					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+					agentName, agentTaskID, subchatID, agentName)
+			} else {
+				// Fallback if agentTaskId not found
+				guidance = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+					"✅ WORKFLOW COMPLETE - YOUR JOB IS DONE!\n" +
+					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+					"The specialist agent is executing the request in background.\n\n" +
+					"🛑 STOP HERE - DO NOT CALL ANY MORE TOOLS\n" +
+					"✅ YOUR ONLY ACTION: Inform the user that work has begun.\n\n" +
+					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+			}
+		}
 	}
 
 	// If we generated guidance, add a clear separator
