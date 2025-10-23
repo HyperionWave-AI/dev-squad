@@ -266,6 +266,17 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
+	// AUTO-POPULATE: If filesModified is empty, try to populate from last code_index_search
+	if len(filesModified) == 0 {
+		cachedPaths := GetLastCodeSearchPaths()
+		if len(cachedPaths) > 0 {
+			filesModified = cachedPaths
+			zap.L().Info("✅ Auto-populated filesModified from code_index_search cache",
+				zap.Int("filesCount", len(filesModified)),
+				zap.Strings("files", filesModified))
+		}
+	}
+
 	// VALIDATION: Warn if filesModified is empty
 	// This is a strong indicator the coordinator didn't use code_index_search results
 	if len(filesModified) == 0 {
