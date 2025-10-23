@@ -132,7 +132,6 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 	}
 
 	var humanTaskID string
-	var validatedTask *storage.HumanTask
 
 	// If task ID was provided, validate it exists in database
 	if providedTaskID != "" {
@@ -149,7 +148,6 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 			if fetchErr != nil {
 				return nil, fetchErr
 			}
-			validatedTask = latestTask
 			humanTaskID = latestTask.ID
 
 			zap.L().Info("Auto-corrected humanTaskId (model sent invalid ID)",
@@ -159,7 +157,6 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 				zap.Time("createdAt", latestTask.CreatedAt))
 		} else {
 			// Valid task ID
-			validatedTask = task
 			humanTaskID = task.ID
 			zap.L().Info("Validated humanTaskId from model",
 				zap.String("humanTaskId", humanTaskID),
@@ -171,7 +168,6 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		if err != nil {
 			return nil, err
 		}
-		validatedTask = latestTask
 		humanTaskID = latestTask.ID
 
 		zap.L().Info("Auto-fetched latest pending human task (no ID provided)",
@@ -303,7 +299,9 @@ func (t *ListAgentTasksTool) Name() string {
 }
 
 func (t *ListAgentTasksTool) Description() string {
-	return "List agent tasks with optional filters. Returns up to 20 tasks with details. Supports pagination via offset/limit. Use to check task status, find assignments, or review progress."
+	return "List agent tasks with optional filters. Returns up to 20 tasks with details. Supports pagination via offset/limit. Use to check task status, find assignments, or review progress. " +
+		"TIP: Filter by humanTaskId or agentName to narrow results. " +
+		"IMPORTANT: If you have a specific agentTaskId (e.g., from execute_subagent result), use coordinator_get_agent_task instead for direct lookup - DO NOT call this repeatedly without filters."
 }
 
 func (t *ListAgentTasksTool) InputSchema() map[string]interface{} {
@@ -2605,7 +2603,7 @@ YOUR TODOs:
 			status = "IN PROGRESS"
 		}
 
-		prompt += fmt.Sprintf("\n%d. [%s] %s", i+1, status, todo.Description)
+		prompt += fmt.Sprintf("\n%d. [%s] ID: %s - %s", i+1, status, todo.ID, todo.Description)
 
 		if todo.FilePath != "" {
 			prompt += fmt.Sprintf("\n   File: %s", todo.FilePath)
