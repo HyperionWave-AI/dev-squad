@@ -1913,66 +1913,73 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					return
 				}
 
-				// Add assistant response to history
+				// CRITICAL FIX: Add tool_call message with tool_use block (not plain text)
+				// This ensures the model has conversation memory of making the tool call
+				// Role must be "tool_call" to match provider.go:429 check
 				currentMessages = append(currentMessages, Message{
-					Role:    "assistant",
+					Role:    "tool_call",
 					Content: responseText,
+					ToolCall: &ToolCall{
+						ID:   toolCall.ID,
+						Name: toolCall.Name,
+						Args: toolCall.Args,
+					},
 				})
 
-				// Add tool result to message history
-				var toolResultMsg string
-				if result.Error != "" {
-					toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
-				} else {
-					outputJSON, err := json.Marshal(result.Output)
-					if err != nil {
-						toolResultMsg = fmt.Sprintf("Tool '%s' result: <serialization error: %v>", result.Name, err)
-					} else {
-						toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(outputJSON))
-					}
-				}
-
-				// CRITICAL FIX: If we generated a loop warning, EMBED it in JSON result
+				// CRITICAL FIX: Embed loop warning into the result.Output (not as separate text)
+				// This ensures it's part of the structured response the model sees
 				if loopWarning != "" {
 					log.Printf("[Loop Detection] %s", loopWarning)
 
 					// Send warning as a visible message to the user
 					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
 
-					// Try to embed warning into the JSON result instead of prepending as text
-					if strings.HasPrefix(toolResultMsg, fmt.Sprintf("Tool '%s' result: ", result.Name)) {
-						jsonPart := strings.TrimPrefix(toolResultMsg, fmt.Sprintf("Tool '%s' result: ", result.Name))
-						var resultData map[string]interface{}
-						if err := json.Unmarshal([]byte(jsonPart), &resultData); err == nil {
-							resultData["_loopWarning"] = loopWarning
-							if newJSON, err := json.Marshal(resultData); err == nil {
-								toolResultMsg = fmt.Sprintf("Tool '%s' result: %s", result.Name, string(newJSON))
-							} else {
-								// fallback: text prepend if reserialization fails
-								toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
-							}
-						} else {
-							// fallback: text prepend if JSON parse fails
-							toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+					// Embed warning directly into result.Output
+					if outputMap, ok := result.Output.(map[string]interface{}); ok {
+						// Create a new map with warning injected
+						newOutput := make(map[string]interface{})
+						for k, v := range outputMap {
+							newOutput[k] = v
 						}
+						newOutput["_loopWarning"] = loopWarning
+						result.Output = newOutput
 					} else {
-						// fallback: if message doesn't match JSON result format
-						toolResultMsg = fmt.Sprintf("%s\n\n%s", loopWarning, toolResultMsg)
+						// For non-map outputs, wrap in a map
+						result.Output = map[string]interface{}{
+							"result":       result.Output,
+							"_loopWarning": loopWarning,
+						}
 					}
 				}
 
-				// Truncate large tool results
+				// Truncate large tool results (apply to result.Output, not string)
 				const maxToolResultSize = 10000
-				if len(toolResultMsg) > maxToolResultSize {
-					originalSize := len(toolResultMsg)
-					toolResultMsg = toolResultMsg[:maxToolResultSize-500] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars] ...", originalSize, maxToolResultSize-500)
-					log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars",
-						result.Name, originalSize, len(toolResultMsg))
+				if outputJSON, err := json.Marshal(result.Output); err == nil {
+					if len(outputJSON) > maxToolResultSize {
+						originalSize := len(outputJSON)
+						truncated := string(outputJSON[:maxToolResultSize-500])
+						result.Output = map[string]interface{}{
+							"_truncated": true,
+							"_message":   fmt.Sprintf("Result was %d chars, showing first %d chars", originalSize, maxToolResultSize-500),
+							"_preview":   truncated,
+						}
+						log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars",
+							result.Name, originalSize, len(truncated))
+					}
 				}
 
+				// CRITICAL FIX: Add tool_result message with proper role (user, not system)
+				// This matches Anthropic's API format and ensures conversation continuity
 				currentMessages = append(currentMessages, Message{
-					Role:    "system",
-					Content: toolResultMsg,
+					Role:    "tool_result",
+					Content: "", // Content is in ToolResult
+					ToolResult: &ToolResult{
+						ID:         toolCall.ID,
+						Name:       toolCall.Name,
+						Output:     result.Output,
+						Error:      result.Error,
+						DurationMs: result.DurationMs,
+					},
 				})
 
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution (filtered function)
