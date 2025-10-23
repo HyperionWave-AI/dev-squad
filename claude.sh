@@ -4,7 +4,7 @@
 # This script launches Claude Code with the --dangerously-skip-permissions flag
 # for use in devcontainer environments
 
-set -e
+#set -e
 
 # Color codes for output
 RED='\033[0;31m'
@@ -33,6 +33,15 @@ print_color "$BLUE" "🚀 Claude Code Interactive Launcher"
 print_color "$BLUE" "===================================="
 echo
 
+CLAUDE_CMD=$(which claude)
+if [ -z "$CLAUDE_CMD" ]; then
+  print_color "$RED" "Could not find executable claude. Please check that claude presents in your PATH"
+  exit 127
+fi
+
+print_color  "$GREEN" "Claude bin found in: $CLAUDE_CMD"
+echo
+
 # Check environment
 if is_devcontainer; then
     print_color "$GREEN" "✓ Detected devcontainer environment"
@@ -52,9 +61,6 @@ else
 fi
 
 echo
-
-# Build the command
-CLAUDE_CMD="~/.claude/local/claude"
 
 # Add the dangerous flag if needed
 if [ "$USE_DANGEROUS_FLAG" = true ]; then
