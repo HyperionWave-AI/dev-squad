@@ -43,7 +43,7 @@ func (t *CreateAgentTaskTool) Name() string {
 }
 
 func (t *CreateAgentTaskTool) Description() string {
-	return "Create a new agent task linked to a human task. Returns task ID. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
+	return "Create a new agent task linked to a human task. Returns task ID. SMART AUTO-FETCH: If humanTaskId is omitted, automatically fetches the most recent pending human task from the database. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. Required: agentName, role, todos. Optional: humanTaskId, contextSummary, filesModified, qdrantCollections, priorWorkSummary."
 }
 
 func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
@@ -52,7 +52,7 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"humanTaskId": map[string]interface{}{
 				"type":        "string",
-				"description": "Parent human task ID (UUID format)",
+				"description": "Parent human task ID (UUID format). OPTIONAL: If not provided, automatically uses the most recent pending human task from the database.",
 			},
 			"agentName": map[string]interface{}{
 				"type":        "string",
@@ -92,29 +92,92 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 				"description": "Summary of previous agent's work and key decisions (for multi-phase tasks)",
 			},
 		},
-		"required": []string{"humanTaskId", "agentName", "role", "todos"},
+		"required": []string{"agentName", "role", "todos"},
 	}
 }
 
 func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	// Extract humanTaskId - auto-inject from context if not provided
-	humanTaskID, ok := input["humanTaskId"].(string)
+	// SMART AUTO-FETCH: Extract humanTaskId from input but ALWAYS validate it exists in database
+	// If invalid/missing, auto-fetch the latest pending task (don't trust the model)
+	providedTaskID, _ := input["humanTaskId"].(string)
 
-	// If not provided or empty, try to get from context (workflow state)
-	if !ok || humanTaskID == "" {
-		if stateID := ctx.Value("lastHumanTaskId"); stateID != nil {
-			if taskID, ok := stateID.(string); ok && taskID != "" {
-				humanTaskID = taskID
-				zap.L().Info("Auto-injected humanTaskId from workflow state",
-					zap.String("humanTaskId", humanTaskID),
-					zap.String("source", "context"))
+	// Helper function to fetch latest pending task
+	fetchLatestTask := func() (*storage.HumanTask, error) {
+		allTasks := t.storage.ListAllHumanTasks()
+		if len(allTasks) == 0 {
+			return nil, fmt.Errorf("no human tasks found - create a human task first using coordinator_create_human_task")
+		}
+
+		// Find the most recent pending task
+		var latestTask *storage.HumanTask
+		for _, task := range allTasks {
+			if task.Status == storage.TaskStatusPending {
+				if latestTask == nil || task.CreatedAt.After(latestTask.CreatedAt) {
+					latestTask = task
+				}
 			}
 		}
+
+		// If no pending task, use the most recent task regardless of status
+		if latestTask == nil {
+			latestTask = allTasks[0]
+			for _, task := range allTasks {
+				if task.CreatedAt.After(latestTask.CreatedAt) {
+					latestTask = task
+				}
+			}
+		}
+
+		return latestTask, nil
 	}
 
-	// Validate required field
-	if humanTaskID == "" {
-		return nil, fmt.Errorf("humanTaskId is required (provide explicitly or create human task first)")
+	var humanTaskID string
+	var validatedTask *storage.HumanTask
+
+	// If task ID was provided, validate it exists in database
+	if providedTaskID != "" {
+		task, err := t.storage.GetHumanTask(providedTaskID)
+		if err != nil || task == nil {
+			// INVALID TASK ID - Model hallucinated or sent wrong ID
+			zap.L().Warn("Model provided invalid humanTaskId - auto-fetching latest task",
+				zap.String("providedTaskId", providedTaskID),
+				zap.String("error", fmt.Sprintf("%v", err)),
+				zap.String("reason", "task_not_found_in_database"))
+
+			// Auto-fetch latest task
+			latestTask, fetchErr := fetchLatestTask()
+			if fetchErr != nil {
+				return nil, fetchErr
+			}
+			validatedTask = latestTask
+			humanTaskID = latestTask.ID
+
+			zap.L().Info("Auto-corrected humanTaskId (model sent invalid ID)",
+				zap.String("modelProvidedId", providedTaskID),
+				zap.String("correctedId", humanTaskID),
+				zap.String("prompt", latestTask.Prompt),
+				zap.Time("createdAt", latestTask.CreatedAt))
+		} else {
+			// Valid task ID
+			validatedTask = task
+			humanTaskID = task.ID
+			zap.L().Info("Validated humanTaskId from model",
+				zap.String("humanTaskId", humanTaskID),
+				zap.String("status", string(task.Status)))
+		}
+	} else {
+		// No task ID provided - auto-fetch latest
+		latestTask, err := fetchLatestTask()
+		if err != nil {
+			return nil, err
+		}
+		validatedTask = latestTask
+		humanTaskID = latestTask.ID
+
+		zap.L().Info("Auto-fetched latest pending human task (no ID provided)",
+			zap.String("humanTaskId", humanTaskID),
+			zap.String("prompt", latestTask.Prompt),
+			zap.Time("createdAt", latestTask.CreatedAt))
 	}
 
 	agentName, ok := input["agentName"].(string)
