@@ -23,11 +23,38 @@
       "mcp__playwright__browser_wait_for",
       "Bash(find:*)",
       "Bash(go:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
       "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
   },
-  "outputStyle": "Explanatory"
+  "outputStyle": "Explanatory",
+  "ui": {
+    "theme": {
+      "default": "system",
+      "persistence": {
+        "enabled": true,
+        "storageKey": "darkMode",
+        "storageType": "localStorage"
+      },
+      "transitions": {
+        "enabled": true,
+        "duration": "0.3s",
+        "easing": "ease"
+      },
+      "systemPreference": {
+        "detectOnLoad": true,
+        "watchChanges": true
+      }
+    },
+    "settings": {
+      "darkModeToggle": {
+        "enabled": true,
+        "showInSettings": true,
+        "showDescription": true,
+        "accessibilityLabel": "Toggle dark mode"
+      }
+    }
+  }
 }
