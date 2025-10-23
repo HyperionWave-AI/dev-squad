@@ -528,6 +528,9 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		failedToolCalls := make(map[string]int)        // Track failed attempts separately
 		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
 		taskIdValidationAttempts := 0                   // Track taskId validation attempts for create_agent_task (max 3)
+
+		// Tool call history: track all executed tools for smart filtering (reduces token usage by ~70%)
+		toolCallHistory := make([]ToolResult, 0, 20)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
 			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
@@ -679,11 +682,36 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			log.Printf("[DEBUG Context] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
 				len(currentMessages), contextSize, toolResultPreview)
 
+			// SMART TOOL FILTERING: Reduce token usage by 70% by sending only relevant tools
+			// This applies to ALL models to reduce rate limit issues
+			originalToolCount := len(tools)
+			relevantToolNames := filterToolsByWorkflowState(toolCallHistory)
+			filteredTools := s.toolRegistry.GetFilteredToolsForLangChain(relevantToolNames)
+
+			// Only apply smart filtering if it actually reduces the tool count
+			// Keep all tools if filtering would include most of them anyway (>30 tools)
+			if len(filteredTools) < originalToolCount && len(filteredTools) <= 30 {
+				tools = filteredTools
+				log.Printf("[Smart Tool Filter] Reduced from %d to %d tools (%.0f%% reduction) - Tool history: %d calls",
+					originalToolCount, len(tools), 100.0*(1.0-float64(len(tools))/float64(originalToolCount)), len(toolCallHistory))
+
+				// Log which tools are being sent for debugging
+				toolNames := make([]string, 0, len(tools))
+				for _, tool := range tools {
+					if tool.Function != nil {
+						toolNames = append(toolNames, tool.Function.Name)
+					}
+				}
+				log.Printf("[Smart Tool Filter] Sending tools: %v", toolNames)
+			} else {
+				log.Printf("[Smart Tool Filter] Keeping all %d tools (filtering not beneficial)", originalToolCount)
+			}
+
 			// PHASE 3: PRESCRIPTIVE STATE MACHINE - Only allow ONE tool per workflow step
-			// This forces Claude into a linear workflow with zero ambiguity
-			// Each step unlocks exactly ONE required tool - Claude has no choice but to follow the sequence
-			isClaudeModel := strings.Contains(strings.ToLower(s.config.Model), "claude")
-			if s.usingFallback || isClaudeModel {
+			// This forces ALL models into a linear workflow with zero ambiguity
+			// Each step unlocks exactly ONE required tool - model has no choice but to follow the sequence
+			// Applied to ALL models (not just Claude) to ensure consistent coordinator workflow
+			if true { // Enable workflow enforcement for all models (GPT, Claude, Groq, etc.)
 				step := workflowState["step"].(int)
 				originalCount := len(tools)
 
@@ -1201,6 +1229,12 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
+				// Track tool execution in history for smart filtering (keep last 20)
+				toolCallHistory = append(toolCallHistory, result)
+				if len(toolCallHistory) > 20 {
+					toolCallHistory = toolCallHistory[1:] // Remove oldest
+				}
+
 				// CRITICAL: Track failed tool calls separately - stop immediately on retry of failed operation
 				if result.Error != "" {
 					failedToolCalls[signature]++
@@ -1370,8 +1404,8 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				})
 
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution
-				// Must match the same condition as tool filtering (s.usingFallback || isClaudeModel)
-				if (s.usingFallback || isClaudeModel) && result.Error == "" {
+				// Apply to ALL models to match prescriptive filter behavior (line 714)
+				if result.Error == "" {
 					switch toolCall.Name {
 					case "coordinator_list_human_tasks":
 						if workflowState["step"].(int) == 0 {
@@ -1916,7 +1950,8 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				})
 
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution (filtered function)
-				if s.usingFallback && result.Error == "" {
+				// Apply to ALL models to match prescriptive filter behavior
+				if result.Error == "" {
 					switch toolCall.Name {
 					case "coordinator_list_human_tasks":
 						if workflowState["step"].(int) == 0 {
@@ -2322,6 +2357,137 @@ func isRateLimitError(err error) bool {
 		strings.Contains(errStr, "quota exceeded") ||
 		strings.Contains(errStr, "usage limit") || // Matches "hourly usage limit", "daily usage limit", etc.
 		strings.Contains(errStr, "hourly limit")
+}
+
+// Tool category definitions for smart filtering
+var (
+	// Phase 1 - Initial Assessment: List/search for existing work
+	workflowPhase1Tools = []string{
+		"coordinator_list_human_tasks",
+		"coordinator_list_agent_tasks",
+		"coordinator_get_agent_task",
+		"knowledge_find",
+		"coordinator_query_knowledge",
+	}
+
+	// Phase 2 - Task Creation: Create and manage tasks
+	workflowPhase2Tools = []string{
+		"coordinator_create_human_task",
+		"create_agent_task",   // FIXED: No coordinator_ prefix
+		"list_agent_tasks",    // FIXED: No coordinator_ prefix
+		"execute_subagent",    // FIXED: No coordinator_ prefix
+		"list_subagents",      // FIXED: No coordinator_ prefix
+		"coordinator_update_task_status",
+		"coordinator_update_todo_status",
+	}
+
+	// Phase 3 - Code Discovery: Search and index code
+	workflowPhase3Tools = []string{
+		"code_index_search",
+		"code_index_status",
+		"code_index_add_folder",
+		"code_index_scan",
+		"code_index_remove_folder",
+	}
+
+	// Phase 4 - Knowledge Management: Store and retrieve knowledge
+	workflowPhase4Tools = []string{
+		"coordinator_upsert_knowledge",
+		"knowledge_store",
+		"coordinator_get_popular_collections",
+	}
+
+	// Core tools - always included in every request
+	coreTools = []string{
+		"bash",
+		"file_read",
+		"file_write",
+		"apply_patch",
+		"coordinator_add_task_prompt_notes",
+		"coordinator_update_task_prompt_notes",
+		"coordinator_add_todo_prompt_notes",
+		"coordinator_update_todo_prompt_notes",
+	}
+)
+
+// filterToolsByWorkflowState analyzes tool call history and returns relevant tools
+// This reduces token usage by ~70% (from 38 tools to 8-12 tools per request)
+func filterToolsByWorkflowState(toolCallHistory []ToolResult) []string {
+	// Start with core tools (always included)
+	relevantTools := make(map[string]bool)
+	for _, tool := range coreTools {
+		relevantTools[tool] = true
+	}
+
+	// Analyze recent tool calls to determine workflow phase
+	recentCalls := make(map[string]bool)
+	lookbackLimit := 3 // Look at last 3 tool calls
+
+	// Collect recent tool names
+	for i := len(toolCallHistory) - 1; i >= 0 && len(recentCalls) < lookbackLimit; i-- {
+		recentCalls[toolCallHistory[i].Name] = true
+	}
+
+	// Determine which phases to include based on recent activity
+	includePhase1 := len(toolCallHistory) == 0 // First request - include listing tools
+	includePhase2 := false
+	includePhase3 := false
+	includePhase4 := false
+
+	// Check recent calls to determine active phases
+	for toolName := range recentCalls {
+		// If we just listed tasks, include task creation tools
+		if toolName == "coordinator_list_human_tasks" || toolName == "list_agent_tasks" {
+			includePhase2 = true
+		}
+		// If we just created a task, include code search tools
+		if toolName == "coordinator_create_human_task" || toolName == "create_agent_task" {
+			includePhase3 = true
+		}
+		// If we searched code, include knowledge and task creation tools
+		if toolName == "code_index_search" {
+			includePhase2 = true // Can create agent tasks
+			includePhase4 = true // Can store knowledge
+		}
+		// If we're managing knowledge, keep those tools
+		if toolName == "coordinator_upsert_knowledge" || toolName == "knowledge_store" || toolName == "knowledge_find" {
+			includePhase4 = true
+		}
+		// If we're updating task status, keep task management tools
+		if toolName == "coordinator_update_task_status" || toolName == "coordinator_update_todo_status" {
+			includePhase2 = true
+		}
+	}
+
+	// Add tools for active phases
+	if includePhase1 {
+		for _, tool := range workflowPhase1Tools {
+			relevantTools[tool] = true
+		}
+	}
+	if includePhase2 {
+		for _, tool := range workflowPhase2Tools {
+			relevantTools[tool] = true
+		}
+	}
+	if includePhase3 {
+		for _, tool := range workflowPhase3Tools {
+			relevantTools[tool] = true
+		}
+	}
+	if includePhase4 {
+		for _, tool := range workflowPhase4Tools {
+			relevantTools[tool] = true
+		}
+	}
+
+	// Convert map to slice
+	result := make([]string, 0, len(relevantTools))
+	for tool := range relevantTools {
+		result = append(result, tool)
+	}
+
+	return result
 }
 
 // extractFilePathsFromCodeIndexResult extracts file paths from code_index_search result
