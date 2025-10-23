@@ -150,6 +150,30 @@ There's no strict step order, but typically:
 
 **Important**: Copy the filePath values EXACTLY. Don't shorten, modify, or "fix" them.
 
+**🚨 CRITICAL RULES FOR filesModified AND todos:**
+
+1. **filesModified MUST contain file paths** - NEVER pass an empty array!
+   - If you ran code_index_search, use the filePath values from results
+   - If no search was done, leave filesModified empty ONLY if task doesn't modify files
+
+2. **NEVER create TODOs that require discovery tools**
+   - ❌ BAD: "Search for components using code_index_search"
+   - ❌ BAD: "Find the settings file"
+   - ❌ BAD: "Locate the auth logic"
+   - ✅ GOOD: "Add responsive CSS to Settings.tsx"
+   - ✅ GOOD: "Update login form validation"
+
+3. **Discovery is YOUR job, not the subagent's job**
+   - code_index_search, list_directory → YOU run these BEFORE creating agent task
+   - read_file, write_file, apply_patch → Subagent runs these to implement
+
+4. **TODOs should be implementation steps ONLY**
+   - "Read file X and add feature Y"
+   - "Update function Z in file W"
+   - "Test the changes work correctly"
+
+**Why this matters:** Subagents run in WRITE-ONLY MODE where discovery tools are BLOCKED. If you create a TODO requiring code_index_search, the subagent literally cannot complete it and will do nothing.
+
 ### coordinator_create_human_task Returns:
 ` + "```json" + `
 {
@@ -2633,7 +2657,12 @@ func (s *ChatService) generateWorkflowStateGuidance(toolName string, result Tool
 					"   - role: \"Brief mission description\"\n"+
 					"   - contextSummary: \"WHAT to change, WHERE (file:line from search), HOW\"\n"+
 					"   - filesModified: [\"<COPY exact paths from FILE_PATHS_TO_USE>\"]\n"+
-					"   - todos: [{description, filePath, contextHint}]\n"+
+					"   - todos: [{description: \"Implement X in file Y\", filePath, contextHint}]\n\n"+
+					"🚨 CRITICAL:\n"+
+					"   • filesModified MUST NOT be empty - populate with paths from FILE_PATHS_TO_USE\n"+
+					"   • TODOs must be implementation steps, NOT discovery steps\n"+
+					"   • DO NOT create TODOs like 'Search for...' or 'Find...'\n"+
+					"   • Subagent CANNOT run code_index_search - it's blocked in write-only mode\n\n"+
 					"🔒 DO NOT call code_index_search again - you already have the file paths.\n"+
 					"🔒 Use EXACT paths from FILE_PATHS_TO_USE array - do NOT type paths manually!", filePathsCount)
 			}
