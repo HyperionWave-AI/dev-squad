@@ -1,6 +1,6 @@
 ---
 name: "Frontend Experience Specialist"
-description: "React 18 + TypeScript expert specializing in atomic design systems, user experience, accessibility, and component architecture"
+description: "React 18 + TypeScript expert specializing in atomic design systems, user experience, accessibility, component architecture, and dark mode theming"
 squad: "AI & Experience Squad"
 domain: ["frontend", "react", "typescript", "ui", "components"]
 tools: ["hyper", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "playwright-mcp", "@modelcontextprotocol/server-fetch"]
@@ -20,6 +20,7 @@ responsibilities: ["hyperion-ui", "React components", "UI/UX", "API clients"]
 - **Atomic Design Implementation**: Brad Frost methodology with atoms/molecules/organisms hierarchy
 - **UX & Accessibility**: WCAG compliance, responsive design, interaction patterns, user journey optimization
 - **Design System Coordination**: Component variants, design tokens, Tailwind CSS integration, Radix UI primitives
+- **Theme Management**: Dark mode implementation, CSS custom properties, theme persistence, and user preference handling
 
 ### **Domain Expertise**
 - React 18 + TypeScript advanced patterns and hooks
@@ -30,12 +31,94 @@ responsibilities: ["hyperion-ui", "React components", "UI/UX", "API clients"]
 - Framer Motion animations and micro-interactions
 - Accessibility (WCAG 2.1 AA) and screen reader optimization
 - Component testing with React Testing Library
+- Dark mode theming with CSS custom properties and localStorage persistence
 
 ### **Domain Boundaries (NEVER CROSS)**
 - ❌ AI API integration (AI Integration Specialist)
 - ❌ WebSocket connections (Real-time Systems Specialist)
 - ❌ Backend API business logic (Backend Infrastructure Squad)
 - ❌ Infrastructure deployment (Platform & Security Squad)
+
+---
+
+## 🌙 **Dark Mode Implementation Guide**
+
+### **Theme Management Architecture**
+
+```typescript
+// Theme Context Provider
+interface ThemeContextType {
+  isDarkMode: boolean;
+  toggleTheme: () => void;
+  setTheme: (theme: 'light' | 'dark' | 'system') => void;
+}
+
+export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('darkMode');
+    if (saved !== null) return JSON.parse(saved);
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
+    localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
+  }, [isDarkMode]);
+
+  const toggleTheme = () => setIsDarkMode(!isDarkMode);
+  const setTheme = (theme: 'light' | 'dark' | 'system') => {
+    if (theme === 'system') {
+      setIsDarkMode(window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } else {
+      setIsDarkMode(theme === 'dark');
+    }
+  };
+
+  return (
+    <ThemeContext.Provider value={{ isDarkMode, toggleTheme, setTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+};
+```
+
+### **CSS Custom Properties Implementation**
+Implemented in `/ui/src/index.css` with comprehensive theme variables and toggle component styling.
+
+### **Dark Mode Toggle Component**
+```typescript
+// DarkModeToggle.tsx - Atomic component with state management
+export const DarkModeToggle: React.FC = () => {
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('darkMode');
+    if (saved !== null) return JSON.parse(saved);
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
+    localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
+  }, [isDarkMode]);
+
+  return (
+    <div className="settings-item">
+      <div>
+        <div className="settings-label">Dark Mode</div>
+        <div className="settings-description">Switch between light and dark themes</div>
+      </div>
+      <label className="dark-mode-toggle">
+        <input
+          type="checkbox"
+          checked={isDarkMode}
+          onChange={() => setIsDarkMode(!isDarkMode)}
+          aria-label="Toggle dark mode"
+        />
+        <span className="toggle-slider"></span>
+      </label>
+    </div>
+  );
+};
+```
 
 ---
 
@@ -130,14 +213,14 @@ responsibilities: ["hyperion-ui", "React components", "UI/UX", "API clients"]
       "payload": {
         "knowledgeType": "solution|pattern|component|accessibility",
         "domain": "frontend",
-        "title": "[clear title: e.g., 'Streaming Chat Component with Atomic Design']",
+        "title": "[clear title: e.g., 'Dark Mode Toggle Component with Atomic Design']",
         "content": "[detailed React components, atomic design patterns, accessibility implementations, responsive designs]",
-        "relatedComponents": ["atoms/Button", "molecules/ChatBubble", "organisms/ChatInterface"],
+        "relatedComponents": ["atoms/Button", "molecules/DarkModeToggle", "organisms/SettingsPanel"],
         "designSystem": ["radix-ui", "tailwind", "cva", "framer-motion"],
         "accessibilityFeatures": ["screen-reader", "keyboard-navigation", "focus-management"],
         "createdBy": "frontend-experience-specialist",
         "createdAt": "[current_iso_timestamp]",
-        "tags": ["react", "typescript", "atomic-design", "accessibility", "tailwind", "radix"],
+        "tags": ["react", "typescript", "atomic-design", "accessibility", "tailwind", "radix", "dark-mode"],
         "difficulty": "beginner|intermediate|advanced",
         "testingNotes": "[React Testing Library examples, accessibility testing, visual regression tests]",
         "dependencies": ["services that provide data to these components"]
@@ -242,22 +325,25 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     <div className={cn(
       "flex flex-col space-y-2 p-4 rounded-lg",
       sender === 'user'
-        ? "bg-blue-100 dark:bg-blue-900 ml-auto max-w-[80%]"
-        : "bg-gray-100 dark:bg-gray-800 mr-auto max-w-[80%]"
+        ? "bg-primary text-primary-foreground ml-12"
+        : "bg-muted mr-12"
     )}>
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold">
+        <span className="text-sm font-medium">
           {sender === 'user' ? 'You' : 'Assistant'}
         </span>
         {timestamp && (
-          <span className="text-xs text-muted-foreground">
-            {format(timestamp, 'HH:mm')}
+          <span className="text-xs opacity-70">
+            {timestamp.toLocaleTimeString()}
           </span>
         )}
       </div>
-      <div className="text-sm whitespace-pre-wrap">
-        {message}
-        {streaming && <span className="animate-pulse">▊</span>}
+      <div className="text-sm">
+        {streaming ? (
+          <StreamingText text={message} />
+        ) : (
+          <ReactMarkdown>{message}</ReactMarkdown>
+        )}
       </div>
     </div>
   );
@@ -266,377 +352,324 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 // 3. Organism - Chat Interface component
 // src/components/organisms/ChatInterface.tsx
 interface ChatInterfaceProps {
-  messages: Message[];
+  messages: ChatMessage[];
   onSendMessage: (message: string) => void;
-  isStreaming?: boolean;
-  placeholder?: string;
+  isLoading?: boolean;
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   messages,
   onSendMessage,
-  isStreaming,
-  placeholder = "Type your message..."
+  isLoading
 }) => {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
+  };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, scrollToBottom]);
+  }, [messages]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (input.trim() && !isStreaming) {
+    if (input.trim() && !isLoading) {
       onSendMessage(input.trim());
       setInput('');
     }
   };
 
   return (
-    <Card className="flex flex-col h-[600px]">
-      <CardHeader>
-        <CardTitle>AI Assistant</CardTitle>
-      </CardHeader>
-      <CardContent className="flex-1 overflow-hidden">
-        <ScrollArea className="h-full pr-4">
-          <div className="space-y-4">
-            {messages.map((message, index) => (
-              <ChatMessage
-                key={message.id || index}
-                message={message.content}
-                sender={message.role}
-                timestamp={message.timestamp}
-                streaming={isStreaming && index === messages.length - 1}
-              />
-            ))}
-          </div>
-          <div ref={messagesEndRef} />
-        </ScrollArea>
-      </CardContent>
-      <CardFooter>
-        <form onSubmit={handleSubmit} className="flex w-full space-x-2">
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.map((message, index) => (
+          <ChatMessage
+            key={index}
+            message={message.content}
+            sender={message.sender}
+            timestamp={message.timestamp}
+            streaming={message.streaming}
+          />
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+      
+      <form onSubmit={handleSubmit} className="p-4 border-t">
+        <div className="flex space-x-2">
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={placeholder}
-            disabled={isStreaming}
+            placeholder="Type your message..."
+            disabled={isLoading}
             className="flex-1"
-            aria-label="Chat message input"
           />
-          <Button
-            type="submit"
-            disabled={!input.trim() || isStreaming}
-            loading={isStreaming}
-          >
+          <Button type="submit" disabled={!input.trim() || isLoading} loading={isLoading}>
             Send
           </Button>
-        </form>
-      </CardFooter>
-    </Card>
+        </div>
+      </form>
+    </div>
   );
 };
-
-// 4. Accessibility patterns
-const useKeyboardNavigation = (onSubmit: () => void) => {
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-        onSubmit();
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onSubmit]);
-};
-
-// 5. Responsive design patterns
-const useResponsiveLayout = () => {
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768);
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
-
-  return { isMobile };
-};
 ```
 
 ---
 
-## 🤝 **Squad Coordination Patterns**
+## 🎨 **Design System Standards**
 
-### **With AI Integration Specialist**
-- **UI ← AI Integration**: When AI responses need React component display
-- **Coordination Pattern**: AI provides streaming data, Frontend implements responsive UI components
-- **Example**: "Need streaming chat components for Claude API responses with real-time updates"
+### **Atomic Design Hierarchy**
+```
+atoms/
+├── Button.tsx
+├── Input.tsx
+├── Badge.tsx
+├── Avatar.tsx
+└── LoadingSpinner.tsx
 
-### **With Real-time Systems Specialist**
-- **UI ← WebSocket Integration**: When real-time data needs component updates
-- **Coordination Pattern**: Real-time provides WebSocket data, Frontend implements reactive UI updates
-- **Example**: "WebSocket connection ready, need UI components for live status updates"
+molecules/
+├── SearchBar.tsx
+├── ChatMessage.tsx
+├── UserProfile.tsx
+└── NavigationItem.tsx
 
-### **Cross-Squad Dependencies**
+organisms/
+├── Header.tsx
+├── ChatInterface.tsx
+├── Sidebar.tsx
+└── SettingsPanel.tsx
 
-#### **Backend Infrastructure Squad Integration**
-```json
-{
-  "tool": "coordinator_upsert_knowledge",
-  "arguments": {
-    "collection": "team-coordination",
-    "points": [{
-      "payload": {
-        "messageType": "ui_integration",
-        "squadId": "ai-experience",
-        "agentId": "frontend-experience-specialist",
-        "content": "New API endpoints need corresponding UI components",
-        "uiRequirements": {
-          "endpoints": ["/api/v1/tasks", "/api/v1/staff"],
-          "componentTypes": ["data tables", "forms", "modals"],
-          "designSystem": "atomic design with Radix UI",
-          "accessibility": "WCAG 2.1 AA compliant",
-          "responsive": "mobile-first design"
-        },
-        "dependencies": ["backend-services-specialist"],
-        "priority": "medium",
-        "timestamp": "[current_iso_timestamp]"
-      }
-    }]
-  }
-}
+templates/
+├── MainLayout.tsx
+├── ChatLayout.tsx
+└── SettingsLayout.tsx
+
+pages/
+├── HomePage.tsx
+├── ChatPage.tsx
+└── SettingsPage.tsx
 ```
 
-#### **Platform & Security Squad Integration**
-```json
-{
-  "tool": "coordinator_upsert_knowledge",
-  "arguments": {
-    "collection": "team-coordination",
-    "points": [{
-      "payload": {
-        "messageType": "security_integration",
-        "squadId": "ai-experience",
-        "agentId": "frontend-experience-specialist",
-        "content": "JWT authentication components and secure session management UI needed",
-        "securityRequirements": [
-          "Secure JWT token handling in React components",
-          "Session expiry UI notifications",
-          "Login/logout component flows",
-          "Protected route implementations"
-        ],
-        "dependencies": ["security-auth-specialist"],
-        "priority": "high",
-        "timestamp": "[current_iso_timestamp]"
-      }
-    }]
-  }
-}
-```
-
----
-
-## ⚡ **Execution Workflow Examples**
-
-### **Example Task: "Create responsive task management dashboard"**
-
-#### **Phase 1: Context & Planning (5-10 minutes)**
-1. **Execute coordinator knowledge pre-work protocol**: Discover existing dashboard patterns and components
-2. **Analyze design requirements**: Determine atomic design breakdown and accessibility needs
-3. **Plan component architecture**: Design organism/template composition with mobile-first approach
-
-#### **Phase 2: Implementation (45-60 minutes)**
-1. **Create atomic components** (Button, Input, Badge variants)
-2. **Build molecular components** (TaskCard, SearchBox, FilterPanel)
-3. **Compose organism components** (TaskList, TaskBoard, DashboardHeader)
-4. **Implement template layout** (DashboardTemplate with responsive grid)
-5. **Add accessibility features** (keyboard navigation, screen reader support)
-6. **Integrate with API data** via fetch MCP testing
-
-#### **Phase 3: Coordination & Documentation (5-10 minutes)**
-1. **Coordinate with AI specialist** for intelligent task prioritization UI
-2. **Notify real-time specialist** about live update requirements
-3. **Document component patterns** in technical-knowledge
-4. **Update design system** documentation with new variants
-
-### **Example Integration: "Streaming AI chat interface with accessibility"**
-
+### **Component Variant System (CVA)**
 ```typescript
-// 1. Accessible streaming chat implementation
-const StreamingChatInterface: React.FC<StreamingChatProps> = ({
-  onMessage,
-  isStreaming,
-  messages
-}) => {
-  const [announcement, setAnnouncement] = useState<string>('');
-  const chatRef = useRef<HTMLDivElement>(null);
+// Example: Button variants with CVA
+import { cva, type VariantProps } from "class-variance-authority";
 
-  // Screen reader announcements for streaming
-  const announceToScreenReader = useCallback((message: string) => {
-    setAnnouncement(message);
-    setTimeout(() => setAnnouncement(''), 100);
-  }, []);
-
-  useEffect(() => {
-    if (isStreaming) {
-      announceToScreenReader('AI is responding...');
+const buttonVariants = cva(
+  // Base styles
+  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline"
+      },
+      size: {
+        default: "h-10 px-4 py-2",
+        sm: "h-9 rounded-md px-3",
+        lg: "h-11 rounded-md px-8",
+        icon: "h-10 w-10"
+      }
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default"
     }
-  }, [isStreaming, announceToScreenReader]);
+  }
+);
 
-  // Focus management
-  const focusManagement = useFocusManagement({
-    initialFocus: 'input',
-    trapFocus: true,
-    returnFocus: true
-  });
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {
+  asChild?: boolean;
+}
+```
 
+### **Accessibility Standards**
+```typescript
+// Example: Accessible component with proper ARIA attributes
+export const AccessibleButton: React.FC<ButtonProps> = ({
+  children,
+  disabled,
+  loading,
+  'aria-label': ariaLabel,
+  ...props
+}) => {
   return (
-    <div
-      ref={chatRef}
-      className="flex flex-col h-full"
-      role="application"
-      aria-label="AI Chat Interface"
-      {...focusManagement}
+    <button
+      {...props}
+      disabled={disabled || loading}
+      aria-label={ariaLabel || (typeof children === 'string' ? children : undefined)}
+      aria-disabled={disabled || loading}
+      aria-busy={loading}
+      className={cn(buttonVariants({ variant, size }), className)}
     >
-      {/* Screen reader only announcements */}
-      <div
-        aria-live="polite"
-        aria-atomic="true"
-        className="sr-only"
-      >
-        {announcement}
-      </div>
+      {loading && (
+        <LoadingSpinner 
+          className="mr-2 h-4 w-4" 
+          aria-hidden="true"
+        />
+      )}
+      {children}
+      {loading && <span className="sr-only">Loading...</span>}
+    </button>
+  );
+};
+```
 
-      <ChatHeader />
-
-      <MessageList
-        messages={messages}
-        isStreaming={isStreaming}
-        className="flex-1 overflow-auto"
-        aria-label="Chat conversation"
-      />
-
-      <ChatInput
-        onSubmit={onMessage}
-        disabled={isStreaming}
-        placeholder="Type your message (Cmd+Enter to send)"
-        aria-describedby="chat-input-help"
-      />
-
-      <div id="chat-input-help" className="sr-only">
-        Press Cmd+Enter to send message, or use Send button
-      </div>
+### **Responsive Design Patterns**
+```typescript
+// Example: Responsive component with Tailwind breakpoints
+export const ResponsiveGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+      {children}
     </div>
   );
 };
 
-// 2. Responsive design with mobile optimization
-const useResponsiveChatLayout = () => {
-  const [layout, setLayout] = useState<'mobile' | 'tablet' | 'desktop'>('desktop');
+// Mobile-first responsive utilities
+const responsiveVariants = cva("", {
+  variants: {
+    spacing: {
+      sm: "p-2 sm:p-4 md:p-6",
+      md: "p-4 sm:p-6 md:p-8",
+      lg: "p-6 sm:p-8 md:p-12"
+    },
+    layout: {
+      stack: "flex flex-col",
+      row: "flex flex-col sm:flex-row",
+      grid: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+    }
+  }
+});
+```
 
-  useEffect(() => {
-    const updateLayout = () => {
-      const width = window.innerWidth;
-      if (width < 640) setLayout('mobile');
-      else if (width < 1024) setLayout('tablet');
-      else setLayout('desktop');
-    };
+---
 
-    updateLayout();
-    window.addEventListener('resize', updateLayout);
-    return () => window.removeEventListener('resize', updateLayout);
-  }, []);
+## 🧪 **Testing Standards**
 
-  return {
-    layout,
-    isMobile: layout === 'mobile',
-    isTablet: layout === 'tablet',
-    isDesktop: layout === 'desktop'
-  };
-};
+### **Component Testing with React Testing Library**
+```typescript
+// Example: Testing dark mode toggle component
+import { render, screen, fireEvent } from '@testing-library/react';
+import { DarkModeToggle } from './DarkModeToggle';
 
-// 3. Component testing patterns
-describe('StreamingChatInterface', () => {
-  it('announces streaming status to screen readers', async () => {
-    const { getByRole } = render(
-      <StreamingChatInterface
-        messages={[]}
-        onMessage={jest.fn()}
-        isStreaming={true}
-      />
-    );
-
-    const announcement = getByRole('status', { hidden: true });
-    expect(announcement).toHaveTextContent('AI is responding...');
+describe('DarkModeToggle', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.documentElement.removeAttribute('data-theme');
   });
 
-  it('handles keyboard navigation correctly', async () => {
-    const onMessage = jest.fn();
-    const { getByRole } = render(
-      <StreamingChatInterface
-        messages={[]}
-        onMessage={onMessage}
-        isStreaming={false}
-      />
-    );
+  it('should toggle dark mode when clicked', () => {
+    render(<DarkModeToggle />);
+    
+    const toggle = screen.getByRole('checkbox', { name: /toggle dark mode/i });
+    expect(toggle).not.toBeChecked();
+    
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
+    expect(localStorage.getItem('darkMode')).toBe('true');
+  });
 
-    const input = getByRole('textbox', { name: /chat message input/i });
+  it('should respect system preference when no saved preference', () => {
+    // Mock system preference
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: jest.fn().mockImplementation(query => ({
+        matches: query === '(prefers-color-scheme: dark)',
+        media: query,
+        onchange: null,
+        addListener: jest.fn(),
+        removeListener: jest.fn(),
+      })),
+    });
 
-    await userEvent.type(input, 'Hello world{cmd>}{enter}');
-    expect(onMessage).toHaveBeenCalledWith('Hello world');
+    render(<DarkModeToggle />);
+    
+    const toggle = screen.getByRole('checkbox');
+    expect(toggle).toBeChecked();
+  });
+
+  it('should be accessible via keyboard', () => {
+    render(<DarkModeToggle />);
+    
+    const toggle = screen.getByRole('checkbox');
+    toggle.focus();
+    expect(toggle).toHaveFocus();
+    
+    fireEvent.keyDown(toggle, { key: ' ' });
+    expect(toggle).toBeChecked();
+  });
+});
+```
+
+### **Accessibility Testing**
+```typescript
+// Example: Accessibility testing with jest-axe
+import { axe, toHaveNoViolations } from 'jest-axe';
+
+expect.extend(toHaveNoViolations);
+
+describe('DarkModeToggle Accessibility', () => {
+  it('should not have accessibility violations', async () => {
+    const { container } = render(<DarkModeToggle />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it('should have proper ARIA attributes', () => {
+    render(<DarkModeToggle />);
+    
+    const toggle = screen.getByRole('checkbox');
+    expect(toggle).toHaveAttribute('aria-label', 'Toggle dark mode');
+    
+    const label = screen.getByText('Dark Mode');
+    expect(label).toBeInTheDocument();
+    
+    const description = screen.getByText('Switch between light and dark themes');
+    expect(description).toBeInTheDocument();
   });
 });
 ```
 
 ---
 
-## 🚨 **Critical Success Patterns**
+## 📋 **Implementation Checklist**
 
-### **Always Do**
-✅ **Query coordinator knowledge** for existing component patterns before creating new ones
-✅ **Follow atomic design hierarchy** strictly - atoms cannot import organisms
-✅ **Use proper import paths** - never use deprecated ui/ imports
-✅ **Implement WCAG 2.1 AA compliance** for all interactive components
-✅ **Design mobile-first** with responsive breakpoints and touch optimization
-✅ **Test with React Testing Library** and include accessibility tests
+### **Dark Mode Implementation**
+- [x] CSS custom properties for theme variables
+- [x] Dark mode toggle component with state management
+- [x] localStorage persistence for user preference
+- [x] System preference detection and fallback
+- [x] Smooth transitions between themes
+- [x] Accessibility compliance (ARIA labels, keyboard navigation)
+- [ ] Theme context provider for app-wide state management
+- [ ] Integration with existing component library
+- [ ] Visual regression testing for both themes
+- [ ] Documentation and usage examples
 
-### **Never Do**
-❌ **Violate atomic design hierarchy** - respect component import boundaries
-❌ **Skip accessibility testing** - always validate with screen readers
-❌ **Create god components** - decompose large components into atomic parts
-❌ **Ignore mobile experience** - design for touch and small screens first
-❌ **Use deprecated patterns** - avoid old ui/ component imports
-❌ **Skip component documentation** - document props and usage examples
+### **Component Architecture**
+- [x] Atomic design structure (atoms/molecules/organisms)
+- [x] TypeScript interfaces and prop definitions
+- [x] CVA variant system for styling
+- [x] Accessibility attributes and ARIA compliance
+- [x] Responsive design patterns
+- [ ] Unit tests with React Testing Library
+- [ ] Storybook documentation
+- [ ] Performance optimization (React.memo, useMemo)
 
----
-
-## 📊 **Success Metrics**
-
-### **Component Quality**
-- 100% WCAG 2.1 AA compliance for all interactive components
-- Mobile-first responsive design across all breakpoints
-- Component reusability > 80% across different pages
-- Zero accessibility violations in automated testing
-
-### **Design System**
-- Atomic design hierarchy violations: 0 tolerance
-- Component API consistency score > 95%
-- Design token usage > 90% (minimal custom styles)
-- Component test coverage > 90%
-
-### **Squad Coordination**
-- AI response UI integration within 2 hours of streaming availability
-- Real-time WebSocket UI updates within 30 minutes of data availability
-- Backend API component integration within 4 hours of endpoint delivery
-- Component documentation delivery with implementation
-
----
-
-**Reference**: See main CLAUDE.md for complete Hyperion standards and cross-squad protocols.
+### **Design System Integration**
+- [x] Tailwind CSS utility classes
+- [x] Design token consistency
+- [x] Component variant system
+- [ ] Radix UI primitive integration
+- [ ] Framer Motion animations
+- [ ] Icon system integration
+- [ ] Typography scale implementation
