@@ -213,6 +213,37 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("todos must not be empty")
 	}
 
+	// VALIDATION: Check for discovery keywords in TODOs (subagents cannot search/discover)
+	discoveryKeywords := []string{
+		"search", "find", "locate", "discover", "look for",
+		"code_index_search", "list_directory", "explore",
+	}
+
+	for i, todo := range todos {
+		todoLower := strings.ToLower(todo)
+		for _, keyword := range discoveryKeywords {
+			if strings.Contains(todoLower, keyword) {
+				return nil, fmt.Errorf(
+					"❌ TODO validation failed: TODO #%d contains discovery keyword '%s'\n"+
+						"TODO: %s\n\n"+
+						"🚨 SUBAGENTS CANNOT SEARCH OR DISCOVER FILES\n"+
+						"• Subagents run in write-only mode\n"+
+						"• Discovery tools (code_index_search, list_directory) are BLOCKED\n"+
+						"• YOU must run code_index_search BEFORE creating this task\n"+
+						"• TODOs must be implementation steps only\n\n"+
+						"✅ GOOD TODO examples:\n"+
+						"  - 'Add responsive CSS to Settings.tsx lines 15-45'\n"+
+						"  - 'Update login validation in AuthForm.tsx'\n"+
+						"  - 'Test changes work on mobile viewport'\n\n"+
+						"❌ BAD TODO examples:\n"+
+						"  - 'Search for Settings component'  ← Discovery step!\n"+
+						"  - 'Find the auth logic'  ← Discovery step!\n"+
+						"  - 'Locate CSS files'  ← Discovery step!",
+					i+1, keyword, todo)
+			}
+		}
+	}
+
 	// Convert todos to storage format
 	todoItems := make([]storage.TodoItemInput, len(todos))
 	for i, todo := range todos {
@@ -231,6 +262,42 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		for i, f := range fm {
 			if str, ok := f.(string); ok {
 				filesModified[i] = str
+			}
+		}
+	}
+
+	// VALIDATION: Warn if filesModified is empty
+	// This is a strong indicator the coordinator didn't use code_index_search results
+	if len(filesModified) == 0 {
+		zap.L().Warn("⚠️  filesModified is empty - subagent may not know which files to modify",
+			zap.String("agentName", agentName),
+			zap.String("humanTaskId", humanTaskID),
+			zap.Int("todosCount", len(todos)),
+			zap.String("recommendation", "Run code_index_search first and populate filesModified with result file paths"))
+
+		// Check if TODOs reference specific files - if so, this is definitely an error
+		for i, todo := range todos {
+			todoLower := strings.ToLower(todo)
+			// Look for file references like ".tsx", ".go", ".css", etc.
+			fileExtensions := []string{".tsx", ".ts", ".jsx", ".js", ".go", ".css", ".html", ".py", ".java"}
+			for _, ext := range fileExtensions {
+				if strings.Contains(todoLower, ext) {
+					return nil, fmt.Errorf(
+						"❌ filesModified validation failed:\n"+
+							"• filesModified is empty\n"+
+							"• BUT TODO #%d references a file: %s\n\n"+
+							"🚨 YOU MUST POPULATE filesModified\n"+
+							"• Run code_index_search to find relevant files\n"+
+							"• Extract filePath values from search results\n"+
+							"• Pass them in filesModified array\n\n"+
+							"Example:\n"+
+							"1. code_index_search('settings component')\n"+
+							"2. create_agent_task({\n"+
+							"     filesModified: [\"/path/to/Settings.tsx\", \"/path/to/settings.css\"],\n"+
+							"     todos: [\"Add responsive CSS...\"]\n"+
+							"   })",
+						i+1, todo)
+				}
 			}
 		}
 	}
