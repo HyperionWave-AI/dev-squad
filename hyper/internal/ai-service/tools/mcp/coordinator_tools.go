@@ -2241,7 +2241,8 @@ func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]
 			}
 		}
 	case "write_file":
-		if path, ok := args["filePath"].(string); ok {
+		// NOTE: The write_file tool uses "path" not "filePath" as its parameter name
+		if path, ok := args["path"].(string); ok {
 			f.FilesWritten[path]++
 		}
 	case "apply_patch":
@@ -2314,7 +2315,34 @@ func (f *FileOperationTracker) GetProgressSummary() string {
 	return summary.String()
 }
 
+// normalizePathForComparison cleans and normalizes a path for comparison
+// Handles ./, ../, and ensures consistent format for matching
+func normalizePathForComparison(path string, projectRoot string) []string {
+	// Clean the path to remove ./ and ../ components
+	cleaned := filepath.Clean(path)
+
+	// Generate multiple variants for matching
+	variants := []string{cleaned}
+
+	// Add absolute version if relative
+	if !filepath.IsAbs(cleaned) {
+		absPath := filepath.Join(projectRoot, cleaned)
+		variants = append(variants, filepath.Clean(absPath))
+	}
+
+	// Add relative version if absolute
+	if filepath.IsAbs(cleaned) {
+		relPath, err := filepath.Rel(projectRoot, cleaned)
+		if err == nil {
+			variants = append(variants, filepath.Clean(relPath))
+		}
+	}
+
+	return variants
+}
+
 // validateFileModifications checks if expected files were actually modified using the session-scoped file operation tracker
+// This validation is robust to both absolute and relative path formats
 func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.AgentTask, progressTracker *FileOperationTracker) (bool, []string, error) {
 	// If no files expected to be modified, skip validation
 	if len(agentTask.FilesModified) == 0 {
@@ -2329,37 +2357,48 @@ func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.Agent
 	// Get project root to normalize paths
 	projectRoot := tools.GetProjectRoot()
 
-	// Normalize expected files to both absolute and relative paths for matching
-	expectedFiles := make(map[string]bool)
-	for _, file := range agentTask.FilesModified {
-		// Store the original path
-		expectedFiles[file] = true
+	t.logger.Info("🔍 [Path Validation] Starting file modification validation",
+		zap.String("projectRoot", projectRoot),
+		zap.Int("expectedFilesCount", len(agentTask.FilesModified)),
+		zap.Int("writtenFilesCount", len(progressTracker.FilesWritten)))
 
-		// Also store relative path if this is absolute
-		if filepath.IsAbs(file) {
-			relPath, err := filepath.Rel(projectRoot, file)
-			if err == nil {
-				expectedFiles[relPath] = true
-			}
-		} else {
-			// Also store absolute path if this is relative
-			absPath := filepath.Join(projectRoot, file)
-			expectedFiles[absPath] = true
+	// Build a map of all expected file path variants for fast lookup
+	expectedFiles := make(map[string]string) // variant -> original path
+	for _, expectedFile := range agentTask.FilesModified {
+		variants := normalizePathForComparison(expectedFile, projectRoot)
+		t.logger.Debug("🔍 [Path Validation] Expected file variants",
+			zap.String("originalPath", expectedFile),
+			zap.Strings("variants", variants))
+		for _, variant := range variants {
+			expectedFiles[variant] = expectedFile
 		}
 	}
 
 	// Check which expected files were actually written
 	matchedFiles := []string{}
 	for writtenPath := range progressTracker.FilesWritten {
-		// Normalize the written path
-		normalizedWritten := writtenPath
-		if !filepath.IsAbs(writtenPath) {
-			normalizedWritten = filepath.Join(projectRoot, writtenPath)
-		}
+		variants := normalizePathForComparison(writtenPath, projectRoot)
+		t.logger.Debug("🔍 [Path Validation] Written file variants",
+			zap.String("writtenPath", writtenPath),
+			zap.Strings("variants", variants))
 
-		// Check both the original and normalized paths
-		if expectedFiles[writtenPath] || expectedFiles[normalizedWritten] {
-			matchedFiles = append(matchedFiles, writtenPath)
+		// Check if any variant of the written path matches any expected file variant
+		matched := false
+		for _, variant := range variants {
+			if originalExpected, found := expectedFiles[variant]; found {
+				matchedFiles = append(matchedFiles, writtenPath)
+				matched = true
+				t.logger.Info("✅ [Path Validation] File matched",
+					zap.String("writtenPath", writtenPath),
+					zap.String("matchedVariant", variant),
+					zap.String("expectedPath", originalExpected))
+				break
+			}
+		}
+		if !matched {
+			t.logger.Warn("⚠️  [Path Validation] File not matched",
+				zap.String("writtenPath", writtenPath),
+				zap.Strings("triedVariants", variants))
 		}
 	}
 
@@ -2370,8 +2409,18 @@ func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.Agent
 		for path := range progressTracker.FilesWritten {
 			writtenFiles = append(writtenFiles, path)
 		}
-		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, but agent wrote %v instead (session-scoped tracking)", agentTask.FilesModified, writtenFiles)
+
+		t.logger.Error("❌ [Path Validation] No expected files matched",
+			zap.Strings("expectedFiles", agentTask.FilesModified),
+			zap.Strings("writtenFiles", writtenFiles),
+			zap.String("projectRoot", projectRoot))
+
+		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, but agent wrote %v instead (session-scoped tracking). Project root: %s", agentTask.FilesModified, writtenFiles, projectRoot)
 	}
+
+	t.logger.Info("✅ [Path Validation] Validation successful",
+		zap.Int("matchedFilesCount", len(matchedFiles)),
+		zap.Strings("matchedFiles", matchedFiles))
 
 	return true, matchedFiles, nil
 }

@@ -154,12 +154,13 @@ func (w *WriteFileTool) Call(ctx context.Context, input string) (string, error) 
 		return "", fmt.Errorf("content size %d exceeds limit %d bytes", len(contentBytes), maxWriteSize)
 	}
 
-	// Create parent directories if needed
-	if writeInput.CreateDirs {
-		dir := filepath.Dir(writeInput.FilePath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("failed to create directories: %w", err)
-		}
+	// Always create parent directories (matches tool description promise)
+	// Previously this was conditional on CreateDirs flag, but that parameter
+	// is not exposed in the tool schema, so it always defaulted to false.
+	// This caused failures when writing to non-existent directories.
+	dir := filepath.Dir(writeInput.FilePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directories: %w", err)
 	}
 
 	// Atomic write: write to temp file then rename
