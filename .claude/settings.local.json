@@ -41,7 +41,7 @@
       "transitions": {
         "enabled": true,
         "duration": "0.3s",
-        "easing": "ease"
+        "easing": "cubic-bezier(0.4, 0, 0.2, 1)"
       },
       "systemPreference": {
         "detectOnLoad": true,
@@ -53,7 +53,80 @@
         "enabled": true,
         "showInSettings": true,
         "showDescription": true,
-        "accessibilityLabel": "Toggle dark mode"
+        "accessibilityLabel": "Toggle dark mode",
+        "visualFeedback": {
+          "enabled": true,
+          "showIcons": true,
+          "lightIcon": "☀️",
+          "darkIcon": "🌙",
+          "showStateText": true,
+          "lightText": "Light Mode",
+          "darkText": "Dark Mode",
+          "animateTransitions": true,
+          "focusIndicator": {
+            "enabled": true,
+            "color": "var(--focus-ring)",
+            "width": "3px",
+            "style": "solid"
+          },
+          "hoverEffects": {
+            "enabled": true,
+            "opacity": 0.9,
+            "scale": 1.02
+          },
+          "activeState": {
+            "enabled": true,
+            "sliderExpansion": "2px"
+          }
+        },
+        "accessibility": {
+          "ariaDescribedBy": "dark-mode-description",
+          "keyboardNavigation": true,
+          "screenReaderAnnouncements": true,
+          "highContrastSupport": true,
+          "reducedMotionSupport": true
+        },
+        "responsive": {
+          "mobileLayout": "stacked",
+          "tabletLayout": "inline",
+          "desktopLayout": "inline",
+          "touchTargetSize": "44px"
+        }
+      },
+      "appearance": {
+        "sectionTitle": "Appearance",
+        "sectionDescription": "Customize the visual appearance of the interface",
+        "showSectionHeaders": true
+      },
+      "notifications": {
+        "sectionTitle": "Notifications",
+        "sectionDescription": "Manage your notification preferences",
+        "showSectionHeaders": true
+      },
+      "privacy": {
+        "sectionTitle": "Privacy & Security",
+        "sectionDescription": "Control your privacy and security settings",
+        "showSectionHeaders": true
+      }
+    },
+    "components": {
+      "settingsContainer": {
+        "borderRadius": "8px",
+        "boxShadow": "0 2px 4px var(--shadow)",
+        "border": "1px solid var(--border-color)"
+      },
+      "settingsItem": {
+        "padding": "1rem 1.5rem",
+        "hoverEffect": true,
+        "transitionDuration": "0.2s"
+      },
+      "toggleSwitch": {
+        "width": "60px",
+        "height": "34px",
+        "sliderSize": "26px",
+        "borderRadius": "34px",
+        "transitionDuration": "0.3s",
+        "transitionEasing": "cubic-bezier(0.4, 0, 0.2, 1)"
       }
     }
   }
