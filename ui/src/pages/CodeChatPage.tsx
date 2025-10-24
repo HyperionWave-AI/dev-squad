@@ -253,6 +253,18 @@ export function CodeChatPage() {
     }
   };
 
+  const handleDeleteAllSessions = async () => {
+    try {
+      // Delete all sessions in parallel
+      await Promise.all(sessions.map((session) => deleteSession(session.id)));
+      setSessions([]);
+      setActiveSessionId(null);
+      setMessages([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete all sessions');
+    }
+  };
+
   const handleRenameSession = async (sessionId: string, newTitle: string) => {
     try {
       const updatedSession = await updateSession(sessionId, newTitle);
@@ -311,6 +323,7 @@ export function CodeChatPage() {
           onSessionSelect={handleSessionSelect}
           onNewChat={handleNewChat}
           onDeleteSession={handleDeleteSession}
+          onDeleteAllSessions={handleDeleteAllSessions}
           onRenameSession={handleRenameSession}
           loading={loading}
         />

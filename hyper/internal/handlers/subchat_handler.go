@@ -37,6 +37,7 @@ type CreateSubchatRequest struct {
 type SubchatResponse struct {
 	ID             string  `json:"id"`
 	ParentChatID   string  `json:"parentChatId"`
+	SessionID      *string `json:"sessionId,omitempty"` // Chat session ID for WebSocket streaming
 	SubagentName   string  `json:"subagentName"`
 	AssignedTaskID *string `json:"assignedTaskId,omitempty"`
 	AssignedTodoID *string `json:"assignedTodoId,omitempty"`
@@ -204,6 +205,7 @@ func (h *SubchatHandler) toSubchatResponse(subchat *storage.Subchat) SubchatResp
 	return SubchatResponse{
 		ID:             subchat.ID,
 		ParentChatID:   subchat.ParentChatID,
+		SessionID:      subchat.SessionID, // Include session ID for WebSocket streaming
 		SubagentName:   subchat.SubagentName,
 		AssignedTaskID: subchat.AssignedTaskID,
 		AssignedTodoID: subchat.AssignedTodoID,
