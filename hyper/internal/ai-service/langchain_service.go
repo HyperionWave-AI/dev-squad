@@ -1044,7 +1044,20 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 				// Check tool result cache BEFORE execution
 				cachedResult, found := resultCache.Get(signature)
-				if found {
+
+				// SPECIAL: Skip cache for coordinator_create_human_task when similar tasks found
+				// This allows loop prevention logic to run and auto-create on 3rd attempt
+				skipCache := false
+				if found && toolCall.Name == "coordinator_create_human_task" {
+					if outputMap, ok := cachedResult.Output.(map[string]interface{}); ok {
+						if similarTasksFound, exists := outputMap["similarTasksFound"].(bool); exists && similarTasksFound {
+							skipCache = true
+							log.Printf("[Tool Cache SKIP] Skipping cache for '%s' - similar tasks detected, allowing loop prevention to run", toolCall.Name)
+						}
+					}
+				}
+
+				if found && !skipCache {
 					// Use cached result - avoid redundant execution
 					result = *cachedResult
 					log.Printf("[Tool Cache HIT] Using cached result for '%s' - skipping execution", toolCall.Name)
@@ -1482,9 +1495,15 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				// FALLBACK MODEL ENHANCEMENT: Add explicit state tracking for workflow comprehension
 				// Haiku (smaller model) benefits from explicit guidance on workflow state and next steps
 				if s.usingFallback {
-					stateGuidance := s.generateWorkflowStateGuidance(toolCall.Name, result, toolCallCount)
+					// Extract session ID from system prompt (first message)
+					sessionID := ""
+					if len(currentMessages) > 0 && currentMessages[0].Role == "system" {
+						sessionID = extractSessionIDFromSystemPrompt(currentMessages[0].Content)
+					}
+
+					stateGuidance := s.generateWorkflowStateGuidance(toolCall.Name, result, toolCallCount, sessionID)
 					if stateGuidance != "" {
-						log.Printf("[Fallback State Tracking] Injecting workflow guidance after tool '%s'", toolCall.Name)
+						log.Printf("[Fallback State Tracking] Injecting workflow guidance after tool '%s' with sessionID: %s", toolCall.Name, sessionID)
 						currentMessages = append(currentMessages, Message{
 							Role:    "system",
 							Content: stateGuidance,
@@ -2582,10 +2601,34 @@ func validateFilePaths(paths []string) ([]string, []string) {
 	return validPaths, invalidPaths
 }
 
+// extractSessionIDFromSystemPrompt extracts the session ID from the system prompt message.
+// The system prompt contains: "SESSION CONTEXT:\n- **CURRENT CHAT SESSION ID**: {sessionId}"
+func extractSessionIDFromSystemPrompt(systemPrompt string) string {
+	// Look for the session ID pattern in the system prompt
+	// Pattern: "CURRENT CHAT SESSION ID**: {sessionId}"
+	const marker = "CURRENT CHAT SESSION ID**: "
+	startIdx := strings.Index(systemPrompt, marker)
+	if startIdx == -1 {
+		return ""
+	}
+
+	// Move past the marker
+	startIdx += len(marker)
+
+	// Find the end of the session ID (newline or end of string)
+	endIdx := strings.IndexAny(systemPrompt[startIdx:], "\n\r")
+	if endIdx == -1 {
+		// No newline found, use rest of string
+		return strings.TrimSpace(systemPrompt[startIdx:])
+	}
+
+	return strings.TrimSpace(systemPrompt[startIdx : startIdx+endIdx])
+}
+
 // generateWorkflowStateGuidance creates explicit state tracking messages for the fallback model
 // to help it understand the 5-step coordinator workflow and what to do next.
 // This is crucial for smaller models like Haiku that need more explicit guidance.
-func (s *ChatService) generateWorkflowStateGuidance(toolName string, result ToolResult, toolCallCount int) string {
+func (s *ChatService) generateWorkflowStateGuidance(toolName string, result ToolResult, toolCallCount int, sessionID string) string {
 	// Skip guidance if tool failed
 	if result.Error != "" {
 		return ""
@@ -2613,8 +2656,8 @@ func (s *ChatService) generateWorkflowStateGuidance(toolName string, result Tool
 				var firstTaskID string
 				if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
 					if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
-						if taskID, ok := firstTask["taskId"].(string); ok {
-							firstTaskID = taskID
+						if tid, ok := firstTask["taskId"].(string); ok {
+							firstTaskID = tid
 						}
 					}
 				}
@@ -2682,12 +2725,17 @@ func (s *ChatService) generateWorkflowStateGuidance(toolName string, result Tool
 			agentName, _ := outputMap["agentName"].(string)
 
 			if hasAgentTaskID {
+				// Use actual session ID instead of placeholder
+				parentChatIDValue := sessionID
+				if parentChatIDValue == "" {
+					parentChatIDValue = "<session-id-not-found>"
+				}
 				guidance = fmt.Sprintf("✅ STEP 4 COMPLETE: Agent task created successfully.\n"+
 					"📝 Agent Task ID: \"%s\"\n"+
 					"➡️ NEXT ACTION (FINAL): Call 'execute_subagent' to launch the agent:\n"+
-					"   {\"agentTaskId\": \"%s\", \"parentChatId\": \"<from session context>\"}\n"+
+					"   {\"agentTaskId\": \"%s\", \"parentChatId\": \"%s\"}\n"+
 					"🔒 DO NOT call create_agent_task again - the task is created.\n"+
-					"✅ After execute_subagent, the %s agent will implement the changes - YOU ARE DONE!", agentTaskID, agentTaskID, agentName)
+					"✅ After execute_subagent, the %s agent will implement the changes - YOU ARE DONE!", agentTaskID, agentTaskID, parentChatIDValue, agentName)
 			}
 		}
 

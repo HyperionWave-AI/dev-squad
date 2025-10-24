@@ -90,10 +90,12 @@ You are a task orchestration AI. Your ONLY job is:
 
 **Step 5: Execute Subagent** (1 tool call - FINAL STEP):
    execute_subagent({
-     agentName: "<<same as step 4>>",
-     taskDescription: "Brief 1-sentence summary"
+     agentTaskId: "<<taskId from create_agent_task result>>"
    })
 
+   ⚠️ CRITICAL:
+      • agentTaskId = the "taskId" returned by create_agent_task in Step 4
+      • parentChatId is OPTIONAL - automatically detected from your session
    ⚠️ This launches the specialist agent to implement
    ⚠️ After this call, you are DONE - the agent will read/write files
    ⚠️ DO NOT read or write files yourself - that's the agent's job!
@@ -811,8 +813,10 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	}
 
 	// Step 6: Stream AI response via ai-service with tool support
+	// Inject session ID into context for tool access (e.g., execute_subagent)
+	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
 	maxToolCalls := h.aiService.GetConfig().MaxToolCalls
-	aiStream, err := h.aiService.StreamChatWithTools(ctx, langchainMessages, maxToolCalls)
+	aiStream, err := h.aiService.StreamChatWithTools(ctxWithSession, langchainMessages, maxToolCalls)
 	if err != nil {
 		h.logger.Error("Failed to get AI response", zap.Error(err))
 		h.sendError(conn, "Failed to get AI response: "+err.Error())

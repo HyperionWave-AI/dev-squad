@@ -13,11 +13,13 @@ import {
   CircularProgress,
   Alert,
   Paper,
+  Collapse,
 } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import { subchatService, type Subchat } from '../services/subchatService';
 import SubchatCard from './SubchatCard';
 import SubchatCreationDialog from './SubchatCreationDialog';
+import SubchatDetailView from './SubchatDetailView';
 
 interface SubchatListProps {
   parentChatId: string;
@@ -32,6 +34,7 @@ export const SubchatList: React.FC<SubchatListProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [expandedSubchatId, setExpandedSubchatId] = useState<string | null>(null);
 
   const loadSubchats = useCallback(async (isBackgroundRefresh = false) => {
     // Don't show loading spinner for background refreshes
@@ -75,6 +78,10 @@ export const SubchatList: React.FC<SubchatListProps> = ({
     if (onSubchatClick) {
       onSubchatClick(subchatId);
     }
+  };
+
+  const handleToggleDetails = (subchatId: string) => {
+    setExpandedSubchatId((prev) => (prev === subchatId ? null : subchatId));
   };
 
   if (loading) {
@@ -165,7 +172,17 @@ export const SubchatList: React.FC<SubchatListProps> = ({
                 <SubchatCard
                   subchat={subchat}
                   onClick={handleCardClick}
+                  isExpanded={expandedSubchatId === subchat.id}
+                  onToggleDetails={handleToggleDetails}
                 />
+                <Collapse in={expandedSubchatId === subchat.id}>
+                  <Box sx={{ mt: 2, ml: 2 }}>
+                    <SubchatDetailView
+                      subchatId={subchat.id}
+                      onClose={() => setExpandedSubchatId(null)}
+                    />
+                  </Box>
+                </Collapse>
               </Box>
             ))}
           </Box>
@@ -194,7 +211,17 @@ export const SubchatList: React.FC<SubchatListProps> = ({
                 <SubchatCard
                   subchat={subchat}
                   onClick={handleCardClick}
+                  isExpanded={expandedSubchatId === subchat.id}
+                  onToggleDetails={handleToggleDetails}
                 />
+                <Collapse in={expandedSubchatId === subchat.id}>
+                  <Box sx={{ mt: 2, ml: 2 }}>
+                    <SubchatDetailView
+                      subchatId={subchat.id}
+                      onClose={() => setExpandedSubchatId(null)}
+                    />
+                  </Box>
+                </Collapse>
               </Box>
             ))}
           </Box>
