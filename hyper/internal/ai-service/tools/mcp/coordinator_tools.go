@@ -2,12 +2,15 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	aiservice "hyper/internal/ai-service"
@@ -988,7 +991,8 @@ func (t *GetPopularCollectionsTool) Execute(ctx context.Context, input map[strin
 
 // CreateHumanTaskTool implements the ToolExecutor interface
 type CreateHumanTaskTool struct {
-	storage storage.TaskStorage
+	storage       storage.TaskStorage
+	retryAttempts sync.Map // Track retry attempts by prompt hash to prevent loops
 }
 
 func (t *CreateHumanTaskTool) Name() string {
@@ -996,7 +1000,20 @@ func (t *CreateHumanTaskTool) Name() string {
 }
 
 func (t *CreateHumanTaskTool) Description() string {
-	return "Create a new human task with the original user prompt. Returns task ID. Use this as the first step when a user makes a request."
+	return `Create a new human task with the original user prompt. Returns task ID. Use this as the first step when a user makes a request.
+
+CRITICAL - Handling Similar Tasks (MUST FOLLOW):
+- If similarTasksFound=true is returned, you MUST:
+  1. STOP and examine the similarTasks array
+  2. ASK THE USER: "I found similar existing tasks. Would you like to:
+     a) Use an existing task (show task details)
+     b) Create a new task anyway"
+  3. Wait for user response
+  4. Based on user choice:
+     - If user chooses existing task → use that taskId
+     - If user wants new task → call this tool again with forceCreate=true
+- DO NOT call this tool again without asking the user first
+- DO NOT try to decide on your own - always ask the user when similar tasks are found`
 }
 
 func (t *CreateHumanTaskTool) InputSchema() map[string]interface{} {
@@ -1027,11 +1044,45 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 		forceCreate = fc
 	}
 
+	// Generate hash of prompt for tracking retry attempts
+	hash := sha256.Sum256([]byte(prompt))
+	promptHash := hex.EncodeToString(hash[:])
+
+	// Track ALL calls (even with forceCreate) to detect loops early
+	var attemptCount int
+	if val, exists := t.retryAttempts.Load(promptHash); exists {
+		attemptCount = val.(int)
+	}
+	attemptCount++
+	t.retryAttempts.Store(promptHash, attemptCount)
+
+	// CRITICAL LOOP PREVENTION: After 2 similar task responses (3rd call total),
+	// auto-create instead of returning similar tasks again
+	if attemptCount >= 3 && !forceCreate {
+		// Clean up tracking
+		t.retryAttempts.Delete(promptHash)
+
+		// Force create the task to prevent infinite loop
+		task, err := t.storage.CreateHumanTask(prompt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create human task: %w", err)
+		}
+
+		return map[string]interface{}{
+			"similarTasksFound": false,
+			"taskId":            task.ID,
+			"status":            task.Status,
+			"prompt":            task.Prompt,
+			"createdAt":         task.CreatedAt,
+			"message":           "⚠️ Auto-created task to prevent infinite loop. Tool was called 3+ times with same prompt - creating task automatically.",
+		}, nil
+	}
+
 	// Check for similar tasks unless forceCreate is true
 	if !forceCreate {
 		similarTasks, scores, err := t.storage.SearchSimilarHumanTasks(prompt, 5, 0.75)
 		if err == nil && len(similarTasks) > 0 {
-			// Found similar tasks - return them instead of creating
+			// Return similar tasks and ask user (on attempts 1 and 2)
 			formattedTasks := make([]map[string]interface{}, len(similarTasks))
 			for i, task := range similarTasks {
 				formattedTasks[i] = map[string]interface{}{
@@ -1046,10 +1097,14 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 			return map[string]interface{}{
 				"similarTasksFound": true,
 				"similarTasks":      formattedTasks,
-				"message":           fmt.Sprintf("Found %d similar task(s). Set forceCreate=true to create anyway, or use an existing task.", len(similarTasks)),
+				"message":           fmt.Sprintf("Found %d similar task(s). ASK THE USER if they want to use an existing task or create a new one. If user wants new task, call again with forceCreate=true.", len(similarTasks)),
+				"_attemptCount":     attemptCount, // Include for debugging
 			}, nil
 		}
 	}
+
+	// Clean up tracking if task is being created
+	t.retryAttempts.Delete(promptHash)
 
 	// No similar tasks or forceCreate=true - proceed with creation
 	task, err := t.storage.CreateHumanTask(prompt)
@@ -2082,6 +2137,7 @@ type AIServiceInterface interface {
 // ChatServiceInterface defines methods needed from the chat service
 type ChatServiceInterface interface {
 	CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
+	GetSession(ctx context.Context, sessionID primitive.ObjectID, companyID string) (*models.ChatSession, error)
 	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
 	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
 	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
@@ -2110,10 +2166,10 @@ func (t *ExecuteSubagentTool) InputSchema() map[string]interface{} {
 			},
 			"parentChatId": map[string]interface{}{
 				"type":        "string",
-				"description": "Parent chat session ID",
+				"description": "Parent chat session ID (optional - will be auto-detected from context if not provided)",
 			},
 		},
-		"required": []string{"agentTaskId", "parentChatId"},
+		"required": []string{"agentTaskId"},
 	}
 }
 
@@ -2123,9 +2179,24 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("agentTaskId is required and must be a string")
 	}
 
-	parentChatID, ok := input["parentChatId"].(string)
-	if !ok || parentChatID == "" {
-		return nil, fmt.Errorf("parentChatId is required and must be a string")
+	// ALWAYS try to get session ID from context first (most reliable)
+	var parentChatID string
+	if sessionID, hasSession := ctx.Value("sessionID").(string); hasSession && sessionID != "" {
+		parentChatID = sessionID
+		t.logger.Info("✅ Using session ID from context (auto-detected)",
+			zap.String("agentTaskId", agentTaskID),
+			zap.String("sessionID", sessionID))
+	} else {
+		// Fallback to AI-provided value only if context doesn't have it
+		providedID, hasProvidedID := input["parentChatId"].(string)
+		if hasProvidedID && providedID != "" && providedID != "main" {
+			parentChatID = providedID
+			t.logger.Warn("⚠️ Using AI-provided parentChatId (context not available)",
+				zap.String("agentTaskId", agentTaskID),
+				zap.String("parentChatId", providedID))
+		} else {
+			return nil, fmt.Errorf("parentChatId could not be determined: not in context and not provided by AI (or AI provided 'main' placeholder)")
+		}
 	}
 
 	t.logger.Info("🚀 execute_subagent tool called",
@@ -2451,9 +2522,36 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	progressTracker := NewFileOperationTracker()
 
 	// Create a chat session for this subchat
-	companyID := "dev-company" // TODO: Extract from context
-	userID := "coordinator"    // Subagent executions are associated with the coordinator
+	// Get parent chat session to extract userID and companyID
+	parentSessionID, err := primitive.ObjectIDFromHex(parentChatID)
+	if err != nil {
+		t.logger.Error("Failed to parse parent chat ID",
+			zap.String("parentChatId", parentChatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Invalid parent chat ID: %v", err))
+		return
+	}
+
+	// Get parent session to inherit userID and companyID
+	parentSession, err := t.chatService.GetSession(ctx, parentSessionID, "dev-company")
+	if err != nil {
+		t.logger.Error("Failed to get parent chat session",
+			zap.String("parentChatId", parentChatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v", err))
+		return
+	}
+
+	// Use parent session's userID and companyID for subchat
+	userID := parentSession.UserID
+	companyID := parentSession.CompanyID
 	sessionTitle := fmt.Sprintf("Subchat: %s - %s", agentTask.AgentName, agentTask.Role)
+
+	t.logger.Info("Creating subchat session with parent's credentials",
+		zap.String("subchatId", subchatID),
+		zap.String("parentChatId", parentChatID),
+		zap.String("userId", userID),
+		zap.String("companyId", companyID))
 
 	chatSession, err := t.chatService.CreateSession(ctx, userID, companyID, sessionTitle)
 	if err != nil {

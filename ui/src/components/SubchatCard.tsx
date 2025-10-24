@@ -16,6 +16,7 @@ import {
   Stack,
   CircularProgress,
   LinearProgress,
+  IconButton,
 } from '@mui/material';
 import {
   AccountTree as TaskIcon,
@@ -25,12 +26,15 @@ import {
   PlayArrow as RunningIcon,
   CheckCircleOutline as CompletedIcon,
   Error as ErrorIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import type { Subchat } from '../services/subchatService';
 
 interface SubchatCardProps {
   subchat: Subchat;
   onClick?: (subchatId: string) => void;
+  isExpanded?: boolean;
+  onToggleDetails?: (subchatId: string) => void;
 }
 
 // Category colors for subagent badges
@@ -55,10 +59,22 @@ const STATUS_ICONS: Record<string, React.ElementType> = {
   failed: ErrorIcon,
 };
 
-export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) => {
+export const SubchatCard: React.FC<SubchatCardProps> = ({
+  subchat,
+  onClick,
+  isExpanded = false,
+  onToggleDetails
+}) => {
   const handleClick = () => {
     if (onClick) {
       onClick(subchat.id);
+    }
+  };
+
+  const handleToggleDetails = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click
+    if (onToggleDetails) {
+      onToggleDetails(subchat.id);
     }
   };
 
@@ -105,8 +121,14 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) =>
           boxShadow: 3,
           transform: 'translateY(-2px)',
         },
+        // Highlight when expanded
+        ...(isExpanded && {
+          borderColor: 'primary.main',
+          borderWidth: 2,
+          boxShadow: 4,
+        }),
         // Add subtle pulse animation for running subchats
-        ...(isRunning && {
+        ...(isRunning && !isExpanded && {
           animation: 'pulse 2s ease-in-out infinite',
           '@keyframes pulse': {
             '0%, 100%': { borderColor: 'divider' },
@@ -118,7 +140,7 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) =>
       <CardActionArea onClick={handleClick} disabled={!onClick}>
         <CardContent>
           <Stack spacing={2}>
-            {/* Subagent name with category badge */}
+            {/* Subagent name with category badge and expand button */}
             <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
               <AgentIcon fontSize="small" color="action" />
               <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
@@ -129,6 +151,19 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({ subchat, onClick }) =>
                 color={categoryColor}
                 size="small"
               />
+              {onToggleDetails && (
+                <IconButton
+                  onClick={handleToggleDetails}
+                  size="small"
+                  sx={{
+                    transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.3s',
+                  }}
+                  aria-label={isExpanded ? 'Hide details' : 'Show details'}
+                >
+                  <ExpandMoreIcon />
+                </IconButton>
+              )}
             </Box>
 
             {/* Status badge with icon and progress indicator */}

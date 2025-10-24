@@ -2,7 +2,7 @@
  * ChatSessionList Component
  *
  * Displays list of chat sessions in left sidebar.
- * Features: session selection, new chat creation, delete with confirmation.
+ * Features: session selection, new chat creation, delete with confirmation, delete all functionality.
  */
 
 import { useState } from 'react';
@@ -22,7 +22,7 @@ import {
   DialogContentText,
   TextField,
 } from '@mui/material';
-import { Add, Delete, Chat } from '@mui/icons-material';
+import { Add, Delete, Chat, DeleteSweep } from '@mui/icons-material';
 import type { ChatSession } from '../services/chatService';
 
 interface ChatSessionListProps {
@@ -31,6 +31,7 @@ interface ChatSessionListProps {
   onSessionSelect: (sessionId: string) => void;
   onNewChat: () => void;
   onDeleteSession: (sessionId: string) => void;
+  onDeleteAllSessions: () => void;
   onRenameSession: (sessionId: string, newTitle: string) => void;
   loading?: boolean;
 }
@@ -41,10 +42,12 @@ export function ChatSessionList({
   onSessionSelect,
   onNewChat,
   onDeleteSession,
+  onDeleteAllSessions,
   onRenameSession,
   loading = false,
 }: ChatSessionListProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState<string>('');
@@ -66,6 +69,19 @@ export function ChatSessionList({
   const handleDeleteCancel = () => {
     setDeleteDialogOpen(false);
     setSessionToDelete(null);
+  };
+
+  const handleDeleteAllClick = () => {
+    setDeleteAllDialogOpen(true);
+  };
+
+  const handleDeleteAllConfirm = () => {
+    onDeleteAllSessions();
+    setDeleteAllDialogOpen(false);
+  };
+
+  const handleDeleteAllCancel = () => {
+    setDeleteAllDialogOpen(false);
   };
 
   const handleDoubleClick = (session: ChatSession, event: React.MouseEvent) => {
@@ -123,24 +139,56 @@ export function ChatSessionList({
         backgroundColor: 'background.paper',
       }}
     >
-      {/* Header with New Chat Button */}
+      {/* Header with New Chat and Delete All Buttons */}
       <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Button
-          fullWidth
-          variant="contained"
-          startIcon={<Add />}
-          onClick={onNewChat}
-          disabled={loading}
+        <Box
           sx={{
-            textTransform: 'none',
-            fontWeight: 600,
+            display: 'flex',
+            gap: 1,
+            alignItems: 'center',
+            flexWrap: 'wrap',
           }}
         >
-          New Chat
-        </Button>
+          <Button
+            variant="contained"
+            startIcon={<Add />}
+            onClick={onNewChat}
+            disabled={loading}
+            sx={{
+              textTransform: 'none',
+              fontWeight: 600,
+              flex: '2 1 auto',
+              minWidth: 0,
+              '@media (max-width: 600px)': {
+                flex: '1 1 100%',
+                mb: 1,
+              },
+            }}
+          >
+            New Chat
+          </Button>
+          {sessions.length > 0 && (
+            <IconButton
+              onClick={handleDeleteAllClick}
+              disabled={loading}
+              color="error"
+              title="Delete All Chats"
+              aria-label="Delete all chat sessions"
+              sx={{
+                border: '1px solid',
+                borderColor: 'error.main',
+                borderRadius: '8px', // Changed from default circular to curved square
+                '&:hover': {
+                  backgroundColor: 'error.light',
+                  borderColor: 'error.main',
+                },
+              }}
+            >
+              <DeleteSweep />
+            </IconButton>
+          )}
+        </Box>
       </Box>
-
-      {/* Session List */}
       <Box
         sx={{
           flexGrow: 1,
@@ -234,7 +282,6 @@ export function ChatSessionList({
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
-                            pr: 4,
                           }}
                         >
                           {session.title}
@@ -242,8 +289,17 @@ export function ChatSessionList({
                       )
                     }
                     secondary={
-                      <Typography variant="caption" color="text.secondary">
-                        {formatDate(session.createdAt)}
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{
+                          fontSize: '0.75rem',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {formatDate(session.updatedAt)}
                       </Typography>
                     }
                   />
@@ -254,26 +310,48 @@ export function ChatSessionList({
         )}
       </Box>
 
-      {/* Delete Confirmation Dialog */}
+      {/* Delete Session Confirmation Dialog */}
       <Dialog
         open={deleteDialogOpen}
         onClose={handleDeleteCancel}
-        maxWidth="xs"
-        fullWidth
+        aria-labelledby="delete-dialog-title"
+        aria-describedby="delete-dialog-description"
       >
-        <DialogTitle>Delete Chat Session?</DialogTitle>
+        <DialogTitle id="delete-dialog-title">Delete Chat Session</DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            This will permanently delete the chat session and all its messages.
-            This action cannot be undone.
+          <DialogContentText id="delete-dialog-description">
+            Are you sure you want to delete this chat session? This action cannot be undone.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleDeleteCancel} color="inherit">
+          <Button onClick={handleDeleteCancel} color="primary">
             Cancel
           </Button>
           <Button onClick={handleDeleteConfirm} color="error" variant="contained">
             Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete All Sessions Confirmation Dialog */}
+      <Dialog
+        open={deleteAllDialogOpen}
+        onClose={handleDeleteAllCancel}
+        aria-labelledby="delete-all-dialog-title"
+        aria-describedby="delete-all-dialog-description"
+      >
+        <DialogTitle id="delete-all-dialog-title">Delete All Chat Sessions</DialogTitle>
+        <DialogContent>
+          <DialogContentText id="delete-all-dialog-description">
+            Are you sure you want to delete all chat sessions? This action cannot be undone and will remove all your chat history.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeleteAllCancel} color="primary">
+            Cancel
+          </Button>
+          <Button onClick={handleDeleteAllConfirm} color="error" variant="contained">
+            Delete All
           </Button>
         </DialogActions>
       </Dialog>

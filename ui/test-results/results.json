@@ -1,7 +1,7 @@
 {
   "config": {
-    "configFile": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/playwright.config.ts",
-    "rootDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/tests",
+    "configFile": "/Users/meghaneelamana/dev-squad/ui/playwright.config.ts",
+    "rootDir": "/Users/meghaneelamana/dev-squad/ui/tests",
     "forbidOnly": false,
     "fullyParallel": true,
     "globalSetup": null,
@@ -37,13 +37,13 @@
     "quiet": false,
     "projects": [
       {
-        "outputDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/test-results",
+        "outputDir": "/Users/meghaneelamana/dev-squad/ui/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {},
         "id": "chromium-desktop",
         "name": "chromium-desktop",
-        "testDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/tests",
+        "testDir": "/Users/meghaneelamana/dev-squad/ui/tests",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -51,13 +51,13 @@
         "timeout": 30000
       },
       {
-        "outputDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/test-results",
+        "outputDir": "/Users/meghaneelamana/dev-squad/ui/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {},
         "id": "webkit-desktop",
         "name": "webkit-desktop",
-        "testDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/tests",
+        "testDir": "/Users/meghaneelamana/dev-squad/ui/tests",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -65,13 +65,13 @@
         "timeout": 30000
       },
       {
-        "outputDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/test-results",
+        "outputDir": "/Users/meghaneelamana/dev-squad/ui/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {},
         "id": "tablet",
         "name": "tablet",
-        "testDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/tests",
+        "testDir": "/Users/meghaneelamana/dev-squad/ui/tests",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -79,13 +79,13 @@
         "timeout": 30000
       },
       {
-        "outputDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/test-results",
+        "outputDir": "/Users/meghaneelamana/dev-squad/ui/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {},
         "id": "mobile",
         "name": "mobile",
-        "testDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/tests",
+        "testDir": "/Users/meghaneelamana/dev-squad/ui/tests",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -93,13 +93,13 @@
         "timeout": 30000
       },
       {
-        "outputDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/test-results",
+        "outputDir": "/Users/meghaneelamana/dev-squad/ui/test-results",
         "repeatEach": 1,
         "retries": 0,
         "metadata": {},
         "id": "accessibility",
         "name": "accessibility",
-        "testDir": "/Users/maxmednikov/MaxSpace/dev-squad/coordinator/ui/tests",
+        "testDir": "/Users/meghaneelamana/dev-squad/ui/tests",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -111,24 +111,24 @@
     "updateSnapshots": "missing",
     "updateSourceMethod": "patch",
     "version": "1.55.1",
-    "workers": 8,
+    "workers": 5,
     "webServer": {
-      "command": "npm run dev",
-      "url": "http://localhost:5173",
+      "command": "echo \"Please start backend with: make dev or make dev-hot\"",
+      "url": "http://localhost:7095",
       "reuseExistingServer": true,
-      "timeout": 120000
+      "timeout": 5000
     }
   },
   "suites": [],
   "errors": [
     {
-      "message": "Error: No tests found.\nMake sure that arguments are regular expressions matching test files.\nYou may need to escape symbols like \"$\" or \"*\" and quote the arguments.",
-      "stack": "Error: No tests found.\nMake sure that arguments are regular expressions matching test files.\nYou may need to escape symbols like \"$\" or \"*\" and quote the arguments."
+      "message": "Error: Process from config.webServer exited early.",
+      "stack": "Error: Process from config.webServer exited early."
     }
   ],
   "stats": {
-    "startTime": "2025-10-05T09:20:16.818Z",
-    "duration": 30.043999999999983,
+    "startTime": "2025-10-24T09:30:17.430Z",
+    "duration": 328.20599999999996,
     "expected": 0,
     "skipped": 0,
     "unexpected": 0,
