@@ -92,7 +92,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-full max-h-[90vh] overflow-y-auto" style={{ maxWidth: 'none', width: '98vw' }}>
         <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
           <h2 className="text-2xl font-bold text-gray-800">
             {isHumanTask ? '👤 Human Task' : '🤖 Agent Task'}
@@ -161,7 +161,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
             </>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
             <div>
               <label className="text-sm font-semibold text-gray-600">Status</label>
               <select
@@ -185,7 +185,7 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 text-sm">
             <div>
               <label className="text-xs font-semibold text-gray-600">Created</label>
               <p className="text-gray-700">
@@ -213,11 +213,11 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
           {task.tags && task.tags.length > 0 && (
             <div>
               <label className="text-sm font-semibold text-gray-600">Tags</label>
-              <div className="flex gap-2 flex-wrap mt-1">
-                {task.tags.map((tag: string) => (
+              <div className="mt-1 flex flex-wrap gap-2">
+                {task.tags.map((tag: string, i: number) => (
                   <span
-                    key={tag}
-                    className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-sm"
+                    key={i}
+                    className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full"
                   >
                     {tag}
                   </span>
@@ -225,15 +225,24 @@ export const TaskDetail: React.FC<TaskDetailProps> = ({ taskId, taskType, onClos
               </div>
             </div>
           )}
-        </div>
 
-        <div className="sticky bottom-0 bg-gray-50 px-6 py-4 border-t flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-6 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors"
-          >
-            Close
-          </button>
+          {task.notes && (
+            <div>
+              <label className="text-sm font-semibold text-gray-600">Notes</label>
+              <div className="mt-1 p-3 bg-gray-50 rounded border border-gray-200">
+                <p className="text-gray-800 whitespace-pre-wrap">{task.notes}</p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end pt-4 border-t">
+            <button
+              onClick={onClose}
+              className="px-6 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>
