@@ -5,8 +5,10 @@ import (
 	"net/http"
 
 	"hyper/internal/mcp/storage"
+	"hyper/internal/services"
 
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
 
@@ -14,16 +16,44 @@ import (
 type SubchatHandler struct {
 	subchatStorage *storage.SubchatStorage
 	taskStorage    storage.TaskStorage
+	chatService    *services.ChatService
 	logger         *zap.Logger
 }
 
 // NewSubchatHandler creates a new subchat handler
-func NewSubchatHandler(subchatStorage *storage.SubchatStorage, taskStorage storage.TaskStorage, logger *zap.Logger) *SubchatHandler {
+func NewSubchatHandler(subchatStorage *storage.SubchatStorage, taskStorage storage.TaskStorage, chatService *services.ChatService, logger *zap.Logger) *SubchatHandler {
 	return &SubchatHandler{
 		subchatStorage: subchatStorage,
 		taskStorage:    taskStorage,
+		chatService:    chatService,
 		logger:         logger,
 	}
+}
+
+// extractUserContext extracts userId and companyId from context (set by auth middleware)
+func (h *SubchatHandler) extractUserContext(c *gin.Context) (string, string, error) {
+	// Extract from context (set by optional auth middleware)
+	userIDVal, exists := c.Get("userId")
+	if !exists {
+		return "", "", fmt.Errorf("missing userId in context")
+	}
+
+	companyIDVal, exists := c.Get("companyId")
+	if !exists {
+		return "", "", fmt.Errorf("missing companyId in context")
+	}
+
+	userID, ok := userIDVal.(string)
+	if !ok || userID == "" {
+		return "", "", fmt.Errorf("invalid userId in context")
+	}
+
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		return "", "", fmt.Errorf("invalid companyId in context")
+	}
+
+	return userID, companyID, nil
 }
 
 // DTOs for subchat API
@@ -60,12 +90,57 @@ func (h *SubchatHandler) CreateSubchat(c *gin.Context) {
 		return
 	}
 
+	// Extract user context for ChatSession creation
+	userID, companyID, err := h.extractUserContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: " + err.Error()})
+		return
+	}
+
 	// Step 1: Create the subchat
 	subchat, err := h.subchatStorage.CreateSubchat(req.ParentChatID, req.SubagentName, req.TaskID, req.TodoID)
 	if err != nil {
 		h.logger.Error("Failed to create subchat", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create subchat: " + err.Error()})
 		return
+	}
+
+	// Step 1.5: Create ChatSession with parentChatId for subchat tree visualization
+	// Parse parent chat ID as ObjectID
+	parentChatOID, err := primitive.ObjectIDFromHex(req.ParentChatID)
+	if err != nil {
+		h.logger.Error("Invalid parent chat ID", zap.String("parentChatId", req.ParentChatID), zap.Error(err))
+		// Continue without creating ChatSession - subchat is already created
+	} else {
+		// Create ChatSession with parent chat ID
+		sessionTitle := fmt.Sprintf("Subchat: %s", req.SubagentName)
+		chatSession, err := h.chatService.CreateSessionWithParent(c.Request.Context(), userID, companyID, sessionTitle, &parentChatOID)
+		if err != nil {
+			h.logger.Error("Failed to create chat session for subchat",
+				zap.String("subchatId", subchat.ID),
+				zap.String("parentChatId", req.ParentChatID),
+				zap.Error(err))
+			// Continue without linking - subchat exists but won't have session
+		} else {
+			// Link the ChatSession to the Subchat
+			sessionIDStr := chatSession.ID.Hex()
+			err = h.subchatStorage.UpdateSubchatSessionID(subchat.ID, sessionIDStr)
+			if err != nil {
+				h.logger.Error("Failed to link chat session to subchat",
+					zap.String("subchatId", subchat.ID),
+					zap.String("sessionId", sessionIDStr),
+					zap.Error(err))
+			} else {
+				// Update subchat object with session ID
+				subchat.SessionID = &sessionIDStr
+
+				h.logger.Info("Successfully created and linked chat session to subchat",
+					zap.String("subchatId", subchat.ID),
+					zap.String("sessionId", sessionIDStr),
+					zap.String("parentChatId", req.ParentChatID),
+					zap.String("subagentName", req.SubagentName))
+			}
+		}
 	}
 
 	// Step 2: Automatically create an agent task for this subchat

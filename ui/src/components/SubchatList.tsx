@@ -14,6 +14,8 @@ import {
   Alert,
   Paper,
   Collapse,
+  Container,
+  Divider,
 } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import { subchatService, type Subchat } from '../services/subchatService';
@@ -24,11 +26,13 @@ import SubchatDetailView from './SubchatDetailView';
 interface SubchatListProps {
   parentChatId: string;
   onSubchatClick?: (subchatId: string) => void;
+  onSubchatCreated?: () => void | Promise<void>; // Callback to refresh parent sessions list
 }
 
 export const SubchatList: React.FC<SubchatListProps> = ({
   parentChatId,
   onSubchatClick,
+  onSubchatCreated: onSubchatCreatedCallback,
 }) => {
   const [subchats, setSubchats] = useState<Subchat[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,10 +70,24 @@ export const SubchatList: React.FC<SubchatListProps> = ({
     return () => clearInterval(intervalId);
   }, [loadSubchats]);
 
-  const handleSubchatCreated = (subchatId: string) => {
+  const handleSubchatCreated = async (subchatId: string) => {
+    console.log('[SubchatList] handleSubchatCreated called with subchatId:', subchatId);
+    console.log('[SubchatList] onSubchatCreatedCallback exists?', !!onSubchatCreatedCallback);
+
     setDialogOpen(false);
-    loadSubchats(); // Refresh list
+    loadSubchats(); // Refresh subchats list in drawer
+
+    // Notify parent to refresh sessions list (for tree structure in sidebar)
+    if (onSubchatCreatedCallback) {
+      console.log('[SubchatList] Calling onSubchatCreatedCallback...');
+      await onSubchatCreatedCallback();
+      console.log('[SubchatList] onSubchatCreatedCallback completed');
+    } else {
+      console.warn('[SubchatList] onSubchatCreatedCallback is not defined!');
+    }
+
     if (onSubchatClick) {
+      console.log('[SubchatList] Navigating to subchat:', subchatId);
       onSubchatClick(subchatId); // Navigate to new subchat
     }
   };
@@ -86,9 +104,26 @@ export const SubchatList: React.FC<SubchatListProps> = ({
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
-        <CircularProgress />
-      </Box>
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        <Box 
+          display="flex" 
+          justifyContent="center" 
+          alignItems="center" 
+          minHeight={300}
+          sx={{
+            backgroundColor: 'background.paper',
+            borderRadius: 2,
+            boxShadow: 1,
+          }}
+        >
+          <Box textAlign="center">
+            <CircularProgress size={48} sx={{ mb: 2 }} />
+            <Typography variant="body2" color="text.secondary">
+              Loading subchats...
+            </Typography>
+          </Box>
+        </Box>
+      </Container>
     );
   }
 
@@ -97,145 +132,240 @@ export const SubchatList: React.FC<SubchatListProps> = ({
   const completedSubchats = subchats.filter((s) => s.status !== 'active');
 
   return (
-    <Box>
-      {/* Header with Create button */}
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={3}
-      >
-        <Typography variant="h6" component="h2">
-          Subchats ({subchats.length})
-        </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setDialogOpen(true)}
-        >
-          Create Subchat
-        </Button>
-      </Box>
-
-      {/* Error message */}
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      )}
-
-      {/* Empty state */}
-      {!loading && !error && subchats.length === 0 && (
-        <Paper
-          variant="outlined"
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Box sx={{ backgroundColor: 'background.paper', borderRadius: 2, boxShadow: 1, p: 3 }}>
+        {/* Header with Create button */}
+        <Box
+          display="flex"
+          justifyContent="space-between"
+          alignItems="center"
+          mb={4}
           sx={{
-            p: 4,
-            textAlign: 'center',
-            backgroundColor: 'background.default',
+            flexDirection: { xs: 'column', sm: 'row' },
+            gap: { xs: 2, sm: 0 },
           }}
         >
-          <Typography variant="body1" color="text.secondary" gutterBottom>
-            No subchats yet
-          </Typography>
-          <Typography variant="body2" color="text.secondary" paragraph>
-            Create a subchat to delegate work to a specialist agent
-          </Typography>
+          <Box>
+            <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 1 }}>
+              Subchats
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {subchats.length} {subchats.length === 1 ? 'subchat' : 'subchats'} total
+            </Typography>
+          </Box>
           <Button
-            variant="outlined"
+            variant="contained"
             startIcon={<AddIcon />}
             onClick={() => setDialogOpen(true)}
+            sx={{
+              minWidth: { xs: '100%', sm: 'auto' },
+              py: 1.5,
+              px: 3,
+              borderRadius: 2,
+              textTransform: 'none',
+              fontWeight: 600,
+            }}
           >
-            Create First Subchat
+            Create Subchat
           </Button>
-        </Paper>
-      )}
+        </Box>
 
-      {/* Running Subchats Section */}
-      {runningSubchats.length > 0 && (
-        <Box mb={4}>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', color: 'primary.main' }}>
-            Running ({runningSubchats.length})
-          </Typography>
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: {
-                xs: '1fr',
-                sm: 'repeat(2, 1fr)',
-                md: 'repeat(3, 1fr)',
+        {/* Error message */}
+        {error && (
+          <Alert 
+            severity="error" 
+            sx={{ 
+              mb: 3, 
+              borderRadius: 2,
+              '& .MuiAlert-message': {
+                width: '100%',
               },
-              gap: 2,
             }}
           >
-            {runningSubchats.map((subchat) => (
-              <Box key={subchat.id}>
-                <SubchatCard
-                  subchat={subchat}
-                  onClick={handleCardClick}
-                  isExpanded={expandedSubchatId === subchat.id}
-                  onToggleDetails={handleToggleDetails}
-                />
-                <Collapse in={expandedSubchatId === subchat.id}>
-                  <Box sx={{ mt: 2, ml: 2 }}>
-                    <SubchatDetailView
-                      subchatId={subchat.id}
-                      onClose={() => setExpandedSubchatId(null)}
-                    />
-                  </Box>
-                </Collapse>
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      )}
+            {error}
+          </Alert>
+        )}
 
-      {/* Completed/Failed Subchats Section */}
-      {completedSubchats.length > 0 && (
-        <Box>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 'bold', color: 'text.secondary' }}>
-            Completed ({completedSubchats.length})
-          </Typography>
-          <Box
+        {/* Empty state */}
+        {!loading && !error && subchats.length === 0 && (
+          <Paper
+            variant="outlined"
             sx={{
-              display: 'grid',
-              gridTemplateColumns: {
-                xs: '1fr',
-                sm: 'repeat(2, 1fr)',
-                md: 'repeat(3, 1fr)',
-              },
-              gap: 2,
+              p: 6,
+              textAlign: 'center',
+              backgroundColor: 'background.default',
+              borderRadius: 3,
+              border: '2px dashed',
+              borderColor: 'divider',
             }}
           >
-            {completedSubchats.map((subchat) => (
-              <Box key={subchat.id}>
-                <SubchatCard
-                  subchat={subchat}
-                  onClick={handleCardClick}
-                  isExpanded={expandedSubchatId === subchat.id}
-                  onToggleDetails={handleToggleDetails}
-                />
-                <Collapse in={expandedSubchatId === subchat.id}>
-                  <Box sx={{ mt: 2, ml: 2 }}>
-                    <SubchatDetailView
-                      subchatId={subchat.id}
-                      onClose={() => setExpandedSubchatId(null)}
-                    />
-                  </Box>
-                </Collapse>
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      )}
+            <Box sx={{ maxWidth: 400, mx: 'auto' }}>
+              <Typography variant="h6" color="text.primary" gutterBottom sx={{ fontWeight: 600 }}>
+                No subchats yet
+              </Typography>
+              <Typography variant="body1" color="text.secondary" paragraph sx={{ mb: 3 }}>
+                Create a subchat to delegate work to a specialist agent and organize your workflow
+              </Typography>
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => setDialogOpen(true)}
+                sx={{
+                  py: 1.5,
+                  px: 4,
+                  borderRadius: 2,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                }}
+              >
+                Create First Subchat
+              </Button>
+            </Box>
+          </Paper>
+        )}
 
-      {/* Creation dialog */}
-      <SubchatCreationDialog
-        open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-        parentChatId={parentChatId}
-        onSubchatCreated={handleSubchatCreated}
-      />
-    </Box>
+        {/* Running Subchats Section */}
+        {runningSubchats.length > 0 && (
+          <Box mb={5}>
+            <Box display="flex" alignItems="center" mb={3}>
+              <Typography 
+                variant="h6" 
+                sx={{ 
+                  fontWeight: 600, 
+                  color: 'primary.main',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                }}
+              >
+                Running
+                <Box
+                  component="span"
+                  sx={{
+                    backgroundColor: 'primary.main',
+                    color: 'primary.contrastText',
+                    borderRadius: '12px',
+                    px: 1.5,
+                    py: 0.5,
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                  }}
+                >
+                  {runningSubchats.length}
+                </Box>
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: {
+                  xs: '1fr',
+                  sm: 'repeat(auto-fit, minmax(320px, 1fr))',
+                  lg: 'repeat(auto-fit, minmax(350px, 1fr))',
+                },
+                gap: 3,
+              }}
+            >
+              {runningSubchats.map((subchat) => (
+                <Box key={subchat.id}>
+                  <SubchatCard
+                    subchat={subchat}
+                    onClick={handleCardClick}
+                    isExpanded={expandedSubchatId === subchat.id}
+                    onToggleDetails={handleToggleDetails}
+                  />
+                  <Collapse in={expandedSubchatId === subchat.id}>
+                    <Box sx={{ mt: 2, ml: 1 }}>
+                      <SubchatDetailView
+                        subchatId={subchat.id}
+                        onClose={() => setExpandedSubchatId(null)}
+                      />
+                    </Box>
+                  </Collapse>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )}
+
+        {/* Divider between sections */}
+        {runningSubchats.length > 0 && completedSubchats.length > 0 && (
+          <Divider sx={{ my: 4 }} />
+        )}
+
+        {/* Completed/Failed Subchats Section */}
+        {completedSubchats.length > 0 && (
+          <Box>
+            <Box display="flex" alignItems="center" mb={3}>
+              <Typography 
+                variant="h6" 
+                sx={{ 
+                  fontWeight: 600, 
+                  color: 'text.secondary',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                }}
+              >
+                Completed
+                <Box
+                  component="span"
+                  sx={{
+                    backgroundColor: 'grey.200',
+                    color: 'text.secondary',
+                    borderRadius: '12px',
+                    px: 1.5,
+                    py: 0.5,
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                  }}
+                >
+                  {completedSubchats.length}
+                </Box>
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: {
+                  xs: '1fr',
+                  sm: 'repeat(auto-fit, minmax(320px, 1fr))',
+                  lg: 'repeat(auto-fit, minmax(350px, 1fr))',
+                },
+                gap: 3,
+              }}
+            >
+              {completedSubchats.map((subchat) => (
+                <Box key={subchat.id}>
+                  <SubchatCard
+                    subchat={subchat}
+                    onClick={handleCardClick}
+                    isExpanded={expandedSubchatId === subchat.id}
+                    onToggleDetails={handleToggleDetails}
+                  />
+                  <Collapse in={expandedSubchatId === subchat.id}>
+                    <Box sx={{ mt: 2, ml: 1 }}>
+                      <SubchatDetailView
+                        subchatId={subchat.id}
+                        onClose={() => setExpandedSubchatId(null)}
+                      />
+                    </Box>
+                  </Collapse>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )}
+
+        {/* Creation dialog */}
+        <SubchatCreationDialog
+          open={dialogOpen}
+          onClose={() => setDialogOpen(false)}
+          parentChatId={parentChatId}
+          onSubchatCreated={handleSubchatCreated}
+        />
+      </Box>
+    </Container>
   );
 };
 

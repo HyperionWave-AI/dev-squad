@@ -2137,6 +2137,7 @@ type AIServiceInterface interface {
 // ChatServiceInterface defines methods needed from the chat service
 type ChatServiceInterface interface {
 	CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
+	CreateSessionWithParent(ctx context.Context, userID, companyID, title string, parentChatID *primitive.ObjectID) (*models.ChatSession, error)
 	GetSession(ctx context.Context, sessionID primitive.ObjectID, companyID string) (*models.ChatSession, error)
 	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
 	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
@@ -2553,7 +2554,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.String("userId", userID),
 		zap.String("companyId", companyID))
 
-	chatSession, err := t.chatService.CreateSession(ctx, userID, companyID, sessionTitle)
+	chatSession, err := t.chatService.CreateSessionWithParent(ctx, userID, companyID, sessionTitle, &parentSessionID)
 	if err != nil {
 		t.logger.Error("Failed to create chat session for subchat",
 			zap.String("subchatId", subchatID),
@@ -2562,9 +2563,10 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		return
 	}
 
-	t.logger.Info("💬 Created chat session for subchat",
+	t.logger.Info("💬 Created chat session for subchat with parent link",
 		zap.String("subchatId", subchatID),
-		zap.String("sessionId", chatSession.ID.Hex()))
+		zap.String("sessionId", chatSession.ID.Hex()),
+		zap.String("parentChatId", parentChatID))
 
 	// Update subchat with session ID for linking
 	sessionIDHex := chatSession.ID.Hex()

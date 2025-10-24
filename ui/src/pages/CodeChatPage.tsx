@@ -35,7 +35,6 @@ export function CodeChatPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [pendingToolCalls, setPendingToolCalls] = useState<Set<string>>(new Set());
   const [subchatsDrawerOpen, setSubchatsDrawerOpen] = useState(false);
   // Real-time streaming tool calls/results (updated immediately, not just on stream end)
@@ -50,9 +49,20 @@ export function CodeChatPage() {
     toolResults: Map<string, ToolResult>;
   }>({ toolCalls: [], toolResults: new Map() });
 
-  // Load sessions on mount
+  // Load sessions on mount and set up auto-refresh polling
   useEffect(() => {
     loadSessions();
+
+    // Auto-refresh sessions every 3 seconds to catch new subchats
+    const intervalId = setInterval(() => {
+      console.log('[CodeChatPage] 🔄 Auto-refresh: polling for new sessions');
+      loadSessions();
+    }, 3000);
+
+    return () => {
+      console.log('[CodeChatPage] 🛑 Cleaning up auto-refresh interval');
+      clearInterval(intervalId);
+    };
   }, []);
 
   // Connect WebSocket when active session changes
@@ -74,10 +84,27 @@ export function CodeChatPage() {
   }, [activeSessionId]);
 
   const loadSessions = async () => {
+    console.log('[CodeChatPage] ============================================');
+    console.log('[CodeChatPage] loadSessions called at', new Date().toISOString());
+    console.log('[CodeChatPage] Current sessions count:', sessions.length);
     try {
-      setLoading(true);
       const fetchedSessions = await getSessions();
+      console.log('[CodeChatPage] ✅ Fetched sessions from API:', fetchedSessions.length, 'sessions');
+      console.log('[CodeChatPage] Full sessions list:', fetchedSessions.map(s => ({
+        id: s.id,
+        title: s.title,
+        parentChatId: s.parentChatId,
+        createdAt: s.createdAt
+      })));
+      console.log('[CodeChatPage] Sessions with parentChatId:', fetchedSessions.filter(s => s.parentChatId).map(s => ({
+        id: s.id,
+        title: s.title,
+        parentChatId: s.parentChatId
+      })));
+
+      console.log('[CodeChatPage] Calling setSessions() with', fetchedSessions.length, 'sessions');
       setSessions(fetchedSessions);
+      console.log('[CodeChatPage] ✅ setSessions() completed');
 
       // Select first session if none active
       if (!activeSessionId && fetchedSessions.length > 0) {
@@ -85,9 +112,10 @@ export function CodeChatPage() {
         await loadMessages(fetchedSessions[0].id);
       }
     } catch (err) {
+      console.error('[CodeChatPage] ❌ Error loading sessions:', err);
       setError(err instanceof Error ? err.message : 'Failed to load sessions');
     } finally {
-      setLoading(false);
+      console.log('[CodeChatPage] ============================================');
     }
   };
 
@@ -135,6 +163,11 @@ export function CodeChatPage() {
             setMessages((prev) => [...prev, newMessage]);
             console.log('[CodeChatPage] AI response completed with', tools.toolCalls.length, 'tool calls');
           }
+
+          // Refresh sessions list in case AI created subchats via tool calls
+          console.log('[CodeChatPage] Refreshing sessions after AI response completion');
+          loadSessions();
+
           // Clear streaming state
           streamingContentRef.current = '';
           currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
@@ -306,15 +339,26 @@ export function CodeChatPage() {
     }
   };
 
-  const handleSubchatClick = (subchatId: string) => {
+  const handleSubchatClick = async (subchatId: string) => {
+    // Refresh sessions list to include any newly created subchats
+    await loadSessions();
     // Navigate to the subchat by setting it as active session
     setActiveSessionId(subchatId);
-    loadMessages(subchatId);
+    await loadMessages(subchatId);
     setSubchatsDrawerOpen(false);
   };
 
+  // Helper to check if active session is a subchat (read-only)
+  const isActiveSessionSubchat = (): boolean => {
+    if (!activeSessionId) return false;
+    const activeSession = sessions.find((s) => s.id === activeSessionId);
+    if (!activeSession) return false;
+    // Detect subchat by title prefix or parentChatId field
+    return activeSession.title.startsWith('Subchat:') || !!activeSession.parentChatId;
+  };
+
   return (
-    <Box sx={{ display: 'flex', height: 'calc(100vh - 140px)' }}>
+    <Box className="chat-dashboard-container" sx={{ display: 'flex', height: 'calc(100vh - 140px)' }}>
       {/* Left Sidebar - Session List (20%) */}
       <Box sx={{ width: '20%', minWidth: 250, maxWidth: 350 }}>
         <ChatSessionList
@@ -325,16 +369,15 @@ export function CodeChatPage() {
           onDeleteSession={handleDeleteSession}
           onDeleteAllSessions={handleDeleteAllSessions}
           onRenameSession={handleRenameSession}
-          loading={loading}
         />
       </Box>
 
       {/* Main Chat Area (80%) */}
       <Box
+        className="chat-main-content"
         sx={{
           flex: 1,
           display: 'flex',
-          flexDirection: 'column',
           backgroundColor: 'background.default',
         }}
       >
@@ -381,11 +424,13 @@ export function CodeChatPage() {
         {/* Input Box */}
         <ChatInputBox
           onSendMessage={handleSendMessage}
-          disabled={!activeSessionId || isStreaming}
+          disabled={!activeSessionId || isStreaming || isActiveSessionSubchat()}
           placeholder={
-            activeSessionId
-              ? 'Type your message...'
-              : 'Create a new chat to get started'
+            !activeSessionId
+              ? 'Create a new chat to get started'
+              : isActiveSessionSubchat()
+              ? 'This subchat is read-only. Monitor the AI agent progress here.'
+              : 'Type your message...'
           }
         />
       </Box>
@@ -408,6 +453,7 @@ export function CodeChatPage() {
           <SubchatList
             parentChatId={activeSessionId}
             onSubchatClick={handleSubchatClick}
+            onSubchatCreated={loadSessions}
           />
         )}
       </Drawer>
