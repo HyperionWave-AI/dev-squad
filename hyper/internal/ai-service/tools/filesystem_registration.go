@@ -220,6 +220,10 @@ func (a *ApplyPatchToolExecutor) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
+			"path": map[string]interface{}{
+				"type":        "string",
+				"description": "Absolute or relative file path to apply patch to",
+			},
 			"patch": map[string]interface{}{
 				"type":        "string",
 				"description": "Unified diff format patch content",
@@ -229,7 +233,7 @@ func (a *ApplyPatchToolExecutor) InputSchema() map[string]interface{} {
 				"description": "Validate patch without applying (default: false)",
 			},
 		},
-		"required": []string{"patch"},
+		"required": []string{"path", "patch"},
 	}
 }
 

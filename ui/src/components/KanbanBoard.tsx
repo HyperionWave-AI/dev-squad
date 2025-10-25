@@ -269,219 +269,153 @@ export function KanbanBoard() {
       );
     } catch (err) {
       console.error('Failed to update task status:', err);
-
-      // Revert optimistic updates
-      setTasks((prevTasks) =>
-        prevTasks.map((task) =>
-          task.id === draggableId ? { ...task, status: source.droppableId as TaskStatus } : task
-        )
-      );
-      setAgentTasks((prevTasks) =>
-        prevTasks.map((task) =>
-          task.id === draggableId ? { ...task, status: source.droppableId as TaskStatus } : task
-        )
-      );
-
-      setError('Failed to update task status');
-
-      // Reload to ensure UI is in sync
-      await loadTasks();
+      // Reload tasks to revert optimistic update
+      loadTasks();
     }
   };
 
-  const handleTaskClick = (task: any) => {
-    // Open dialog for both human and agent tasks
+  const handleTaskClick = (task: FlattenedTask) => {
+    console.log('[KanbanBoard] Task clicked:', task.id, task.title);
     setSelectedTask(task);
     setDialogOpen(true);
   };
 
   const handleDialogClose = () => {
+    console.log('[KanbanBoard] Dialog closing');
     setDialogOpen(false);
     setSelectedTask(null);
   };
 
   if (loading) {
     return (
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          minHeight: '400px',
-        }}
-      >
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
         <CircularProgress />
       </Box>
     );
   }
 
+  if (error) {
+    return (
+      <Alert severity="error" sx={{ m: 2 }}>
+        {error}
+      </Alert>
+    );
+  }
+
   return (
-    <Box sx={{ width: '100%' }}>
-      {/* Search and Filter Bar */}
-      <Box sx={{ mb: 3 }}>
+    <Box sx={{
+      width: '100%',
+      minHeight: '100%',
+      overflow: 'auto'
+    }}>
+      {/* Search Bar */}
+      <Box sx={{ mb: 3, px: 2, pt: 2 }}>
         <TextField
           fullWidth
-          placeholder="Search tasks by title, description, or tags..."
+          placeholder="Search tasks..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          slotProps={{
-            input: {
-              startAdornment: (
-                <InputAdornment position="start">
-                  <Search />
-                </InputAdornment>
-              ),
-              endAdornment: searchQuery && (
-                <InputAdornment position="end">
-                  <Typography variant="body2" color="text.secondary">
-                    {tasks.filter(
-                      (task) =>
-                        task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        task.description.toLowerCase().includes(searchQuery.toLowerCase())
-                    ).length}{' '}
-                    results
-                  </Typography>
-                </InputAdornment>
-              ),
-            }
-          }}
-          sx={{
-            '& .MuiOutlinedInput-root': {
-              backgroundColor: 'white',
-            },
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <Search />
+              </InputAdornment>
+            ),
           }}
         />
       </Box>
 
-      {/* Error Alert */}
-      {error && (
-        <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
-
       {/* Kanban Board */}
       <DragDropContext onDragEnd={onDragEnd}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 2 }}>
-          {columns.map((column) => {
-            const columnTasks = tasksByStatus[column.id];
-
-            return (
-              <Box key={column.id}>
-                <Paper
-                  elevation={0}
-                  sx={{
-                    backgroundColor: column.bgColor,
-                    border: '1px solid',
-                    borderColor: 'divider',
-                    borderRadius: 2,
-                    height: '100%',
-                    minHeight: '600px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                  }}
-                >
-                  {/* Column Header */}
-                  <Box
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 2,
+            width: '100%',
+            minHeight: 'calc(100vh - 120px)',
+            overflowX: 'auto',
+            px: 2,
+            pb: 2,
+          }}
+        >
+          {columns.map((column) => (
+            <Box
+              key={column.id}
+              sx={{
+                flex: '1 1 0',
+                minWidth: '300px',
+                maxWidth: 'none',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              {/* Column Header */}
+              <Paper
+                sx={{
+                  p: 2,
+                  mb: 2,
+                  backgroundColor: column.bgColor,
+                  borderTop: `4px solid ${column.color}`,
+                }}
+              >
+                <Box display="flex" alignItems="center" justifyContent="space-between">
+                  <Typography variant="h6" sx={{ color: column.color, fontWeight: 600 }}>
+                    {column.title}
+                  </Typography>
+                  <Badge
+                    badgeContent={tasksByStatus[column.id].length}
+                    color="primary"
                     sx={{
-                      p: 2,
-                      borderBottom: '1px solid',
-                      borderColor: 'divider',
-                      backgroundColor: 'white',
-                      borderTopLeftRadius: 8,
-                      borderTopRightRadius: 8,
+                      '& .MuiBadge-badge': {
+                        backgroundColor: column.color,
+                        color: 'white',
+                      },
+                    }}
+                  />
+                </Box>
+              </Paper>
+
+              {/* Column Content */}
+              <Droppable droppableId={column.id}>
+                {(provided, snapshot) => (
+                  <Box
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    sx={{
+                      flex: 1,
+                      minHeight: '200px',
+                      backgroundColor: snapshot.isDraggingOver ? '#f5f5f5' : 'transparent',
+                      borderRadius: 1,
+                      p: 1,
+                      transition: 'background-color 0.2s ease',
                     }}
                   >
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <Typography
-                        variant="h6"
-                        sx={{
-                          fontSize: '0.875rem',
-                          fontWeight: 600,
-                          color: column.color,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.05em',
-                        }}
-                      >
-                        {column.title}
-                      </Typography>
-                      <Badge
-                        badgeContent={columnTasks.length}
-                        color="primary"
-                        sx={{
-                          '& .MuiBadge-badge': {
-                            backgroundColor: column.color,
-                            color: 'white',
-                          },
-                        }}
+                    {tasksByStatus[column.id].map((task, index) => (
+                      <KanbanTaskCard
+                        key={task.id}
+                        task={task}
+                        index={index}
+                        onClick={() => handleTaskClick(task)}
                       />
-                    </Box>
+                    ))}
+                    {provided.placeholder}
                   </Box>
-
-                  {/* Droppable Area */}
-                  <Droppable droppableId={column.id}>
-                    {(provided, snapshot) => (
-                      <Box
-                        ref={provided.innerRef}
-                        {...provided.droppableProps}
-                        sx={{
-                          p: 2,
-                          flexGrow: 1,
-                          minHeight: 100,
-                          backgroundColor: snapshot.isDraggingOver
-                            ? 'action.hover'
-                            : 'transparent',
-                          transition: 'background-color 0.2s ease',
-                          overflowY: 'auto',
-                          maxHeight: 'calc(100vh - 300px)',
-                        }}
-                      >
-                        {columnTasks.length === 0 ? (
-                          <Box
-                            sx={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              height: '100%',
-                              minHeight: 200,
-                            }}
-                          >
-                            <Typography
-                              variant="body2"
-                              color="text.secondary"
-                              sx={{ textAlign: 'center' }}
-                            >
-                              No tasks
-                            </Typography>
-                          </Box>
-                        ) : (
-                          columnTasks.map((task, index) => (
-                            <KanbanTaskCard
-                              key={task.id}
-                              task={task}
-                              index={index}
-                              onClick={handleTaskClick}
-                            />
-                          ))
-                        )}
-                        {provided.placeholder}
-                      </Box>
-                    )}
-                  </Droppable>
-                </Paper>
-              </Box>
-            );
-          })}
+                )}
+              </Droppable>
+            </Box>
+          ))}
         </Box>
       </DragDropContext>
 
       {/* Task Detail Dialog */}
-      <TaskDetailDialog
-        task={selectedTask}
-        open={dialogOpen}
-        onClose={handleDialogClose}
-        onTaskUpdate={loadTasks}
-      />
+      {selectedTask && (
+        <TaskDetailDialog
+          task={selectedTask}
+          open={dialogOpen}
+          onClose={handleDialogClose}
+          onTaskUpdate={loadTasks}
+        />
+      )}
     </Box>
   );
 }
