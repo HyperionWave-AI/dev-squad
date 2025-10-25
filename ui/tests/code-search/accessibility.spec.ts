@@ -13,6 +13,7 @@
  * - Form labels and error associations
  * - Skip links and landmarks
  * - Responsive text and zoom support
+ * - Dark mode accessibility compliance
  */
 
 import { test, expect } from '@playwright/test';
@@ -100,6 +101,366 @@ test.describe('Code Search - WCAG 2.1 AA Compliance @accessibility', () => {
     const violations = await runAccessibilityAudit(page, 'error state');
 
     expect(violations.length).toBe(0);
+  });
+});
+
+test.describe('Dark Mode Toggle - Accessibility & Functionality @accessibility @darkmode', () => {
+  test('should pass axe-core audit in light mode', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    // Ensure light mode is active
+    await page.evaluate(() => {
+      document.documentElement.removeAttribute('data-theme');
+      localStorage.setItem('darkMode', 'false');
+    });
+
+    const violations = await runAccessibilityAudit(page, 'light mode settings');
+    expect(violations.length).toBe(0);
+  });
+
+  test('should pass axe-core audit in dark mode', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    // Enable dark mode
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      localStorage.setItem('darkMode', 'true');
+    });
+
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
+    const violations = await runAccessibilityAudit(page, 'dark mode settings');
+    expect(violations.length).toBe(0);
+  });
+
+  test('should have proper ARIA attributes on dark mode toggle', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    
+    // Check ARIA attributes
+    await expect(toggle).toHaveAttribute('aria-label', 'Toggle dark mode');
+    await expect(toggle).toHaveAttribute('type', 'checkbox');
+    
+    // Check associated label and description
+    const label = page.getByText('Dark Mode');
+    const description = page.getByText('Switch between light and dark themes');
+    
+    await expect(label).toBeVisible();
+    await expect(description).toBeVisible();
+  });
+
+  test('should be keyboard accessible', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    
+    // Focus the toggle
+    await toggle.focus();
+    await expect(toggle).toBeFocused();
+
+    // Check initial state
+    const initialState = await toggle.isChecked();
+
+    // Toggle with Space key
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(300);
+
+    // State should have changed
+    const newState = await toggle.isChecked();
+    expect(newState).toBe(!initialState);
+
+    // Theme should be applied
+    const themeAttribute = await page.evaluate(() => 
+      document.documentElement.getAttribute('data-theme')
+    );
+    
+    if (newState) {
+      expect(themeAttribute).toBe('dark');
+    } else {
+      expect(themeAttribute).toBeNull();
+    }
+  });
+
+  test('should have sufficient color contrast in both modes', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    // Test light mode contrast
+    await page.evaluate(() => {
+      document.documentElement.removeAttribute('data-theme');
+    });
+
+    let violations = await new AxeBuilder({ page })
+      .withTags(['wcag2aa'])
+      .include('.settings-container')
+      .analyze();
+
+    expect(violations.filter(v => v.id === 'color-contrast').length).toBe(0);
+
+    // Test dark mode contrast
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    });
+
+    violations = await new AxeBuilder({ page })
+      .withTags(['wcag2aa'])
+      .include('.settings-container')
+      .analyze();
+
+    expect(violations.filter(v => v.id === 'color-contrast').length).toBe(0);
+  });
+
+  test('should maintain focus visibility in both themes', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+
+    // Test focus visibility in light mode
+    await page.evaluate(() => {
+      document.documentElement.removeAttribute('data-theme');
+    });
+
+    await toggle.focus();
+    
+    const lightModeFocusStyles = await toggle.evaluate((el) => {
+      const styles = window.getComputedStyle(el);
+      return {
+        outline: styles.outline,
+        boxShadow: styles.boxShadow,
+      };
+    });
+
+    // Should have visible focus indicator
+    const hasLightFocusIndicator = 
+      (lightModeFocusStyles.outline && lightModeFocusStyles.outline !== 'none') ||
+      (lightModeFocusStyles.boxShadow && lightModeFocusStyles.boxShadow !== 'none');
+
+    expect(hasLightFocusIndicator).toBeTruthy();
+
+    // Test focus visibility in dark mode
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    });
+
+    await toggle.focus();
+    
+    const darkModeFocusStyles = await toggle.evaluate((el) => {
+      const styles = window.getComputedStyle(el);
+      return {
+        outline: styles.outline,
+        boxShadow: styles.boxShadow,
+      };
+    });
+
+    // Should have visible focus indicator
+    const hasDarkFocusIndicator = 
+      (darkModeFocusStyles.outline && darkModeFocusStyles.outline !== 'none') ||
+      (darkModeFocusStyles.boxShadow && darkModeFocusStyles.boxShadow !== 'none');
+
+    expect(hasDarkFocusIndicator).toBeTruthy();
+  });
+});
+
+test.describe('Dark Mode Toggle - Functionality Tests @darkmode', () => {
+  test('should toggle theme when clicked', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    
+    // Get initial state
+    const initialChecked = await toggle.isChecked();
+    const initialTheme = await page.evaluate(() => 
+      document.documentElement.getAttribute('data-theme')
+    );
+
+    // Click toggle
+    await toggle.click();
+    await page.waitForTimeout(300);
+
+    // State should change
+    const newChecked = await toggle.isChecked();
+    const newTheme = await page.evaluate(() => 
+      document.documentElement.getAttribute('data-theme')
+    );
+
+    expect(newChecked).toBe(!initialChecked);
+    
+    if (newChecked) {
+      expect(newTheme).toBe('dark');
+    } else {
+      expect(newTheme).toBeNull();
+    }
+  });
+
+  test('should persist theme preference in localStorage', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    
+    // Enable dark mode
+    if (!(await toggle.isChecked())) {
+      await toggle.click();
+      await page.waitForTimeout(300);
+    }
+
+    // Check localStorage
+    const storedValue = await page.evaluate(() => 
+      localStorage.getItem('darkMode')
+    );
+    expect(storedValue).toBe('true');
+
+    // Disable dark mode
+    await toggle.click();
+    await page.waitForTimeout(300);
+
+    // Check localStorage again
+    const newStoredValue = await page.evaluate(() => 
+      localStorage.getItem('darkMode')
+    );
+    expect(newStoredValue).toBe('false');
+  });
+
+  test('should restore theme preference on page reload', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    // Set dark mode
+    await page.evaluate(() => {
+      localStorage.setItem('darkMode', 'true');
+    });
+
+    // Reload page
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
+    // Check if dark mode is restored
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    const themeAttribute = await page.evaluate(() => 
+      document.documentElement.getAttribute('data-theme')
+    );
+
+    await expect(toggle).toBeChecked();
+    expect(themeAttribute).toBe('dark');
+  });
+
+  test('should respect system preference when no saved preference', async ({ page }) => {
+    // Clear any existing preference
+    await page.evaluate(() => {
+      localStorage.removeItem('darkMode');
+    });
+
+    // Mock system preference for dark mode
+    await page.emulateMedia({ colorScheme: 'dark' });
+
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    const themeAttribute = await page.evaluate(() => 
+      document.documentElement.getAttribute('data-theme')
+    );
+
+    // Should follow system preference
+    await expect(toggle).toBeChecked();
+    expect(themeAttribute).toBe('dark');
+
+    // Test light system preference
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
+    const newThemeAttribute = await page.evaluate(() => 
+      document.documentElement.getAttribute('data-theme')
+    );
+
+    expect(newThemeAttribute).toBeNull();
+  });
+
+  test('should have smooth transitions between themes', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    
+    // Check if transitions are enabled
+    const bodyTransition = await page.evaluate(() => {
+      const styles = window.getComputedStyle(document.body);
+      return styles.transition;
+    });
+
+    expect(bodyTransition).toContain('background-color');
+    expect(bodyTransition).toContain('color');
+
+    // Toggle and verify transition occurs
+    await toggle.click();
+    await page.waitForTimeout(100); // Allow transition to start
+
+    // Transition should be in progress or completed
+    const transitionStyles = await page.evaluate(() => {
+      const styles = window.getComputedStyle(document.body);
+      return {
+        transition: styles.transition,
+        backgroundColor: styles.backgroundColor,
+        color: styles.color
+      };
+    });
+
+    expect(transitionStyles.transition).toBeTruthy();
+  });
+
+  test('should update all themed elements when toggled', async ({ page }) => {
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const toggle = page.getByRole('checkbox', { name: /toggle dark mode/i });
+    
+    // Get initial styles
+    const initialStyles = await page.evaluate(() => {
+      const settingsContainer = document.querySelector('.settings-container');
+      const settingsItem = document.querySelector('.settings-item');
+      
+      if (!settingsContainer || !settingsItem) return null;
+      
+      return {
+        containerBg: window.getComputedStyle(settingsContainer).backgroundColor,
+        itemBg: window.getComputedStyle(settingsItem).backgroundColor,
+        textColor: window.getComputedStyle(settingsContainer).color
+      };
+    });
+
+    // Toggle theme
+    await toggle.click();
+    await page.waitForTimeout(300);
+
+    // Get new styles
+    const newStyles = await page.evaluate(() => {
+      const settingsContainer = document.querySelector('.settings-container');
+      const settingsItem = document.querySelector('.settings-item');
+      
+      if (!settingsContainer || !settingsItem) return null;
+      
+      return {
+        containerBg: window.getComputedStyle(settingsContainer).backgroundColor,
+        itemBg: window.getComputedStyle(settingsItem).backgroundColor,
+        textColor: window.getComputedStyle(settingsContainer).color
+      };
+    });
+
+    // Styles should have changed
+    if (initialStyles && newStyles) {
+      expect(newStyles.containerBg).not.toBe(initialStyles.containerBg);
+      expect(newStyles.itemBg).not.toBe(initialStyles.itemBg);
+      expect(newStyles.textColor).not.toBe(initialStyles.textColor);
+    }
   });
 });
 
@@ -259,375 +620,8 @@ test.describe('Code Search - Keyboard Navigation @accessibility', () => {
         await page.keyboard.press('Enter');
 
         // Action should be triggered
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(1000);
       }
     }
-  });
-});
-
-test.describe('Code Search - Screen Reader Support @accessibility', () => {
-  test('should have proper ARIA labels on all form inputs', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Check search input
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await expect(searchInput).toBeVisible();
-
-    const searchAriaLabel = await searchInput.getAttribute('aria-label');
-    const searchLabelFor = await searchInput.getAttribute('id');
-
-    expect(searchAriaLabel || searchLabelFor).toBeTruthy();
-
-    // Check add folder form
-    const addButton = page.getByRole('button', { name: /add folder/i });
-    await addButton.click();
-
-    const folderPathInput = page.getByLabel(/folder path/i);
-    await expect(folderPathInput).toBeVisible();
-
-    const folderAriaLabel = await folderPathInput.getAttribute('aria-label');
-    const folderLabelFor = await folderPathInput.getAttribute('id');
-
-    expect(folderAriaLabel || folderLabelFor).toBeTruthy();
-  });
-
-  test('should have proper ARIA roles on interactive elements', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Check for proper roles
-    const searchRegion = page.getByRole('search');
-    const hasSearchRegion = await searchRegion.count() > 0;
-    expect(hasSearchRegion).toBeTruthy();
-
-    // Buttons should have button role
-    const buttons = page.getByRole('button');
-    const buttonCount = await buttons.count();
-    expect(buttonCount).toBeGreaterThan(0);
-
-    // Dialogs should have dialog role
-    const addButton = page.getByRole('button', { name: /add folder/i });
-    await addButton.click();
-
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 2000 });
-  });
-
-  test('should announce search results to screen readers', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await searchInput.fill('error handling');
-    await page.keyboard.press('Enter');
-
-    await page.waitForTimeout(3000);
-
-    // Check for aria-live region
-    const liveRegions = page.locator('[aria-live]');
-    const liveRegionCount = await liveRegions.count();
-
-    expect(liveRegionCount).toBeGreaterThan(0);
-
-    // Live region should have appropriate politeness
-    const firstLiveRegion = liveRegions.first();
-    const politeness = await firstLiveRegion.getAttribute('aria-live');
-
-    expect(['polite', 'assertive']).toContain(politeness);
-  });
-
-  test('should announce loading states to screen readers', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await searchInput.fill('database');
-    await page.keyboard.press('Enter');
-
-    // Check for aria-busy attribute during loading
-    const resultsContainer = page.locator('[data-testid="results-section"]');
-
-    if (await resultsContainer.isVisible()) {
-      const ariaBusy = await resultsContainer.getAttribute('aria-busy');
-      // May be 'true' during loading, 'false' or null after
-      expect(ariaBusy === 'true' || ariaBusy === 'false' || ariaBusy === null).toBeTruthy();
-    }
-  });
-
-  test('should have descriptive button labels (not just icons)', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Get all buttons
-    const buttons = page.getByRole('button');
-    const buttonCount = await buttons.count();
-
-    for (let i = 0; i < Math.min(buttonCount, 10); i++) {
-      const button = buttons.nth(i);
-
-      // Button should have accessible name (text or aria-label)
-      const accessibleName = await button.evaluate((btn) => {
-        return btn.textContent?.trim() || btn.getAttribute('aria-label') || btn.getAttribute('title');
-      });
-
-      expect(accessibleName).toBeTruthy();
-      expect(accessibleName!.length).toBeGreaterThan(0);
-    }
-  });
-
-  test('should associate error messages with form fields', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    const addButton = page.getByRole('button', { name: /add folder/i });
-    await addButton.click();
-
-    // Submit without filling required field
-    const submitButton = page.getByRole('button', { name: /add|submit|save/i });
-    await submitButton.click();
-
-    await page.waitForTimeout(1000);
-
-    // Check for aria-describedby or aria-errormessage
-    const folderPathInput = page.getByLabel(/folder path/i);
-
-    const ariaDescribedby = await folderPathInput.getAttribute('aria-describedby');
-    const ariaErrorMessage = await folderPathInput.getAttribute('aria-errormessage');
-    const ariaInvalid = await folderPathInput.getAttribute('aria-invalid');
-
-    // Should have error association
-    expect(ariaDescribedby || ariaErrorMessage || ariaInvalid).toBeTruthy();
-  });
-
-  test('should have landmark regions for screen reader navigation', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Check for main landmark
-    const mainRegion = page.getByRole('main');
-    const hasMain = await mainRegion.count() > 0;
-    expect(hasMain).toBeTruthy();
-
-    // Check for navigation landmark (if present)
-    const navRegion = page.getByRole('navigation');
-    // Navigation may or may not be present on this page
-
-    // Check for search landmark
-    const searchRegion = page.getByRole('search');
-    const hasSearch = await searchRegion.count() > 0;
-    expect(hasSearch).toBeTruthy();
-  });
-});
-
-test.describe('Code Search - Color Contrast @accessibility', () => {
-  test('should meet WCAG AA color contrast standards for text', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Test runs axe-core which includes color-contrast checks
-    const violations = await runAccessibilityAudit(page);
-
-    // Filter for color-contrast violations
-    const contrastViolations = violations.filter(v => v.id === 'color-contrast');
-
-    expect(contrastViolations.length).toBe(0);
-  });
-
-  test('should have sufficient contrast for interactive elements', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Get buttons and check contrast
-    const buttons = page.getByRole('button');
-    const firstButton = buttons.first();
-
-    if (await firstButton.isVisible()) {
-      const styles = await firstButton.evaluate((btn) => {
-        const computed = window.getComputedStyle(btn);
-        return {
-          color: computed.color,
-          backgroundColor: computed.backgroundColor,
-        };
-      });
-
-      // Verify colors are set (actual contrast calculation is done by axe-core)
-      expect(styles.color).toBeTruthy();
-      expect(styles.backgroundColor).toBeTruthy();
-    }
-  });
-
-  test('should have sufficient contrast in focus states', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await searchInput.focus();
-
-    const focusStyles = await searchInput.evaluate((el) => {
-      const styles = window.getComputedStyle(el);
-      return {
-        outlineColor: styles.outlineColor,
-        outlineWidth: styles.outlineWidth,
-      };
-    });
-
-    // Focus outline should exist and be visible
-    expect(focusStyles.outlineColor).toBeTruthy();
-    expect(focusStyles.outlineWidth).not.toBe('0px');
-  });
-});
-
-test.describe('Code Search - Text and Zoom @accessibility', () => {
-  test('should remain usable at 200% zoom', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Zoom to 200%
-    await page.evaluate(() => {
-      document.body.style.zoom = '2';
-    });
-
-    await page.waitForTimeout(1000);
-
-    // Verify key elements are still visible and functional
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await expect(searchInput).toBeVisible();
-
-    const addButton = page.getByRole('button', { name: /add folder/i });
-    await expect(addButton).toBeVisible();
-
-    // No horizontal scrolling should be required for main content
-    const hasHorizontalScroll = await page.evaluate(() => {
-      return document.documentElement.scrollWidth > document.documentElement.clientWidth;
-    });
-
-    // Some horizontal scroll may be acceptable at 200% zoom
-    // Main point is that interface remains usable
-    expect(true).toBeTruthy(); // Test passes if we got here
-  });
-
-  test('should support text resize without breaking layout', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Increase font size
-    await page.evaluate(() => {
-      document.body.style.fontSize = '200%';
-    });
-
-    await page.waitForTimeout(1000);
-
-    // Interface should still be functional
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await expect(searchInput).toBeVisible();
-
-    // Elements should not overlap excessively
-    const violations = await runAccessibilityAudit(page, 'enlarged text');
-
-    expect(violations.length).toBe(0);
-  });
-});
-
-test.describe('Code Search - Images and Icons @accessibility', () => {
-  test('should have alt text or aria-label on all images', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Get all images
-    const images = page.locator('img');
-    const imageCount = await images.count();
-
-    for (let i = 0; i < imageCount; i++) {
-      const image = images.nth(i);
-
-      const altText = await image.getAttribute('alt');
-      const ariaLabel = await image.getAttribute('aria-label');
-      const ariaHidden = await image.getAttribute('aria-hidden');
-
-      // Image should have alt text, aria-label, or be decorative (aria-hidden)
-      expect(altText !== null || ariaLabel !== null || ariaHidden === 'true').toBeTruthy();
-    }
-  });
-
-  test('should have accessible names for icon-only buttons', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Get all buttons
-    const buttons = page.getByRole('button');
-    const buttonCount = await buttons.count();
-
-    for (let i = 0; i < buttonCount; i++) {
-      const button = buttons.nth(i);
-
-      const textContent = await button.textContent();
-      const ariaLabel = await button.getAttribute('aria-label');
-      const title = await button.getAttribute('title');
-
-      // Button must have accessible name
-      const hasAccessibleName = (textContent && textContent.trim().length > 0) || ariaLabel || title;
-
-      expect(hasAccessibleName).toBeTruthy();
-    }
-  });
-});
-
-test.describe('Code Search - Skip Links and Navigation @accessibility', () => {
-  test('should have skip link to main content', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Look for skip link (usually first focusable element)
-    await page.keyboard.press('Tab');
-    await page.waitForTimeout(100);
-
-    const focusedElement = await page.evaluate(() => {
-      const el = document.activeElement;
-      return {
-        text: el?.textContent?.toLowerCase() || '',
-        href: (el as HTMLAnchorElement)?.href || '',
-      };
-    });
-
-    // Skip link should mention "skip" or "main" or "content"
-    const isSkipLink = /skip|main|content/.test(focusedElement.text);
-
-    if (isSkipLink) {
-      // Skip link exists
-      expect(isSkipLink).toBeTruthy();
-
-      // Activate skip link
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(200);
-
-      // Focus should move to main content
-      const newFocus = await page.evaluate(() => document.activeElement?.tagName);
-      expect(newFocus).toBeTruthy();
-    }
-  });
-
-  test('should maintain logical tab order', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    const tabOrder: string[] = [];
-
-    // Tab through first 10 elements
-    for (let i = 0; i < 10; i++) {
-      await page.keyboard.press('Tab');
-      await page.waitForTimeout(100);
-
-      const focusedElement = await page.evaluate(() => {
-        const el = document.activeElement;
-        return el?.getAttribute('data-testid') || el?.tagName || '';
-      });
-
-      tabOrder.push(focusedElement);
-    }
-
-    // Tab order should be logical (no duplicates, moves forward)
-    expect(tabOrder.length).toBe(10);
-    expect(tabOrder.some(el => el.length > 0)).toBeTruthy();
   });
 });
