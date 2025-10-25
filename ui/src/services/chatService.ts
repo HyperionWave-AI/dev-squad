@@ -18,6 +18,7 @@ export interface ChatSession {
   userId: string;
   companyId: string;
   title: string;
+  parentChatId?: string; // For subchats - links to parent session
   createdAt: string;
   updatedAt: string;
 }

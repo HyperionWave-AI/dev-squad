@@ -380,12 +380,26 @@ func (fw *FileWatcher) handleCreate(path string, folder *storage.IndexedFolder) 
 		return
 	}
 
-	// If it's a directory, add it to watcher
+	// If it's a directory, check if we should ignore it BEFORE adding to watcher
 	if info.IsDir() {
+		// CRITICAL FIX: Check shouldIgnore before adding to prevent watching node_modules, .git, etc.
+		// This prevents the "recursive directory explosion" bug where npm install creates
+		// node_modules with 10,000+ subdirectories, exhausting file descriptors
+		if fw.shouldIgnore(path) {
+			fw.logger.Debug("Ignoring new directory (matches ignore patterns)",
+				zap.String("path", path))
+			return
+		}
+
+		// Directory is safe to watch - add it to watcher
 		if err := fw.watcher.Add(path); err != nil {
 			fw.logger.Error("Failed to watch new directory",
 				zap.String("path", path),
 				zap.Error(err))
+		} else {
+			fw.logger.Info("Now watching new directory",
+				zap.String("path", path),
+				zap.String("folderId", folder.ID))
 		}
 		return
 	}
