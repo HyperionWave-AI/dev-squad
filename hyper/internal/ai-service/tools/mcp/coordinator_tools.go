@@ -183,17 +183,23 @@ func extractPatternFiles(contextSummary string, todos []string, projectRoot stri
 			}
 		}
 
-		// Strategy 4: Try finding with bash find command (last resort)
+		// Strategy 4: Try finding with find command (last resort)
 		if foundPath == "" {
 			logger.Debug("Searching for pattern file using find command",
 				zap.String("filename", filename))
 			// Use find to locate the file
-			findCmd := fmt.Sprintf("find %s -name %s -type f 2>/dev/null | head -1", projectRoot, filename)
-			output, err := exec.Command("bash", "-c", findCmd).Output()
+			// SECURITY: Use exec.Command with separate arguments to prevent command injection
+			// DO NOT use bash -c or fmt.Sprintf with user-controlled input
+			cmd := exec.Command("find", projectRoot, "-name", filename, "-type", "f")
+			output, err := cmd.Output()
 			if err == nil && len(output) > 0 {
-				foundPath = strings.TrimSpace(string(output))
-				if _, err := os.Stat(foundPath); err != nil {
-					foundPath = "" // Invalid path
+				// Take first result only (equivalent to | head -1)
+				lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+				if len(lines) > 0 && lines[0] != "" {
+					foundPath = lines[0]
+					if _, err := os.Stat(foundPath); err != nil {
+						foundPath = "" // Invalid path
+					}
 				}
 			}
 		}
