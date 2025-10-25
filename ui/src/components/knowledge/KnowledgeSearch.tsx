@@ -196,7 +196,11 @@ export const KnowledgeSearch: React.FC = () => {
             color="secondary"
             onClick={handleClear}
             startIcon={<ClearIcon />}
-            sx={{ minWidth: '120px' }}
+            sx={{ 
+              minWidth: '120px',
+              borderRadius: '8px', // Changed from default to curved square appearance
+              '&:hover': { borderRadius: '8px' } // Maintain curved square on hover
+            }}
           >
             Clear
           </Button>

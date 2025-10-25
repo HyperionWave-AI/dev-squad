@@ -2,13 +2,18 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
-	"hyper/internal/ai-service"
+	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
@@ -17,6 +22,296 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
+
+// correctFilePaths attempts to fix invalid file paths using common correction strategies
+// Returns (correctedPaths, unfixablePaths, wasIndexingIssue)
+func correctFilePaths(paths []string, logger *zap.Logger) ([]string, []string, bool) {
+	if len(paths) == 0 {
+		return paths, nil, false
+	}
+
+	projectRoot := tools.GetProjectRoot()
+	logger.Info("🔧 Validating and correcting file paths",
+		zap.Int("pathCount", len(paths)),
+		zap.String("projectRoot", projectRoot))
+
+	correctedPaths := make([]string, 0, len(paths))
+	unfixablePaths := make([]string, 0)
+	hadCorrections := false
+	indexingIssuePatterns := 0
+
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+
+		// Check if path exists as-is
+		if _, err := os.Stat(path); err == nil {
+			correctedPaths = append(correctedPaths, path)
+			logger.Debug("✅ Path valid", zap.String("path", path))
+			continue
+		}
+
+		// Path doesn't exist, try to fix it
+		logger.Warn("⚠️  Path does not exist, attempting correction",
+			zap.String("originalPath", path))
+
+		fixedPath := tryFixPath(path, projectRoot, logger)
+
+		if fixedPath != "" {
+			// Verify the fixed path exists
+			if _, err := os.Stat(fixedPath); err == nil {
+				correctedPaths = append(correctedPaths, fixedPath)
+				hadCorrections = true
+				logger.Info("✅ Path corrected successfully",
+					zap.String("original", path),
+					zap.String("corrected", fixedPath))
+
+				// Check if this looks like an indexing issue
+				if strings.Contains(path, "/hyper/hyper/") || strings.Contains(path, "/hyper/ui/") {
+					indexingIssuePatterns++
+				}
+			} else {
+				unfixablePaths = append(unfixablePaths, path)
+				logger.Error("❌ Path correction failed - fixed path still doesn't exist",
+					zap.String("original", path),
+					zap.String("attempted", fixedPath))
+			}
+		} else {
+			unfixablePaths = append(unfixablePaths, path)
+			logger.Error("❌ Could not correct path - no valid corrections found",
+				zap.String("path", path))
+		}
+	}
+
+	// Determine if this is an indexing issue
+	isIndexingIssue := indexingIssuePatterns > 0
+	if isIndexingIssue {
+		logger.Warn("🔍 INDEXING ISSUE DETECTED",
+			zap.Int("pathsWithIssue", indexingIssuePatterns),
+			zap.String("pattern", "Paths contain duplicate /hyper/ or incorrect /hyper/ui/ prefixes"),
+			zap.String("recommendation", "Code index may be storing incorrect paths - consider re-indexing"))
+	}
+
+	if hadCorrections {
+		logger.Info("🔧 Path correction summary",
+			zap.Int("totalPaths", len(paths)),
+			zap.Int("corrected", len(correctedPaths)),
+			zap.Int("unfixable", len(unfixablePaths)),
+			zap.Bool("indexingIssue", isIndexingIssue))
+	}
+
+	return correctedPaths, unfixablePaths, isIndexingIssue
+}
+
+// extractPatternFiles scans contextSummary and todos for file references
+// Returns validated file paths that exist and can be used as pattern references
+func extractPatternFiles(contextSummary string, todos []string, projectRoot string, logger *zap.Logger) []string {
+	// Common file extensions to look for in references
+	// Examples: "follow pattern from HTTPToolsPage.tsx", "similar to ChatSessionList.tsx"
+	fileExtensions := []string{".tsx", ".ts", ".jsx", ".js", ".go", ".css", ".html", ".py", ".java"}
+
+	candidateFiles := make(map[string]bool)
+
+	// Combine all text to scan
+	allText := contextSummary + " " + strings.Join(todos, " ")
+
+	logger.Debug("Scanning for pattern file references",
+		zap.String("contextSummary", contextSummary),
+		zap.Strings("todos", todos))
+
+	// Extract file names with extensions
+	for _, ext := range fileExtensions {
+		// Find all occurrences of words ending with the extension
+		// Using a simple approach: split by spaces and look for filenames
+		words := strings.Fields(allText)
+		for _, word := range words {
+			// Clean up punctuation
+			cleaned := strings.Trim(word, ".,;:()[]{}\"'`")
+			if strings.HasSuffix(cleaned, ext) {
+				candidateFiles[cleaned] = true
+				logger.Debug("Found potential pattern file reference",
+					zap.String("file", cleaned))
+			}
+		}
+	}
+
+	if len(candidateFiles) == 0 {
+		logger.Debug("No pattern file references found in context/TODOs")
+		return nil
+	}
+
+	// Now validate and find full paths for these files
+	validatedFiles := []string{}
+	searchDirs := []string{
+		"ui/src/components",
+		"ui/src/pages",
+		"ui/src/hooks",
+		"ui/src",
+		"hyper/internal",
+		"hyper/internal/ai-service",
+		"hyper/internal/mcp",
+		"hyper/internal/server",
+	}
+
+	for filename := range candidateFiles {
+		var foundPath string
+
+		// Strategy 1: Try as absolute path
+		if strings.HasPrefix(filename, "/") {
+			if _, err := os.Stat(filename); err == nil {
+				foundPath = filename
+			}
+		}
+
+		// Strategy 2: Try relative to project root
+		if foundPath == "" {
+			candidate := filepath.Join(projectRoot, filename)
+			if _, err := os.Stat(candidate); err == nil {
+				foundPath = candidate
+			}
+		}
+
+		// Strategy 3: Search in common directories
+		if foundPath == "" {
+			for _, dir := range searchDirs {
+				candidate := filepath.Join(projectRoot, dir, filename)
+				if _, err := os.Stat(candidate); err == nil {
+					foundPath = candidate
+					break
+				}
+			}
+		}
+
+		// Strategy 4: Try finding with find command (last resort)
+		if foundPath == "" {
+			logger.Debug("Searching for pattern file using find command",
+				zap.String("filename", filename))
+			// Use find to locate the file
+			// SECURITY: Use exec.Command with separate arguments to prevent command injection
+			// DO NOT use bash -c or fmt.Sprintf with user-controlled input
+			cmd := exec.Command("find", projectRoot, "-name", filename, "-type", "f")
+			output, err := cmd.Output()
+			if err == nil && len(output) > 0 {
+				// Take first result only (equivalent to | head -1)
+				lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+				if len(lines) > 0 && lines[0] != "" {
+					foundPath = lines[0]
+					if _, err := os.Stat(foundPath); err != nil {
+						foundPath = "" // Invalid path
+					}
+				}
+			}
+		}
+
+		if foundPath != "" {
+			validatedFiles = append(validatedFiles, foundPath)
+			logger.Info("✅ Validated pattern reference file",
+				zap.String("filename", filename),
+				zap.String("fullPath", foundPath))
+		} else {
+			logger.Warn("⚠️  Pattern reference file not found",
+				zap.String("filename", filename),
+				zap.String("suggestion", "File mentioned in context but doesn't exist - coordinator may need to verify this reference"))
+		}
+	}
+
+	return validatedFiles
+}
+
+// tryFixPath attempts multiple strategies to correct an invalid file path
+func tryFixPath(path string, projectRoot string, logger *zap.Logger) string {
+	strategies := []struct {
+		name string
+		fix  func(string) string
+	}{
+		{
+			name: "Remove duplicate /hyper/hyper/ pattern",
+			fix: func(p string) string {
+				return strings.Replace(p, "/hyper/hyper/", "/hyper/", 1)
+			},
+		},
+		{
+			name: "Replace /hyper/ui/ with /ui/",
+			fix: func(p string) string {
+				return strings.Replace(p, "/hyper/ui/", "/ui/", 1)
+			},
+		},
+		{
+			name: "Remove leading /hyper/ if path starts with it",
+			fix: func(p string) string {
+				if strings.HasPrefix(p, "/hyper/") {
+					return strings.TrimPrefix(p, "/hyper")
+				}
+				return ""
+			},
+		},
+		{
+			name: "Prepend project root to relative path",
+			fix: func(p string) string {
+				// Remove leading ./ if present
+				cleaned := strings.TrimPrefix(p, "./")
+				return filepath.Join(projectRoot, cleaned)
+			},
+		},
+		{
+			name: "Search in common UI directories",
+			fix: func(p string) string {
+				basename := filepath.Base(p)
+				commonDirs := []string{
+					"ui/src/components",
+					"ui/src/pages",
+					"ui/src",
+				}
+				for _, dir := range commonDirs {
+					candidate := filepath.Join(projectRoot, dir, basename)
+					if _, err := os.Stat(candidate); err == nil {
+						return candidate
+					}
+				}
+				return ""
+			},
+		},
+		{
+			name: "Search in common backend directories",
+			fix: func(p string) string {
+				basename := filepath.Base(p)
+				commonDirs := []string{
+					"hyper/internal/ai-service",
+					"hyper/internal/mcp",
+					"hyper/internal",
+				}
+				for _, dir := range commonDirs {
+					candidate := filepath.Join(projectRoot, dir, basename)
+					if _, err := os.Stat(candidate); err == nil {
+						return candidate
+					}
+				}
+				return ""
+			},
+		},
+	}
+
+	for _, strategy := range strategies {
+		fixed := strategy.fix(path)
+		if fixed != "" && fixed != path {
+			logger.Debug("Trying correction strategy",
+				zap.String("strategy", strategy.name),
+				zap.String("original", path),
+				zap.String("candidate", fixed))
+
+			// Check if this fixed path exists
+			if _, err := os.Stat(fixed); err == nil {
+				logger.Info("✅ Correction strategy successful",
+					zap.String("strategy", strategy.name),
+					zap.String("fixed", fixed))
+				return fixed
+			}
+		}
+	}
+
+	return "" // No correction worked
+}
 
 // CoordinatorTools provides MCP coordinator tool executors for LangChain
 type CoordinatorTools struct {
@@ -42,7 +337,7 @@ func (t *CreateAgentTaskTool) Name() string {
 }
 
 func (t *CreateAgentTaskTool) Description() string {
-	return "Create a new agent task linked to a human task. Returns task ID. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. Required: humanTaskId, agentName, role, todos. Optional: contextSummary, filesModified, qdrantCollections, priorWorkSummary."
+	return "Create a new agent task linked to a human task. Returns task ID. SMART AUTO-FETCH: If humanTaskId is omitted, automatically fetches the most recent pending human task from the database. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. Required: agentName, role, todos. Optional: humanTaskId, contextSummary, filesModified, qdrantCollections, priorWorkSummary."
 }
 
 func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
@@ -51,7 +346,7 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"humanTaskId": map[string]interface{}{
 				"type":        "string",
-				"description": "Parent human task ID (UUID format)",
+				"description": "Parent human task ID (UUID format). OPTIONAL: If not provided, automatically uses the most recent pending human task from the database.",
 			},
 			"agentName": map[string]interface{}{
 				"type":        "string",
@@ -91,15 +386,88 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 				"description": "Summary of previous agent's work and key decisions (for multi-phase tasks)",
 			},
 		},
-		"required": []string{"humanTaskId", "agentName", "role", "todos"},
+		"required": []string{"agentName", "role", "todos"},
 	}
 }
 
 func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	// Extract and validate required fields
-	humanTaskID, ok := input["humanTaskId"].(string)
-	if !ok || humanTaskID == "" {
-		return nil, fmt.Errorf("humanTaskId is required and must be a string")
+	// SMART AUTO-FETCH: Extract humanTaskId from input but ALWAYS validate it exists in database
+	// If invalid/missing, auto-fetch the latest pending task (don't trust the model)
+	providedTaskID, _ := input["humanTaskId"].(string)
+
+	// Helper function to fetch latest pending task
+	fetchLatestTask := func() (*storage.HumanTask, error) {
+		allTasks := t.storage.ListAllHumanTasks()
+		if len(allTasks) == 0 {
+			return nil, fmt.Errorf("no human tasks found - create a human task first using coordinator_create_human_task")
+		}
+
+		// Find the most recent pending task
+		var latestTask *storage.HumanTask
+		for _, task := range allTasks {
+			if task.Status == storage.TaskStatusPending {
+				if latestTask == nil || task.CreatedAt.After(latestTask.CreatedAt) {
+					latestTask = task
+				}
+			}
+		}
+
+		// If no pending task, use the most recent task regardless of status
+		if latestTask == nil {
+			latestTask = allTasks[0]
+			for _, task := range allTasks {
+				if task.CreatedAt.After(latestTask.CreatedAt) {
+					latestTask = task
+				}
+			}
+		}
+
+		return latestTask, nil
+	}
+
+	var humanTaskID string
+
+	// If task ID was provided, validate it exists in database
+	if providedTaskID != "" {
+		task, err := t.storage.GetHumanTask(providedTaskID)
+		if err != nil || task == nil {
+			// INVALID TASK ID - Model hallucinated or sent wrong ID
+			zap.L().Warn("Model provided invalid humanTaskId - auto-fetching latest task",
+				zap.String("providedTaskId", providedTaskID),
+				zap.String("error", fmt.Sprintf("%v", err)),
+				zap.String("reason", "task_not_found_in_database"))
+
+			// Auto-fetch latest task
+			latestTask, fetchErr := fetchLatestTask()
+			if fetchErr != nil {
+				return nil, fetchErr
+			}
+			humanTaskID = latestTask.ID
+
+			zap.L().Info("Auto-corrected humanTaskId (model sent invalid ID)",
+				zap.String("modelProvidedId", providedTaskID),
+				zap.String("correctedId", humanTaskID),
+				zap.String("prompt", latestTask.Prompt),
+				zap.Time("createdAt", latestTask.CreatedAt))
+		} else {
+			// Valid task ID
+			humanTaskID = task.ID
+			zap.L().Info("Validated humanTaskId from model",
+				zap.String("humanTaskId", humanTaskID),
+				zap.String("status", string(task.Status)))
+		}
+	} else {
+		// No task ID provided - auto-fetch latest
+		latestTask, err := fetchLatestTask()
+		if err != nil {
+			return nil, err
+		}
+		humanTaskID = latestTask.ID
+
+		zap.L().Info("Auto-fetched latest pending human task (no ID provided)",
+			zap.String("humanTaskId", humanTaskID),
+			zap.String("prompt", latestTask.Prompt),
+			zap.Time("createdAt", latestTask.CreatedAt))
 	}
 
 	agentName, ok := input["agentName"].(string)
@@ -139,6 +507,37 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("todos must not be empty")
 	}
 
+	// VALIDATION: Check for discovery keywords in TODOs (subagents cannot search/discover)
+	discoveryKeywords := []string{
+		"search", "find", "locate", "discover", "look for",
+		"code_index_search", "list_directory", "explore",
+	}
+
+	for i, todo := range todos {
+		todoLower := strings.ToLower(todo)
+		for _, keyword := range discoveryKeywords {
+			if strings.Contains(todoLower, keyword) {
+				return nil, fmt.Errorf(
+					"❌ TODO validation failed: TODO #%d contains discovery keyword '%s'\n"+
+						"TODO: %s\n\n"+
+						"🚨 SUBAGENTS CANNOT SEARCH OR DISCOVER FILES\n"+
+						"• Subagents run in write-only mode\n"+
+						"• Discovery tools (code_index_search, list_directory) are BLOCKED\n"+
+						"• YOU must run code_index_search BEFORE creating this task\n"+
+						"• TODOs must be implementation steps only\n\n"+
+						"✅ GOOD TODO examples:\n"+
+						"  - 'Add responsive CSS to Settings.tsx lines 15-45'\n"+
+						"  - 'Update login validation in AuthForm.tsx'\n"+
+						"  - 'Test changes work on mobile viewport'\n\n"+
+						"❌ BAD TODO examples:\n"+
+						"  - 'Search for Settings component'  ← Discovery step!\n"+
+						"  - 'Find the auth logic'  ← Discovery step!\n"+
+						"  - 'Locate CSS files'  ← Discovery step!",
+					i+1, keyword, todo)
+			}
+		}
+	}
+
 	// Convert todos to storage format
 	todoItems := make([]storage.TodoItemInput, len(todos))
 	for i, todo := range todos {
@@ -161,6 +560,99 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
+	// AUTO-POPULATE: If filesModified is empty, try to populate from last code_index_search
+	if len(filesModified) == 0 {
+		cachedPaths := GetLastCodeSearchPaths()
+		if len(cachedPaths) > 0 {
+			filesModified = cachedPaths
+			zap.L().Info("✅ Auto-populated filesModified from code_index_search cache",
+				zap.Int("filesCount", len(filesModified)),
+				zap.Strings("files", filesModified))
+		}
+	}
+
+	// PATH CORRECTION: Fix invalid paths before validation (defensive programming)
+	// Only runs if paths exist but some are invalid
+	if len(filesModified) > 0 {
+		correctedPaths, unfixablePaths, isIndexingIssue := correctFilePaths(filesModified, zap.L())
+		if len(unfixablePaths) > 0 {
+			// Some paths could not be fixed - this will fail validation
+			zap.L().Error("❌ Path correction failed for some files",
+				zap.Strings("unfixablePaths", unfixablePaths),
+				zap.Bool("indexingIssue", isIndexingIssue))
+			// Don't return error here - let validation handle it with proper error message
+		} else if len(correctedPaths) != len(filesModified) {
+			// Paths were corrected successfully
+			filesModified = correctedPaths
+			zap.L().Info("✅ File paths corrected and validated",
+				zap.Int("correctedCount", len(correctedPaths)),
+				zap.Bool("indexingIssue", isIndexingIssue))
+		}
+	}
+
+	// PATTERN FILE DETECTION: Auto-add reference files mentioned in context/TODOs
+	// Scan contextSummary and todos for file references (e.g., "follow pattern from HTTPToolsPage.tsx")
+	projectRoot := tools.GetProjectRoot()
+	patternFiles := extractPatternFiles(contextSummary, todos, projectRoot, zap.L())
+	if len(patternFiles) > 0 {
+		// Add pattern files to filesModified if not already present
+		filesModifiedSet := make(map[string]bool)
+		for _, f := range filesModified {
+			filesModifiedSet[f] = true
+		}
+
+		addedPatternFiles := []string{}
+		for _, patternFile := range patternFiles {
+			if !filesModifiedSet[patternFile] {
+				filesModified = append(filesModified, patternFile)
+				addedPatternFiles = append(addedPatternFiles, patternFile)
+				filesModifiedSet[patternFile] = true
+			}
+		}
+
+		if len(addedPatternFiles) > 0 {
+			zap.L().Info("✅ Auto-added pattern reference files to filesModified",
+				zap.Strings("patternFiles", addedPatternFiles),
+				zap.Int("totalFilesModified", len(filesModified)))
+		}
+	}
+
+	// VALIDATION: Warn if filesModified is empty
+	// This is a strong indicator the coordinator didn't use code_index_search results
+	if len(filesModified) == 0 {
+		zap.L().Warn("⚠️  filesModified is empty - subagent may not know which files to modify",
+			zap.String("agentName", agentName),
+			zap.String("humanTaskId", humanTaskID),
+			zap.Int("todosCount", len(todos)),
+			zap.String("recommendation", "Run code_index_search first and populate filesModified with result file paths"))
+
+		// Check if TODOs reference specific files - if so, this is definitely an error
+		for i, todo := range todos {
+			todoLower := strings.ToLower(todo)
+			// Look for file references like ".tsx", ".go", ".css", etc.
+			fileExtensions := []string{".tsx", ".ts", ".jsx", ".js", ".go", ".css", ".html", ".py", ".java"}
+			for _, ext := range fileExtensions {
+				if strings.Contains(todoLower, ext) {
+					return nil, fmt.Errorf(
+						"❌ filesModified validation failed:\n"+
+							"• filesModified is empty\n"+
+							"• BUT TODO #%d references a file: %s\n\n"+
+							"🚨 YOU MUST POPULATE filesModified\n"+
+							"• Run code_index_search to find relevant files\n"+
+							"• Extract filePath values from search results\n"+
+							"• Pass them in filesModified array\n\n"+
+							"Example:\n"+
+							"1. code_index_search('settings component')\n"+
+							"2. create_agent_task({\n"+
+							"     filesModified: [\"/path/to/Settings.tsx\", \"/path/to/settings.css\"],\n"+
+							"     todos: [\"Add responsive CSS...\"]\n"+
+							"   })",
+						i+1, todo)
+				}
+			}
+		}
+	}
+
 	var qdrantCollections []string
 	if qc, ok := input["qdrantCollections"].([]interface{}); ok {
 		qdrantCollections = make([]string, len(qc))
@@ -168,6 +660,24 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 			if str, ok := c.(string); ok {
 				qdrantCollections[i] = str
 			}
+		}
+	}
+
+	// Validate file paths exist before creating task (Claude optimization)
+	// This prevents subagents from being launched with invalid file paths
+	if len(filesModified) > 0 {
+		var missingFiles []string
+		for _, filePath := range filesModified {
+			if filePath == "" {
+				continue // Skip empty paths
+			}
+			// Check if file exists
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				missingFiles = append(missingFiles, filePath)
+			}
+		}
+		if len(missingFiles) > 0 {
+			return nil, fmt.Errorf("file validation failed: the following files do not exist:\n%s\n\nPlease verify the file paths from code_index_search results and ensure they are copied exactly", strings.Join(missingFiles, "\n"))
 		}
 	}
 
@@ -207,7 +717,9 @@ func (t *ListAgentTasksTool) Name() string {
 }
 
 func (t *ListAgentTasksTool) Description() string {
-	return "List agent tasks with optional filters. Returns up to 20 tasks with details. Supports pagination via offset/limit. Use to check task status, find assignments, or review progress."
+	return "List agent tasks with optional filters. Returns up to 20 tasks with details. Supports pagination via offset/limit. Use to check task status, find assignments, or review progress. " +
+		"TIP: Filter by humanTaskId or agentName to narrow results. " +
+		"IMPORTANT: If you have a specific agentTaskId (e.g., from execute_subagent result), use coordinator_get_agent_task instead for direct lookup - DO NOT call this repeatedly without filters."
 }
 
 func (t *ListAgentTasksTool) InputSchema() map[string]interface{} {
@@ -485,7 +997,8 @@ func (t *GetPopularCollectionsTool) Execute(ctx context.Context, input map[strin
 
 // CreateHumanTaskTool implements the ToolExecutor interface
 type CreateHumanTaskTool struct {
-	storage storage.TaskStorage
+	storage       storage.TaskStorage
+	retryAttempts sync.Map // Track retry attempts by prompt hash to prevent loops
 }
 
 func (t *CreateHumanTaskTool) Name() string {
@@ -493,7 +1006,20 @@ func (t *CreateHumanTaskTool) Name() string {
 }
 
 func (t *CreateHumanTaskTool) Description() string {
-	return "Create a new human task with the original user prompt. Returns task ID. Use this as the first step when a user makes a request."
+	return `Create a new human task with the original user prompt. Returns task ID. Use this as the first step when a user makes a request.
+
+CRITICAL - Handling Similar Tasks (MUST FOLLOW):
+- If similarTasksFound=true is returned, you MUST:
+  1. STOP and examine the similarTasks array
+  2. ASK THE USER: "I found similar existing tasks. Would you like to:
+     a) Use an existing task (show task details)
+     b) Create a new task anyway"
+  3. Wait for user response
+  4. Based on user choice:
+     - If user chooses existing task → use that taskId
+     - If user wants new task → call this tool again with forceCreate=true
+- DO NOT call this tool again without asking the user first
+- DO NOT try to decide on your own - always ask the user when similar tasks are found`
 }
 
 func (t *CreateHumanTaskTool) InputSchema() map[string]interface{} {
@@ -524,11 +1050,45 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 		forceCreate = fc
 	}
 
+	// Generate hash of prompt for tracking retry attempts
+	hash := sha256.Sum256([]byte(prompt))
+	promptHash := hex.EncodeToString(hash[:])
+
+	// Track ALL calls (even with forceCreate) to detect loops early
+	var attemptCount int
+	if val, exists := t.retryAttempts.Load(promptHash); exists {
+		attemptCount = val.(int)
+	}
+	attemptCount++
+	t.retryAttempts.Store(promptHash, attemptCount)
+
+	// CRITICAL LOOP PREVENTION: After 2 similar task responses (3rd call total),
+	// auto-create instead of returning similar tasks again
+	if attemptCount >= 3 && !forceCreate {
+		// Clean up tracking
+		t.retryAttempts.Delete(promptHash)
+
+		// Force create the task to prevent infinite loop
+		task, err := t.storage.CreateHumanTask(prompt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create human task: %w", err)
+		}
+
+		return map[string]interface{}{
+			"similarTasksFound": false,
+			"taskId":            task.ID,
+			"status":            task.Status,
+			"prompt":            task.Prompt,
+			"createdAt":         task.CreatedAt,
+			"message":           "⚠️ Auto-created task to prevent infinite loop. Tool was called 3+ times with same prompt - creating task automatically.",
+		}, nil
+	}
+
 	// Check for similar tasks unless forceCreate is true
 	if !forceCreate {
 		similarTasks, scores, err := t.storage.SearchSimilarHumanTasks(prompt, 5, 0.75)
 		if err == nil && len(similarTasks) > 0 {
-			// Found similar tasks - return them instead of creating
+			// Return similar tasks and ask user (on attempts 1 and 2)
 			formattedTasks := make([]map[string]interface{}, len(similarTasks))
 			for i, task := range similarTasks {
 				formattedTasks[i] = map[string]interface{}{
@@ -543,10 +1103,14 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 			return map[string]interface{}{
 				"similarTasksFound": true,
 				"similarTasks":      formattedTasks,
-				"message":           fmt.Sprintf("Found %d similar task(s). Set forceCreate=true to create anyway, or use an existing task.", len(similarTasks)),
+				"message":           fmt.Sprintf("Found %d similar task(s). ASK THE USER if they want to use an existing task or create a new one. If user wants new task, call again with forceCreate=true.", len(similarTasks)),
+				"_attemptCount":     attemptCount, // Include for debugging
 			}, nil
 		}
 	}
+
+	// Clean up tracking if task is being created
+	t.retryAttempts.Delete(promptHash)
 
 	// No similar tasks or forceCreate=true - proceed with creation
 	task, err := t.storage.CreateHumanTask(prompt)
@@ -687,12 +1251,45 @@ func (t *UpdateTodoStatusTool) Execute(ctx context.Context, input map[string]int
 		return nil, fmt.Errorf("failed to update TODO status: %w", err)
 	}
 
-	return map[string]interface{}{
+	// Build response with clear nextAction guidance
+	response := map[string]interface{}{
+		"success":     true,
+		"message":     fmt.Sprintf("✅ TODO %s updated to status: %s", todoID, status),
 		"agentTaskId": agentTaskID,
 		"todoId":      todoID,
 		"status":      status,
 		"notes":       notes,
-	}, nil
+	}
+
+	// Add nextAction guidance based on status
+	switch status {
+	case "in_progress":
+		response["nextAction"] = "IMPLEMENT_CHANGES"
+		response["nextSteps"] = []string{
+			"Call write_file or apply_patch to implement the code changes",
+			"After implementing, call coordinator_update_todo_status with status='completed'",
+			"DO NOT call coordinator_update_todo_status again with status='in_progress'",
+		}
+		response["guidance"] = "You have marked this TODO as in_progress. Your NEXT action MUST be write_file or apply_patch to implement changes. DO NOT call this tool again with the same status."
+
+	case "completed":
+		response["nextAction"] = "MOVE_TO_NEXT_TODO"
+		response["nextSteps"] = []string{
+			"Move to the next pending TODO in your task",
+			"OR if all TODOs are completed, the task will auto-complete",
+		}
+		response["guidance"] = "TODO completed successfully. Move to the next TODO or wait for task completion."
+
+	case "pending":
+		response["nextAction"] = "START_TODO"
+		response["nextSteps"] = []string{
+			"Call coordinator_update_todo_status with status='in_progress' to start this TODO",
+			"Then implement the changes with write_file or apply_patch",
+		}
+		response["guidance"] = "TODO reset to pending. Call this tool again with status='in_progress' to start working on it."
+	}
+
+	return response, nil
 }
 
 // ListHumanTasksTool implements the ToolExecutor interface
@@ -762,6 +1359,97 @@ func (t *GetAgentTaskTool) Execute(ctx context.Context, input map[string]interfa
 
 	return map[string]interface{}{
 		"task": task,
+	}, nil
+}
+
+// FindSimilarTasksTool implements the ToolExecutor interface for finding similar existing tasks
+// This helps prevent duplicate task creation (Claude optimization)
+type FindSimilarTasksTool struct {
+	storage storage.TaskStorage
+}
+
+func (t *FindSimilarTasksTool) Name() string {
+	return "coordinator_find_similar_tasks"
+}
+
+func (t *FindSimilarTasksTool) Description() string {
+	return "Search for existing tasks similar to a given prompt. Returns tasks with similarity scores (0-1). Use BEFORE creating a new task to avoid duplicates. Higher scores indicate more similar tasks."
+}
+
+func (t *FindSimilarTasksTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"prompt": map[string]interface{}{
+				"type":        "string",
+				"description": "The task description to search for similar tasks",
+			},
+			"limit": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum number of results to return (default: 5, max: 10)",
+			},
+			"minScore": map[string]interface{}{
+				"type":        "number",
+				"description": "Minimum similarity score threshold 0-1 (default: 0.7)",
+			},
+		},
+		"required": []string{"prompt"},
+	}
+}
+
+func (t *FindSimilarTasksTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	// Extract required prompt
+	prompt, ok := input["prompt"].(string)
+	if !ok || prompt == "" {
+		return nil, fmt.Errorf("prompt is required and must be a non-empty string")
+	}
+
+	// Extract optional limit (default: 5, max: 10)
+	limit := 5
+	if l, ok := input["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+		if limit > 10 {
+			limit = 10
+		}
+	}
+
+	// Extract optional minScore (default: 0.7)
+	minScore := 0.7
+	if s, ok := input["minScore"].(float64); ok && s >= 0 && s <= 1 {
+		minScore = s
+	}
+
+	// Search for similar tasks
+	tasks, scores, err := t.storage.SearchSimilarHumanTasks(prompt, limit, minScore)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search similar tasks: %w", err)
+	}
+
+	// Format results
+	type SimilarTask struct {
+		TaskID    string  `json:"taskId"`
+		Prompt    string  `json:"prompt"`
+		Status    string  `json:"status"`
+		CreatedAt string  `json:"createdAt"`
+		Score     float64 `json:"score"`
+	}
+
+	results := make([]SimilarTask, len(tasks))
+	for i, task := range tasks {
+		results[i] = SimilarTask{
+			TaskID:    task.ID,
+			Prompt:    task.Prompt,
+			Status:    string(task.Status),
+			CreatedAt: task.CreatedAt.Format("2006-01-02 15:04:05"),
+			Score:     scores[i],
+		}
+	}
+
+	return map[string]interface{}{
+		"similarTasks": results,
+		"count":        len(results),
+		"searchPrompt": prompt,
+		"minScore":     minScore,
 	}, nil
 }
 
@@ -1202,22 +1890,22 @@ func (t *SetCurrentSubagentTool) Execute(ctx context.Context, input map[string]i
 
 	// Validate subagent name against known list
 	validSubagents := map[string]bool{
-		"go-dev":                             true,
-		"go-mcp-dev":                         true,
-		"Backend Services Specialist":        true,
-		"Event Systems Specialist":           true,
-		"Data Platform Specialist":           true,
-		"ui-dev":                             true,
-		"ui-tester":                          true,
-		"Frontend Experience Specialist":     true,
-		"AI Integration Specialist":          true,
-		"Real-time Systems Specialist":       true,
-		"sre":                                true,
-		"k8s-deployment-expert":              true,
+		"go-dev":                               true,
+		"go-mcp-dev":                           true,
+		"Backend Services Specialist":          true,
+		"Event Systems Specialist":             true,
+		"Data Platform Specialist":             true,
+		"ui-dev":                               true,
+		"ui-tester":                            true,
+		"Frontend Experience Specialist":       true,
+		"AI Integration Specialist":            true,
+		"Real-time Systems Specialist":         true,
+		"sre":                                  true,
+		"k8s-deployment-expert":                true,
 		"Infrastructure Automation Specialist": true,
-		"Security & Auth Specialist":         true,
-		"Observability Specialist":           true,
-		"End-to-End Testing Coordinator":     true,
+		"Security & Auth Specialist":           true,
+		"Observability Specialist":             true,
+		"End-to-End Testing Coordinator":       true,
 	}
 
 	if !validSubagents[subagentName] {
@@ -1455,6 +2143,8 @@ type AIServiceInterface interface {
 // ChatServiceInterface defines methods needed from the chat service
 type ChatServiceInterface interface {
 	CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
+	CreateSessionWithParent(ctx context.Context, userID, companyID, title string, parentChatID *primitive.ObjectID) (*models.ChatSession, error)
+	GetSession(ctx context.Context, sessionID primitive.ObjectID, companyID string) (*models.ChatSession, error)
 	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
 	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
 	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
@@ -1483,10 +2173,10 @@ func (t *ExecuteSubagentTool) InputSchema() map[string]interface{} {
 			},
 			"parentChatId": map[string]interface{}{
 				"type":        "string",
-				"description": "Parent chat session ID",
+				"description": "Parent chat session ID (optional - will be auto-detected from context if not provided)",
 			},
 		},
-		"required": []string{"agentTaskId", "parentChatId"},
+		"required": []string{"agentTaskId"},
 	}
 }
 
@@ -1496,9 +2186,24 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("agentTaskId is required and must be a string")
 	}
 
-	parentChatID, ok := input["parentChatId"].(string)
-	if !ok || parentChatID == "" {
-		return nil, fmt.Errorf("parentChatId is required and must be a string")
+	// ALWAYS try to get session ID from context first (most reliable)
+	var parentChatID string
+	if sessionID, hasSession := ctx.Value("sessionID").(string); hasSession && sessionID != "" {
+		parentChatID = sessionID
+		t.logger.Info("✅ Using session ID from context (auto-detected)",
+			zap.String("agentTaskId", agentTaskID),
+			zap.String("sessionID", sessionID))
+	} else {
+		// Fallback to AI-provided value only if context doesn't have it
+		providedID, hasProvidedID := input["parentChatId"].(string)
+		if hasProvidedID && providedID != "" && providedID != "main" {
+			parentChatID = providedID
+			t.logger.Warn("⚠️ Using AI-provided parentChatId (context not available)",
+				zap.String("agentTaskId", agentTaskID),
+				zap.String("parentChatId", providedID))
+		} else {
+			return nil, fmt.Errorf("parentChatId could not be determined: not in context and not provided by AI (or AI provided 'main' placeholder)")
+		}
 	}
 
 	t.logger.Info("🚀 execute_subagent tool called",
@@ -1541,24 +2246,25 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID)
 
 	return map[string]interface{}{
-		"subchatId":    subchat.ID,
-		"agentName":    subchat.SubagentName,
-		"agentTaskId":  agentTaskID,
-		"status":       "executing",
-		"message":      fmt.Sprintf("Subchat created and %s is now executing in background. Check subchat messages for progress.", agentTask.AgentName),
-		"createdAt":    subchat.CreatedAt,
+		"subchatId":   subchat.ID,
+		"agentName":   subchat.SubagentName,
+		"agentTaskId": agentTaskID,
+		"status":      "executing",
+		"message":     fmt.Sprintf("Subchat created and %s is now executing in background. Check subchat messages for progress.", agentTask.AgentName),
+		"createdAt":   subchat.CreatedAt,
 	}, nil
 }
 
 // FileOperationTracker tracks file operations and duplicate tool calls during subagent execution
 type FileOperationTracker struct {
-	DirectoriesListed map[string]int    // path -> count
-	FilesRead         map[string]int    // path -> count
-	FilesWritten      map[string]int    // path -> count
-	ToolCallHistory   []string          // chronological list of tool calls
+	DirectoriesListed map[string]int // path -> count
+	FilesRead         map[string]int // path -> count
+	FilesWritten      map[string]int // path -> count
+	BashCalls         map[string]int // command -> count
+	ToolCallHistory   []string       // chronological list of tool calls
 
 	// Track full argument sets for loop detection
-	ToolCallSignatures map[string]int   // signature (toolName + argsJSON) -> count
+	ToolCallSignatures map[string]int // signature (toolName + argsJSON) -> count
 }
 
 // NewFileOperationTracker creates a new tracker
@@ -1567,6 +2273,7 @@ func NewFileOperationTracker() *FileOperationTracker {
 		DirectoriesListed:  make(map[string]int),
 		FilesRead:          make(map[string]int),
 		FilesWritten:       make(map[string]int),
+		BashCalls:          make(map[string]int),
 		ToolCallHistory:    make([]string, 0),
 		ToolCallSignatures: make(map[string]int),
 	}
@@ -1611,9 +2318,38 @@ func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]
 				warning = fmt.Sprintf("⚠️  WARNING: You already read file '%s' %d time(s). You should have the content from previous calls.", path, f.FilesRead[path]-1)
 			}
 		}
-	case "write_file", "apply_patch":
-		if path, ok := args["filePath"].(string); ok {
+	case "write_file":
+		// NOTE: The write_file tool uses "path" not "filePath" as its parameter name
+		if path, ok := args["path"].(string); ok {
 			f.FilesWritten[path]++
+		}
+	case "apply_patch":
+		// For apply_patch, the file path is embedded in the patch content
+		// Format: "*** Update File: path/to/file.ext"
+		if patchContent, ok := args["patch"].(string); ok {
+			// Extract file path from patch
+			if strings.Contains(patchContent, "*** Update File:") {
+				lines := strings.Split(patchContent, "\n")
+				for _, line := range lines {
+					if strings.HasPrefix(line, "*** Update File:") {
+						filePath := strings.TrimSpace(strings.TrimPrefix(line, "*** Update File:"))
+						f.FilesWritten[filePath]++
+						break
+					}
+				}
+			} else {
+				// Fallback: mark as generic write if we can't extract path
+				f.FilesWritten["<patch-unknown-file>"]++
+			}
+		}
+	case "bash":
+		if command, ok := args["command"].(string); ok {
+			// Track bash command (truncate if too long for map key)
+			cmdKey := command
+			if len(cmdKey) > 100 {
+				cmdKey = cmdKey[:100] + "..."
+			}
+			f.BashCalls[cmdKey]++
 		}
 	}
 
@@ -1657,7 +2393,34 @@ func (f *FileOperationTracker) GetProgressSummary() string {
 	return summary.String()
 }
 
+// normalizePathForComparison cleans and normalizes a path for comparison
+// Handles ./, ../, and ensures consistent format for matching
+func normalizePathForComparison(path string, projectRoot string) []string {
+	// Clean the path to remove ./ and ../ components
+	cleaned := filepath.Clean(path)
+
+	// Generate multiple variants for matching
+	variants := []string{cleaned}
+
+	// Add absolute version if relative
+	if !filepath.IsAbs(cleaned) {
+		absPath := filepath.Join(projectRoot, cleaned)
+		variants = append(variants, filepath.Clean(absPath))
+	}
+
+	// Add relative version if absolute
+	if filepath.IsAbs(cleaned) {
+		relPath, err := filepath.Rel(projectRoot, cleaned)
+		if err == nil {
+			variants = append(variants, filepath.Clean(relPath))
+		}
+	}
+
+	return variants
+}
+
 // validateFileModifications checks if expected files were actually modified using the session-scoped file operation tracker
+// This validation is robust to both absolute and relative path formats
 func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.AgentTask, progressTracker *FileOperationTracker) (bool, []string, error) {
 	// If no files expected to be modified, skip validation
 	if len(agentTask.FilesModified) == 0 {
@@ -1672,37 +2435,48 @@ func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.Agent
 	// Get project root to normalize paths
 	projectRoot := tools.GetProjectRoot()
 
-	// Normalize expected files to both absolute and relative paths for matching
-	expectedFiles := make(map[string]bool)
-	for _, file := range agentTask.FilesModified {
-		// Store the original path
-		expectedFiles[file] = true
+	t.logger.Info("🔍 [Path Validation] Starting file modification validation",
+		zap.String("projectRoot", projectRoot),
+		zap.Int("expectedFilesCount", len(agentTask.FilesModified)),
+		zap.Int("writtenFilesCount", len(progressTracker.FilesWritten)))
 
-		// Also store relative path if this is absolute
-		if filepath.IsAbs(file) {
-			relPath, err := filepath.Rel(projectRoot, file)
-			if err == nil {
-				expectedFiles[relPath] = true
-			}
-		} else {
-			// Also store absolute path if this is relative
-			absPath := filepath.Join(projectRoot, file)
-			expectedFiles[absPath] = true
+	// Build a map of all expected file path variants for fast lookup
+	expectedFiles := make(map[string]string) // variant -> original path
+	for _, expectedFile := range agentTask.FilesModified {
+		variants := normalizePathForComparison(expectedFile, projectRoot)
+		t.logger.Debug("🔍 [Path Validation] Expected file variants",
+			zap.String("originalPath", expectedFile),
+			zap.Strings("variants", variants))
+		for _, variant := range variants {
+			expectedFiles[variant] = expectedFile
 		}
 	}
 
 	// Check which expected files were actually written
 	matchedFiles := []string{}
 	for writtenPath := range progressTracker.FilesWritten {
-		// Normalize the written path
-		normalizedWritten := writtenPath
-		if !filepath.IsAbs(writtenPath) {
-			normalizedWritten = filepath.Join(projectRoot, writtenPath)
-		}
+		variants := normalizePathForComparison(writtenPath, projectRoot)
+		t.logger.Debug("🔍 [Path Validation] Written file variants",
+			zap.String("writtenPath", writtenPath),
+			zap.Strings("variants", variants))
 
-		// Check both the original and normalized paths
-		if expectedFiles[writtenPath] || expectedFiles[normalizedWritten] {
-			matchedFiles = append(matchedFiles, writtenPath)
+		// Check if any variant of the written path matches any expected file variant
+		matched := false
+		for _, variant := range variants {
+			if originalExpected, found := expectedFiles[variant]; found {
+				matchedFiles = append(matchedFiles, writtenPath)
+				matched = true
+				t.logger.Info("✅ [Path Validation] File matched",
+					zap.String("writtenPath", writtenPath),
+					zap.String("matchedVariant", variant),
+					zap.String("expectedPath", originalExpected))
+				break
+			}
+		}
+		if !matched {
+			t.logger.Warn("⚠️  [Path Validation] File not matched",
+				zap.String("writtenPath", writtenPath),
+				zap.Strings("triedVariants", variants))
 		}
 	}
 
@@ -1713,8 +2487,18 @@ func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.Agent
 		for path := range progressTracker.FilesWritten {
 			writtenFiles = append(writtenFiles, path)
 		}
-		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, but agent wrote %v instead (session-scoped tracking)", agentTask.FilesModified, writtenFiles)
+
+		t.logger.Error("❌ [Path Validation] No expected files matched",
+			zap.Strings("expectedFiles", agentTask.FilesModified),
+			zap.Strings("writtenFiles", writtenFiles),
+			zap.String("projectRoot", projectRoot))
+
+		return false, matchedFiles, fmt.Errorf("expected files not modified: wanted %v, but agent wrote %v instead (session-scoped tracking). Project root: %s", agentTask.FilesModified, writtenFiles, projectRoot)
 	}
+
+	t.logger.Info("✅ [Path Validation] Validation successful",
+		zap.Int("matchedFilesCount", len(matchedFiles)),
+		zap.Strings("matchedFiles", matchedFiles))
 
 	return true, matchedFiles, nil
 }
@@ -1745,11 +2529,38 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	progressTracker := NewFileOperationTracker()
 
 	// Create a chat session for this subchat
-	companyID := "dev-company" // TODO: Extract from context
-	userID := "coordinator"    // Subagent executions are associated with the coordinator
+	// Get parent chat session to extract userID and companyID
+	parentSessionID, err := primitive.ObjectIDFromHex(parentChatID)
+	if err != nil {
+		t.logger.Error("Failed to parse parent chat ID",
+			zap.String("parentChatId", parentChatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Invalid parent chat ID: %v", err))
+		return
+	}
+
+	// Get parent session to inherit userID and companyID
+	parentSession, err := t.chatService.GetSession(ctx, parentSessionID, "dev-company")
+	if err != nil {
+		t.logger.Error("Failed to get parent chat session",
+			zap.String("parentChatId", parentChatID),
+			zap.Error(err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v", err))
+		return
+	}
+
+	// Use parent session's userID and companyID for subchat
+	userID := parentSession.UserID
+	companyID := parentSession.CompanyID
 	sessionTitle := fmt.Sprintf("Subchat: %s - %s", agentTask.AgentName, agentTask.Role)
 
-	chatSession, err := t.chatService.CreateSession(ctx, userID, companyID, sessionTitle)
+	t.logger.Info("Creating subchat session with parent's credentials",
+		zap.String("subchatId", subchatID),
+		zap.String("parentChatId", parentChatID),
+		zap.String("userId", userID),
+		zap.String("companyId", companyID))
+
+	chatSession, err := t.chatService.CreateSessionWithParent(ctx, userID, companyID, sessionTitle, &parentSessionID)
 	if err != nil {
 		t.logger.Error("Failed to create chat session for subchat",
 			zap.String("subchatId", subchatID),
@@ -1758,9 +2569,10 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		return
 	}
 
-	t.logger.Info("💬 Created chat session for subchat",
+	t.logger.Info("💬 Created chat session for subchat with parent link",
 		zap.String("subchatId", subchatID),
-		zap.String("sessionId", chatSession.ID.Hex()))
+		zap.String("sessionId", chatSession.ID.Hex()),
+		zap.String("parentChatId", parentChatID))
 
 	// Update subchat with session ID for linking
 	sessionIDHex := chatSession.ID.Hex()
@@ -1836,7 +2648,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	fullResponse := ""
 	toolCallCount := 0
 	completedTodos := 0
-	readFileCount := 0     // Track read_file calls (after 3 reads, MUST write)
+	readFileCount := 0         // Track read_file calls (after 3 reads, MUST write)
 	hasWrittenAnyFile := false // Track if any write has occurred
 
 	// RUNTIME ENFORCEMENT: File content cache to prevent re-reads
@@ -1868,6 +2680,14 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 
 			case aiservice.StreamEventToolCall:
 				toolCallCount++
+
+				// 📊 COMPREHENSIVE LOGGING: Log every tool call with timestamp and details
+				t.logger.Info("🔧 TOOL CALL",
+					zap.String("subchatId", subchatID),
+					zap.Int("callNumber", toolCallCount),
+					zap.String("toolName", event.ToolCall.Name),
+					zap.Any("args", event.ToolCall.Args),
+					zap.Time("timestamp", time.Now()))
 
 				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
 				if event.ToolCall.Name == "read_file" {
@@ -1917,7 +2737,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				// RUNTIME ENFORCEMENT: Track write operations and reward
 				if event.ToolCall.Name == "write_file" || event.ToolCall.Name == "apply_patch" {
 					hasWrittenAnyFile = true
-					readFileCount = 0 // Reset read counter after write
+					readFileCount = 0    // Reset read counter after write
 					executionScore += 20 // Big reward for writing
 
 					t.logger.Info("✅ Write operation detected - BIG scoring bonus",
@@ -2095,6 +2915,29 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 			}
 		}
 	}
+
+	// 📊 COMPREHENSIVE LOGGING: Final execution summary
+	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
+	t.logger.Info("║ 📊 FINAL EXECUTION SUMMARY",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName))
+	t.logger.Info("╠═══════════════════════════════════════════════════════════════════")
+	t.logger.Info("║ Tool Calls",
+		zap.Int("total", toolCallCount),
+		zap.Int("reads", readFileCount),
+		zap.Int("writes", len(progressTracker.FilesWritten)),
+		zap.Int("bash", len(progressTracker.BashCalls)))
+	t.logger.Info("║ TODOs",
+		zap.Int("completed", completedTodos),
+		zap.Int("total", len(agentTask.Todos)))
+	t.logger.Info("║ Score",
+		zap.Int("finalScore", executionScore),
+		zap.Bool("hasWritten", hasWrittenAnyFile))
+	t.logger.Info("║ Files",
+		zap.Int("filesRead", len(progressTracker.FilesRead)),
+		zap.Int("filesWritten", len(progressTracker.FilesWritten)),
+		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)))
+	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
 
 	t.logger.Info("📝 Saving final AI response to subchat",
 		zap.String("subchatId", subchatID),
@@ -2357,7 +3200,7 @@ YOUR TODOs:
 			status = "IN PROGRESS"
 		}
 
-		prompt += fmt.Sprintf("\n%d. [%s] %s", i+1, status, todo.Description)
+		prompt += fmt.Sprintf("\n%d. [%s] ID: %s - %s", i+1, status, todo.ID, todo.Description)
 
 		if todo.FilePath != "" {
 			prompt += fmt.Sprintf("\n   File: %s", todo.FilePath)
@@ -2506,6 +3349,7 @@ func RegisterCoordinatorTools(
 		&UpdateTodoStatusTool{storage: taskStorage},
 		&ListHumanTasksTool{storage: taskStorage},
 		&GetAgentTaskTool{storage: taskStorage},
+		&FindSimilarTasksTool{storage: taskStorage}, // Claude optimization: prevent duplicate tasks
 		&AddTaskPromptNotesTool{storage: taskStorage},
 		&UpdateTaskPromptNotesTool{storage: taskStorage},
 		&ClearTaskPromptNotesTool{storage: taskStorage},

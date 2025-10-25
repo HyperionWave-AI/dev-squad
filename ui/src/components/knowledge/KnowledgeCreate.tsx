@@ -103,123 +103,183 @@ export const KnowledgeCreate: React.FC<KnowledgeCreateProps> = ({ collections, o
   const maxCharacters = 10000;
 
   return (
-    <div className="p-4 border-2 rounded-lg bg-white shadow-sm">
-      <h2 className="text-xl font-bold mb-4">Create Knowledge Entry</h2>
+    <div className="w-full max-w-4xl mx-auto">
+      {/* Header */}
+      <div className="mb-6">
+        <h2 className="text-2xl font-semibold text-gray-900 mb-2">
+          Create Knowledge Entry
+        </h2>
+        <p className="text-sm text-gray-600">
+          Add new knowledge to your collection with proper metadata and categorization.
+        </p>
+      </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Collection Select */}
-        <div>
-          <label htmlFor="collection" className="block text-sm font-semibold mb-1">
-            Collection <span className="text-red-600">*</span>
-          </label>
-          <select
-            id="collection"
-            value={selectedCollection}
-            onChange={(e) => setSelectedCollection(e.target.value)}
-            className="w-full p-2 border-2 border-gray-300 rounded focus:border-blue-500 focus:outline-none"
-            required
-          >
-            <option value="">Select a collection...</option>
-            {collections
-              .sort((a, b) => a.category.localeCompare(b.category))
-              .map((col) => (
-                <option key={col.name} value={col.name}>
-                  {col.category} / {col.name}
-                </option>
-              ))}
-          </select>
-        </div>
-
-        {/* Text Input */}
-        <div>
-          <label htmlFor="text" className="block text-sm font-semibold mb-1">
-            Knowledge Text <span className="text-red-600">*</span>
-          </label>
-          <textarea
-            id="text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Enter detailed knowledge, patterns, or documentation..."
-            className="w-full p-2 border-2 border-gray-300 rounded focus:border-blue-500 focus:outline-none resize-y"
-            rows={6}
-            maxLength={maxCharacters}
-            required
-          />
-          <p className="text-xs text-gray-600 mt-1">
-            {characterCount} / {maxCharacters} characters
-          </p>
-        </div>
-
-        {/* Metadata Editor */}
-        <div>
-          <label className="block text-sm font-semibold mb-2">
-            Metadata (optional)
-          </label>
+      {/* Main Form Card */}
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
+        <form onSubmit={handleSubmit} className="p-6 space-y-6" noValidate>
+          {/* Collection Select */}
           <div className="space-y-2">
-            {metadata.map((entry, index) => (
-              <div key={index} className="flex gap-2">
-                <input
-                  type="text"
-                  value={entry.key}
-                  onChange={(e) => updateMetadataEntry(index, 'key', e.target.value)}
-                  placeholder="Key"
-                  className="flex-1 p-2 border-2 border-gray-300 rounded focus:border-blue-500 focus:outline-none"
-                />
-                <input
-                  type="text"
-                  value={entry.value}
-                  onChange={(e) => updateMetadataEntry(index, 'value', e.target.value)}
-                  placeholder="Value"
-                  className="flex-1 p-2 border-2 border-gray-300 rounded focus:border-blue-500 focus:outline-none"
-                />
-                {metadata.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeMetadataEntry(index)}
-                    className="px-3 py-2 bg-red-100 text-red-700 rounded font-semibold hover:bg-red-200 transition-colors"
-                    aria-label="Remove metadata entry"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-            ))}
+            <label htmlFor="collection" className="block text-sm font-medium text-gray-700">
+              Collection <span className="text-red-500">*</span>
+            </label>
+            <select
+              id="collection"
+              value={selectedCollection}
+              onChange={(e) => setSelectedCollection(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              required
+              aria-describedby="collection-help"
+            >
+              <option value="">Select a collection...</option>
+              {collections
+                .sort((a, b) => a.category.localeCompare(b.category))
+                .map((col) => (
+                  <option key={col.name} value={col.name}>
+                    {col.category} / {col.name}
+                  </option>
+                ))}
+            </select>
+            <p id="collection-help" className="text-xs text-gray-500">
+              Choose the collection where this knowledge will be stored
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={addMetadataEntry}
-            className="mt-2 px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm font-semibold hover:bg-gray-200 transition-colors"
-          >
-            + Add Metadata
-          </button>
-        </div>
 
-        {/* Submit Button */}
-        <div className="flex gap-2 pt-2">
-          <button
-            type="submit"
-            disabled={loading}
-            className="px-6 py-2 bg-green-600 text-white rounded font-semibold hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-          >
-            {loading ? 'Creating...' : 'Create Knowledge'}
-          </button>
-          <p className="text-xs text-gray-500 self-center">
-            Press Ctrl+Enter to submit
-          </p>
-        </div>
-      </form>
+          {/* Text Input */}
+          <div className="space-y-2">
+            <label htmlFor="text" className="block text-sm font-medium text-gray-700">
+              Knowledge Text <span className="text-red-500">*</span>
+            </label>
+            <textarea
+              id="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Enter detailed knowledge, patterns, or documentation..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors resize-vertical"
+              rows={8}
+              maxLength={maxCharacters}
+              required
+              aria-describedby="text-help text-count"
+            />
+            <div className="flex justify-between items-center">
+              <p id="text-help" className="text-xs text-gray-500">
+                Provide comprehensive information that will be useful for future reference
+              </p>
+              <p id="text-count" className="text-xs text-gray-500">
+                {characterCount} / {maxCharacters} characters
+              </p>
+            </div>
+          </div>
+
+          {/* Metadata Editor */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-sm font-medium text-gray-700">
+                Metadata (optional)
+              </label>
+              <button
+                type="button"
+                onClick={addMetadataEntry}
+                className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+              >
+                + Add Metadata
+              </button>
+            </div>
+            
+            <div className="space-y-3">
+              {metadata.map((entry, index) => (
+                <div key={index} className="flex gap-3 items-start">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={entry.key}
+                      onChange={(e) => updateMetadataEntry(index, 'key', e.target.value)}
+                      placeholder="Key"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                      aria-label={`Metadata key ${index + 1}`}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={entry.value}
+                      onChange={(e) => updateMetadataEntry(index, 'value', e.target.value)}
+                      placeholder="Value"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                      aria-label={`Metadata value ${index + 1}`}
+                    />
+                  </div>
+                  {metadata.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeMetadataEntry(index)}
+                      className="px-3 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors"
+                      aria-label={`Remove metadata entry ${index + 1}`}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            
+            <p className="text-xs text-gray-500">
+              Add key-value pairs to provide additional context and searchable attributes
+            </p>
+          </div>
+
+          {/* Submit Section */}
+          <div className="pt-4 border-t border-gray-200">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-500">
+                Press <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+Enter</kbd> to submit
+              </p>
+              <button
+                type="submit"
+                disabled={loading || !selectedCollection || !text.trim()}
+                className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {loading ? (
+                  <>
+                    <svg className="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Creating...
+                  </>
+                ) : (
+                  'Create Knowledge'
+                )}
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
 
       {/* Success Message */}
       {success && (
-        <div className="mt-4 p-4 border-2 border-green-300 bg-green-50 rounded-lg">
-          <p className="text-green-800 font-semibold">✓ Knowledge entry created successfully!</p>
+        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-md" role="alert">
+          <div className="flex items-center">
+            <svg className="w-5 h-5 text-green-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+            </svg>
+            <p className="text-sm font-medium text-green-800">
+              Knowledge entry created successfully!
+            </p>
+          </div>
         </div>
       )}
 
       {/* Error Display */}
       {error && (
-        <div className="mt-4 p-4 border-2 border-red-300 bg-red-50 rounded-lg">
-          <p className="text-red-800 font-semibold">Error: {error}</p>
+        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md" role="alert">
+          <div className="flex items-center">
+            <svg className="w-5 h-5 text-red-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+            </svg>
+            <p className="text-sm font-medium text-red-800">
+              Error: {error}
+            </p>
+          </div>
         </div>
       )}
     </div>

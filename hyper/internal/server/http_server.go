@@ -375,7 +375,7 @@ func StartHTTPServer(
 		logger.Warn("System subagents may not be available - some features may not work correctly")
 	}
 
-	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, logger)
+	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, chatService, logger)
 	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
 
 	// Register subchat routes
