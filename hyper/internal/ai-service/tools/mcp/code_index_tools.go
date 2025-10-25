@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
@@ -12,6 +14,34 @@ import (
 
 	"go.uber.org/zap"
 )
+
+// Global cache for last code_index_search result (for auto-populating filesModified)
+var (
+	lastCodeSearchCache     []string
+	lastCodeSearchTimestamp time.Time
+	codeSearchCacheMutex    sync.RWMutex
+	codeSearchCacheTTL      = 5 * time.Minute
+)
+
+// GetLastCodeSearchPaths returns the cached file paths from the most recent code_index_search
+// Returns nil if cache is expired (older than 5 minutes) or empty
+func GetLastCodeSearchPaths() []string {
+	codeSearchCacheMutex.RLock()
+	defer codeSearchCacheMutex.RUnlock()
+
+	// Check if cache is expired
+	if time.Since(lastCodeSearchTimestamp) > codeSearchCacheTTL {
+		return nil
+	}
+
+	// Return a copy to avoid external modification
+	if len(lastCodeSearchCache) == 0 {
+		return nil
+	}
+	result := make([]string, len(lastCodeSearchCache))
+	copy(result, lastCodeSearchCache)
+	return result
+}
 
 // CodeIndexSearchTool implements the ToolExecutor interface for code search
 // NOW FULLY FUNCTIONAL with embedding and Qdrant clients
@@ -201,6 +231,17 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 	for _, result := range results {
 		filePaths = append(filePaths, result.FilePath)
 	}
+
+	// CACHE: Store file paths for auto-populating filesModified in create_agent_task
+	codeSearchCacheMutex.Lock()
+	lastCodeSearchCache = make([]string, len(filePaths))
+	copy(lastCodeSearchCache, filePaths)
+	lastCodeSearchTimestamp = time.Now()
+	codeSearchCacheMutex.Unlock()
+
+	t.logger.Info("Code search: cached file paths for auto-population",
+		zap.Int("cachedPaths", len(filePaths)),
+		zap.Time("cachedAt", lastCodeSearchTimestamp))
 
 	return map[string]interface{}{
 		"success":     true,

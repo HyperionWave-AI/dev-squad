@@ -30,8 +30,9 @@ type FilesystemToolHandler struct {
 
 // NewFilesystemToolHandler creates a new filesystem tools handler
 func NewFilesystemToolHandler(logger *zap.Logger) *FilesystemToolHandler {
-	// Use current working directory as base
-	baseDir, _ := os.Getwd()
+	// Use project root (git root) as base, not current working directory
+	// This ensures paths work correctly even when server is run from subdirectories
+	baseDir := tools.GetProjectRoot()
 	return &FilesystemToolHandler{
 		logger:  logger,
 		baseDir: baseDir,
@@ -92,10 +93,15 @@ func (h *FilesystemToolHandler) validatePath(path string) (string, error) {
 	// Map absolute paths to project-relative
 	mappedPath := tools.MapPath(path)
 
-	// Convert to absolute path (now relative to project root)
-	absPath, err := filepath.Abs(mappedPath)
-	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
+	// Convert to absolute path (relative paths MUST use project root as base, NOT current working directory)
+	var absPath string
+	if filepath.IsAbs(mappedPath) {
+		// Already absolute - use as is
+		absPath = mappedPath
+	} else {
+		// Relative path - join with project root (h.baseDir), NOT os.Getwd()
+		// This fixes the bug where ./ui/... became /hyper/ui/... when server started from /hyper/
+		absPath = filepath.Join(h.baseDir, mappedPath)
 	}
 
 	// Clean the path
