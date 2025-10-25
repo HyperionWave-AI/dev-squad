@@ -364,16 +364,10 @@ func (p *anthropicProvider) messagesToContent(messages []Message) string {
 	return content
 }
 
-// SupportsTools returns true for Anthropic models that support tool use
+// SupportsTools returns true for Anthropic provider
+// All modern Claude models support tool use - no need for hardcoded model checks
 func (p *anthropicProvider) SupportsTools() bool {
-	// Claude 3+ models (Sonnet, Opus, Haiku) support tool use
-	// Includes: claude-3, claude-3.5, claude-sonnet-4, etc.
-	model := strings.ToLower(p.config.Model)
-	return strings.Contains(model, "claude-3") ||
-		strings.Contains(model, "claude-3.5") ||
-		strings.Contains(model, "claude-sonnet-4") ||
-		strings.Contains(model, "claude-opus-4") ||
-		strings.Contains(model, "claude-4")
+	return true
 }
 
 // StreamChatWithTools implements tool calling for Anthropic using direct API calls
