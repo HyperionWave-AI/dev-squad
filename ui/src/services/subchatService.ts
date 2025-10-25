@@ -19,6 +19,7 @@ export interface Subagent {
 export interface Subchat {
   id: string;
   parentChatId: string;
+  sessionId?: string; // Chat session ID for WebSocket streaming
   subagentName: string;
   assignedTaskId?: string;
   assignedTodoId?: string;
