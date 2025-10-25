@@ -12,6 +12,7 @@ type ChatSession struct {
 	UserID           string              `json:"userId" bson:"userId"`
 	CompanyID        string              `json:"companyId" bson:"companyId"`
 	Title            string              `json:"title" bson:"title"`
+	ParentChatID     *primitive.ObjectID `json:"parentChatId,omitempty" bson:"parentChatId,omitempty"` // For subchats - links to parent session
 	ActiveSubagentID *primitive.ObjectID `json:"activeSubagentId,omitempty" bson:"activeSubagentId,omitempty"`
 	CreatedAt        time.Time           `json:"createdAt" bson:"createdAt"`
 	UpdatedAt        time.Time           `json:"updatedAt" bson:"updatedAt"`

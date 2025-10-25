@@ -15,7 +15,7 @@ type ApplyPatchTool struct{}
 
 // ApplyPatchInput represents the input schema for patch application
 type ApplyPatchInput struct {
-	FilePath string `json:"filePath"`
+	FilePath string `json:"path"` // NOTE: Schema uses "path" parameter name (consistent with read_file/write_file)
 	Patch    string `json:"patch"`
 	DryRun   bool   `json:"dryRun,omitempty"` // validate without writing
 }

@@ -68,14 +68,20 @@ func NewChatService(db *mongo.Database, logger *zap.Logger) (*ChatService, error
 
 // CreateSession creates a new chat session for a user
 func (s *ChatService) CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error) {
+	return s.CreateSessionWithParent(ctx, userID, companyID, title, nil)
+}
+
+// CreateSessionWithParent creates a new chat session with an optional parent chat ID (for subchats)
+func (s *ChatService) CreateSessionWithParent(ctx context.Context, userID, companyID, title string, parentChatID *primitive.ObjectID) (*models.ChatSession, error) {
 	now := time.Now().UTC()
 	session := &models.ChatSession{
-		ID:        primitive.NewObjectID(),
-		UserID:    userID,
-		CompanyID: companyID,
-		Title:     title,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:           primitive.NewObjectID(),
+		UserID:       userID,
+		CompanyID:    companyID,
+		Title:        title,
+		ParentChatID: parentChatID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	_, err := s.sessionsCollection.InsertOne(ctx, session)
@@ -83,10 +89,18 @@ func (s *ChatService) CreateSession(ctx context.Context, userID, companyID, titl
 		return nil, fmt.Errorf("failed to create chat session: %w", err)
 	}
 
-	s.logger.Info("Chat session created",
+	logFields := []zap.Field{
 		zap.String("sessionId", session.ID.Hex()),
 		zap.String("userId", userID),
-		zap.String("companyId", companyID))
+		zap.String("companyId", companyID),
+	}
+
+	if parentChatID != nil {
+		logFields = append(logFields, zap.String("parentChatId", parentChatID.Hex()))
+		s.logger.Info("Subchat session created", logFields...)
+	} else {
+		s.logger.Info("Chat session created", logFields...)
+	}
 
 	return session, nil
 }
