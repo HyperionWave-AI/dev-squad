@@ -1209,6 +1209,168 @@ func (h *RESTAPIHandler) GetIndexStatus(c *gin.Context) {
 	})
 }
 
+// EnableWatcher enables the file watcher for all indexed folders
+// POST /api/v1/code-index/enable-watcher
+func (h *RESTAPIHandler) EnableWatcher(c *gin.Context) {
+	if h.fileWatcher == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "File watcher is not available",
+		})
+		return
+	}
+
+	// Get all folders
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to list folders: " + err.Error(),
+		})
+		return
+	}
+
+	// Start watching all folders
+	addedCount := 0
+	for _, folder := range folders {
+		if err := h.fileWatcher.AddFolder(&folder); err != nil {
+			h.logger.Warn("Failed to add folder to watcher",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+		} else {
+			addedCount++
+		}
+	}
+
+	h.logger.Info("Enabled file watcher", zap.Int("foldersAdded", addedCount))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("File watcher enabled for %d folders", addedCount),
+		"foldersWatched": addedCount,
+	})
+}
+
+// DisableWatcher disables the file watcher
+// POST /api/v1/code-index/disable-watcher
+func (h *RESTAPIHandler) DisableWatcher(c *gin.Context) {
+	if h.fileWatcher == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "File watcher is not available",
+		})
+		return
+	}
+
+	// Get all folders
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to list folders: " + err.Error(),
+		})
+		return
+	}
+
+	// Stop watching all folders
+	removedCount := 0
+	for _, folder := range folders {
+		if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
+			h.logger.Warn("Failed to remove folder from watcher",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+		} else {
+			removedCount++
+		}
+	}
+
+	h.logger.Info("Disabled file watcher", zap.Int("foldersRemoved", removedCount))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("File watcher disabled, stopped watching %d folders", removedCount),
+		"foldersStopped": removedCount,
+	})
+}
+
+// ReindexAll reindexes all files in all indexed folders
+// POST /api/v1/code-index/reindex-all
+func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
+	// Get all folders
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to list folders: " + err.Error(),
+		})
+		return
+	}
+
+	if len(folders) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "No folders to reindex",
+			"foldersReindexed": 0,
+			"totalFilesIndexed": 0,
+		})
+		return
+	}
+
+	// Reindex each folder
+	totalFilesIndexed := 0
+	totalFilesUpdated := 0
+	totalFilesSkipped := 0
+	foldersReindexed := 0
+
+	for _, folder := range folders {
+		h.logger.Info("Reindexing folder", zap.String("path", folder.Path))
+
+		// Get collection name
+		mapping, err := h.codeIndexStorage.GetPathMapping(folder.Path)
+		if err != nil {
+			h.logger.Warn("Failed to get collection mapping for folder",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+			continue
+		}
+
+		// Scan folder
+		stats, err := h.fileScanner.ScanAndIndex(
+			folder.Path,
+			mapping.QdrantCollection,
+			h.codeIndexStorage,
+			h.qdrantClient,
+			h.embeddingClient,
+		)
+
+		if err != nil {
+			h.logger.Error("Failed to reindex folder",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+			continue
+		}
+
+		totalFilesIndexed += stats.FilesIndexed
+		totalFilesUpdated += stats.FilesUpdated
+		totalFilesSkipped += stats.FilesSkipped
+		foldersReindexed++
+
+		h.logger.Info("Folder reindexed",
+			zap.String("path", folder.Path),
+			zap.Int("filesIndexed", stats.FilesIndexed),
+			zap.Int("filesUpdated", stats.FilesUpdated),
+			zap.Int("filesSkipped", stats.FilesSkipped))
+	}
+
+	h.logger.Info("Reindex all completed",
+		zap.Int("foldersReindexed", foldersReindexed),
+		zap.Int("totalFilesIndexed", totalFilesIndexed))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("Reindexed %d folders", foldersReindexed),
+		"foldersReindexed": foldersReindexed,
+		"totalFilesIndexed": totalFilesIndexed,
+		"totalFilesUpdated": totalFilesUpdated,
+		"totalFilesSkipped": totalFilesSkipped,
+	})
+}
+
 // RegisterRESTRoutes registers all REST API routes under /api/v1
 func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	// Human Tasks
@@ -1240,5 +1402,8 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		codeIndex.POST("/scan", h.ScanFolder)
 		codeIndex.POST("/search", h.SearchCode)
 		codeIndex.GET("/status", h.GetIndexStatus)
+		codeIndex.POST("/enable-watcher", h.EnableWatcher)
+		codeIndex.POST("/disable-watcher", h.DisableWatcher)
+		codeIndex.POST("/reindex-all", h.ReindexAll)
 	}
 }
