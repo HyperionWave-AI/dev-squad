@@ -209,7 +209,7 @@ func (h *FilesystemToolHandler) handleBash(ctx context.Context, args map[string]
 	// Prepare result
 	result := map[string]interface{}{
 		"command":    command,
-		"workingDir": workingDir,
+		"workingDir": tools.StripProjectRoot(workingDir),
 		"stdout":     stdout.String(),
 		"stderr":     stderr.String(),
 		"exitCode":   0,
@@ -346,7 +346,7 @@ func (h *FilesystemToolHandler) handleFileRead(ctx context.Context, args map[str
 
 	result := map[string]interface{}{
 		"success":      true,
-		"filePath":     validatedPath,
+		"filePath":     tools.StripProjectRoot(validatedPath),
 		"size":         fileInfo.Size(),
 		"bytesRead":    content.Len(),
 		"offset":       offset,
@@ -471,7 +471,7 @@ func (h *FilesystemToolHandler) handleFileWrite(ctx context.Context, args map[st
 
 	result := map[string]interface{}{
 		"success":      true,
-		"filePath":     validatedPath,
+		"filePath":     tools.StripProjectRoot(validatedPath),
 		"bytesWritten": bytesWritten,
 		"totalSize":    fileInfo.Size(),
 		"mode":         "append",
@@ -645,7 +645,7 @@ func (h *FilesystemToolHandler) handleApplyPatch(ctx context.Context, args map[s
 
 	result := map[string]interface{}{
 		"success":      true,
-		"filePath":     validatedPath,
+		"filePath":     tools.StripProjectRoot(validatedPath),
 		"dryRun":       dryRun,
 		"linesChanged": linesChanged,
 		"linesAdded":   linesAdded,
