@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap"
 )
 
 // ToolMetadata represents metadata about an MCP tool
@@ -59,14 +60,16 @@ type ToolsStorage struct {
 	toolsCollection   *mongo.Collection
 	serversCollection *mongo.Collection
 	qdrantClient      QdrantClientInterface
+	logger            *zap.Logger
 }
 
 // NewToolsStorage creates a new tools storage instance
-func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface) (*ToolsStorage, error) {
+func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface, logger *zap.Logger) (*ToolsStorage, error) {
 	storage := &ToolsStorage{
 		toolsCollection:   db.Collection("tools"),
 		serversCollection: db.Collection("mcp_servers"),
 		qdrantClient:      qdrantClient,
+		logger:            logger,
 	}
 
 	// Create indexes
@@ -164,7 +167,10 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 		// Ensure collection exists with correct dimensions
 		if err := s.qdrantClient.EnsureCollection("mcp-tools", vectorDim); err != nil {
 			// Log error but don't fail - MongoDB has the data
-			fmt.Printf("Warning: failed to ensure Qdrant collection 'mcp-tools': %v\n", err)
+			s.logger.Warn("Failed to ensure Qdrant collection",
+				zap.String("collection", "mcp-tools"),
+				zap.Int("vectorDim", vectorDim),
+				zap.Error(err))
 		} else {
 			// Create searchable text combining tool name and description
 			searchableText := fmt.Sprintf("%s: %s", toolName, description)
@@ -177,7 +183,11 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 
 			if err := s.qdrantClient.StorePoint("mcp-tools", metadata.ID, searchableText, pointMetadata); err != nil {
 				// Log error but don't fail - MongoDB has the data
-				fmt.Printf("Warning: failed to store tool in Qdrant: %v\n", err)
+				s.logger.Warn("Failed to store tool in Qdrant",
+					zap.String("collection", "mcp-tools"),
+					zap.String("toolName", toolName),
+					zap.String("toolId", metadata.ID),
+					zap.Error(err))
 			}
 		}
 	}
@@ -224,7 +234,11 @@ func (s *ToolsStorage) SearchTools(ctx context.Context, query string, limit int)
 		}
 		// Log error but continue to MongoDB fallback
 		if err != nil {
-			fmt.Printf("Warning: Qdrant search failed, falling back to MongoDB: %v\n", err)
+			s.logger.Warn("Qdrant search failed, falling back to MongoDB",
+				zap.String("collection", "mcp-tools"),
+				zap.String("query", query),
+				zap.Int("limit", limit),
+				zap.Error(err))
 		}
 	}
 
@@ -408,7 +422,11 @@ func (s *ToolsStorage) RemoveServerTools(ctx context.Context, serverName string)
 		for _, toolID := range toolIDs {
 			if err := s.qdrantClient.DeletePoint("mcp-tools", toolID); err != nil {
 				// Log error but don't fail
-				fmt.Printf("Warning: failed to delete tool %s from Qdrant: %v\n", toolID, err)
+				s.logger.Warn("Failed to delete tool from Qdrant",
+					zap.String("collection", "mcp-tools"),
+					zap.String("toolId", toolID),
+					zap.String("serverName", serverName),
+					zap.Error(err))
 			}
 		}
 	}
@@ -423,9 +441,13 @@ func (s *ToolsStorage) RemoveServerTools(ctx context.Context, serverName string)
 	_, err = s.serversCollection.UpdateOne(ctx, bson.M{"serverName": serverName}, update)
 	if err != nil {
 		// Log error but don't fail - tools are deleted
-		fmt.Printf("Warning: failed to update server tool count: %v\n", err)
+		s.logger.Warn("Failed to update server tool count",
+			zap.String("serverName", serverName),
+			zap.Error(err))
 	}
 
-	fmt.Printf("Removed %d tools for server %s\n", result.DeletedCount, serverName)
+	s.logger.Info("Removed tools for server",
+		zap.String("serverName", serverName),
+		zap.Int64("toolCount", result.DeletedCount))
 	return nil
 }

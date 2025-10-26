@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap"
 )
 
 // Test MongoDB connection helper
@@ -32,7 +33,10 @@ func setupTestMongoDB(t *testing.T) (*storage.MongoTaskStorage, func()) {
 	dbName := "test_coordinator_" + uuid.New().String()
 	db := client.Database(dbName)
 
-	taskStorage, err := storage.NewMongoTaskStorage(db)
+	// Create a test logger
+	logger, _ := zap.NewDevelopment()
+
+	taskStorage, err := storage.NewMongoTaskStorage(db, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create MongoTaskStorage: %v", err)
 	}
