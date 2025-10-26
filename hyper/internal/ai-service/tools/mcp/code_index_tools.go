@@ -23,6 +23,29 @@ var (
 	codeSearchCacheTTL      = 5 * time.Minute
 )
 
+// parseRetrieveMode parses the retrieve mode parameter and returns the retrieve type, chunk size in lines, and t-shirt size
+// Maps: chunk-s→50/s, chunk-m→100/m, chunk-l→200/l, chunk-xl→400/xl, chunk→200/l (backward compat), full→0/empty
+func parseRetrieveMode(mode string) (retrieveType string, chunkLines int, tshirtSize string) {
+	switch mode {
+	case "chunk-s":
+		return "chunk", 50, "s"
+	case "chunk-m":
+		return "chunk", 100, "m"
+	case "chunk-l":
+		return "chunk", 200, "l"
+	case "chunk-xl":
+		return "chunk", 400, "xl"
+	case "chunk":
+		// Backward compatibility: chunk defaults to chunk-l (200 lines)
+		return "chunk", 200, "l"
+	case "full":
+		return "full", 0, ""
+	default:
+		// Default to chunk-l for unknown values
+		return "chunk", 200, "l"
+	}
+}
+
 // GetLastCodeSearchPaths returns the cached file paths from the most recent code_index_search
 // Returns nil if cache is expired (older than 5 minutes) or empty
 func GetLastCodeSearchPaths() []string {
@@ -57,7 +80,7 @@ func (t *CodeIndexSearchTool) Name() string {
 }
 
 func (t *CodeIndexSearchTool) Description() string {
-	return "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Default limit: 10 results (max: 50). Use to find examples, patterns, or specific implementations. NOTE: Requires code index to be populated via MCP endpoint first."
+	return "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Default limit: 10 results (max: 50). IMPORTANT: retrieve='full' returns only the single best match to conserve tokens - use chunk modes (chunk-s/m/l/xl) for exploring multiple results. NOTE: Requires code index to be populated via MCP endpoint first."
 }
 
 func (t *CodeIndexSearchTool) InputSchema() map[string]interface{} {
@@ -75,6 +98,11 @@ func (t *CodeIndexSearchTool) InputSchema() map[string]interface{} {
 			"folderPath": map[string]interface{}{
 				"type":        "string",
 				"description": "Optional: filter results to a specific folder path",
+			},
+			"retrieve": map[string]interface{}{
+				"type":        "string",
+				"description": "Content retrieval mode: 'chunk' (default - 200 lines), 'chunk-s' (50 lines), 'chunk-m' (100 lines), 'chunk-l' (200 lines), 'chunk-xl' (400 lines), or 'full' (entire file)",
+				"enum":        []string{"chunk", "chunk-s", "chunk-m", "chunk-l", "chunk-xl", "full"},
 			},
 		},
 		"required": []string{"query"},
@@ -97,12 +125,18 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
-	// Get retrieve mode (default: "chunk")
-	retrieveMode := "chunk"
+	// Parse retrieve mode (default: "chunk")
+	retrieveModeParam := "chunk"
 	if mode, ok := input["retrieve"].(string); ok {
-		if mode == "full" || mode == "chunk" {
-			retrieveMode = mode
-		}
+		retrieveModeParam = mode
+	}
+	retrieveType, chunkLines, tshirtSize := parseRetrieveMode(retrieveModeParam)
+
+	// MCP Best Practice: Limit full file retrieval to top 1 result to conserve context
+	// Full mode returns entire file content which can be very large
+	// For exploring multiple results, users should use chunk modes (chunk-s/m/l/xl)
+	if retrieveType == "full" {
+		limit = 1
 	}
 
 	// Get current project root
@@ -188,13 +222,68 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 			result.EndLine = int(endLine)
 		}
 
-		// Handle content based on retrieve mode
-		if retrieveMode == "chunk" {
-			// Default: return just the matching chunk content from Qdrant
-			if content, ok := hit.Payload["content"].(string); ok {
-				result.Content = content
+		// Handle content based on retrieve type
+		if retrieveType == "chunk" {
+			// Sized chunk retrieval: fetch N lines around the match
+			if result.FileID != "" && chunkLines > 0 {
+				// Calculate target line range centered around the match
+				matchMidpoint := (result.StartLine + result.EndLine) / 2
+				targetStart := matchMidpoint - (chunkLines / 2)
+				targetEnd := targetStart + chunkLines - 1
+				if targetStart < 1 {
+					targetStart = 1
+					targetEnd = targetStart + chunkLines - 1
+				}
+
+				// Fetch overlapping chunks from storage
+				overlappingChunks, err := t.codeIndexStorage.GetChunksByFileIDAndLineRange(result.FileID, targetStart, targetEnd)
+				if err != nil {
+					t.logger.Warn("Failed to fetch sized chunk",
+						zap.String("fileID", result.FileID),
+						zap.Int("targetStart", targetStart),
+						zap.Int("targetEnd", targetEnd),
+						zap.Error(err))
+					// Fallback to Qdrant chunk content
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				} else if len(overlappingChunks) > 0 {
+					// Concatenate overlapping chunks and extract exact line range
+					var fullContent strings.Builder
+					minLine := overlappingChunks[0].StartLine
+					for _, chunk := range overlappingChunks {
+						fullContent.WriteString(chunk.Content)
+					}
+
+					// Extract exactly chunkLines from the concatenated content
+					allLines := strings.Split(fullContent.String(), "\n")
+					startIdx := targetStart - minLine
+					endIdx := targetEnd - minLine + 1
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if endIdx > len(allLines) {
+						endIdx = len(allLines)
+					}
+
+					extractedLines := allLines[startIdx:endIdx]
+					result.Content = strings.Join(extractedLines, "\n")
+					result.StartLine = targetStart
+					result.EndLine = targetStart + len(extractedLines) - 1
+					result.ChunkSize = tshirtSize
+				} else {
+					// Fallback to Qdrant chunk if no chunks found
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				}
+			} else {
+				// No sizing requested or invalid chunkLines, use Qdrant chunk
+				if content, ok := hit.Payload["content"].(string); ok {
+					result.Content = content
+				}
 			}
-		} else if retrieveMode == "full" {
+		} else if retrieveType == "full" {
 			// Fetch entire file content from MongoDB
 			if result.FileID != "" {
 				allChunks, err := t.codeIndexStorage.GetChunksByFileID(result.FileID)
@@ -223,7 +312,9 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 
 	t.logger.Info("Code search completed",
 		zap.String("query", query),
-		zap.String("retrieveMode", retrieveMode),
+		zap.String("retrieveMode", retrieveModeParam),
+		zap.String("retrieveType", retrieveType),
+		zap.Int("chunkLines", chunkLines),
 		zap.Int("results", len(results)))
 
 	// CRITICAL: Extract file paths into a prominent list so AI can't miss them
@@ -243,14 +334,21 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Int("cachedPaths", len(filePaths)),
 		zap.Time("cachedAt", lastCodeSearchTimestamp))
 
-	return map[string]interface{}{
+	response := map[string]interface{}{
 		"success":     true,
 		"query":       query,
 		"FILE_PATHS_TO_USE": filePaths, // PROMINENT - AI must use these exact paths
 		"results":     results,
 		"resultCount": len(results),
 		"INSTRUCTIONS": "USE THE EXACT FILE PATHS FROM 'FILE_PATHS_TO_USE' ARRAY - DO NOT GUESS OR MODIFY THEM",
-	}, nil
+	}
+
+	// Add guidance message when full mode is used
+	if retrieveType == "full" {
+		response["guidance"] = "Returning top 1 result with full file content to conserve tokens. For multi-result exploration, use chunk-based retrieval modes: chunk-s (50 lines), chunk-m (100 lines), chunk-l (200 lines), or chunk-xl (400 lines)."
+	}
+
+	return response, nil
 }
 
 // CodeIndexAddFolderTool implements the ToolExecutor interface for adding folders

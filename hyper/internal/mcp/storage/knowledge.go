@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap"
 )
 
 // KnowledgeEntry represents a stored knowledge item
@@ -56,14 +57,16 @@ type MongoKnowledgeStorage struct {
 	knowledgeCollection *mongo.Collection
 	qdrantClient        QdrantClientInterface
 	vectorDimension     int
+	logger              *zap.Logger
 }
 
 // NewMongoKnowledgeStorage creates a new MongoDB + Qdrant knowledge storage
-func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInterface) (*MongoKnowledgeStorage, error) {
+func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInterface, logger *zap.Logger) (*MongoKnowledgeStorage, error) {
 	storage := &MongoKnowledgeStorage{
 		knowledgeCollection: db.Collection("knowledge_entries"),
 		qdrantClient:        qdrantClient,
 		vectorDimension:     768, // TEI nomic-embed-text-v1.5 dimension
+		logger:              logger,
 	}
 
 	// Create indexes
@@ -120,12 +123,17 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 		// Ensure collection exists
 		if err := s.qdrantClient.EnsureCollection(collection, s.vectorDimension); err != nil {
 			// Log error but don't fail - MongoDB has the data
-			fmt.Printf("Warning: failed to ensure Qdrant collection: %v\n", err)
+			s.logger.Warn("Failed to ensure Qdrant collection",
+				zap.String("collection", collection),
+				zap.Error(err))
 		} else {
 			// Store vector point
 			if err := s.qdrantClient.StorePoint(collection, entry.ID, text, metadata); err != nil {
 				// Log error but don't fail - MongoDB has the data
-				fmt.Printf("Warning: failed to store in Qdrant: %v\n", err)
+				s.logger.Warn("Failed to store point in Qdrant",
+					zap.String("collection", collection),
+					zap.String("entryId", entry.ID),
+					zap.Error(err))
 			}
 		}
 	}
@@ -153,7 +161,10 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int) ([]*Q
 		}
 		// Log error but continue to MongoDB fallback
 		if err != nil {
-			fmt.Printf("Warning: Qdrant search failed, falling back to MongoDB: %v\n", err)
+			s.logger.Warn("Qdrant search failed, falling back to MongoDB",
+				zap.String("collection", collection),
+				zap.String("query", query),
+				zap.Error(err))
 		}
 	}
 
