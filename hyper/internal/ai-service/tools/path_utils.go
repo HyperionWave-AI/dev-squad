@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,15 +10,30 @@ import (
 
 var projectRoot string
 
-// InitProjectRoot detects project root (git root or current working directory)
+// InitProjectRoot detects project root with the following priority:
+// 1. PROJECT_ROOT environment variable (if set)
+// 2. Git repository root (git rev-parse --show-toplevel)
+// 3. Current working directory (os.Getwd)
 func InitProjectRoot() error {
-	// Try git root first
+	// Priority 1: Check PROJECT_ROOT environment variable
+	if envRoot := os.Getenv("PROJECT_ROOT"); envRoot != "" {
+		// Validate that the path exists
+		if _, err := os.Stat(envRoot); err == nil {
+			projectRoot = envRoot
+			return nil
+		}
+		// Path doesn't exist - log warning and continue with fallbacks
+		fmt.Fprintf(os.Stderr, "Warning: PROJECT_ROOT=%s does not exist, falling back to auto-detection\n", envRoot)
+	}
+
+	// Priority 2: Try git root
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	if output, err := cmd.Output(); err == nil {
 		projectRoot = strings.TrimSpace(string(output))
 		return nil
 	}
-	// Fallback to current working directory
+
+	// Priority 3: Fallback to current working directory
 	var err error
 	projectRoot, err = os.Getwd()
 	return err
