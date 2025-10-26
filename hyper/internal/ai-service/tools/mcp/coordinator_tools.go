@@ -2648,14 +2648,6 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	fullResponse := ""
 	toolCallCount := 0
 	completedTodos := 0
-	readFileCount := 0         // Track read_file calls (after 3 reads, MUST write)
-	hasWrittenAnyFile := false // Track if any write has occurred
-
-	// RUNTIME ENFORCEMENT: File content cache to prevent re-reads
-	fileContentCache := make(map[string]string)
-
-	// RUNTIME ENFORCEMENT: Execution scoring system
-	executionScore := 0
 
 	t.logger.Info("📡 Subagent AI stream started - processing events...",
 		zap.String("subchatId", subchatID),
@@ -2688,83 +2680,6 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					zap.String("toolName", event.ToolCall.Name),
 					zap.Any("args", event.ToolCall.Args),
 					zap.Time("timestamp", time.Now()))
-
-				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
-				if event.ToolCall.Name == "read_file" {
-					readFileCount++
-
-					// Check if this file was already read (duplicate read)
-					filePath := ""
-					if fp, ok := event.ToolCall.Args["file_path"].(string); ok {
-						filePath = fp
-					}
-
-					if _, alreadyRead := fileContentCache[filePath]; alreadyRead {
-						// Duplicate read - penalty
-						executionScore -= 5
-						t.logger.Warn("⚠️ DUPLICATE READ detected - scoring penalty",
-							zap.String("subchatId", subchatID),
-							zap.String("filePath", filePath),
-							zap.Int("score", executionScore))
-					} else {
-						// First read - small bonus
-						executionScore += 5
-						t.logger.Info("✅ First read of file - scoring bonus",
-							zap.String("subchatId", subchatID),
-							zap.String("filePath", filePath),
-							zap.Int("score", executionScore))
-					}
-
-					// RUNTIME ENFORCEMENT: Hard read limit - block reads after threshold
-					if readFileCount > 3 && !hasWrittenAnyFile {
-						executionScore -= 50
-						t.logger.Error("🚫 HARD LIMIT: Exceeded 3 reads without write - CRITICAL",
-							zap.String("subchatId", subchatID),
-							zap.Int("readFileCount", readFileCount),
-							zap.Int("score", executionScore))
-					}
-
-					// Penalty for exceeding 1 read without write (lowered threshold from 2 to 1)
-					if readFileCount > 1 && !hasWrittenAnyFile {
-						executionScore -= 20
-						t.logger.Warn("⚠️ Exceeded 1 read without write - large penalty (WRITE NOW)",
-							zap.String("subchatId", subchatID),
-							zap.Int("readFileCount", readFileCount),
-							zap.Int("score", executionScore))
-					}
-				}
-
-				// RUNTIME ENFORCEMENT: Track write operations and reward
-				if event.ToolCall.Name == "write_file" || event.ToolCall.Name == "apply_patch" {
-					hasWrittenAnyFile = true
-					readFileCount = 0    // Reset read counter after write
-					executionScore += 20 // Big reward for writing
-
-					t.logger.Info("✅ Write operation detected - BIG scoring bonus",
-						zap.String("subchatId", subchatID),
-						zap.String("toolName", event.ToolCall.Name),
-						zap.Int("score", executionScore))
-				}
-
-				// RUNTIME ENFORCEMENT: Reward TODO completion
-				if event.ToolCall.Name == "coordinator_update_todo_status" {
-					if status, ok := event.ToolCall.Args["status"].(string); ok && status == "completed" {
-						executionScore += 10
-						t.logger.Info("✅ TODO completed - scoring bonus",
-							zap.String("subchatId", subchatID),
-							zap.Int("score", executionScore))
-					}
-				}
-
-				// Penalty for duplicate tool calls
-				warning := progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
-				if warning != "" {
-					executionScore -= 10
-					t.logger.Warn("⚠️ Duplicate operation - scoring penalty",
-						zap.String("subchatId", subchatID),
-						zap.String("toolName", event.ToolCall.Name),
-						zap.Int("score", executionScore))
-				}
 
 				// Record file operation in progress tracker (for reporting only)
 				progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
@@ -2822,66 +2737,14 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					summarizedOutput = fmt.Sprintf("Error: %s", event.ToolResult.Error)
 				}
 
-				// RUNTIME ENFORCEMENT: File content caching and duplicate read blocking
-				if event.ToolResult.Name == "read_file" && event.ToolResult.Error == "" {
-					// Cache the full content (not the summarized version)
-					if fullContent, ok := event.ToolResult.Output.(string); ok {
-						// Check if this is a duplicate read by checking cache
-						if len(fileContentCache) > 0 {
-							// RUNTIME ENFORCEMENT: Return cached summary instead of full content
-							summarizedOutput = fmt.Sprintf("⚠️ CACHED FILE CONTENT - DO NOT RE-READ\n\nThis file was already read. Content is cached. You MUST use the previous read content.\n\nSUMMARY: File contains %d characters across %d lines.\n\nYour next action MUST be write_file or apply_patch - NOT another read_file.\n\nCURRENT SCORE: %d points", len(fullContent), len(strings.Split(fullContent, "\n")), executionScore)
-
-							t.logger.Warn("🚫 Returning cached summary - blocking duplicate read",
-								zap.String("subchatId", subchatID),
-								zap.Int("score", executionScore))
-						} else {
-							// First read - cache the content but still return it
-							fileContentCache["last_read"] = fullContent
-							t.logger.Info("💾 Cached file content for enforcement",
-								zap.String("subchatId", subchatID),
-								zap.Int("contentSize", len(fullContent)))
-						}
-					}
-				}
-
-				// RUNTIME ENFORCEMENT: Inject forced write scaffold after 1 read without write (lowered from 2)
-				if readFileCount >= 1 && !hasWrittenAnyFile {
-					forceScaffold := fmt.Sprintf("\n\n╔══════════════════════════════════════════════════════════════╗\n║          FORCED WRITE SCAFFOLD - COMPLETE AND SUBMIT          ║\n╚══════════════════════════════════════════════════════════════╝\n\n🚨 WRITE-ONLY MODE ENFORCEMENT 🚨\n\nYou have read %d file(s). Reading phase is COMPLETE.\n\nYour NEXT tool call MUST be either:\n1. write_file - to create or modify a file\n2. apply_patch - to apply code changes\n\nYou are BLOCKED from calling read_file again.\n\nCURRENT EXECUTION SCORE: %d points\n\nSCORING:\n- Next write_file/apply_patch: +20 points ✅\n- Another read_file: -50 points ❌ (HARD LIMIT)\n\nIMPLEMENT NOW - DO NOT READ ANOTHER FILE.", readFileCount, executionScore)
-					summarizedOutput += forceScaffold
-
-					// Save scaffold as visible message
-					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", forceScaffold, companyID)
-					if err != nil {
-						t.logger.Warn("Failed to save forced scaffold message",
-							zap.String("subchatId", subchatID),
-							zap.Error(err))
-					}
-
-					t.logger.Warn("🔨 Injected FORCED WRITE SCAFFOLD",
-						zap.String("subchatId", subchatID),
-						zap.Int("readFileCount", readFileCount),
-						zap.Int("score", executionScore))
-				}
-
-				// RUNTIME ENFORCEMENT: Inject scoring message (visible to model)
-				scoringMessage := fmt.Sprintf("\n\n📊 EXECUTION SCORE: %d points\n", executionScore)
-				if executionScore >= 30 {
-					scoringMessage += "✅ EXCELLENT - On track for successful completion!\n"
-				} else if executionScore >= 10 {
-					scoringMessage += "⚠️ NEEDS WRITE - Read enough, now implement changes!\n"
-				} else if executionScore < 0 {
-					scoringMessage += "🚨 CRITICAL - Too many reads, not enough writes!\n"
-				}
-				summarizedOutput += scoringMessage
-
 				// Inject progress summary every 3 tool calls
 				if toolCallCount%3 == 0 && (len(progressTracker.FilesRead) > 0 || len(progressTracker.DirectoriesListed) > 0) {
 					progressSummary := progressTracker.GetProgressSummary()
 					summarizedOutput += progressSummary
 
-					t.logger.Info("📊 Injected progress summary with scoring",
+					t.logger.Info("📊 Injected progress summary",
 						zap.String("subchatId", subchatID),
-						zap.Int("score", executionScore))
+						zap.Int("toolCallCount", toolCallCount))
 				}
 
 				// Log tool result with success/failure indicator and context size info
@@ -2923,20 +2786,15 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.String("agentName", agentTask.AgentName))
 	t.logger.Info("╠═══════════════════════════════════════════════════════════════════")
 	t.logger.Info("║ Tool Calls",
-		zap.Int("total", toolCallCount),
-		zap.Int("reads", readFileCount),
-		zap.Int("writes", len(progressTracker.FilesWritten)),
-		zap.Int("bash", len(progressTracker.BashCalls)))
+		zap.Int("total", toolCallCount))
 	t.logger.Info("║ TODOs",
 		zap.Int("completed", completedTodos),
 		zap.Int("total", len(agentTask.Todos)))
-	t.logger.Info("║ Score",
-		zap.Int("finalScore", executionScore),
-		zap.Bool("hasWritten", hasWrittenAnyFile))
 	t.logger.Info("║ Files",
 		zap.Int("filesRead", len(progressTracker.FilesRead)),
 		zap.Int("filesWritten", len(progressTracker.FilesWritten)),
-		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)))
+		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)),
+		zap.Int("bashCalls", len(progressTracker.BashCalls)))
 	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
 
 	t.logger.Info("📝 Saving final AI response to subchat",
@@ -3099,9 +2957,9 @@ BLOCKED TOOLS (these will FAIL):
 
 ═══════════════════════════════════════════════════════════════
 
-⏱️ MANDATORY WORKFLOW - YOU MUST COMPLETE WITHIN 3 STEPS PER TODO:
+⏱️ RECOMMENDED WORKFLOW - EFFICIENT IMPLEMENTATION:
 
-Step 1: read_file on target file (ONCE ONLY)
+Step 1: read_file on target files to understand current state
 Step 2: write_file or apply_patch to implement changes
 Step 3: coordinator_update_todo_status to mark TODO completed
 
@@ -3109,45 +2967,28 @@ REPEAT for next TODO.
 
 ═══════════════════════════════════════════════════════════════
 
-🎯 EXECUTION SCORING (visible after each tool call):
+🎯 BEST PRACTICES:
 
-+20 points: write_file or apply_patch executed
-+10 points: coordinator_update_todo_status (completed)
- +5 points: read_file (first read of a file)
- -5 points: read_file (duplicate read of same file)
--10 points: calling same tool twice with identical args
--20 points: exceeding 1 read without a write
--50 points: exceeding 3 reads without a write (HARD LIMIT)
-
-Target score: +30 per TODO (read once, write once, update status)
-
-═══════════════════════════════════════════════════════════════
-
-⚠️ ENFORCEMENT RULES (RUNTIME - NOT SUGGESTIONS):
-
-0. READ ONLY FILES SPECIFIED IN TASK
+0. FOCUS ON FILES SPECIFIED IN TASK
    • Task specifies EXACT file paths to modify
-   • Do NOT explore, search, or read other files
-   • Do NOT call list_directory - IT IS BLOCKED
+   • Prioritize these files over exploration
    • Use the exact paths provided in filesModified
+   • You can read files multiple times if needed for correctness
 
-1. File content is CACHED after first read_file
-   • Subsequent read_file on same file returns cached summary
-   • You will NOT receive full content again - implement now
+1. EFFICIENT FILE READING
+   • Read files as needed to understand the code
+   • Re-read if you need to verify changes
+   • Balance understanding with execution speed
 
-2. After 1 read_file call without write:
-   • You receive a FORCED WRITE SCAFFOLD
-   • You MUST complete the scaffold and submit immediately
+2. WRITE EARLY AND OFTEN
+   • Don't over-analyze before implementing
+   • Start writing code once you understand the requirements
+   • Test and iterate as needed
 
-3. You MAY NOT read any file more than ONCE
-   • Second read returns: "CACHED - use previous content"
-   • This forces you to implement, not re-read
-
-4. Maximum 3 tool calls per TODO:
-   • Call 1: read_file
-   • Call 2: write_file/apply_patch
-   • Call 3: coordinator_update_todo_status
-   • Extra calls trigger immediate scoring penalty
+3. TRACK YOUR PROGRESS
+   • Use coordinator_update_todo_status to track completion
+   • Store key decisions with coordinator_upsert_knowledge
+   • Update status as you complete each TODO
 
 ═══════════════════════════════════════════════════════════════
 
