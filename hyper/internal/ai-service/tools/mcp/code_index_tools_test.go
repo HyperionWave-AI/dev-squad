@@ -1,0 +1,303 @@
+package mcp
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+// TestParseQueryForFilenameBoost tests the query parsing function
+func TestParseQueryForFilenameBoost(t *testing.T) {
+	tests := []struct {
+		name             string
+		query            string
+		expectedTokens   []string
+		expectedExts     []string
+		expectedFilename string
+	}{
+		{
+			name:             "Query with exact filename",
+			query:            "App.tsx main application component",
+			expectedTokens:   []string{"app.tsx", "application"},
+			expectedExts:     []string{".tsx"},
+			expectedFilename: "app.tsx",
+		},
+		{
+			name:             "Query with multiple extensions",
+			query:            "search for .tsx and .ts files",
+			expectedTokens:   []string{"search", "tsx", "ts", "files"},
+			expectedExts:     []string{".tsx", ".ts"},
+			expectedFilename: "",
+		},
+		{
+			name:             "Query with filename tokens only",
+			query:            "ChatSessionList component implementation",
+			expectedTokens:   []string{"chatsessionlist", "implementation"},
+			expectedExts:     []string{},
+			expectedFilename: "",
+		},
+		{
+			name:             "Query with Go file",
+			query:            "main.go server startup code",
+			expectedTokens:   []string{"main.go", "server", "startup"},
+			expectedExts:     []string{".go"},
+			expectedFilename: "main.go",
+		},
+		{
+			name:             "Query with hyphenated filename",
+			query:            "code-index-tools.go implementation",
+			expectedTokens:   []string{"index", "tools.go", "implementation"}, // "code" filtered as stopword
+			expectedExts:     []string{".go"},
+			expectedFilename: "code-index-tools.go", // Full filename captured by filename pattern
+		},
+		{
+			name:             "Query with stopwords filtered",
+			query:            "the main function in the App component",
+			expectedTokens:   []string{"app"},
+			expectedExts:     []string{},
+			expectedFilename: "",
+		},
+		{
+			name:             "Query with CSS file",
+			query:            "App.css styling and layout",
+			expectedTokens:   []string{"app.css", "styling", "layout"},
+			expectedExts:     []string{".css"},
+			expectedFilename: "app.css",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens, exts, filename := parseQueryForFilenameBoost(tt.query)
+
+			assert.ElementsMatch(t, tt.expectedTokens, tokens,
+				"Tokens should match (order doesn't matter)")
+			assert.ElementsMatch(t, tt.expectedExts, exts,
+				"Extensions should match (order doesn't matter)")
+			assert.Equal(t, tt.expectedFilename, filename,
+				"Exact filename should match")
+		})
+	}
+}
+
+// TestCalculateFilenameBoost tests the boost calculation function
+func TestCalculateFilenameBoost(t *testing.T) {
+	tests := []struct {
+		name           string
+		filePath       string
+		queryTokens    []string
+		queryExts      []string
+		exactFilename  string
+		expectedBoost  float64
+		description    string
+	}{
+		{
+			name:          "Exact filename match - highest boost",
+			filePath:      "/path/to/App.tsx",
+			queryTokens:   []string{"app"},
+			queryExts:     []string{".tsx"},
+			exactFilename: "app.tsx",
+			expectedBoost: 1.5,
+			description:   "50% boost for exact match",
+		},
+		{
+			name:          "Extension match only",
+			filePath:      "/path/to/Component.tsx",
+			queryTokens:   []string{"helper"},
+			queryExts:     []string{".tsx"},
+			exactFilename: "",
+			expectedBoost: 1.4,
+			description:   "40% boost for extension match",
+		},
+		{
+			name:          "Filename token match",
+			filePath:      "/path/to/ChatSessionList.tsx",
+			queryTokens:   []string{"chatsessionlist"},
+			queryExts:     []string{},
+			exactFilename: "",
+			expectedBoost: 1.3,
+			description:   "30% boost for token match",
+		},
+		{
+			name:          "No match at all",
+			filePath:      "/path/to/Unrelated.js",
+			queryTokens:   []string{"app"},
+			queryExts:     []string{".tsx"},
+			exactFilename: "",
+			expectedBoost: 1.0,
+			description:   "No boost for no match",
+		},
+		{
+			name:          "CSS file with extension match",
+			filePath:      "/styles/App.css",
+			queryTokens:   []string{"app"},
+			queryExts:     []string{".css"},
+			exactFilename: "",
+			expectedBoost: 1.4,
+			description:   "40% boost for CSS extension match",
+		},
+		{
+			name:          "Partial filename token match",
+			filePath:      "/components/AppHeader.tsx",
+			queryTokens:   []string{"app"},
+			queryExts:     []string{},
+			exactFilename: "",
+			expectedBoost: 1.3,
+			description:   "30% boost for partial token match",
+		},
+		{
+			name:          "Case insensitive exact match",
+			filePath:      "/path/to/APP.TSX",
+			queryTokens:   []string{"app"},
+			queryExts:     []string{".tsx"},
+			exactFilename: "app.tsx",
+			expectedBoost: 1.5,
+			description:   "50% boost - case insensitive",
+		},
+		{
+			name:          "Empty file path",
+			filePath:      "",
+			queryTokens:   []string{"app"},
+			queryExts:     []string{".tsx"},
+			exactFilename: "app.tsx",
+			expectedBoost: 1.0,
+			description:   "No boost for empty path",
+		},
+		{
+			name:          "Go file exact match",
+			filePath:      "/cmd/main.go",
+			queryTokens:   []string{"main"},
+			queryExts:     []string{".go"},
+			exactFilename: "main.go",
+			expectedBoost: 1.5,
+			description:   "50% boost for Go file exact match",
+		},
+		{
+			name:          "Extension match takes priority over token match",
+			filePath:      "/path/to/Helper.tsx",
+			queryTokens:   []string{"help"},
+			queryExts:     []string{".tsx"},
+			exactFilename: "",
+			expectedBoost: 1.4,
+			description:   "Extension match (40%) > token match (30%)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			boost := calculateFilenameBoost(tt.filePath, tt.queryTokens, tt.queryExts, tt.exactFilename)
+			assert.Equal(t, tt.expectedBoost, boost, tt.description)
+		})
+	}
+}
+
+// TestFilenameBoostingIntegration tests the complete boosting workflow
+func TestFilenameBoostingIntegration(t *testing.T) {
+	// Simulate the query: "App.tsx main application component layout structure"
+	query := "App.tsx main application component layout structure"
+	tokens, exts, exactFilename := parseQueryForFilenameBoost(query)
+
+	// Simulate Qdrant results where App.css has higher semantic score than App.tsx
+	// (because CSS has more "layout" and "structure" keywords)
+	type mockResult struct {
+		filePath      string
+		originalScore float64
+	}
+
+	results := []mockResult{
+		{filePath: "/styles/App.css", originalScore: 0.85},      // Higher semantic score
+		{filePath: "/components/App.tsx", originalScore: 0.72},   // Lower semantic score
+		{filePath: "/layouts/Layout.tsx", originalScore: 0.68},
+		{filePath: "/utils/helpers.ts", originalScore: 0.55},
+	}
+
+	// Apply boosting
+	for i := range results {
+		boost := calculateFilenameBoost(results[i].filePath, tokens, exts, exactFilename)
+		results[i].originalScore *= boost
+		// Clamp to 1.0
+		if results[i].originalScore > 1.0 {
+			results[i].originalScore = 1.0
+		}
+	}
+
+	// After boosting, App.tsx should rank first
+	// App.tsx: 0.72 * 1.5 (exact match) = 1.08 → clamped to 1.0
+	// App.css: 0.85 * 1.0 (no match - wrong extension) = 0.85
+	// Layout.tsx: 0.68 * 1.4 (extension match) = 0.952
+	// helpers.ts: 0.55 * 1.0 (no match) = 0.55
+
+	assert.Equal(t, 1.0, results[1].originalScore, "App.tsx should have max score after exact filename boost")
+	assert.Less(t, results[0].originalScore, results[1].originalScore, "App.tsx should rank higher than App.css after boosting")
+	assert.Greater(t, results[2].originalScore, 0.68, "Layout.tsx should be boosted for extension match")
+
+	t.Logf("Final scores after boosting:")
+	t.Logf("  App.tsx: %.2f (was 0.72)", results[1].originalScore)
+	t.Logf("  App.css: %.2f (was 0.85)", results[0].originalScore)
+	t.Logf("  Layout.tsx: %.2f (was 0.68)", results[2].originalScore)
+	t.Logf("  helpers.ts: %.2f (was 0.55)", results[3].originalScore)
+}
+
+// TestRealWorldQueries tests actual user query patterns
+func TestRealWorldQueries(t *testing.T) {
+	tests := []struct {
+		name         string
+		query        string
+		expectedTop  string // Expected top result after boosting
+		results      []struct {
+			path  string
+			score float64
+		}
+	}{
+		{
+			name:        "User searches for specific React component",
+			query:       "ChatSessionList component",
+			expectedTop: "/components/ChatSessionList.tsx",
+			results: []struct {
+				path  string
+				score float64
+			}{
+				{path: "/components/SessionManager.tsx", score: 0.80},
+				{path: "/components/ChatSessionList.tsx", score: 0.75},
+				{path: "/utils/chatHelpers.ts", score: 0.70},
+			},
+		},
+		{
+			name:        "User searches with file extension",
+			query:       "authentication logic .go",
+			expectedTop: "/auth/handler.go",
+			results: []struct {
+				path  string
+				score float64
+			}{
+				{path: "/services/auth.ts", score: 0.85},
+				{path: "/auth/handler.go", score: 0.78},
+				{path: "/middleware/auth.go", score: 0.76},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens, exts, exactFilename := parseQueryForFilenameBoost(tt.query)
+
+			// Apply boosting
+			maxScore := 0.0
+			topFile := ""
+			for _, r := range tt.results {
+				boost := calculateFilenameBoost(r.path, tokens, exts, exactFilename)
+				boostedScore := r.score * boost
+				if boostedScore > 1.0 {
+					boostedScore = 1.0
+				}
+				if boostedScore > maxScore {
+					maxScore = boostedScore
+					topFile = r.path
+				}
+			}
+
+			assert.Equal(t, tt.expectedTop, topFile,
+				"After boosting, expected file should rank first")
+		})
+	}
+}

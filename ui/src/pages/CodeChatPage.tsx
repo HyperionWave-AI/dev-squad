@@ -48,6 +48,14 @@ export function CodeChatPage() {
     toolCalls: ToolCall[];
     toolResults: Map<string, ToolResult>;
   }>({ toolCalls: [], toolResults: new Map() });
+  // Ref to track current active session (prevents stale closure in auto-refresh interval)
+  const activeSessionIdRef = useRef<string | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+    console.log('[CodeChatPage] 📌 activeSessionIdRef updated to:', activeSessionId);
+  }, [activeSessionId]);
 
   // Load sessions on mount and set up auto-refresh polling
   useEffect(() => {
@@ -87,6 +95,7 @@ export function CodeChatPage() {
     console.log('[CodeChatPage] ============================================');
     console.log('[CodeChatPage] loadSessions called at', new Date().toISOString());
     console.log('[CodeChatPage] Current sessions count:', sessions.length);
+    console.log('[CodeChatPage] 🔍 Checking activeSessionIdRef.current:', activeSessionIdRef.current);
     try {
       const fetchedSessions = await getSessions();
       console.log('[CodeChatPage] ✅ Fetched sessions from API:', fetchedSessions.length, 'sessions');
@@ -106,10 +115,13 @@ export function CodeChatPage() {
       setSessions(fetchedSessions);
       console.log('[CodeChatPage] ✅ setSessions() completed');
 
-      // Select first session if none active
-      if (!activeSessionId && fetchedSessions.length > 0) {
+      // Select first session if none active (using ref to avoid stale closure)
+      if (!activeSessionIdRef.current && fetchedSessions.length > 0) {
+        console.log('[CodeChatPage] 🎯 No active session, auto-selecting first session:', fetchedSessions[0].id);
         setActiveSessionId(fetchedSessions[0].id);
         await loadMessages(fetchedSessions[0].id);
+      } else if (activeSessionIdRef.current) {
+        console.log('[CodeChatPage] ✅ Active session already set, skipping auto-select. Current:', activeSessionIdRef.current);
       }
     } catch (err) {
       console.error('[CodeChatPage] ❌ Error loading sessions:', err);
@@ -250,13 +262,19 @@ export function CodeChatPage() {
   };
 
   const handleSessionSelect = async (sessionId: string) => {
+    console.log('[CodeChatPage] 👆 User clicked session:', sessionId);
+    console.log('[CodeChatPage] Previous activeSessionId:', activeSessionId);
+    console.log('[CodeChatPage] Previous activeSessionIdRef.current:', activeSessionIdRef.current);
     if (sessionId !== activeSessionId) {
+      console.log('[CodeChatPage] ✅ Setting new active session:', sessionId);
       setActiveSessionId(sessionId);
       await loadMessages(sessionId);
       setStreamingContent('');
       setIsStreaming(false);
       // Reset agent selection for new session
       setSelectedAgentId(null);
+    } else {
+      console.log('[CodeChatPage] ⏭️ Session already active, no change needed');
     }
   };
 
@@ -358,7 +376,7 @@ export function CodeChatPage() {
   };
 
   return (
-    <Box className="chat-dashboard-container" sx={{ display: 'flex', height: 'calc(100vh - 140px)' }}>
+    <Box className="chat-dashboard-container" sx={{ display: 'flex', height: 'calc(100vh - 80px)' }}>
       {/* Left Sidebar - Session List (20%) */}
       <Box sx={{ width: '20%', minWidth: 250, maxWidth: 350 }}>
         <ChatSessionList
@@ -378,6 +396,7 @@ export function CodeChatPage() {
         sx={{
           flex: 1,
           display: 'flex',
+          flexDirection: 'column',
           backgroundColor: 'background.default',
         }}
       >
@@ -387,6 +406,7 @@ export function CodeChatPage() {
             display: 'flex',
             alignItems: 'center',
             gap: 1,
+            py: 1,
             borderBottom: '1px solid',
             borderColor: 'divider',
           }}
