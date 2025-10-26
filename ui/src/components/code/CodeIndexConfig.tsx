@@ -20,7 +20,7 @@ import {
   Box,
   CircularProgress,
 } from '@mui/material';
-import { Add, Delete, FolderOpen, Refresh } from '@mui/icons-material';
+import { Add, Delete, FolderOpen, Refresh, PlayArrow, Stop, Sync } from '@mui/icons-material';
 import { restCodeClient } from '../../services/restCodeClient';
 import type { IndexStatus } from '../../types/codeIndex';
 
@@ -36,6 +36,7 @@ export const CodeIndexConfig: React.FC = () => {
     '*.js',
   ]);
   const [excludePatterns, setExcludePatterns] = useState('node_modules,dist,build,.git');
+  const [actionLoading, setActionLoading] = useState(false);
 
   const FILE_PATTERNS = [
     { label: 'Go (*.go)', value: '*.go' },
@@ -123,6 +124,57 @@ export const CodeIndexConfig: React.FC = () => {
     await loadStatus();
   };
 
+  const handleEnableWatcher = async () => {
+    try {
+      setActionLoading(true);
+      const result = await restCodeClient.enableWatcher();
+      alert(result.message || 'File watcher enabled successfully');
+      await loadStatus();
+    } catch (err) {
+      console.error('Failed to enable watcher:', err);
+      alert(err instanceof Error ? err.message : 'Failed to enable file watcher');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDisableWatcher = async () => {
+    try {
+      setActionLoading(true);
+      const result = await restCodeClient.disableWatcher();
+      alert(result.message || 'File watcher disabled successfully');
+      await loadStatus();
+    } catch (err) {
+      console.error('Failed to disable watcher:', err);
+      alert(err instanceof Error ? err.message : 'Failed to disable file watcher');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReindexAll = async () => {
+    if (!confirm('This will reindex all files in all folders. This may take some time. Continue?')) {
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      const result = await restCodeClient.reindexAll();
+      alert(
+        result.message ||
+        `Reindexed ${result.foldersReindexed} folders, ${result.totalFilesIndexed} files`
+      );
+      await loadStatus();
+    } catch (err) {
+      console.error('Failed to reindex all:', err);
+      alert(err instanceof Error ? err.message : 'Failed to reindex all files');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const watcherRunning = status?.watcherStatus === 'running';
+
   return (
     <>
       <Card>
@@ -185,6 +237,49 @@ export const CodeIndexConfig: React.FC = () => {
             sx={{ mt: 2 }}
           >
             Add Folder
+          </Button>
+
+          {/* File Watcher Controls */}
+          <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+            {watcherRunning ? (
+              <Button
+                variant="outlined"
+                color="warning"
+                startIcon={<Stop />}
+                onClick={handleDisableWatcher}
+                disabled={actionLoading || loading}
+                fullWidth
+                size="small"
+              >
+                Disable Indexing
+              </Button>
+            ) : (
+              <Button
+                variant="outlined"
+                color="success"
+                startIcon={<PlayArrow />}
+                onClick={handleEnableWatcher}
+                disabled={actionLoading || loading}
+                fullWidth
+                size="small"
+              >
+                Enable Indexing
+              </Button>
+            )}
+          </Box>
+
+          {/* Reindex All Button */}
+          <Button
+            variant="outlined"
+            color="primary"
+            startIcon={<Sync />}
+            onClick={handleReindexAll}
+            disabled={actionLoading || loading || !status?.folders?.length}
+            fullWidth
+            sx={{ mt: 1 }}
+            size="small"
+          >
+            {actionLoading ? 'Reindexing...' : 'Reindex All Files'}
           </Button>
         </CardContent>
       </Card>
