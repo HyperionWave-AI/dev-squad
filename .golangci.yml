@@ -1,0 +1,112 @@
+# Hyperion Go Linting Configuration
+# Purpose: Enforce code quality and logging standards
+
+version: 2
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+  skip-dirs:
+    - .archive
+    - vendor
+    - node_modules
+    - ui/dist
+
+linters:
+  enable:
+    - govet          # Go vet
+    - errcheck       # Check unchecked errors
+    - staticcheck    # Advanced static analysis (includes gosimple)
+    - unused         # Check for unused code
+    - ineffassign    # Detect ineffectual assignments
+    - forbidigo      # Forbid specific function calls (for logging enforcement)
+    - revive         # General purpose linter
+  enable-all: false
+  disable-all: false
+
+linters-settings:
+  # Forbid direct print statements - enforce zap logger usage
+  forbidigo:
+    forbid:
+      # Ban fmt.Print* family
+      - p: ^fmt\.Print(ln|f)?$
+        msg: "Use zap logger instead of fmt.Print* for logging. Example: logger.Info(\"message\", zap.String(\"key\", value))"
+
+      # Ban log.Print* family
+      - p: ^log\.Print(ln|f)?$
+        msg: "Use zap logger instead of log.Print* for logging. Example: logger.Info(\"message\")"
+
+      # Ban log.Fatal* family
+      - p: ^log\.Fatal(ln|f)?$
+        msg: "Use zap logger with proper error handling instead of log.Fatal*. Example: logger.Fatal(\"message\", zap.Error(err))"
+
+      # Ban log.Panic* family
+      - p: ^log\.Panic(ln|f)?$
+        msg: "Use zap logger with proper error handling instead of log.Panic*. Example: logger.Error(\"critical error\", zap.Error(err)); panic(err)"
+
+    # Exclude specific files/patterns where print statements are acceptable
+    exclude-godoc-examples: true
+    analyze-types: true
+
+  # Revive configuration for general code quality
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+      - name: unexported-return
+        disabled: false
+      - name: error-return
+        disabled: false
+      - name: error-naming
+        disabled: false
+      - name: error-strings
+        disabled: false
+      - name: context-as-argument
+        disabled: false
+
+issues:
+  # Exclude specific files from forbidigo linter (acceptable print usage)
+  exclude-rules:
+    # Allow print statements in scripts (utility/testing purposes)
+    - path: hyper/scripts/
+      linters:
+        - forbidigo
+
+    # Allow print statements in test files for test output
+    - path: _test\.go$
+      linters:
+        - forbidigo
+
+    # Allow print statements in force_new_collection.go (utility script)
+    - path: force_new_collection\.go$
+      linters:
+        - forbidigo
+
+    # Allow print statements in check_recent_tasks.go (utility script)
+    - path: check_recent_tasks\.go$
+      linters:
+        - forbidigo
+
+    # Allow print statements in main.go for critical interactive prompts ONLY
+    # Note: We'll migrate config loading messages to logger, but keep dimension prompt
+    - path: cmd/coordinator/main\.go$
+      text: "dimension mismatch|user choice|Please choose"
+      linters:
+        - forbidigo
+
+  # Maximum issues count per linter
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  # Show all issues
+  new: false
+
+# Output format
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  unique-by-line: true
+  sort-results: true

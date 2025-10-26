@@ -17,9 +17,7 @@ export const CodeSearchPage: React.FC = () => {
   const handleSearch = async (query: string, options: SearchOptions) => {
     try {
       setLoading(true);
-      const searchResults = await restCodeClient.search(query, {
-        limit: options.limit,
-      });
+      const searchResults = await restCodeClient.search(query, options);
       setResults(searchResults);
     } catch (err) {
       console.error('Search failed:', err);
@@ -55,10 +53,13 @@ export const CodeSearchPage: React.FC = () => {
             display: 'grid',
             gridTemplateColumns: { xs: '1fr', md: '2fr 1fr' },
             gap: 3,
+            width: '100%',
+            maxWidth: '100%',
+            overflow: 'hidden',
           }}
         >
           {/* Search and Results Section */}
-          <Stack spacing={3}>
+          <Stack spacing={3} sx={{ width: '100%', maxWidth: '100%', minWidth: 0 }}>
             {/* Search Form */}
             <CodeSearch onSearch={handleSearch} loading={loading} />
 
