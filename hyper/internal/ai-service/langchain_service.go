@@ -1193,7 +1193,8 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 								if tasks, ok := outputMap["tasks"].([]interface{}); ok {
 									for _, task := range tasks {
 										if taskMap, ok := task.(map[string]interface{}); ok {
-											if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
+											// BUGFIX: Field name is "id" not "taskId" (matching TaskDTO JSON schema)
+											if taskId, ok := taskMap["id"].(string); ok && taskId == humanTaskId {
 												taskExists = true
 												break
 											}
@@ -1437,9 +1438,31 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						result.Name, originalSize, len(toolResultMsg))
 				}
 
+				// CRITICAL FIX: Add tool_call message BEFORE tool_result (required by Anthropic API)
+				// This ensures proper conversation history tracking
 				currentMessages = append(currentMessages, Message{
-					Role:    "system",
-					Content: toolResultMsg,
+					Role:    "tool_call",
+					Content: responseText,
+					ToolCall: &ToolCall{
+						ID:   toolCall.ID,
+						Name: toolCall.Name,
+						Args: toolCall.Args,
+					},
+				})
+
+				// CRITICAL FIX: Add tool_result message with proper structure (not system role)
+				// This ensures the AI provider actually receives and processes the tool results
+				// The toolResultMsg is used for Output to preserve truncation and loop warning logic
+				currentMessages = append(currentMessages, Message{
+					Role:    "tool_result",
+					Content: "",
+					ToolResult: &ToolResult{
+						ID:         toolCall.ID,
+						Name:       toolCall.Name,
+						Output:     toolResultMsg, // Preserve processed result with truncation/warnings
+						Error:      result.Error,
+						DurationMs: result.DurationMs,
+					},
 				})
 
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution

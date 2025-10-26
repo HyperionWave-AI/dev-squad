@@ -395,6 +395,35 @@ func (s *CodeIndexStorage) GetChunksByFileID(fileID string) ([]*FileChunk, error
 	return s.ListChunks(fileID)
 }
 
+// GetChunksByFileIDAndLineRange retrieves chunks that overlap with a specified line range
+// Returns chunks where startLine <= targetEnd AND endLine >= targetStart
+func (s *CodeIndexStorage) GetChunksByFileIDAndLineRange(fileID string, targetStart, targetEnd int) ([]*FileChunk, error) {
+	filter := bson.M{
+		"fileId": fileID,
+		"$and": []bson.M{
+			{"startLine": bson.M{"$lte": targetEnd}},
+			{"endLine": bson.M{"$gte": targetStart}},
+		},
+	}
+
+	cursor, err := s.chunksCol.Find(
+		context.Background(),
+		filter,
+		options.Find().SetSort(bson.D{{Key: "chunkNum", Value: 1}}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query chunks by line range: %w", err)
+	}
+	defer cursor.Close(context.Background())
+
+	var chunks []*FileChunk
+	if err := cursor.All(context.Background(), &chunks); err != nil {
+		return nil, fmt.Errorf("failed to decode chunks: %w", err)
+	}
+
+	return chunks, nil
+}
+
 // GetIndexStatus returns the current status of the code index
 func (s *CodeIndexStorage) GetIndexStatus() (*IndexStatus, error) {
 	ctx := context.Background()

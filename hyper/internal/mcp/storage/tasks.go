@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap"
 )
 
 // TaskType represents the type of task
@@ -126,14 +127,16 @@ type MongoTaskStorage struct {
 	humanTasksCollection *mongo.Collection
 	agentTasksCollection *mongo.Collection
 	knowledgeStorage     KnowledgeStorage
+	logger               *zap.Logger
 }
 
 // NewMongoTaskStorage creates a new MongoDB-backed task storage
-func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage) (*MongoTaskStorage, error) {
+func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage, logger *zap.Logger) (*MongoTaskStorage, error) {
 	storage := &MongoTaskStorage{
 		humanTasksCollection: db.Collection("human_tasks"),
 		agentTasksCollection: db.Collection("agent_tasks"),
 		knowledgeStorage:     knowledgeStorage,
+		logger:               logger,
 	}
 
 	// Create indexes
@@ -205,7 +208,10 @@ func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 		_, err := s.knowledgeStorage.Upsert(collection, task.Prompt, metadata)
 		if err != nil {
 			// Log error but don't fail task creation
-			fmt.Printf("Warning: failed to index human task in knowledge base: %v\n", err)
+			s.logger.Warn("Failed to index human task in knowledge base",
+				zap.String("taskId", task.ID),
+				zap.String("collection", collection),
+				zap.Error(err))
 		}
 	}
 

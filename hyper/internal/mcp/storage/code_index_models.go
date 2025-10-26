@@ -58,6 +58,7 @@ type SearchResult struct {
 	FolderID          string  `json:"folderId"`
 	FolderPath        string  `json:"folderPath"`
 	FullFileRetrieved bool    `json:"fullFileRetrieved"` // True when retrieve="full" mode
+	ChunkSize         string  `json:"chunkSize,omitempty"` // T-shirt size (s/m/l/xl) when using sized chunk modes
 }
 
 // IndexStatus represents the current status of the code index
