@@ -74,14 +74,14 @@ export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => 
   };
 
   return (
-    <Card>
-      <CardContent>
+    <Card sx={{ width: '100%', maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
+      <CardContent sx={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
         <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Search />
           Semantic Code Search
         </Typography>
 
-        <Stack spacing={3}>
+        <Stack spacing={3} sx={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
           {/* Search Query */}
           <TextField
             fullWidth
@@ -98,6 +98,7 @@ export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => 
               ),
             }}
             disabled={loading}
+            sx={{ maxWidth: '100%', boxSizing: 'border-box' }}
           />
 
           {/* File Type Filters */}
@@ -120,7 +121,7 @@ export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => 
           </Box>
 
           {/* Min Score Slider */}
-          <Box>
+          <Box sx={{ width: '100%', maxWidth: '100%' }}>
             <Typography variant="subtitle2" gutterBottom>
               Minimum Relevance Score: {(minScore * 100).toFixed(0)}%
             </Typography>
@@ -138,11 +139,12 @@ export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => 
               valueLabelDisplay="auto"
               valueLabelFormat={(value) => `${(value * 100).toFixed(0)}%`}
               disabled={loading}
+              sx={{ width: '100%' }}
             />
           </Box>
 
           {/* Result Limit Slider */}
-          <Box>
+          <Box sx={{ width: '100%', maxWidth: '100%' }}>
             <Typography variant="subtitle2" gutterBottom>
               Maximum Results: {limit}
             </Typography>
@@ -159,6 +161,7 @@ export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => 
               ]}
               valueLabelDisplay="auto"
               disabled={loading}
+              sx={{ width: '100%' }}
             />
           </Box>
 

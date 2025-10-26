@@ -1,5 +1,26 @@
 # Makefile Cleanup Summary
 
+## Project Overview: Hyperion (hyper)
+
+**Hyperion** is an AI-powered code analysis platform that integrates with Claude Code. It provides:
+- **Code Indexing**: Semantic understanding of code files
+- **Vector Search**: Find similar code patterns
+- **Claude Integration**: Works as MCP plugin for Claude Code
+- **REST API**: HTTP endpoints for programmatic access
+- **Web UI**: React-based interface
+- **Real-time Monitoring**: Auto-indexes file changes
+
+### Single Binary Architecture
+The project uses a **single unified binary** (`hyper`) with three runtime modes instead of separate binaries:
+
+```
+./bin/hyper --mode=http   → REST API + Web UI (port 7095)
+./bin/hyper --mode=mcp    → MCP stdio (Claude Code)
+./bin/hyper --mode=both   → Both modes (default)
+```
+
+---
+
 ## Changes Made
 
 ### 1. Root Makefile (`/Makefile`) - ✅ Cleaned Up
@@ -72,6 +93,33 @@ This Makefile still references the old architecture:
 
 **Remaining:**
 - `cmd/coordinator/` → The unified binary (contains all features)
+
+## Technology Stack
+
+### Backend (Go 1.25)
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| Framework | Gin Web Framework | HTTP server & routing |
+| Protocol | MCP Go SDK | Claude Code integration |
+| Database | MongoDB | Metadata, tasks, history |
+| Vector DB | Qdrant | Semantic search |
+| File Watching | fsnotify | Real-time monitoring |
+| Embeddings | Multiple providers | Vector generation |
+| Logging | Uber Zap | Structured logging |
+| LLM Chain | LangChain Go | AI orchestration |
+| Auth | golang-jwt | JWT tokens |
+| WebSocket | Gorilla WebSocket | Real-time updates |
+
+### Frontend (React)
+- **Framework**: React 18+
+- **Build Tool**: Vite
+- **Embedded**: In Go binary via `embed` package
+
+### Embedding Providers
+- **Ollama**: Local, GPU-accelerated (default)
+- **OpenAI**: Cloud-based, high quality
+- **Voyage AI**: Specialized embeddings
+- **TEI**: Self-hosted embeddings
 
 ## Verified Working Commands
 
@@ -158,6 +206,40 @@ Calls: ./build-native.sh
 4. Result: Single ~16MB binary with embedded UI
 ```
 
+## Core Features
+
+### Code Indexing & Analysis
+- Real-time file watching using fsnotify
+- Automatic code parsing and tokenization
+- Semantic indexing with embeddings
+- Incremental updates for performance
+- Multi-language support
+
+### Semantic Search
+- Vector-based similarity search via Qdrant
+- Code snippet retrieval by semantic meaning
+- Context-aware search using embeddings
+- Filtering and ranking capabilities
+
+### Claude Code Integration (MCP)
+- stdio protocol for direct Claude integration
+- Tool definitions in JSON Schema format
+- Real-time code analysis from Claude
+- Bi-directional communication
+
+### REST API + Web UI
+- RESTful endpoints for all operations
+- React-based web interface on port 7095
+- Real-time updates via WebSocket
+- JWT authentication
+- CORS support
+
+### File Watching & Auto-Indexing
+- Recursive directory monitoring
+- Automatic re-indexing on file changes
+- Batch processing for efficiency
+- Configurable watch patterns
+
 ## Testing
 
 ### Build Test
@@ -183,6 +265,41 @@ export VOYAGE_API_KEY="..."
 # Should start stdio server for Claude Code
 ```
 
+## Configuration
+
+### Environment Variables
+```bash
+# MongoDB
+MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net"
+MONGODB_DATABASE="coordinator_db1"
+
+# Qdrant Vector Database
+QDRANT_URL="https://qdrant-instance.com"
+QDRANT_KNOWLEDGE_COLLECTION="dev_squad_knowledge"
+
+# Embedding Provider (ollama|openai|voyage|tei)
+EMBEDDING="ollama"
+
+# Ollama Configuration
+OLLAMA_URL="http://localhost:11434"
+OLLAMA_MODEL="nomic-embed-text"
+
+# OpenAI Configuration
+OPENAI_API_KEY="sk-..."
+
+# Voyage AI Configuration
+VOYAGE_API_KEY="pa-..."
+
+# Server Configuration
+PORT="7095"
+LOG_LEVEL="info"
+```
+
+### Configuration File
+- **Location**: `.env.hyper` (in executable directory or current directory)
+- **Priority**: Custom config path > executable dir > current dir
+- **Format**: Standard `.env` format
+
 ## Recommendations
 
 ### Optional Cleanup (Future)
@@ -197,6 +314,34 @@ export VOYAGE_API_KEY="..."
 - build-native.sh ✅
 - hyper/cmd/coordinator/ ✅
 
+## Directory Structure
+
+```
+hyper/
+├── cmd/
+│   └── coordinator/          # Unified binary source
+│       └── main.go          # --mode flag: http|mcp|both
+├── internal/
+│   ├── server/              # HTTP server (Gin)
+│   ├── mcp/                 # MCP protocol
+│   │   ├── handlers/        # MCP tools
+│   │   ├── storage/         # MongoDB + Qdrant
+│   │   ├── embeddings/      # TEI/Voyage/Ollama/OpenAI
+│   │   ├── indexer/         # Code indexing
+│   │   └── watcher/         # File watching
+│   ├── middleware/          # HTTP middleware
+│   └── ai-service/          # AI integration
+├── embed/                   # Embedded UI (auto-generated)
+├── go.mod                   # Go dependencies
+└── Makefile                 # Build targets
+
+coordinator/
+└── ui/                      # React UI source
+    ├── src/
+    ├── dist/                # Built UI (auto-generated)
+    └── package.json
+```
+
 ## Conclusion
 
 ✅ **Makefile cleanup complete**
@@ -205,3 +350,36 @@ export VOYAGE_API_KEY="..."
 ✅ **All targets tested and working**
 
 The build system now focuses on the **single unified hyper binary** approach. All redundant targets removed, all working targets preserved.
+
+## Quick Reference
+
+**One binary, three modes:**
+```bash
+./bin/hyper --mode=http   # REST API + UI (port 7095)
+./bin/hyper --mode=mcp    # MCP stdio (Claude Code)
+./bin/hyper --mode=both   # Both (default)
+```
+
+**Build:**
+```bash
+make native  # Single command builds everything
+```
+
+**Develop:**
+```bash
+make dev-hot  # Hot reload for Go + UI
+```
+
+**Key Capabilities:**
+- AI-powered code analysis
+- Semantic code search
+- Claude Code integration
+- REST API + Web UI
+- Real-time file monitoring
+- Vector embeddings
+- Multiple embedding providers
+
+---
+
+*Last Updated: 2024*
+*Project: Hyperion (hyper)*
