@@ -68,6 +68,7 @@ type TodoItemInput struct {
 type HumanTask struct {
 	ID        string     `json:"taskId" bson:"taskId"`
 	Prompt    string     `json:"prompt" bson:"prompt"`
+	Summary   string     `json:"summary,omitempty" bson:"summary,omitempty"` // AI-generated summary (max 100 tokens)
 	CreatedAt time.Time  `json:"createdAt" bson:"createdAt"`
 	UpdatedAt time.Time  `json:"updatedAt" bson:"updatedAt"`
 	Status    TaskStatus `json:"status" bson:"status"`
@@ -86,6 +87,7 @@ type AgentTask struct {
 	Status            TaskStatus `json:"status" bson:"status"`
 	Notes             string     `json:"notes,omitempty" bson:"notes,omitempty"`
 	ContextSummary    string     `json:"contextSummary,omitempty" bson:"contextSummary,omitempty"`
+	Summary           string     `json:"summary,omitempty" bson:"summary,omitempty"` // AI-generated summary (max 100 tokens)
 	FilesModified             []string   `json:"filesModified,omitempty" bson:"filesModified,omitempty"`
 	QdrantCollections         []string   `json:"qdrantCollections,omitempty" bson:"qdrantCollections,omitempty"`
 	PriorWorkSummary          string     `json:"priorWorkSummary,omitempty" bson:"priorWorkSummary,omitempty"`
@@ -128,15 +130,23 @@ type MongoTaskStorage struct {
 	agentTasksCollection *mongo.Collection
 	knowledgeStorage     KnowledgeStorage
 	logger               *zap.Logger
+	summarizer           TaskSummarizer // AI summarization service
+}
+
+// TaskSummarizer interface for AI-powered task summarization
+type TaskSummarizer interface {
+	SummarizeTaskWithFallback(ctx context.Context, content string, maxFallbackLength int) string
 }
 
 // NewMongoTaskStorage creates a new MongoDB-backed task storage
-func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage, logger *zap.Logger) (*MongoTaskStorage, error) {
+// summarizer can be nil for backward compatibility (will skip AI summarization)
+func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage, summarizer TaskSummarizer, logger *zap.Logger) (*MongoTaskStorage, error) {
 	storage := &MongoTaskStorage{
 		humanTasksCollection: db.Collection("human_tasks"),
 		agentTasksCollection: db.Collection("agent_tasks"),
 		knowledgeStorage:     knowledgeStorage,
 		logger:               logger,
+		summarizer:           summarizer,
 	}
 
 	// Create indexes
@@ -190,6 +200,22 @@ func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Status:    TaskStatusPending,
+	}
+
+	// Generate AI summary if summarizer is available
+	if s.summarizer != nil {
+		summary := s.summarizer.SummarizeTaskWithFallback(ctx, prompt, 200)
+		task.Summary = summary
+		s.logger.Debug("Generated task summary",
+			zap.String("taskId", task.ID),
+			zap.Int("summaryLength", len(summary)))
+	} else {
+		// Fallback: use first 200 chars if no summarizer
+		if len(prompt) > 200 {
+			task.Summary = prompt[:200] + "..."
+		} else {
+			task.Summary = prompt
+		}
 	}
 
 	_, err := s.humanTasksCollection.InsertOne(ctx, task)
@@ -262,6 +288,26 @@ func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, 
 		FilesModified:     filesModified,
 		QdrantCollections: qdrantCollections,
 		PriorWorkSummary:  priorWorkSummary,
+	}
+
+	// Generate AI summary from context if summarizer is available
+	if s.summarizer != nil && contextSummary != "" {
+		summary := s.summarizer.SummarizeTaskWithFallback(ctx, contextSummary, 200)
+		task.Summary = summary
+		s.logger.Debug("Generated agent task summary",
+			zap.String("taskId", task.ID),
+			zap.String("agentName", agentName),
+			zap.Int("summaryLength", len(summary)))
+	} else if contextSummary != "" {
+		// Fallback: use first 200 chars of context summary
+		if len(contextSummary) > 200 {
+			task.Summary = contextSummary[:200] + "..."
+		} else {
+			task.Summary = contextSummary
+		}
+	} else if role != "" {
+		// If no context, use role as summary
+		task.Summary = role
 	}
 
 	_, err = s.agentTasksCollection.InsertOne(ctx, task)
