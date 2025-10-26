@@ -141,3 +141,40 @@ func TestParseArrayParameter_QdrantCollections(t *testing.T) {
 		"collection2",
 	}, result)
 }
+
+// TestEstimateTokens tests the token estimation helper function
+func TestEstimateTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: 0,
+		},
+		{
+			name:     "short string",
+			input:    "test",
+			expected: 1, // 4 chars / 4 = 1
+		},
+		{
+			name:     "medium string",
+			input:    "This is a test string with some content",
+			expected: 9, // 39 chars / 4 = 9
+		},
+		{
+			name:     "~100 character string",
+			input:    "This is a longer string that contains exactly one hundred characters to test token estimation logic",
+			expected: 24, // 99 chars / 4 = 24
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := estimateTokens(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

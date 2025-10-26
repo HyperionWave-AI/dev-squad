@@ -110,8 +110,10 @@ type TaskStorage interface {
 	GetHumanTask(taskID string) (*HumanTask, error)
 	GetAgentTask(taskID string) (*AgentTask, error)
 	GetAgentTasksByName(agentName string) ([]*AgentTask, error)
-	ListAllHumanTasks() []*HumanTask
-	ListAllAgentTasks() []*AgentTask
+	ListAllHumanTasks() []*HumanTask // Deprecated: Use ListHumanTasks with filter
+	ListAllAgentTasks() []*AgentTask // Deprecated: Use ListAgentTasks with filter
+	ListHumanTasks(filter bson.M) ([]*HumanTask, error)
+	ListAgentTasks(filter bson.M, offset, limit int) ([]*AgentTask, int, error)
 	UpdateTaskStatus(taskID string, status TaskStatus, notes string) error
 	UpdateTodoStatus(agentTaskID, todoID string, status TodoStatus, notes string) error
 	AddTaskPromptNotes(agentTaskID string, notes string) error
@@ -369,6 +371,7 @@ func (s *MongoTaskStorage) GetAgentTasksByName(agentName string) ([]*AgentTask, 
 }
 
 // ListAllHumanTasks returns all human tasks
+// Deprecated: Use ListHumanTasks with filter for better performance
 func (s *MongoTaskStorage) ListAllHumanTasks() []*HumanTask {
 	ctx := context.Background()
 
@@ -386,7 +389,31 @@ func (s *MongoTaskStorage) ListAllHumanTasks() []*HumanTask {
 	return tasks
 }
 
+// ListHumanTasks returns human tasks matching the given filter
+func (s *MongoTaskStorage) ListHumanTasks(filter bson.M) ([]*HumanTask, error) {
+	ctx := context.Background()
+
+	// If filter is nil, use empty filter to get all
+	if filter == nil {
+		filter = bson.M{}
+	}
+
+	cursor, err := s.humanTasksCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query human tasks: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []*HumanTask
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return nil, fmt.Errorf("failed to decode human tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
 // ListAllAgentTasks returns all agent tasks
+// Deprecated: Use ListAgentTasks with filter for better performance
 func (s *MongoTaskStorage) ListAllAgentTasks() []*AgentTask {
 	ctx := context.Background()
 
@@ -402,6 +429,41 @@ func (s *MongoTaskStorage) ListAllAgentTasks() []*AgentTask {
 	}
 
 	return tasks
+}
+
+// ListAgentTasks returns agent tasks matching the given filter with pagination
+// Returns tasks, total count, and error
+func (s *MongoTaskStorage) ListAgentTasks(filter bson.M, offset, limit int) ([]*AgentTask, int, error) {
+	ctx := context.Background()
+
+	// If filter is nil, use empty filter to get all
+	if filter == nil {
+		filter = bson.M{}
+	}
+
+	// Count total matching documents
+	totalCount, err := s.agentTasksCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count agent tasks: %w", err)
+	}
+
+	// Apply pagination options
+	findOptions := options.Find()
+	findOptions.SetSkip(int64(offset))
+	findOptions.SetLimit(int64(limit))
+
+	cursor, err := s.agentTasksCollection.Find(ctx, filter, findOptions)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query agent tasks: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []*AgentTask
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return nil, 0, fmt.Errorf("failed to decode agent tasks: %w", err)
+	}
+
+	return tasks, int(totalCount), nil
 }
 
 // UpdateTaskStatus updates the status and notes of any task (human or agent)
