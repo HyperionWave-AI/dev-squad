@@ -33,8 +33,8 @@ func setupTestMongoDB(t *testing.T) (*MongoTaskStorage, func()) {
 	// Create a test logger
 	logger, _ := zap.NewDevelopment()
 
-	// Create a mock knowledge storage (nil is acceptable for tests not using similarity)
-	storage, err := NewMongoTaskStorage(db, nil, logger)
+	// Create a mock knowledge storage and summarizer (nil is acceptable for tests)
+	storage, err := NewMongoTaskStorage(db, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create MongoTaskStorage: %v", err)
 	}

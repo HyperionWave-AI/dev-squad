@@ -340,6 +340,28 @@ func (c *ToolResultCache) Set(signature string, result *ToolResult) {
 	c.cache[signature] = cachedResult
 }
 
+// Delete removes a cached tool result by signature
+func (c *ToolResultCache) Delete(signature string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.cache, signature)
+}
+
+// DeletePrefix removes all cached tool results with signatures starting with the given prefix
+// Returns the count of entries deleted
+func (c *ToolResultCache) DeletePrefix(prefix string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for signature := range c.cache {
+		if len(signature) >= len(prefix) && signature[:len(prefix)] == prefix {
+			delete(c.cache, signature)
+			count++
+		}
+	}
+	return count
+}
+
 // NewChatService creates a new ChatService with the given configuration
 // Creates an empty tool registry - use RegisterTool() or GetToolRegistry() to add tools
 func NewChatService(config *AIConfig) (*ChatService, error) {
@@ -1193,8 +1215,8 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 								if tasks, ok := outputMap["tasks"].([]interface{}); ok {
 									for _, task := range tasks {
 										if taskMap, ok := task.(map[string]interface{}); ok {
-											// BUGFIX: Field name is "id" not "taskId" (matching TaskDTO JSON schema)
-											if taskId, ok := taskMap["id"].(string); ok && taskId == humanTaskId {
+											// Check taskId field (matching HumanTask JSON schema with json:"taskId" tag)
+											if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
 												taskExists = true
 												break
 											}
@@ -1268,6 +1290,45 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
+
+				// CACHE INVALIDATION: Clear related caches after successful write operations
+				// This prevents stale cache data from causing validation failures and incorrect state
+				if result.Error == "" {
+					switch toolCall.Name {
+					case "coordinator_create_human_task":
+						// Clear all list_human_tasks cache entries (any filter parameters)
+						count := resultCache.DeletePrefix("coordinator_list_human_tasks:")
+						log.Printf("[Cache Invalidation] coordinator_create_human_task: cleared %d coordinator_list_human_tasks cache entries", count)
+
+					case "coordinator_create_agent_task":
+						// Clear all list_agent_tasks cache entries (any filter parameters)
+						count := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						log.Printf("[Cache Invalidation] coordinator_create_agent_task: cleared %d coordinator_list_agent_tasks cache entries", count)
+
+					case "coordinator_update_task_status":
+						// Clear human tasks, agent tasks, and specific task get caches
+						count1 := resultCache.DeletePrefix("coordinator_list_human_tasks:")
+						count2 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						count3 := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] coordinator_update_task_status: cleared %d human_tasks + %d agent_tasks + %d get_task cache entries", count1, count2, count3)
+
+					case "coordinator_update_todo_status":
+						// Clear agent tasks and specific task get caches
+						count1 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						count2 := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] coordinator_update_todo_status: cleared %d agent_tasks + %d get_task cache entries", count1, count2)
+
+					case "coordinator_add_task_prompt_notes", "coordinator_update_task_prompt_notes", "coordinator_clear_task_prompt_notes":
+						// Clear specific task get cache
+						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
+
+					case "coordinator_add_todo_prompt_notes", "coordinator_update_todo_prompt_notes", "coordinator_clear_todo_prompt_notes":
+						// Clear specific task get cache
+						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
+					}
+				}
 
 				// Track tool execution in history for smart filtering (keep last 20)
 				toolCallHistory = append(toolCallHistory, result)
