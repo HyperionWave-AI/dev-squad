@@ -112,6 +112,7 @@ func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient,
 	return nil
 }
 
+
 // initLogger creates a logger that outputs to both console and file
 func initLogger() (*zap.Logger, error) {
 	// Ensure logs directory exists
@@ -351,11 +352,27 @@ func main() {
 			zap.String("hint", "Set EMBEDDING=ollama, EMBEDDING=openai, or EMBEDDING=voyage"))
 	}
 
-	// Initialize Qdrant client
-	logger.Info("Connecting to Qdrant", zap.String("url", qdrantURL))
-	qdrantClient := storage.NewQdrantClient(qdrantURL, qdrantKnowledgeCollection)
+	// Append dimension suffix to knowledge collection name
+	// This allows seamless switching between embedding providers without data loss
+	// Each provider's vectors are stored in a separate collection (e.g., dev_squad_knowledge_1024, dev_squad_knowledge_768)
+	dimensions := embeddingClient.GetDimensions()
+	qdrantKnowledgeCollectionWithDim := fmt.Sprintf("%s_%d", qdrantKnowledgeCollection, dimensions)
 
-	logger.Info("Successfully connected to Qdrant")
+	// Initialize Qdrant client with the same embedding client used for code indexing
+	// This ensures knowledge_store and knowledge_find use the configured embedding provider (Voyage/Ollama/OpenAI)
+	logger.Info("Connecting to Qdrant",
+		zap.String("url", qdrantURL),
+		zap.String("baseCollection", qdrantKnowledgeCollection),
+		zap.String("activeCollection", qdrantKnowledgeCollectionWithDim),
+		zap.String("embeddingProvider", embeddingMode),
+		zap.Int("dimensions", dimensions))
+
+	qdrantClient := storage.NewQdrantClientWithEmbeddingClient(qdrantURL, qdrantKnowledgeCollectionWithDim, embeddingClient)
+
+	logger.Info("Successfully connected to Qdrant - using dimension-specific collection",
+		zap.String("collection", qdrantKnowledgeCollectionWithDim),
+		zap.String("embeddingProvider", embeddingMode),
+		zap.Int("dimensions", dimensions))
 
 	// Initialize code index storage
 	codeIndexStorage, err := storage.NewCodeIndexStorage(db)
