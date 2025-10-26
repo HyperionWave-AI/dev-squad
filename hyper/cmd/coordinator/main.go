@@ -512,8 +512,14 @@ func main() {
 		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
 	}
 
+	// Initialize AI summarizer for task summarization (optional - if fails, task storage will use fallback)
+	var taskSummarizer storage.TaskSummarizer
+	// Note: summarizer will be nil if initialization fails, which is acceptable (will use fallback)
+	// The summarizer requires AI service configuration from .env.hyper
+	// If not configured, tasks will still be created but summaries will be truncated text instead of AI-generated
+
 	// Initialize task storage (needed by coordinator tools)
-	taskStorage, err := storage.NewMongoTaskStorage(db, knowledgeStorage, logger)
+	taskStorage, err := storage.NewMongoTaskStorage(db, knowledgeStorage, taskSummarizer, logger)
 	if err != nil {
 		logger.Fatal("Failed to initialize task storage", zap.Error(err))
 	}

@@ -428,7 +428,7 @@ body {
   width: 100%;
   max-width: 1600px;
   margin: 0 auto;
-  padding: var(--spacing-md);
+  padding: 0;
 }
 
 .chat-main-content {
@@ -783,7 +783,7 @@ body {
   }
   
   .chat-dashboard-container {
-    padding: var(--spacing-lg);
+    padding: 0;
     max-width: 1800px;
   }
   
@@ -815,7 +815,7 @@ body {
 
 @media (min-width: 768px) {
   .chat-dashboard-container {
-    padding: var(--spacing-xl);
+    padding: 0;
     max-width: 1900px;
   }
   
