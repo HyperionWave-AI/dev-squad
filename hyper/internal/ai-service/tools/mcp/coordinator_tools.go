@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
@@ -376,6 +378,12 @@ func truncateField(text string, maxBytes int) (string, bool) {
 	// Truncate and add indicator
 	truncated := text[:truncateAt] + "... [TRUNCATED]"
 	return truncated, true
+}
+
+// estimateTokens provides a rough estimate of token count for a string.
+// Uses the approximation that 1 token ≈ 4 characters.
+func estimateTokens(s string) int {
+	return len(s) / 4
 }
 
 // CoordinatorTools provides MCP coordinator tool executors for LangChain
@@ -772,6 +780,7 @@ func (t *ListAgentTasksTool) Name() string {
 
 func (t *ListAgentTasksTool) Description() string {
 	return "List agent tasks with optional filters. Returns up to 10 tasks with details. Supports pagination via offset/limit. Large fields (>2KB) are truncated with indicator. Use to check task status, find assignments, or review progress. " +
+		"Default filter excludes completed tasks (status != completed). " +
 		"TIP: Filter by humanTaskId or agentName to narrow results. " +
 		"IMPORTANT: If you have a specific agentTaskId (e.g., from execute_subagent result), use coordinator_get_agent_task instead for direct lookup - DO NOT call this repeatedly without filters."
 }
@@ -787,6 +796,10 @@ func (t *ListAgentTasksTool) InputSchema() map[string]interface{} {
 			"humanTaskId": map[string]interface{}{
 				"type":        "string",
 				"description": "Filter by parent human task ID (optional)",
+			},
+			"status": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter by status. Options: 'all', 'pending', 'in_progress', 'blocked', 'completed'. Default: excludes completed tasks",
 			},
 			"offset": map[string]interface{}{
 				"type":        "integer",
@@ -804,6 +817,7 @@ func (t *ListAgentTasksTool) Execute(ctx context.Context, input map[string]inter
 	// Extract filter parameters
 	agentName, _ := input["agentName"].(string)
 	humanTaskID, _ := input["humanTaskId"].(string)
+	statusFilter, _ := input["status"].(string)
 
 	// Extract pagination parameters
 	offset := 0
@@ -819,61 +833,68 @@ func (t *ListAgentTasksTool) Execute(ctx context.Context, input map[string]inter
 		}
 	}
 
-	// Get all tasks
-	allTasks := t.storage.ListAllAgentTasks()
+	// Build MongoDB filter combining all filter parameters
+	filter := bson.M{}
 
-	// Apply filters
-	var filteredTasks []*storage.AgentTask
-	for _, task := range allTasks {
-		if humanTaskID != "" && task.HumanTaskID != humanTaskID {
-			continue
-		}
-		if agentName != "" && task.AgentName != agentName {
-			continue
-		}
-		filteredTasks = append(filteredTasks, task)
+	// Add humanTaskId filter if provided
+	if humanTaskID != "" {
+		filter["humanTaskId"] = humanTaskID
 	}
 
-	// Apply pagination
-	totalCount := len(filteredTasks)
-	endIndex := offset + limit
-	if offset > totalCount {
-		offset = totalCount
-	}
-	if endIndex > totalCount {
-		endIndex = totalCount
+	// Add agentName filter if provided
+	if agentName != "" {
+		filter["agentName"] = agentName
 	}
 
-	paginatedTasks := filteredTasks[offset:endIndex]
+	// Add status filter
+	if statusFilter == "" {
+		// Default: exclude completed tasks
+		filter["status"] = bson.M{"$ne": "completed"}
+	} else if statusFilter != "all" {
+		// Filter by specific status (if "all", don't add status filter)
+		filter["status"] = statusFilter
+	}
 
-	// Apply truncation to large fields (2KB max)
-	const maxFieldBytes = 2048
-	for _, task := range paginatedTasks {
-		// Truncate contextSummary
-		if task.ContextSummary != "" {
-			task.ContextSummary, _ = truncateField(task.ContextSummary, maxFieldBytes)
+	// Query tasks with MongoDB filter and pagination
+	tasks, totalCount, err := t.storage.ListAgentTasks(filter, offset, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent tasks: %w", err)
+	}
+
+	// Create summary objects with only essential fields and enforce 20k token limit
+	const maxTokens = 20000
+	var summaries []map[string]interface{}
+	totalTokens := 0
+	originalCount := len(tasks)
+
+	for _, task := range tasks {
+		summary := map[string]interface{}{
+			"taskId":      task.ID,
+			"summary":     task.Role, // Using role as summary
+			"status":      task.Status,
+			"createdAt":   task.CreatedAt,
+			"humanTaskId": task.HumanTaskID,
+			"agentName":   task.AgentName,
 		}
 
-		// Truncate role
-		if task.Role != "" {
-			task.Role, _ = truncateField(task.Role, maxFieldBytes)
+		// Estimate tokens for this summary
+		summaryJSON, _ := json.Marshal(summary)
+		summaryTokens := estimateTokens(string(summaryJSON))
+
+		// Check if adding this summary would exceed token limit
+		if totalTokens+summaryTokens > maxTokens {
+			log.Printf("WARNING: List agent tasks truncated from %d to %d items to stay under 20k token limit", originalCount, len(summaries))
+			break
 		}
 
-		// Truncate todo descriptions and notes
-		for i := range task.Todos {
-			if task.Todos[i].Description != "" {
-				task.Todos[i].Description, _ = truncateField(task.Todos[i].Description, maxFieldBytes)
-			}
-			if task.Todos[i].Notes != "" {
-				task.Todos[i].Notes, _ = truncateField(task.Todos[i].Notes, maxFieldBytes)
-			}
-		}
+		summaries = append(summaries, summary)
+		totalTokens += summaryTokens
 	}
 
 	// Format response
 	return map[string]interface{}{
-		"tasks":      paginatedTasks,
-		"count":      len(paginatedTasks),
+		"tasks":      summaries,
+		"count":      len(summaries),
 		"totalCount": totalCount,
 		"offset":     offset,
 		"limit":      limit,
@@ -1380,13 +1401,17 @@ func (t *ListHumanTasksTool) Name() string {
 }
 
 func (t *ListHumanTasksTool) Description() string {
-	return "List human tasks from the coordinator database with pagination. Returns up to 10 tasks. Large fields (>2KB) are truncated with indicator. Use to check human task status or review user requests."
+	return "List human tasks from the coordinator database with pagination. Returns up to 10 tasks. Large fields (>2KB) are truncated with indicator. Use to check human task status or review user requests. Default filter excludes completed tasks (status != completed)."
 }
 
 func (t *ListHumanTasksTool) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
+			"status": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter by status. Options: 'all', 'pending', 'in_progress', 'blocked', 'completed'. Default: excludes completed tasks",
+			},
 			"offset": map[string]interface{}{
 				"type":        "integer",
 				"description": "Number of tasks to skip for pagination (default: 0)",
@@ -1400,7 +1425,29 @@ func (t *ListHumanTasksTool) InputSchema() map[string]interface{} {
 }
 
 func (t *ListHumanTasksTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	// Extract pagination parameters
+	// Extract status filter parameter
+	statusFilter, _ := input["status"].(string)
+
+	// Build MongoDB filter based on status parameter
+	var filter bson.M
+	if statusFilter == "" {
+		// Default: exclude completed tasks
+		filter = bson.M{"status": bson.M{"$ne": "completed"}}
+	} else if statusFilter == "all" {
+		// Show all tasks
+		filter = bson.M{}
+	} else {
+		// Filter by specific status
+		filter = bson.M{"status": statusFilter}
+	}
+
+	// Query tasks with MongoDB filter
+	tasks, err := t.storage.ListHumanTasks(filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list human tasks: %w", err)
+	}
+
+	// Extract pagination parameters for response formatting
 	offset := 0
 	if o, ok := input["offset"].(float64); ok && o >= 0 {
 		offset = int(o)
@@ -1414,11 +1461,8 @@ func (t *ListHumanTasksTool) Execute(ctx context.Context, input map[string]inter
 		}
 	}
 
-	// Get all tasks
-	allTasks := t.storage.ListAllHumanTasks()
-
-	// Apply pagination
-	totalCount := len(allTasks)
+	// Apply pagination in-memory (TODO: move to MongoDB query)
+	totalCount := len(tasks)
 	endIndex := offset + limit
 	if offset > totalCount {
 		offset = totalCount
@@ -1427,19 +1471,39 @@ func (t *ListHumanTasksTool) Execute(ctx context.Context, input map[string]inter
 		endIndex = totalCount
 	}
 
-	paginatedTasks := allTasks[offset:endIndex]
+	paginatedTasks := tasks[offset:endIndex]
 
-	// Apply truncation to prompt field (2KB max)
-	const maxFieldBytes = 2048
+	// Create summary objects with only essential fields and enforce 20k token limit
+	const maxTokens = 20000
+	var summaries []map[string]interface{}
+	totalTokens := 0
+	originalCount := len(paginatedTasks)
+
 	for _, task := range paginatedTasks {
-		if task.Prompt != "" {
-			task.Prompt, _ = truncateField(task.Prompt, maxFieldBytes)
+		summary := map[string]interface{}{
+			"taskId":    task.ID,
+			"summary":   task.Prompt, // Using prompt as summary
+			"status":    task.Status,
+			"createdAt": task.CreatedAt,
 		}
+
+		// Estimate tokens for this summary
+		summaryJSON, _ := json.Marshal(summary)
+		summaryTokens := estimateTokens(string(summaryJSON))
+
+		// Check if adding this summary would exceed token limit
+		if totalTokens+summaryTokens > maxTokens {
+			log.Printf("WARNING: List human tasks truncated from %d to %d items to stay under 20k token limit", originalCount, len(summaries))
+			break
+		}
+
+		summaries = append(summaries, summary)
+		totalTokens += summaryTokens
 	}
 
 	return map[string]interface{}{
-		"tasks":      paginatedTasks,
-		"count":      len(paginatedTasks),
+		"tasks":      summaries,
+		"count":      len(summaries),
 		"totalCount": totalCount,
 		"offset":     offset,
 		"limit":      limit,
