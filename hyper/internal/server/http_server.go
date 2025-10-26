@@ -78,7 +78,10 @@ func promptKillProcess(port string, pid int, logger *zap.Logger) (bool, error) {
 		return false, nil
 	}
 
-	fmt.Printf("\n⚠️  Port %s is already in use by process %d\n", port, pid)
+	logger.Warn("Port conflict detected",
+		zap.String("port", port),
+		zap.Int("pid", pid))
+	//nolint:forbidigo // User interaction prompt - must use fmt.Print for terminal input
 	fmt.Print("Kill the process and retry? [y/N]: ")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -125,6 +128,7 @@ func StartHTTPServer(
 	hasEmbeddedUI bool,
 	logger *zap.Logger,
 	mongoDatabase *mongo.Database,
+	toolsStorage *storage.ToolsStorage,
 ) error {
 	// Create REST API handler
 	restHandler := api.NewRESTAPIHandler(
@@ -170,15 +174,8 @@ func StartHTTPServer(
 	logger.Info("AI chat service initialized successfully",
 		zap.String("provider", aiConfig.Provider))
 
-	// Initialize tools storage for HTTP tool management and MCP discovery
-	toolsStorage, err := storage.NewToolsStorage(mongoDatabase, qdrantClient)
-	if err != nil {
-		logger.Error("Failed to create tools storage", zap.Error(err))
-		return err
-	}
-	logger.Info("Tools storage initialized for HTTP tool management")
-
 	// Create tools discovery handler for MCP management tools
+	// Use the toolsStorage passed from main.go (initialized once)
 	// Pass mcpServer instance for direct tool execution (no HTTP bridge needed)
 	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer)
 	logger.Info("Tools discovery handler created with direct MCP server access")
@@ -415,6 +412,19 @@ func StartHTTPServer(
 		zap.String("listPath", "/api/v1/tools/http"),
 		zap.String("deletePath", "/api/v1/tools/http/:id"))
 
+	// Register MCP server registry routes
+	mcpServersHandler := handlers.NewMCPServersHandler(toolsStorage, toolsDiscoveryHandler, logger)
+	mcpServersGroup := r.Group("/api/v1/mcp/servers")
+	{
+		mcpServersHandler.RegisterMCPServersRoutes(mcpServersGroup)
+	}
+
+	logger.Info("MCP Servers API routes registered",
+		zap.String("addPath", "/api/v1/mcp/servers"),
+		zap.String("listPath", "/api/v1/mcp/servers"),
+		zap.String("deletePath", "/api/v1/mcp/servers/:serverName"),
+		zap.String("rediscoverPath", "/api/v1/mcp/servers/:serverName/rediscover"))
+
 	// Create MCP HTTP handler using official go-sdk StreamableHTTPHandler
 	// This implements the full MCP Streamable HTTP transport specification
 	mcpHandler := mcp.NewStreamableHTTPHandler(
@@ -581,7 +591,6 @@ func StartHTTPServer(
 				return fmt.Errorf("failed to kill process %d: %w", pid, killErr)
 			}
 
-			fmt.Printf("✓ Killed process %d, retrying... (attempt %d/%d)\n", pid, attempt, maxRetries)
 			logger.Info("Process killed, retrying server start",
 				zap.Int("pid", pid),
 				zap.Int("attempt", attempt),

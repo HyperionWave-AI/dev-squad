@@ -120,7 +120,7 @@ func (h *CodeToolsHandler) registerScan(server *mcp.Server) error {
 func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "code_index_search",
-		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Content can be retrieved as chunks (default) or full files.",
+		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Content can be retrieved as chunks (default) or full files. IMPORTANT: When retrieve='full', returns only the top 1 result to conserve context. Use chunk modes (chunk-s/m/l/xl) for multi-result exploration.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -138,8 +138,12 @@ func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 				},
 				"retrieve": {
 					Type:        "string",
-					Description: "Content retrieval mode: 'chunk' (default - return matching chunk only) or 'full' (return entire file content)",
-					Enum:        []interface{}{"chunk", "full"},
+					Description: "Content retrieval mode: 'chunk' (default - 200 lines), 'chunk-s' (50 lines), 'chunk-m' (100 lines), 'chunk-l' (200 lines), 'chunk-xl' (400 lines), or 'full' (entire file)",
+					Enum:        []interface{}{"chunk", "chunk-s", "chunk-m", "chunk-l", "chunk-xl", "full"},
+				},
+				"minScore": {
+					Type:        "number",
+					Description: "Optional: minimum similarity score threshold (0.0-1.0). Only results with score >= minScore will be returned. Default: 0.0 (no filtering). Higher values = stricter filtering (e.g., 0.5 = moderate, 0.9 = strict).",
 				},
 			},
 			Required: []string{"query"},
@@ -324,6 +328,29 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 	}, nil
 }
 
+// parseRetrieveMode parses the retrieve mode parameter and returns the retrieve type, chunk size in lines, and t-shirt size
+// Maps: chunk-s→50/s, chunk-m→100/m, chunk-l→200/l, chunk-xl→400/xl, chunk→200/l (backward compat), full→0/empty
+func parseRetrieveMode(mode string) (retrieveType string, chunkLines int, tshirtSize string) {
+	switch mode {
+	case "chunk-s":
+		return "chunk", 50, "s"
+	case "chunk-m":
+		return "chunk", 100, "m"
+	case "chunk-l":
+		return "chunk", 200, "l"
+	case "chunk-xl":
+		return "chunk", 400, "xl"
+	case "chunk":
+		// Backward compatibility: chunk defaults to chunk-l (200 lines)
+		return "chunk", 200, "l"
+	case "full":
+		return "full", 0, ""
+	default:
+		// Default to chunk-l for unknown values
+		return "chunk", 200, "l"
+	}
+}
+
 // handleSearch handles the code_index_search tool
 func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	query, ok := args["query"].(string)
@@ -339,12 +366,28 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		limit = 50
 	}
 
-	// Get retrieve mode (default: "chunk")
-	retrieveMode := "chunk"
-	if mode, ok := args["retrieve"].(string); ok {
-		if mode == "full" || mode == "chunk" {
-			retrieveMode = mode
+	// Extract and validate minScore parameter (default: 0.0 = no filtering)
+	minScore := 0.0
+	if ms, ok := args["minScore"].(float64); ok {
+		minScore = ms
+		// Validate range: must be between 0.0 and 1.0
+		if minScore < 0.0 || minScore > 1.0 {
+			return createCodeIndexErrorResult(fmt.Sprintf("minScore must be between 0.0 and 1.0, got: %.2f", minScore)), nil
 		}
+	}
+
+	// Parse retrieve mode (default: "chunk")
+	retrieveModeParam := "chunk"
+	if mode, ok := args["retrieve"].(string); ok {
+		retrieveModeParam = mode
+	}
+	retrieveType, chunkLines, tshirtSize := parseRetrieveMode(retrieveModeParam)
+
+	// MCP Best Practice: Limit full file retrieval to top 1 result to conserve context
+	// Full mode returns entire file content which can be very large
+	// For exploring multiple results, users should use chunk modes (chunk-s/m/l/xl)
+	if retrieveType == "full" {
+		limit = 1
 	}
 
 	// Get current project root
@@ -408,13 +451,68 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 			result.EndLine = int(endLine)
 		}
 
-		// Handle content based on retrieve mode
-		if retrieveMode == "chunk" {
-			// Default: return just the matching chunk content from Qdrant
-			if content, ok := hit.Payload["content"].(string); ok {
-				result.Content = content
+		// Handle content based on retrieve type
+		if retrieveType == "chunk" {
+			// Sized chunk retrieval: fetch N lines around the match
+			if result.FileID != "" && chunkLines > 0 {
+				// Calculate target line range centered around the match
+				matchMidpoint := (result.StartLine + result.EndLine) / 2
+				targetStart := matchMidpoint - (chunkLines / 2)
+				targetEnd := targetStart + chunkLines - 1
+				if targetStart < 1 {
+					targetStart = 1
+					targetEnd = targetStart + chunkLines - 1
+				}
+
+				// Fetch overlapping chunks from storage
+				overlappingChunks, err := h.codeIndexStorage.GetChunksByFileIDAndLineRange(result.FileID, targetStart, targetEnd)
+				if err != nil {
+					h.logger.Warn("Failed to fetch sized chunk",
+						zap.String("fileID", result.FileID),
+						zap.Int("targetStart", targetStart),
+						zap.Int("targetEnd", targetEnd),
+						zap.Error(err))
+					// Fallback to Qdrant chunk content
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				} else if len(overlappingChunks) > 0 {
+					// Concatenate overlapping chunks and extract exact line range
+					var fullContent strings.Builder
+					minLine := overlappingChunks[0].StartLine
+					for _, chunk := range overlappingChunks {
+						fullContent.WriteString(chunk.Content)
+					}
+
+					// Extract exactly chunkLines from the concatenated content
+					allLines := strings.Split(fullContent.String(), "\n")
+					startIdx := targetStart - minLine
+					endIdx := targetEnd - minLine + 1
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if endIdx > len(allLines) {
+						endIdx = len(allLines)
+					}
+
+					extractedLines := allLines[startIdx:endIdx]
+					result.Content = strings.Join(extractedLines, "\n")
+					result.StartLine = targetStart
+					result.EndLine = targetStart + len(extractedLines) - 1
+					result.ChunkSize = tshirtSize
+				} else {
+					// Fallback to Qdrant chunk if no chunks found
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				}
+			} else {
+				// No sizing requested or invalid chunkLines, use Qdrant chunk
+				if content, ok := hit.Payload["content"].(string); ok {
+					result.Content = content
+				}
 			}
-		} else if retrieveMode == "full" {
+		} else if retrieveType == "full" {
 			// Fetch entire file content from MongoDB
 			if result.FileID != "" {
 				allChunks, err := h.codeIndexStorage.GetChunksByFileID(result.FileID)
@@ -441,18 +539,53 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		results = append(results, result)
 	}
 
+	// Filter results by minScore threshold (if specified)
+	originalCount := len(results)
+	if minScore > 0.0 {
+		filteredResults := make([]storage.SearchResult, 0, len(results))
+		minScoreFloat32 := float32(minScore)
+		for _, result := range results {
+			if result.Score >= minScoreFloat32 {
+				filteredResults = append(filteredResults, result)
+			}
+		}
+		results = filteredResults
+	}
+
 	h.logger.Info("Code search completed",
 		zap.String("query", query),
-		zap.String("retrieveMode", retrieveMode),
-		zap.Int("results", len(results)))
+		zap.String("retrieveMode", retrieveModeParam),
+		zap.String("retrieveType", retrieveType),
+		zap.Int("chunkLines", chunkLines),
+		zap.Float64("minScore", minScore),
+		zap.Int("originalResults", originalCount),
+		zap.Int("filteredResults", len(results)))
 
-	jsonData, _ := json.Marshal(map[string]interface{}{
+	// Build response with filtering metadata
+	response := map[string]interface{}{
 		"success":      true,
 		"query":        query,
-		"retrieveMode": retrieveMode,
+		"retrieveMode": retrieveModeParam,
 		"results":      results,
 		"count":        len(results),
-	})
+	}
+
+	// Add guidance message when full mode is used
+	if retrieveType == "full" {
+		response["message"] = "Returning top 1 result with full file content to conserve context. For multi-result exploration, use chunk-based retrieval modes: chunk-s (50 lines), chunk-m (100 lines), chunk-l (200 lines), or chunk-xl (400 lines)."
+	}
+
+	// Add score filtering metadata if filtering was applied
+	if minScore > 0.0 {
+		response["minScore"] = minScore
+		response["resultsFiltered"] = true
+		response["originalCount"] = originalCount
+		response["filteredCount"] = len(results)
+	} else {
+		response["resultsFiltered"] = false
+	}
+
+	jsonData, _ := json.Marshal(response)
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{

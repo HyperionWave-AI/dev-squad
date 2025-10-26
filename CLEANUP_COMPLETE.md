@@ -1,5 +1,28 @@
 # Go Projects Unification & Makefile Cleanup - COMPLETE ✅
 
+## Project Context: Hyperion (hyper)
+
+**Hyperion** is an AI-powered code analysis and coordination platform that integrates with Claude Code via the Model Context Protocol (MCP). The project provides intelligent code indexing, semantic search, and AI-assisted development workflows.
+
+### What Hyperion Does
+- **Code Indexing**: Automatically indexes code files with semantic understanding
+- **Vector Search**: Finds similar code patterns using embeddings
+- **Claude Integration**: Works as a plugin for Claude Code via MCP
+- **REST API**: Provides HTTP endpoints for programmatic access
+- **Web UI**: React-based interface for standalone use
+- **Real-time Monitoring**: Watches files and auto-indexes changes
+
+### Architecture: Single Unified Binary
+Instead of multiple separate binaries (coordinator, mcp-server, bridge, indexer), Hyperion uses a **single unified binary** (`hyper`) with three runtime modes:
+
+```
+./bin/hyper --mode=http   → REST API + Web UI (port 7095)
+./bin/hyper --mode=mcp    → MCP stdio server (for Claude Code)
+./bin/hyper --mode=both   → Both modes (default)
+```
+
+---
+
 ## Summary
 
 Successfully cleaned up and unified the build system for the hyper binary. All redundant code removed, Makefiles simplified, and build process streamlined.
@@ -79,6 +102,65 @@ coordinator/
     ├── dist/                # Built UI (auto-generated)
     └── package.json
 ```
+
+## Technology Stack
+
+### Backend (Go 1.25)
+- **Framework**: Gin Web Framework (HTTP server)
+- **Protocol**: MCP Go SDK (Claude Code integration)
+- **Database**: MongoDB (metadata, tasks, history)
+- **Vector DB**: Qdrant (semantic search)
+- **File Watching**: fsnotify (real-time monitoring)
+- **Embeddings**: Multiple providers (Ollama, OpenAI, Voyage, TEI)
+- **Logging**: Uber Zap (structured logging)
+- **LLM Chain**: LangChain Go (AI orchestration)
+- **Auth**: golang-jwt (JWT tokens)
+- **WebSocket**: Gorilla WebSocket (real-time updates)
+
+### Frontend (React)
+- **Framework**: React 18+
+- **Build Tool**: Vite
+- **API Client**: Fetch/Axios
+- **Embedded**: In Go binary via `embed` package
+
+### Embedding Providers
+- **Ollama**: Local, GPU-accelerated (default)
+- **OpenAI**: Cloud-based, high quality
+- **Voyage AI**: Specialized embeddings
+- **TEI**: Self-hosted embeddings
+
+## Core Features
+
+### Code Indexing & Analysis
+- Real-time file watching with fsnotify
+- Automatic code parsing and tokenization
+- Semantic indexing with embeddings
+- Incremental updates for performance
+
+### Semantic Search
+- Vector-based similarity search via Qdrant
+- Code snippet retrieval by semantic meaning
+- Context-aware search using embeddings
+- Filtering and ranking capabilities
+
+### Claude Code Integration (MCP)
+- stdio protocol for direct Claude integration
+- Tool definitions in JSON Schema format
+- Real-time code analysis from Claude
+- Bi-directional communication
+
+### REST API + Web UI
+- RESTful endpoints for all operations
+- React-based web interface on port 7095
+- Real-time updates via WebSocket
+- JWT authentication
+- CORS support
+
+### File Watching & Auto-Indexing
+- Recursive directory monitoring
+- Automatic re-indexing on file changes
+- Batch processing for efficiency
+- Configurable watch patterns
 
 ## Working Commands
 
@@ -189,5 +271,15 @@ make native  # Single command builds everything
 ```bash
 make dev-hot  # Hot reload for Go + UI
 ```
+
+**Key Features:**
+- Single unified binary with embedded UI
+- Three runtime modes (HTTP, MCP, Both)
+- AI-powered code analysis and indexing
+- Claude Code integration via MCP
+- REST API + Web UI
+- Real-time file watching
+- Vector-based semantic search
+- Multiple embedding providers
 
 That's it! Single binary, simple build, clean structure. 🚀
