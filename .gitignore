@@ -32,3 +32,4 @@ third_party
 
 # Local Claude settings
 .claude/settings.local.json
+.env.hyper.stable
