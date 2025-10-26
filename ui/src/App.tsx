@@ -20,19 +20,20 @@ import {
   Divider,
   Chip,
 } from '@mui/material';
-import { 
-  Dashboard, 
-  Psychology, 
-  Refresh, 
-  Code, 
-  Chat, 
-  Build, 
-  Settings, 
+import {
+  Dashboard,
+  Psychology,
+  Refresh,
+  Code,
+  Chat,
+  Build,
+  Settings,
   SmartToy,
   Menu as MenuIcon,
   Close as CloseIcon,
   LightMode,
-  DarkMode
+  DarkMode,
+  Hub
 } from '@mui/icons-material';
 import { getTheme, getPreferredTheme, setThemePreference } from './theme';
 import { KanbanBoard } from './components/KanbanBoard';
@@ -42,6 +43,7 @@ import { CodeChatPage } from './pages/CodeChatPage';
 import { HTTPToolsPage } from './pages/HTTPToolsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SubagentsPage } from './pages/SubagentsPage';
+import { MCPServersPage } from './pages/MCPServersPage';
 
 function App() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -87,6 +89,7 @@ function App() {
     { path: '/tasks', label: 'Tasks', icon: <Dashboard />, priority: 'high' },
     { path: '/knowledge', label: 'Knowledge', icon: <Psychology />, priority: 'medium' },
     { path: '/code', label: 'Code', icon: <Code />, priority: 'medium' },
+    { path: '/mcp-servers', label: 'MCP Servers', icon: <Hub />, priority: 'medium' },
     { path: '/tools', label: 'Tools', icon: <Build />, priority: 'low' },
     { path: '/subagents', label: 'Subagents', icon: <SmartToy />, priority: 'low' },
     { path: '/settings', label: 'Settings', icon: <Settings />, priority: 'low' },
@@ -538,6 +541,7 @@ function App() {
             <Route path="/knowledge" element={<KnowledgeBrowser key={refreshKey} />} />
             <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
             <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
+            <Route path="/mcp-servers" element={<MCPServersPage key={refreshKey} />} />
             <Route path="/subagents" element={<SubagentsPage key={refreshKey} />} />
             <Route path="/settings" element={<SettingsPage key={refreshKey} />} />
           </Routes>

@@ -26,6 +26,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // ensureCodeIndexCollectionWithDimensions ensures the code index collection exists with the correct dimensions
@@ -58,29 +59,40 @@ func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient,
 	if autoRecreate == "true" {
 		logger.Info("CODE_INDEX_AUTO_RECREATE=true, automatically recreating collection")
 	} else {
-		// Prompt user for confirmation
-		fmt.Printf("\n")
-		fmt.Printf("⚠️  Vector Dimension Mismatch Detected\n")
-		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		fmt.Printf("Collection:      %s\n", dimErr.Collection)
-		fmt.Printf("Current dims:    %d (in Qdrant)\n", dimErr.ExpectedDim)
-		fmt.Printf("Expected dims:   %d (from %s)\n", expectedDimensions, os.Getenv("OLLAMA_MODEL"))
-		fmt.Printf("\n")
-		fmt.Printf("This usually happens when you switch embedding models.\n")
-		fmt.Printf("\n")
-		fmt.Printf("⚠️  WARNING: Recreating will DELETE ALL indexed code!\n")
-		fmt.Printf("You will need to re-scan your folders after recreation.\n")
-		fmt.Printf("\n")
-		fmt.Printf("Do you want to recreate the collection? (yes/no): ")
+		// Prompt user for confirmation - log the dimension mismatch for audit trail
+		logger.Warn("User interaction required for dimension mismatch",
+			zap.String("collection", dimErr.Collection),
+			zap.Int("currentDimensions", dimErr.ExpectedDim),
+			zap.Int("expectedDimensions", expectedDimensions),
+			zap.String("embeddingModel", os.Getenv("OLLAMA_MODEL")))
+
+		// Display user prompt
+		logger.Info("⚠️  Vector Dimension Mismatch Detected")
+		logger.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		logger.Info("Dimension details",
+			zap.String("collection", dimErr.Collection),
+			zap.Int("currentDims", dimErr.ExpectedDim),
+			zap.Int("expectedDims", expectedDimensions),
+			zap.String("model", os.Getenv("OLLAMA_MODEL")))
+		logger.Info("This usually happens when you switch embedding models")
+		logger.Warn("⚠️  WARNING: Recreating will DELETE ALL indexed code!")
+		logger.Info("You will need to re-scan your folders after recreation")
+		logger.Info("Do you want to recreate the collection? (yes/no): ")
 
 		// Read user input
 		var response string
 		fmt.Scanln(&response)
 
 		response = strings.ToLower(strings.TrimSpace(response))
+		logger.Info("User decision received", zap.String("response", response))
+
 		if response != "yes" && response != "y" {
+			logger.Warn("User declined collection recreation",
+				zap.String("collection", dimErr.Collection))
 			return fmt.Errorf("user declined to recreate collection - cannot proceed with dimension mismatch")
 		}
+		logger.Info("User approved collection recreation",
+			zap.String("collection", dimErr.Collection))
 	}
 
 	// User agreed - recreate the collection
@@ -89,10 +101,9 @@ func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient,
 		return fmt.Errorf("failed to recreate collection: %w", err)
 	}
 
-	fmt.Printf("\n")
-	fmt.Printf("✅ Collection recreated successfully with %d dimensions\n", expectedDimensions)
-	fmt.Printf("🔄 You can now re-scan your code folders\n")
-	fmt.Printf("\n")
+	logger.Info("✅ Collection recreated successfully",
+		zap.Int("dimensions", expectedDimensions))
+	logger.Info("🔄 You can now re-scan your code folders")
 
 	logger.Info("Code index collection recreated",
 		zap.String("collection", storage.CodeIndexCollection),
@@ -101,13 +112,68 @@ func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient,
 	return nil
 }
 
+// initLogger creates a logger that outputs to both console and file
+func initLogger() (*zap.Logger, error) {
+	// Ensure logs directory exists
+	logsDir := "./logs"
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create logs directory: %w", err)
+	}
+
+	// Generate log filename with timestamp
+	logFilePath := filepath.Join(logsDir, fmt.Sprintf("coordinator-%s.log", time.Now().Format("2006-01-02")))
+
+	// Open log file
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+
+	// Configure encoder for console (colorized, human-readable)
+	consoleEncoderConfig := zap.NewDevelopmentEncoderConfig()
+	consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	consoleEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	// Configure encoder for file (JSON, machine-readable)
+	fileEncoderConfig := zap.NewProductionEncoderConfig()
+	fileEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	// Create cores
+	consoleCore := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(consoleEncoderConfig),
+		zapcore.AddSync(os.Stdout),
+		zapcore.DebugLevel,
+	)
+
+	fileCore := zapcore.NewCore(
+		zapcore.NewJSONEncoder(fileEncoderConfig),
+		zapcore.AddSync(logFile),
+		zapcore.InfoLevel, // Log Info and above to file
+	)
+
+	// Combine cores
+	core := zapcore.NewTee(consoleCore, fileCore)
+
+	// Create logger with caller information
+	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+
+	return logger, nil
+}
+
 func main() {
-	// Initialize project root detection
-	if err := tools.InitProjectRoot(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to detect project root: %v\n", err)
+	// Initialize logger early for startup messages
+	logger, err := initLogger()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create logger: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Project root: %s\n", tools.GetProjectRoot())
+	defer logger.Sync()
+
+	// Initialize project root detection
+	if err := tools.InitProjectRoot(); err != nil {
+		logger.Fatal("Failed to detect project root", zap.Error(err))
+	}
+	logger.Info("Project root detected", zap.String("path", tools.GetProjectRoot()))
 
 	// Parse command-line flags
 	mode := flag.String("mode", "both", "Server mode: http, mcp, or both")
@@ -120,11 +186,11 @@ func main() {
 	// If custom config path provided, use it exclusively
 	if *configPath != "" {
 		if err := godotenv.Overload(*configPath); err != nil {
-			fmt.Fprintf(os.Stderr, "✗ Failed to load config from custom path: %s\n", *configPath)
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			logger.Fatal("Failed to load config from custom path",
+				zap.String("path", *configPath),
+				zap.Error(err))
 		}
-		fmt.Printf("✓ Loaded configuration from custom path: %s\n", *configPath)
+		logger.Info("Configuration loaded from custom path", zap.String("path", *configPath))
 	} else {
 		// Default behavior: try executable dir, then current dir
 		executable, err := os.Executable()
@@ -134,28 +200,24 @@ func main() {
 
 			// Try to load .env.hyper from executable directory
 			if err := godotenv.Overload(envFile); err == nil {
-				fmt.Printf("✓ Loaded configuration from: %s\n", envFile)
+				logger.Info("Configuration loaded", zap.String("path", envFile))
 			} else {
-				fmt.Printf("Debug: Failed to load %s: %v\n", envFile, err)
+				logger.Debug("Failed to load config from executable directory",
+					zap.String("path", envFile),
+					zap.Error(err))
 				// Also try current working directory
 				if err := godotenv.Overload(".env.hyper"); err == nil {
-					fmt.Println("✓ Loaded configuration from: ./.env.hyper")
+					logger.Info("Configuration loaded", zap.String("path", "./.env.hyper"))
 				} else {
-					fmt.Printf("Debug: Failed to load ./.env.hyper: %v\n", err)
-					// Debug: Show why loading failed
-					fmt.Printf("Warning: No .env.hyper found (checked: %s and ./.env.hyper)\n", envFile)
+					logger.Debug("Failed to load config from current directory",
+						zap.String("path", "./.env.hyper"),
+						zap.Error(err))
+					logger.Warn("No .env.hyper found",
+						zap.Strings("checkedPaths", []string{envFile, "./.env.hyper"}))
 				}
 			}
 		}
 	}
-
-	// Initialize logger
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create logger: %v\n", err)
-		os.Exit(1)
-	}
-	defer logger.Sync()
 
 	logger.Info("Starting Unified Hyperion Coordinator",
 		zap.String("mode", *mode))
@@ -246,34 +308,20 @@ func main() {
 				zap.String("model", ollamaModel),
 				zap.String("hint", "Install: brew install ollama && ollama pull <model> && brew services start ollama"))
 		}
-		logger.Info("Using Ollama embeddings (GPU-accelerated via llama.cpp)",
-			zap.String("url", ollamaURL),
-			zap.String("model", ollamaModel),
-			zap.Int("dimensions", embeddingClient.GetDimensions()),
-			zap.String("backend", "Metal/CUDA/Vulkan (auto-detected by Ollama)"))
 
-	case "local":
-		// Use local TEI service (Hugging Face Text Embeddings Inference)
-		teiURL := os.Getenv("TEI_URL")
-		if teiURL == "" {
-			teiURL = "http://embedding-service:8080" // Default TEI URL
-		}
-		embeddingClient = embeddings.NewTEIClient(teiURL)
-		logger.Info("Using local TEI embedding service",
-			zap.String("url", teiURL),
-			zap.String("model", "nomic-ai/nomic-embed-text-v1.5"),
-			zap.Int("dimensions", 768))
+		logger.Info("Initialized Ollama embedding client",
+			zap.String("url", ollamaURL),
+			zap.String("model", ollamaModel))
 
 	case "openai":
-		// Use OpenAI embeddings
-		openAIKey := os.Getenv("OPENAI_API_KEY")
-		if openAIKey == "" {
-			logger.Fatal("OPENAI_API_KEY is required when EMBEDDING=openai")
+		// Use OpenAI API
+		openaiKey := os.Getenv("OPENAI_API_KEY")
+		if openaiKey == "" {
+			logger.Fatal("OPENAI_API_KEY environment variable is required when EMBEDDING=openai")
 		}
-		embeddingClient = embeddings.NewOpenAIClient(openAIKey)
-		logger.Info("Using OpenAI embedding service",
-			zap.String("model", "text-embedding-3-small"),
-			zap.Int("dimensions", 1536))
+
+		embeddingClient = embeddings.NewOpenAIClient(openaiKey)
+		logger.Info("Initialized OpenAI embedding client")
 
 	case "voyage":
 		// Use Voyage AI embeddings (Anthropic's recommended provider)
@@ -298,54 +346,39 @@ func main() {
 		}
 
 	default:
-		logger.Fatal("Invalid EMBEDDING mode. Use 'ollama' (default), 'llama', 'local', 'openai', or 'voyage'",
-			zap.String("mode", embeddingMode))
+		logger.Fatal("Unknown embedding mode",
+			zap.String("mode", embeddingMode),
+			zap.String("hint", "Set EMBEDDING=ollama, EMBEDDING=openai, or EMBEDDING=voyage"))
 	}
 
-	// Now create Qdrant client with the correct embedding client
-	qdrantClient := storage.NewQdrantClientWithEmbeddingClient(qdrantURL, qdrantKnowledgeCollection, embeddingClient)
-	logger.Info("Qdrant client initialized with embedding client",
-		zap.String("url", qdrantURL),
-		zap.String("knowledgeCollection", qdrantKnowledgeCollection),
-		zap.Int("vectorDimensions", embeddingClient.GetDimensions()))
+	// Initialize Qdrant client
+	logger.Info("Connecting to Qdrant", zap.String("url", qdrantURL))
+	qdrantClient := storage.NewQdrantClient(qdrantURL, qdrantKnowledgeCollection)
 
-	// Initialize storage layers (NOW that qdrantClient is created with correct embeddings)
-	// First initialize knowledge storage
-	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db, qdrantClient)
-	if err != nil {
-		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
-	}
-	logger.Info("Knowledge storage initialized with MongoDB + Qdrant")
+	logger.Info("Successfully connected to Qdrant")
 
-	// Then initialize task storage with knowledge storage for duplicate detection
-	taskStorage, err := storage.NewMongoTaskStorage(db, knowledgeStorage)
-	if err != nil {
-		logger.Fatal("Failed to initialize task storage", zap.Error(err))
-	}
-	logger.Info("Task storage initialized with MongoDB and duplicate detection")
-
-	// Initialize code indexing components
+	// Initialize code index storage
 	codeIndexStorage, err := storage.NewCodeIndexStorage(db)
 	if err != nil {
 		logger.Fatal("Failed to initialize code index storage", zap.Error(err))
 	}
-	logger.Info("Code index storage initialized")
 
-	// Initialize tools storage for tools discovery (with correct embedding client!)
-	toolsStorage, err := storage.NewToolsStorage(db, qdrantClient)
-	if err != nil {
-		logger.Fatal("Failed to initialize tools storage", zap.Error(err))
-	}
-	logger.Info("Tools storage initialized",
-		zap.String("embeddingMode", embeddingMode),
-		zap.Int("vectorDimensions", embeddingClient.GetDimensions()))
+	// Ensure code index collection exists with correct dimensions
+	embeddingDimensions := embeddingClient.GetDimensions()
+	logger.Info("Embedding dimensions", zap.Int("dimensions", embeddingDimensions))
 
-	logger.Info("Code index collection configured", zap.String("collection", storage.CodeIndexCollection))
-
-	// Ensure Qdrant code index collection exists with correct dimensions
-	expectedDimensions := embeddingClient.GetDimensions()
-	if err := ensureCodeIndexCollectionWithDimensions(qdrantClient, expectedDimensions, logger); err != nil {
+	if err := ensureCodeIndexCollectionWithDimensions(qdrantClient, embeddingDimensions, logger); err != nil {
 		logger.Fatal("Failed to ensure code index collection", zap.Error(err))
+	}
+
+	// Initialize path mapper for file watcher
+	pathMappingsEnv := os.Getenv("PATH_MAPPINGS")
+	pathMapper := watcher.NewPathMapper(pathMappingsEnv, logger)
+
+	// Initialize file watcher
+	fileWatcher, err := watcher.NewFileWatcher(codeIndexStorage, qdrantClient, embeddingClient, pathMapper, logger)
+	if err != nil {
+		logger.Fatal("Failed to initialize file watcher", zap.Error(err))
 	}
 
 	// Auto-index project root at startup
@@ -412,7 +445,7 @@ func main() {
 			}
 
 			// Recreate the specific collection for this path (768 = nomic-embed-text dimensions)
-			if err := qdrantClient.EnsureCollection(collectionName, 768); err != nil {
+			if err := qdrantClient.EnsureCollection(collectionName, embeddingDimensions); err != nil {
 				logger.Error("Failed to recreate collection", zap.Error(err))
 			} else {
 				logger.Info("Recreated collection successfully",
@@ -430,7 +463,7 @@ func main() {
 	}
 
 	// Start indexing in background if needed
-	if needsIndexing {
+	if needsIndexing && collectionName != "" {
 		logger.Info("Starting background file indexing...",
 			zap.String("path", projectRoot),
 			zap.String("collection", collectionName))
@@ -455,288 +488,177 @@ func main() {
 					zap.Int("filesSkipped", result.FilesSkipped),
 					zap.Int("totalFiles", result.TotalFiles),
 					zap.Duration("duration", duration))
+
+				// Verify collection has vectors
+				pointCount, err := qdrantClient.GetCollectionPointCount(collectionName)
+				if err != nil {
+					logger.Error("Failed to verify collection point count", zap.Error(err))
+				} else {
+					logger.Info("Collection verification complete",
+						zap.String("collection", collectionName),
+						zap.Int("pointCount", pointCount))
+				}
 			}
 		}()
+	} else if !needsIndexing {
+		logger.Info("Skipping background indexing - collection already populated")
+	} else {
+		logger.Warn("Skipping background indexing - collection name is empty")
 	}
 
-	// Initialize path mapper for Docker volume mapping
-	pathMappingsEnv := os.Getenv("CODE_INDEX_PATH_MAPPINGS")
-	pathMapper := watcher.NewPathMapper(pathMappingsEnv, logger)
-
-	// Initialize file watcher
-	fileWatcher, err := watcher.NewFileWatcher(codeIndexStorage, qdrantClient, embeddingClient, pathMapper, logger)
+	// Initialize knowledge storage (needed by task storage and coordinator tools)
+	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db, qdrantClient, logger)
 	if err != nil {
-		logger.Fatal("Failed to create file watcher", zap.Error(err))
+		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
 	}
 
-	// Load existing folders into file watcher
-	folders, err := codeIndexStorage.ListFolders()
+	// Initialize task storage (needed by coordinator tools)
+	taskStorage, err := storage.NewMongoTaskStorage(db, knowledgeStorage, logger)
 	if err != nil {
-		logger.Warn("Failed to load existing folders for file watcher", zap.Error(err))
-	} else {
-		for _, folder := range folders {
-			if folder.Status == "active" {
-				// Convert relative paths to absolute paths before passing to file watcher
-				absPath, err := filepath.Abs(folder.Path)
-				if err != nil {
-					logger.Warn("Failed to convert folder path to absolute path",
-						zap.String("path", folder.Path),
-						zap.Error(err))
-					continue
-				}
+		logger.Fatal("Failed to initialize task storage", zap.Error(err))
+	}
 
-				// Create new folder struct with absolute path
-				folderWithAbsPath := &storage.IndexedFolder{
-					ID:          folder.ID,
-					Path:        absPath,
-					Description: folder.Description,
-					Status:      folder.Status,
-					AddedAt:     folder.AddedAt,
-					LastScanned: folder.LastScanned,
-					FileCount:   folder.FileCount,
-					Error:       folder.Error,
-				}
+	// Initialize tools storage for MCP hub tools (discover_tools, execute_tool, etc.)
+	toolsStorage, err := storage.NewToolsStorage(db, qdrantClient, logger)
+	if err != nil {
+		logger.Fatal("Failed to initialize tools storage", zap.Error(err))
+	}
 
-				if err := fileWatcher.AddFolder(folderWithAbsPath); err != nil {
-					logger.Warn("Failed to add folder to file watcher",
-						zap.String("path", absPath),
-						zap.String("originalPath", folder.Path),
-						zap.Error(err))
-				} else {
-					logger.Info("Added folder to watch list",
-						zap.String("path", absPath),
-						zap.String("originalPath", folder.Path))
-				}
-			}
+	// Initialize MCP handlers
+	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, logger)
+
+	// Create MCP server with Implementation and ServerOptions
+	impl := &mcp.Implementation{
+		Name:    "hyper-coordinator",
+		Version: "1.0.0",
+	}
+	mcpServer := mcp.NewServer(impl, &mcp.ServerOptions{})
+
+	// Register code indexing tools
+	if err := codeToolsHandler.RegisterCodeIndexTools(mcpServer); err != nil {
+		logger.Fatal("Failed to register code indexing tools", zap.Error(err))
+	}
+
+	// Check if MCP hub tools should be registered (default: true, disable with MCP_HUB=false)
+	mcpHubEnabled := os.Getenv("MCP_HUB") != "false"
+	logger.Info("MCP hub tools registration",
+		zap.Bool("enabled", mcpHubEnabled),
+		zap.String("MCP_HUB", os.Getenv("MCP_HUB")))
+
+	// Conditionally register MCP hub tools for external MCP client discovery
+	if mcpHubEnabled {
+		toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer)
+		if err := toolsDiscoveryHandler.RegisterToolsDiscoveryTools(mcpServer); err != nil {
+			logger.Fatal("Failed to register MCP hub tools", zap.Error(err))
 		}
-	}
-
-	// Auto-register folders from CODE_INDEX_FOLDERS environment variable
-	codeIndexFolders := os.Getenv("CODE_INDEX_FOLDERS")
-	if codeIndexFolders != "" {
-		folderPaths := strings.Split(codeIndexFolders, ",")
-		for _, folderPath := range folderPaths {
-			folderPath = strings.TrimSpace(folderPath)
-			if folderPath == "" {
-				continue
-			}
-
-			existingFolder, err := codeIndexStorage.GetFolderByPath(folderPath)
-			if err != nil || existingFolder != nil {
-				continue
-			}
-
-			newFolder, err := codeIndexStorage.AddFolder(folderPath, "Auto-registered")
-			if err != nil {
-				logger.Warn("Failed to auto-register folder", zap.String("path", folderPath), zap.Error(err))
-				continue
-			}
-
-			if err := fileWatcher.AddFolder(newFolder); err != nil {
-				logger.Warn("Failed to add auto-registered folder to file watcher", zap.Error(err))
-			}
-
-			// Trigger initial scan if AUTO_SCAN is enabled
-			if os.Getenv("CODE_INDEX_AUTO_SCAN") != "false" {
-				go func(folder *storage.IndexedFolder) {
-					if err := fileWatcher.ScanFolder(folder); err != nil {
-						logger.Warn("Failed to scan auto-registered folder", zap.Error(err))
-					}
-				}(newFolder)
-			}
-		}
-	}
-
-	// Start file watcher
-	if err := fileWatcher.Start(); err != nil {
-		logger.Warn("Failed to start file watcher", zap.Error(err))
+		logger.Info("MCP hub tools registered to MCP server",
+			zap.Strings("tools", []string{
+				"discover_tools",
+				"get_tool_schema",
+				"execute_tool",
+				"mcp_add_server",
+				"mcp_rediscover_server",
+				"mcp_remove_server",
+			}))
 	} else {
-		logger.Info("File watcher started successfully")
+		logger.Info("MCP hub tools NOT registered (MCP_HUB=false)")
 	}
 
-	// Create MCP server instance (used by both HTTP and stdio modes)
-	mcpServer := createMCPServer(taskStorage, knowledgeStorage, codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, mongoClient, toolsStorage, logger)
-
-	// Check for embedded UI (production single-binary mode)
-	hasEmbedded := embed.HasUI()
-	var embeddedFS http.FileSystem
-	if hasEmbedded {
-		var err error
-		embeddedFS, err = embed.GetUIFileSystem()
-		if err != nil {
-			logger.Warn("Failed to load embedded UI, will use filesystem", zap.Error(err))
-			hasEmbedded = false
-		} else {
-			logger.Info("Embedded UI detected (single-binary mode)")
-		}
-	} else {
-		logger.Info("No embedded UI detected (development mode - will serve from filesystem)")
+	// Register coordinator tools (task management, knowledge, subagents)
+	logger.Info("Registering coordinator tools to MCP server...")
+	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage, db)
+	if err := toolHandler.RegisterToolHandlers(mcpServer); err != nil {
+		logger.Fatal("Failed to register coordinator tools to MCP server", zap.Error(err))
 	}
+	logger.Info("Coordinator tools registered to MCP server", zap.Int("count", 19))
 
-	// Handle graceful shutdown (cross-platform signal handling)
-	ctx, stop := setupSignalHandler()
-	defer stop()
+	// Register Qdrant tools (semantic search and storage)
+	logger.Info("Registering Qdrant tools to MCP server...")
+	qdrantHandler := handlers.NewQdrantToolHandler(qdrantClient)
+	if err := qdrantHandler.RegisterQdrantTools(mcpServer); err != nil {
+		logger.Fatal("Failed to register Qdrant tools to MCP server", zap.Error(err))
+	}
+	logger.Info("Qdrant tools registered to MCP server", zap.Int("count", 2))
 
-	var wg sync.WaitGroup
+	// Register filesystem tools (bash, file operations, patch application)
+	logger.Info("Registering filesystem tools to MCP server...")
+	filesystemHandler := handlers.NewFilesystemToolHandler(logger)
+	if err := filesystemHandler.RegisterFilesystemTools(mcpServer); err != nil {
+		logger.Fatal("Failed to register filesystem tools to MCP server", zap.Error(err))
+	}
+	logger.Info("Filesystem tools registered to MCP server", zap.Int("count", 5))
+
+	// Get UI filesystem
+	embeddedUI, err := embed.GetUIFileSystem()
+	if err != nil {
+		logger.Warn("Failed to get embedded UI", zap.Error(err))
+	}
+	hasEmbeddedUI := embed.HasUI()
 
 	// Start servers based on mode
-	switch *mode {
-	case "http":
-		// HTTP mode only - REST API + UI serving
-		httpPort := os.Getenv("HTTP_PORT")
-		if httpPort == "" {
-			httpPort = "7095"
-		}
-		logger.Info("Starting in HTTP-only mode", zap.String("port", httpPort))
+	var wg sync.WaitGroup
+	var serverErrors []error
+	var mu sync.Mutex
 
+	if *mode == "http" || *mode == "both" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := server.StartHTTPServer(ctx, httpPort, taskStorage, knowledgeStorage, codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, mcpServer, embeddedFS, hasEmbedded, logger, db); err != nil {
-				logger.Fatal("HTTP server error", zap.Error(err))
+			// Read HTTP port from environment, default to 8080
+			httpPort := os.Getenv("HTTP_PORT")
+			if httpPort == "" {
+				httpPort = "8080"
 			}
-		}()
-
-	case "mcp":
-		// MCP mode only - stdio protocol
-		logger.Info("Starting in MCP-only mode (stdio)")
-
-		transport := &mcp.StdioTransport{}
-		if err := mcpServer.Run(ctx, transport); err != nil {
-			logger.Fatal("MCP server error", zap.Error(err))
-		}
-
-	case "both":
-		// Both HTTP and MCP
-		httpPort := os.Getenv("HTTP_PORT")
-		if httpPort == "" {
-			httpPort = "7095"
-		}
-
-		logger.Info("Starting in dual mode", zap.String("httpPort", httpPort))
-
-		// Start HTTP server in goroutine
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := server.StartHTTPServer(ctx, httpPort, taskStorage, knowledgeStorage, codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, mcpServer, embeddedFS, hasEmbedded, logger, db); err != nil {
+			logger.Info("Starting HTTP server", zap.String("port", httpPort))
+			ctx := context.Background()
+			if err := server.StartHTTPServer(
+				ctx,
+				httpPort,
+				taskStorage,
+				knowledgeStorage,
+				codeIndexStorage,
+				qdrantClient,
+				embeddingClient,
+				fileWatcher,
+				mcpServer,
+				embeddedUI,
+				hasEmbeddedUI,
+				logger,
+				db,
+				toolsStorage,
+			); err != nil && err != http.ErrServerClosed {
+				mu.Lock()
+				serverErrors = append(serverErrors, fmt.Errorf("HTTP server error: %w", err))
+				mu.Unlock()
 				logger.Error("HTTP server error", zap.Error(err))
 			}
 		}()
+	}
 
-		// Start MCP server in goroutine
+	if *mode == "mcp" || *mode == "both" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			transport := &mcp.StdioTransport{}
-			if err := mcpServer.Run(ctx, transport); err != nil {
+			logger.Info("Starting MCP server on stdio")
+			ctx := context.Background()
+			if err := mcpServer.Run(ctx, &mcp.StdioTransport{}); err != nil {
+				mu.Lock()
+				serverErrors = append(serverErrors, fmt.Errorf("MCP server error: %w", err))
+				mu.Unlock()
 				logger.Error("MCP server error", zap.Error(err))
 			}
 		}()
-
-	default:
-		logger.Fatal("Invalid mode. Use: http, mcp, or both", zap.String("mode", *mode))
 	}
 
-	// Wait for interrupt signal
-	<-ctx.Done()
-	logger.Info("Shutdown signal received, stopping servers...")
-
-	// Wait for all servers to stop
+	// Wait for servers to complete
 	wg.Wait()
-	logger.Info("Server shutdown complete")
-}
 
-// createMCPServer creates and configures the MCP server with all handlers
-func createMCPServer(
-	taskStorage storage.TaskStorage,
-	knowledgeStorage storage.KnowledgeStorage,
-	codeIndexStorage *storage.CodeIndexStorage,
-	qdrantClient *storage.QdrantClient,
-	embeddingClient embeddings.EmbeddingClient,
-	fileWatcher *watcher.FileWatcher,
-	mongoClient *mongo.Client,
-	toolsStorage *storage.ToolsStorage,
-	logger *zap.Logger,
-) *mcp.Server {
-	impl := &mcp.Implementation{
-		Name:    "hyperion-coordinator-unified",
-		Version: "2.0.0",
-	}
-
-	opts := &mcp.ServerOptions{
-		HasResources: true,
-		HasTools:     true,
-		HasPrompts:   true,
-	}
-
-	server := mcp.NewServer(impl, opts)
-
-	// Get the database from mongoClient
-	mongoDB := mongoClient.Database(os.Getenv("MONGODB_DATABASE"))
-	if mongoDB == nil {
-		mongoDB = mongoClient.Database("coordinator_db1")
-	}
-
-	// Create tool metadata registry for automatic tool indexing
-	toolMetadataRegistry := handlers.NewToolMetadataRegistry()
-
-	// Initialize and register all handlers
-	resourceHandler := handlers.NewResourceHandler(taskStorage, knowledgeStorage)
-	docResourceHandler := handlers.NewDocResourceHandler()
-	workflowResourceHandler := handlers.NewWorkflowResourceHandler(taskStorage)
-	knowledgeResourceHandler := handlers.NewKnowledgeResourceHandler(knowledgeStorage)
-	metricsResourceHandler := handlers.NewMetricsResourceHandler(taskStorage)
-	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage, mongoDB)
-	qdrantToolHandler := handlers.NewQdrantToolHandler(qdrantClient)
-	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, logger)
-	planningPromptHandler := handlers.NewPlanningPromptHandler()
-	knowledgePromptHandler := handlers.NewKnowledgePromptHandler()
-	coordinationPromptHandler := handlers.NewCoordinationPromptHandler()
-	documentationPromptHandler := handlers.NewDocumentationPromptHandler()
-	filesystemToolHandler := handlers.NewFilesystemToolHandler(logger)
-	toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage, server)
-
-	// Set metadata registry on all tool handlers for automatic indexing
-	toolHandler.SetMetadataRegistry(toolMetadataRegistry)
-	qdrantToolHandler.SetMetadataRegistry(toolMetadataRegistry)
-	filesystemToolHandler.SetMetadataRegistry(toolMetadataRegistry)
-	codeToolsHandler.SetMetadataRegistry(toolMetadataRegistry)
-	toolsDiscoveryHandler.SetMetadataRegistry(toolMetadataRegistry)
-
-	// Register all handlers (panic on error)
-	must := func(err error) {
-		if err != nil {
-			logger.Fatal("Failed to register handlers", zap.Error(err))
+	// Check for errors
+	if len(serverErrors) > 0 {
+		logger.Error("Server errors occurred")
+		for _, err := range serverErrors {
+			logger.Error("", zap.Error(err))
 		}
+		os.Exit(1)
 	}
-
-	must(resourceHandler.RegisterResourceHandlers(server))
-	must(docResourceHandler.RegisterDocResources(server))
-	must(workflowResourceHandler.RegisterWorkflowResources(server))
-	must(knowledgeResourceHandler.RegisterKnowledgeResources(server))
-	must(metricsResourceHandler.RegisterMetricsResources(server))
-	must(toolHandler.RegisterToolHandlers(server))
-	must(qdrantToolHandler.RegisterQdrantTools(server))
-	must(codeToolsHandler.RegisterCodeIndexTools(server))
-	must(filesystemToolHandler.RegisterFilesystemTools(server))
-	must(toolsDiscoveryHandler.RegisterToolsDiscoveryTools(server))
-	must(planningPromptHandler.RegisterPlanningPrompts(server))
-	must(knowledgePromptHandler.RegisterKnowledgePrompts(server))
-	must(coordinationPromptHandler.RegisterCoordinationPrompts(server))
-	must(documentationPromptHandler.RegisterDocumentationPrompts(server))
-
-	logger.Info("MCP server configured with all handlers")
-
-	// Index all MCP tools for discovery via discover_tools (using automatic registry)
-	logger.Info("Indexing MCP tools for semantic discovery...")
-	if count, err := handlers.IndexRegisteredTools(toolMetadataRegistry, toolsStorage, logger); err != nil {
-		logger.Warn("Failed to index MCP tools (tools may not be discoverable)", zap.Error(err))
-	} else {
-		logger.Info("MCP tools indexed successfully",
-			zap.Int("count", count),
-			zap.String("collection", "mcp-tools"))
-	}
-
-	return server
 }

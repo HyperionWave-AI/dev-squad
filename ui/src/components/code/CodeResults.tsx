@@ -92,7 +92,7 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: '100%' }}>
       <Typography variant="h6" sx={{ mb: 1 }}>
         Search Results ({results.length})
       </Typography>
@@ -103,7 +103,7 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
         const scorePercentage = Math.round(result.score * 100);
 
         return (
-          <Card key={index}>
+          <Card key={index} sx={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
             <CardContent>
               {/* File Header */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
@@ -169,7 +169,7 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
 
               {/* Code Content */}
               {result.content && (
-                <Box sx={{ mt: 2 }}>
+                <Box sx={{ mt: 2, width: '100%', maxWidth: '100%', overflow: 'auto' }}>
                   <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
                     {result.fullFileRetrieved ? 'Full File:' : 'Code Chunk:'}
                   </Typography>
@@ -182,20 +182,23 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
                       </Box>
                     }
                   >
-                    <SyntaxHighlighter
-                      language={language}
-                      style={vscDarkPlus}
-                      customStyle={{
-                        borderRadius: 8,
-                        fontSize: '0.875rem',
-                        margin: 0,
-                      }}
-                      showLineNumbers={result.startLine !== undefined}
-                      startingLineNumber={result.startLine}
-                      wrapLines
-                    >
-                      {result.content}
-                    </SyntaxHighlighter>
+                    <Box sx={{ width: '100%', maxWidth: '100%', overflowX: 'auto' }}>
+                      <SyntaxHighlighter
+                        language={language}
+                        style={vscDarkPlus}
+                        customStyle={{
+                          borderRadius: 8,
+                          fontSize: '0.875rem',
+                          margin: 0,
+                          maxWidth: '100%',
+                        }}
+                        showLineNumbers={result.startLine !== undefined}
+                        startingLineNumber={result.startLine}
+                        wrapLines
+                      >
+                        {result.content}
+                      </SyntaxHighlighter>
+                    </Box>
                   </Suspense>
                 </Box>
               )}

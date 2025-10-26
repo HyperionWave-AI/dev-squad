@@ -1143,6 +1143,17 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		results = append(results, result)
 	}
 
+	// Filter results by minimum score if specified
+	if req.MinScore > 0 {
+		filteredResults := make([]SearchResultDTO, 0, len(results))
+		for _, result := range results {
+			if result.Score >= req.MinScore {
+				filteredResults = append(filteredResults, result)
+			}
+		}
+		results = filteredResults
+	}
+
 	h.logger.Info("Code search completed",
 		zap.String("query", req.Query),
 		zap.String("retrieveMode", retrieveMode),
@@ -1231,7 +1242,7 @@ func (h *RESTAPIHandler) EnableWatcher(c *gin.Context) {
 	// Start watching all folders
 	addedCount := 0
 	for _, folder := range folders {
-		if err := h.fileWatcher.AddFolder(&folder); err != nil {
+		if err := h.fileWatcher.AddFolder(folder); err != nil {
 			h.logger.Warn("Failed to add folder to watcher",
 				zap.String("path", folder.Path),
 				zap.Error(err))
@@ -1329,32 +1340,129 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 			continue
 		}
 
-		// Scan folder
-		stats, err := h.fileScanner.ScanAndIndex(
-			folder.Path,
-			mapping.QdrantCollection,
-			h.codeIndexStorage,
-			h.qdrantClient,
-			h.embeddingClient,
-		)
-
-		if err != nil {
-			h.logger.Error("Failed to reindex folder",
+		// Update folder status to scanning
+		if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "scanning", ""); err != nil {
+			h.logger.Error("Failed to update folder status",
 				zap.String("path", folder.Path),
 				zap.Error(err))
 			continue
 		}
 
-		totalFilesIndexed += stats.FilesIndexed
-		totalFilesUpdated += stats.FilesUpdated
-		totalFilesSkipped += stats.FilesSkipped
+		// Scan directory for files
+		scannedFiles, err := h.fileScanner.ScanDirectory(folder.Path)
+		if err != nil {
+			h.codeIndexStorage.UpdateFolderStatus(folder.ID, "error", err.Error())
+			h.logger.Error("Failed to scan directory",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+			continue
+		}
+
+		filesIndexed := 0
+		filesUpdated := 0
+		filesSkipped := 0
+
+		// Process each file
+		for _, scannedFile := range scannedFiles {
+			scannedFile.FolderID = folder.ID
+
+			// Check if file already exists
+			existingFile, _ := h.codeIndexStorage.GetFileByPath(scannedFile.Path)
+
+			if existingFile != nil {
+				// Check if file has changed
+				if existingFile.SHA256 == scannedFile.SHA256 {
+					filesSkipped++
+					continue
+				}
+				filesUpdated++
+				scannedFile.ID = existingFile.ID
+			} else {
+				filesIndexed++
+				scannedFile.ID = uuid.New().String()
+			}
+
+			// Create chunks
+			chunks, err := h.fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
+			if err != nil {
+				h.logger.Warn("Failed to create chunks", zap.String("file", scannedFile.Path), zap.Error(err))
+				continue
+			}
+
+			// Generate embeddings for chunks
+			var qdrantPoints []storage.CodeIndexPoint
+			for _, chunk := range chunks {
+				// Generate embedding
+				embedding, err := h.embeddingClient.CreateEmbedding(chunk.Content)
+				if err != nil {
+					h.logger.Warn("Failed to create embedding",
+						zap.String("file", scannedFile.Path),
+						zap.Int("chunk", chunk.ChunkNum),
+						zap.Error(err))
+					continue
+				}
+
+				// Create Qdrant point with deterministic UUID
+				pointID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%s_chunk_%d", scannedFile.ID, chunk.ChunkNum))).String()
+				chunk.VectorID = pointID
+
+				point := storage.CodeIndexPoint{
+					ID:     pointID,
+					Vector: embedding,
+					Payload: map[string]interface{}{
+						"fileId":       scannedFile.ID,
+						"folderId":     folder.ID,
+						"folderPath":   folder.Path,
+						"filePath":     scannedFile.Path,
+						"relativePath": scannedFile.RelativePath,
+						"language":     scannedFile.Language,
+						"chunkNum":     chunk.ChunkNum,
+						"startLine":    chunk.StartLine,
+						"endLine":      chunk.EndLine,
+						"content":      chunk.Content,
+					},
+				}
+				qdrantPoints = append(qdrantPoints, point)
+
+				// Save chunk to MongoDB
+				if err := h.codeIndexStorage.UpsertChunk(chunk); err != nil {
+					h.logger.Warn("Failed to save chunk", zap.Error(err))
+				}
+			}
+
+			// Upload vectors to Qdrant
+			if len(qdrantPoints) > 0 {
+				collectionName := mapping.QdrantCollection
+				if err := h.qdrantClient.UpsertCodeIndexPoints(collectionName, qdrantPoints); err != nil {
+					h.logger.Warn("Failed to upsert vectors", zap.String("file", scannedFile.Path), zap.Error(err))
+				}
+			}
+
+			// Save file metadata to MongoDB
+			if err := h.codeIndexStorage.UpsertFile(scannedFile); err != nil {
+				h.logger.Warn("Failed to save file", zap.Error(err))
+			}
+		}
+
+		// Update folder status and scan time
+		if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "active", ""); err != nil {
+			h.logger.Warn("Failed to update folder status", zap.Error(err))
+		}
+
+		if err := h.codeIndexStorage.UpdateFolderScanTime(folder.ID, len(scannedFiles)); err != nil {
+			h.logger.Warn("Failed to update scan time", zap.Error(err))
+		}
+
+		totalFilesIndexed += filesIndexed
+		totalFilesUpdated += filesUpdated
+		totalFilesSkipped += filesSkipped
 		foldersReindexed++
 
 		h.logger.Info("Folder reindexed",
 			zap.String("path", folder.Path),
-			zap.Int("filesIndexed", stats.FilesIndexed),
-			zap.Int("filesUpdated", stats.FilesUpdated),
-			zap.Int("filesSkipped", stats.FilesSkipped))
+			zap.Int("filesIndexed", filesIndexed),
+			zap.Int("filesUpdated", filesUpdated),
+			zap.Int("filesSkipped", filesSkipped))
 	}
 
 	h.logger.Info("Reindex all completed",
