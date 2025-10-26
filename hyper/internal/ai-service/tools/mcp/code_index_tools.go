@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,99 @@ var (
 	codeSearchCacheMutex    sync.RWMutex
 	codeSearchCacheTTL      = 5 * time.Minute
 )
+
+// parseQueryForFilenameBoost extracts tokens, file extensions, and potential exact filenames from the search query
+// Returns:
+// - tokens: lowercase tokens from the query (split on spaces and punctuation)
+// - extensions: file extensions found in the query (e.g., ".tsx", ".go")
+// - exactFilename: potential exact filename if detected (e.g., "App.tsx")
+func parseQueryForFilenameBoost(query string) (tokens []string, extensions []string, exactFilename string) {
+	queryLower := strings.ToLower(query)
+
+	// Extract file extensions using regex (e.g., .tsx, .go, .js, .ts)
+	extPattern := regexp.MustCompile(`\.\w+`)
+	extMatches := extPattern.FindAllString(queryLower, -1)
+	extensions = extMatches
+
+	// Split query into tokens (split on whitespace and common punctuation)
+	tokenPattern := regexp.MustCompile(`[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9]+)?`)
+	tokenMatches := tokenPattern.FindAllString(queryLower, -1)
+
+	// Filter out common stopwords
+	stopwords := map[string]bool{
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
+		"with": true, "by": true, "from": true, "as": true, "is": true, "are": true,
+		"was": true, "were": true, "be": true, "been": true, "have": true, "has": true,
+		"main": true, "component": true, "function": true, "class": true, "interface": true,
+		"code": true, "file": true, "script": true, "module": true,
+	}
+
+	for _, token := range tokenMatches {
+		if !stopwords[token] && len(token) > 1 {
+			tokens = append(tokens, token)
+		}
+	}
+
+	// Detect exact filename pattern (word with extension, e.g., "App.tsx", "main.go")
+	filenamePattern := regexp.MustCompile(`\b([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)\b`)
+	if match := filenamePattern.FindString(queryLower); match != "" {
+		exactFilename = match
+	}
+
+	return tokens, extensions, exactFilename
+}
+
+// calculateFilenameBoost calculates a score boost multiplier based on filename matching
+// Returns a multiplier where:
+// - 1.0 = no boost
+// - 1.3 = 30% boost for filename token match
+// - 1.4 = 40% boost for extension match
+// - 1.5 = 50% boost for exact filename match
+func calculateFilenameBoost(filePath string, queryTokens []string, queryExtensions []string, exactFilename string) float64 {
+	if filePath == "" {
+		return 1.0
+	}
+
+	// Extract filename from path and lowercase it
+	filename := strings.ToLower(path.Base(filePath))
+	filenameWithoutExt := filename
+	fileExt := path.Ext(filename)
+	if fileExt != "" {
+		filenameWithoutExt = filename[:len(filename)-len(fileExt)]
+	}
+
+	boost := 1.0
+
+	// HIGHEST PRIORITY: Exact filename match (50% boost)
+	if exactFilename != "" && filename == exactFilename {
+		return 1.5
+	}
+
+	// HIGH PRIORITY: Extension match (40% boost)
+	extensionMatched := false
+	for _, ext := range queryExtensions {
+		if fileExt == ext {
+			boost = 1.4
+			extensionMatched = true
+			break
+		}
+	}
+
+	// MEDIUM PRIORITY: Filename token match (30% boost)
+	// Only apply if we don't already have an extension match
+	if !extensionMatched {
+		for _, token := range queryTokens {
+			// Check if token appears in filename (without extension)
+			if strings.Contains(filenameWithoutExt, token) || strings.Contains(filename, token) {
+				boost = 1.3
+				break
+			}
+		}
+	}
+
+	return boost
+}
 
 // parseRetrieveMode parses the retrieve mode parameter and returns the retrieve type, chunk size in lines, and t-shirt size
 // Maps: chunk-s→50/s, chunk-m→100/m, chunk-l→200/l, chunk-xl→400/xl, chunk→200/l (backward compat), full→0/empty
@@ -174,6 +269,64 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 	t.logger.Info("Code search: Qdrant search response",
 		zap.Int("resultCount", len(searchResp.Result)),
 		zap.String("collection", collectionName))
+
+	// FILENAME-AWARE SCORE BOOSTING
+	// Parse query once to extract filename matching criteria
+	queryTokens, queryExtensions, exactFilename := parseQueryForFilenameBoost(query)
+	t.logger.Debug("Query parsed for filename boosting",
+		zap.Strings("tokens", queryTokens),
+		zap.Strings("extensions", queryExtensions),
+		zap.String("exactFilename", exactFilename))
+
+	// Apply score boosting to each hit based on filename matching
+	boostedCount := 0
+	for i := range searchResp.Result {
+		hit := &searchResp.Result[i]
+
+		// Extract file path from payload
+		var filePath string
+		if fp, ok := hit.Payload["filePath"].(string); ok {
+			filePath = fp
+		}
+
+		// Calculate boost multiplier
+		boostMultiplier := calculateFilenameBoost(filePath, queryTokens, queryExtensions, exactFilename)
+
+		// Apply boost to score (multiplicative)
+		originalScore := hit.Score
+		hit.Score = float32(float64(originalScore) * boostMultiplier)
+
+		// Clamp score to maximum of 1.0
+		if hit.Score > 1.0 {
+			hit.Score = 1.0
+		}
+
+		// Log boosted scores for debugging
+		if boostMultiplier > 1.0 {
+			boostedCount++
+			t.logger.Debug("Score boosted for filename match",
+				zap.String("filePath", filePath),
+				zap.Float64("originalScore", float64(originalScore)),
+				zap.Float64("boostMultiplier", boostMultiplier),
+				zap.Float64("boostedScore", float64(hit.Score)))
+		}
+	}
+
+	// Re-sort results by boosted scores (descending order)
+	// This ensures files with filename matches rank higher
+	if boostedCount > 0 {
+		// Simple bubble sort for small result sets (max 50 items)
+		for i := 0; i < len(searchResp.Result)-1; i++ {
+			for j := i + 1; j < len(searchResp.Result); j++ {
+				if searchResp.Result[j].Score > searchResp.Result[i].Score {
+					searchResp.Result[i], searchResp.Result[j] = searchResp.Result[j], searchResp.Result[i]
+				}
+			}
+		}
+		t.logger.Info("Results re-sorted after filename boosting",
+			zap.Int("boostedCount", boostedCount),
+			zap.Int("totalResults", len(searchResp.Result)))
+	}
 
 	// Build results (filter out archived paths)
 	var results []storage.SearchResult
