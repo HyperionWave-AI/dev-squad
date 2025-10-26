@@ -140,6 +140,49 @@ class RestCodeClient {
       folders: [],
     };
   }
+
+  /**
+   * Enable file watcher for all indexed folders
+   */
+  async enableWatcher(): Promise<{ success: boolean; message: string }> {
+    return this.fetchJSON<{ success: boolean; message: string }>(
+      '/enable-watcher',
+      {
+        method: 'POST',
+      }
+    );
+  }
+
+  /**
+   * Disable file watcher
+   */
+  async disableWatcher(): Promise<{ success: boolean; message: string }> {
+    return this.fetchJSON<{ success: boolean; message: string }>(
+      '/disable-watcher',
+      {
+        method: 'POST',
+      }
+    );
+  }
+
+  /**
+   * Reindex all files in all indexed folders
+   */
+  async reindexAll(): Promise<{
+    success: boolean;
+    message: string;
+    foldersReindexed: number;
+    totalFilesIndexed: number;
+  }> {
+    return this.fetchJSON<{
+      success: boolean;
+      message: string;
+      foldersReindexed: number;
+      totalFilesIndexed: number;
+    }>('/reindex-all', {
+      method: 'POST',
+    });
+  }
 }
 
 export const restCodeClient = new RestCodeClient();
