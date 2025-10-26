@@ -818,19 +818,44 @@ func (h *ToolHandler) registerListAgentTasks(server *mcp.Server) error {
 func (h *ToolHandler) handleListHumanTasks(ctx context.Context) (*mcp.CallToolResult, map[string]interface{}, error) {
 	tasks := h.taskStorage.ListAllHumanTasks()
 
-	tasksJSON, err := json.MarshalIndent(tasks, "", "  ")
+	// Create summarized view (only include summary, not full prompt)
+	summarizedTasks := make([]map[string]interface{}, len(tasks))
+	for i, task := range tasks {
+		taskMap := make(map[string]interface{})
+		taskMap["taskId"] = task.ID
+		taskMap["status"] = task.Status
+		taskMap["createdAt"] = task.CreatedAt
+		taskMap["updatedAt"] = task.UpdatedAt
+
+		// Use summary if available, otherwise fallback to truncated prompt
+		if task.Summary != "" {
+			taskMap["summary"] = task.Summary
+		} else if len(task.Prompt) > 200 {
+			taskMap["summary"] = task.Prompt[:200] + "..."
+		} else {
+			taskMap["summary"] = task.Prompt
+		}
+
+		if task.Notes != "" {
+			taskMap["notes"] = task.Notes
+		}
+
+		summarizedTasks[i] = taskMap
+	}
+
+	tasksJSON, err := json.MarshalIndent(summarizedTasks, "", "  ")
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to marshal tasks: %s", err.Error())), nil, nil
 	}
 
-	resultText := fmt.Sprintf("✓ Retrieved %d human tasks\n\nTasks:\n%s", len(tasks), string(tasksJSON))
+	resultText := fmt.Sprintf("✓ Retrieved %d human tasks\n\nℹ️  Showing summaries only. Use coordinator_get_agent_task(taskId) for full details.\n\nTasks:\n%s", len(tasks), string(tasksJSON))
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: resultText},
 		},
 	}, map[string]interface{}{
-		"tasks": tasks,
+		"tasks": summarizedTasks,
 		"count": len(tasks),
 	}, nil
 }
@@ -881,7 +906,7 @@ func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]
 
 	paginatedTasks := filteredTasks[offset:endIndex]
 
-	// Truncate large fields (>500 bytes)
+	// Create summarized view (return only summary field, not full context)
 	truncatedTasks := make([]map[string]interface{}, len(paginatedTasks))
 	for i, task := range paginatedTasks {
 		taskMap := make(map[string]interface{})
@@ -893,17 +918,15 @@ func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]
 		taskMap["createdAt"] = task.CreatedAt
 		taskMap["updatedAt"] = task.UpdatedAt
 
-		// Truncate large fields
-		if len(task.ContextSummary) > 500 {
-			taskMap["contextSummary"] = task.ContextSummary[:500] + "... [TRUNCATED - use coordinator_get_agent_task for full content]"
+		// Use AI-generated summary if available, otherwise fallback to truncated context
+		if task.Summary != "" {
+			taskMap["summary"] = task.Summary
+		} else if task.ContextSummary != "" && len(task.ContextSummary) > 200 {
+			taskMap["summary"] = task.ContextSummary[:200] + "..."
+		} else if task.ContextSummary != "" {
+			taskMap["summary"] = task.ContextSummary
 		} else {
-			taskMap["contextSummary"] = task.ContextSummary
-		}
-
-		if len(task.PriorWorkSummary) > 500 {
-			taskMap["priorWorkSummary"] = task.PriorWorkSummary[:500] + "... [TRUNCATED - use coordinator_get_agent_task for full content]"
-		} else {
-			taskMap["priorWorkSummary"] = task.PriorWorkSummary
+			taskMap["summary"] = task.Role
 		}
 
 		if len(task.Notes) > 500 {
@@ -971,7 +994,7 @@ func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]
 	if agentName != "" {
 		resultText += fmt.Sprintf("\nFiltered by agentName: %s", agentName)
 	}
-	resultText += fmt.Sprintf("\n\nℹ️  Note: Fields >500 bytes are truncated. Use coordinator_get_agent_task(taskId) for full details.")
+	resultText += fmt.Sprintf("\n\nℹ️  Showing AI-generated summaries only. Use coordinator_get_agent_task(taskId) for full context and details.")
 	resultText += fmt.Sprintf("\n\nTasks:\n%s", string(tasksJSON))
 
 	return &mcp.CallToolResult{
