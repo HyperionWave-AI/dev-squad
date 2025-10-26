@@ -13,7 +13,6 @@ import {
   List,
   ListItem,
   ListItemButton,
-  ListItemText,
   IconButton,
   Button,
   Typography,
@@ -28,9 +27,7 @@ import {
 import {
   Add,
   Delete,
-  Chat,
   DeleteSweep,
-  SmartToy,
   ExpandMore
 } from '@mui/icons-material';
 import type { ChatSession } from '../services/chatService';
@@ -503,7 +500,6 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                 const isActive = session.id === activeSessionId;
                 const hasChildren = treeNode.children.length > 0;
                 const isExpanded = expandedNodes.has(session.id);
-                const isSubchatNode = isSubchat(session);
 
                 return (
                   <ListItem
@@ -525,93 +521,82 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                         py: 1.5,
                         minHeight: GRAPH_CONFIG.itemHeight,
                         alignItems: 'flex-start',
+                        display: 'flex',
+                        flexDirection: 'column',
                       }}
                     >
-                      {/* Expand/Collapse button for parent chats */}
-                      {hasChildren && (
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleToggleExpand(session.id, e)}
-                          sx={{
-                            mr: 1,
-                            mt: 0.5,
-                            transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
-                            transition: 'transform 0.2s',
-                          }}
-                        >
-                          <ExpandMore fontSize="small" />
-                        </IconButton>
-                      )}
-
-                      {/* Chat icon */}
-                      <Box sx={{ mr: 1.5, mt: 0.5, flexShrink: 0 }}>
-                        {isSubchatNode ? (
-                          <SmartToy
-                            fontSize="small"
-                            sx={{ color: theme.palette.secondary.main }}
-                          />
-                        ) : (
-                          <Chat
-                            fontSize="small"
-                            sx={{ color: theme.palette.primary.main }}
-                          />
-                        )}
-                      </Box>
-
-                      {/* Session title and metadata */}
-                      <ListItemText
-                        primary={
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontWeight: isActive ? 600 : 400,
-                              color: isActive ? 'primary.main' : 'text.primary',
-                              lineHeight: 1.3,
-                            }}
-                          >
-                            {session.title}
-                          </Typography>
-                        }
-                        secondary={
-                          <Typography
-                            variant="caption"
-                            sx={{
-                              color: 'text.secondary',
-                              display: 'block',
-                              mt: 0.5,
-                            }}
-                          >
-                            {new Date(session.createdAt).toLocaleDateString()}
-                            {hasChildren && (
-                              <span style={{ marginLeft: 8 }}>
-                                • {treeNode.children.length} subchat{treeNode.children.length !== 1 ? 's' : ''}
-                              </span>
-                            )}
-                          </Typography>
-                        }
-                      />
-
-                      {/* Action buttons */}
-                      <Box sx={{ display: 'flex', gap: 0.5, ml: 1 }}>
-                        {onRenameSession && (
+                      <Box sx={{ display: 'flex', width: '100%', alignItems: 'center' }}>
+                        {/* Expand/Collapse button for parent chats */}
+                        {hasChildren && (
                           <IconButton
                             size="small"
-                            onClick={(e) => handleRenameClick(session.id, session.title, e)}
-                            sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
+                            onClick={(e) => handleToggleExpand(session.id, e)}
+                            sx={{
+                              mr: 1,
+                              transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                              transition: 'transform 0.2s',
+                            }}
                           >
-                            <Typography variant="caption">✏️</Typography>
+                            <ExpandMore fontSize="small" />
                           </IconButton>
                         )}
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleDeleteClick(session.id, e)}
+
+                        {/* Session title - Line 1 */}
+                        <Typography
+                          variant="body2"
                           sx={{
-                            opacity: 0.7,
-                            '&:hover': { opacity: 1, color: 'error.main' },
+                            fontWeight: isActive ? 600 : 400,
+                            color: isActive ? 'primary.main' : 'text.primary',
+                            lineHeight: 1.3,
+                            flex: 1,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
                           }}
                         >
-                          <Delete fontSize="small" />
-                        </IconButton>
+                          {session.title}
+                        </Typography>
+                      </Box>
+
+                      {/* Date and action buttons - Line 2 */}
+                      <Box sx={{ display: 'flex', width: '100%', alignItems: 'center', mt: 0.5, pl: hasChildren ? 5 : 0 }}>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary',
+                            flex: 1,
+                          }}
+                        >
+                          {new Date(session.createdAt).toLocaleDateString()}
+                          {hasChildren && (
+                            <span style={{ marginLeft: 8 }}>
+                              • {treeNode.children.length} subchat{treeNode.children.length !== 1 ? 's' : ''}
+                            </span>
+                          )}
+                        </Typography>
+
+                        {/* Action buttons */}
+                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                          {onRenameSession && (
+                            <IconButton
+                              size="small"
+                              onClick={(e) => handleRenameClick(session.id, session.title, e)}
+                              sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
+                            >
+                              <Typography variant="caption">✏️</Typography>
+                            </IconButton>
+                          )}
+                          <IconButton
+                            size="small"
+                            onClick={(e) => handleDeleteClick(session.id, e)}
+                            sx={{
+                              opacity: 0.7,
+                              '&:hover': { opacity: 1, color: 'error.main' },
+                            }}
+                          >
+                            <Delete fontSize="small" />
+                          </IconButton>
+                        </Box>
                       </Box>
                     </ListItemButton>
                   </ListItem>

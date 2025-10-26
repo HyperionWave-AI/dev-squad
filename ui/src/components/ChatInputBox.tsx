@@ -107,17 +107,6 @@ export function ChatInputBox({
           <Send />
         </IconButton>
       </Box>
-
-      {/* Hint Text */}
-      {!disabled && (
-        <Typography
-          variant="caption"
-          color="text.disabled"
-          sx={{ display: 'block', mt: 0.5, ml: 1 }}
-        >
-          Press Enter to send, Shift+Enter for new line
-        </Typography>
-      )}
     </Box>
   );
 }
