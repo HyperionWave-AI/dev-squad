@@ -132,6 +132,8 @@ export function ToolCallCard({
             sx={{
               maxHeight: 300,
               overflowY: 'auto',
+              overflowX: 'auto',
+              minWidth: 0,
               '& pre': { margin: 0 },
             }}
           >
@@ -143,6 +145,8 @@ export function ToolCallCard({
                 borderRadius: '4px',
                 margin: 0,
                 padding: '12px',
+                overflow: 'auto',
+                maxWidth: '100%',
               }}
             >
               {JSON.stringify(args, null, 2)}

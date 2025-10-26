@@ -116,8 +116,10 @@ export function ToolResultCard({
           fontFamily: 'monospace',
           fontSize: '0.875rem',
           overflowX: 'auto',
+          maxWidth: '100%',
           maxHeight: 400,
           overflowY: 'auto',
+          minWidth: 0,
         }}
         dangerouslySetInnerHTML={{ __html: html }}
       />
@@ -145,7 +147,7 @@ export function ToolResultCard({
         <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
           File: {filePath}
         </Typography>
-        <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
+        <Box sx={{ maxHeight: 400, overflowY: 'auto', overflowX: 'auto', minWidth: 0 }}>
           <SyntaxHighlighter
             language={language}
             style={vscDarkPlus}
@@ -153,6 +155,8 @@ export function ToolResultCard({
               fontSize: '0.85rem',
               borderRadius: '4px',
               margin: 0,
+              overflow: 'auto',
+              maxWidth: '100%',
             }}
             showLineNumbers
           >
@@ -282,7 +286,7 @@ export function ToolResultCard({
       : parsedData;
 
     return (
-      <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
+      <Box sx={{ maxHeight: 400, overflowY: 'auto', overflowX: 'auto', minWidth: 0 }}>
         <SyntaxHighlighter
           language="diff"
           style={vscDarkPlus}
@@ -290,6 +294,8 @@ export function ToolResultCard({
             fontSize: '0.85rem',
             borderRadius: '4px',
             margin: 0,
+            overflow: 'auto',
+            maxWidth: '100%',
           }}
           showLineNumbers
         >
@@ -303,7 +309,7 @@ export function ToolResultCard({
     const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 
     return (
-      <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
+      <Box sx={{ maxHeight: 400, overflowY: 'auto', overflowX: 'auto', minWidth: 0 }}>
         <SyntaxHighlighter
           language="json"
           style={vscDarkPlus}
@@ -311,6 +317,8 @@ export function ToolResultCard({
             fontSize: '0.85rem',
             borderRadius: '4px',
             margin: 0,
+            overflow: 'auto',
+            maxWidth: '100%',
           }}
         >
           {content}
