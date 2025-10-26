@@ -261,7 +261,7 @@ func (l *ListDirectoryTool) Call(ctx context.Context, input string) (string, err
 
 	if !info.IsDir() {
 		parentDir := filepath.Dir(listInput.Path)
-		return "", fmt.Errorf("path '%s' is a FILE, not a directory. To read file contents, use read_file tool with this path. To list directory, provide the parent directory path: %s", listInput.Path, parentDir)
+		return "", fmt.Errorf("path '%s' is a FILE, not a directory. To read file contents, use read_file tool with this path. To list directory, provide the parent directory path: %s", StripProjectRoot(listInput.Path), StripProjectRoot(parentDir))
 	}
 
 	// Collect all file names (not full metadata)
