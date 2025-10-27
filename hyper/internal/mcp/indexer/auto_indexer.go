@@ -67,12 +67,22 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 		a.logger.Warn("Failed to update folder status", zap.Error(err))
 	}
 
+	// Create scanner with folder-specific configuration
+	includePatterns := folder.GetIncludePatterns()
+	excludePatterns := folder.GetExcludePatterns()
+	chunkSize := folder.GetChunkSize()
+
+	fileScanner := scanner.NewFileScannerWithConfig(includePatterns, excludePatterns, chunkSize)
+
 	// Scan directory for files
 	a.logger.Info("Scanning directory for code files...",
 		zap.String("path", projectRoot),
-		zap.String("collection", collectionName))
+		zap.String("collection", collectionName),
+		zap.Strings("includePatterns", includePatterns),
+		zap.Strings("excludePatterns", excludePatterns),
+		zap.String("chunkSize", chunkSize))
 
-	scannedFiles, err := a.fileScanner.ScanDirectory(projectRoot)
+	scannedFiles, err := fileScanner.ScanDirectory(projectRoot)
 	if err != nil {
 		a.codeIndexStorage.UpdateFolderStatus(folder.ID, "error", err.Error())
 		result.Error = fmt.Errorf("failed to scan directory: %w", err)
@@ -112,8 +122,8 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 			scannedFile.ID = uuid.New().String()
 		}
 
-		// Create chunks
-		chunks, err := a.fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
+		// Create chunks using the configured scanner
+		chunks, err := fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
 		if err != nil {
 			a.logger.Warn("Failed to create chunks",
 				zap.String("file", scannedFile.Path),
