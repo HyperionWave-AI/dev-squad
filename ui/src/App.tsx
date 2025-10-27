@@ -20,19 +20,20 @@ import {
   Divider,
   Chip,
 } from '@mui/material';
-import { 
-  Dashboard, 
-  Psychology, 
-  Refresh, 
-  Code, 
-  Chat, 
-  Build, 
-  Settings, 
+import {
+  Dashboard,
+  Psychology,
+  Refresh,
+  Code,
+  Chat,
+  Build,
+  Settings,
   SmartToy,
   Menu as MenuIcon,
   Close as CloseIcon,
   LightMode,
-  DarkMode
+  DarkMode,
+  Science
 } from '@mui/icons-material';
 import { getTheme, getPreferredTheme, setThemePreference } from './theme';
 import { KanbanBoard } from './components/KanbanBoard';
@@ -42,6 +43,7 @@ import { CodeChatPage } from './pages/CodeChatPage';
 import { HTTPToolsPage } from './pages/HTTPToolsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SubagentsPage } from './pages/SubagentsPage';
+import { SubchatTestPage } from './pages/SubchatTestPage';
 
 function App() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -85,6 +87,7 @@ function App() {
   const navigationItems = [
     { path: '/chat', label: 'Chat', icon: <Chat />, priority: 'high' },
     { path: '/tasks', label: 'Tasks', icon: <Dashboard />, priority: 'high' },
+    { path: '/subchat-test', label: 'Subchat Test', icon: <Science />, priority: 'high' }, // TODO: Remove before commit
     { path: '/knowledge', label: 'Knowledge', icon: <Psychology />, priority: 'medium' },
     { path: '/code', label: 'Code', icon: <Code />, priority: 'medium' },
     { path: '/tools', label: 'Tools', icon: <Build />, priority: 'low' },
@@ -535,6 +538,7 @@ function App() {
             <Route path="/" element={<Navigate to="/chat" replace />} />
             <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
             <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
+            <Route path="/subchat-test" element={<SubchatTestPage key={refreshKey} />} /> {/* TODO: Remove before commit */}
             <Route path="/knowledge" element={<KnowledgeBrowser key={refreshKey} />} />
             <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
             <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />

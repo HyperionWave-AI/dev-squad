@@ -20,11 +20,8 @@ import {
 import { Add as AddIcon } from '@mui/icons-material';
 import { subchatService, type Subchat } from '../services/subchatService';
 import SubchatCard from './SubchatCard';
-import SubchatCreationDialog from './SubchatCreationDialog';
+import { SubchatCreationDialog } from './SubchatCreationDialog';
 import SubchatDetailView from './SubchatDetailView';
-
-interface SubchatListProps {
-  parentChatId: string;
   onSubchatClick?: (subchatId: string) => void;
   onSubchatCreated?: () => void | Promise<void>; // Callback to refresh parent sessions list
 }
