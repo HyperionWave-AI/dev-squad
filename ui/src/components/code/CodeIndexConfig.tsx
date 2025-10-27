@@ -19,6 +19,10 @@ import {
   Checkbox,
   Box,
   CircularProgress,
+  Radio,
+  RadioGroup,
+  FormControl,
+  FormLabel,
 } from '@mui/material';
 import { Add, Delete, FolderOpen, Refresh, PlayArrow, Stop, Sync } from '@mui/icons-material';
 import { restCodeClient } from '../../services/restCodeClient';
@@ -35,7 +39,9 @@ export const CodeIndexConfig: React.FC = () => {
     '*.tsx',
     '*.js',
   ]);
+  const [customIncludePatterns, setCustomIncludePatterns] = useState('');
   const [excludePatterns, setExcludePatterns] = useState('node_modules,dist,build,.git');
+  const [chunkSize, setChunkSize] = useState<'xs' | 's' | 'm' | 'l' | 'xl'>('m');
   const [actionLoading, setActionLoading] = useState(false);
 
   const FILE_PATTERNS = [
@@ -45,6 +51,14 @@ export const CodeIndexConfig: React.FC = () => {
     { label: 'JavaScript (*.js)', value: '*.js' },
     { label: 'Python (*.py)', value: '*.py' },
     { label: 'Java (*.java)', value: '*.java' },
+  ];
+
+  const CHUNK_SIZE_OPTIONS = [
+    { value: 'xs', label: 'Extra Small (100 lines)', description: 'Best for fine-grained searches' },
+    { value: 's', label: 'Small (250 lines)', description: 'Good for focused code sections' },
+    { value: 'm', label: 'Medium (500 lines)', description: 'Balanced for most use cases' },
+    { value: 'l', label: 'Large (1000 lines)', description: 'Good for larger context' },
+    { value: 'xl', label: 'Extra Large (2000 lines)', description: 'Maximum context per chunk' },
   ];
 
   const loadStatus = async () => {
@@ -72,8 +86,25 @@ export const CodeIndexConfig: React.FC = () => {
     try {
       setLoading(true);
 
+      // Combine selected patterns with custom patterns
+      const customPatterns = customIncludePatterns
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+
+      const allIncludePatterns = [...selectedPatterns, ...customPatterns];
+
+      // Parse exclude patterns
+      const excludePatternsArray = excludePatterns
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+
       await restCodeClient.addFolder({
         folderPath: folderPath.trim(),
+        includePatterns: allIncludePatterns.length > 0 ? allIncludePatterns : undefined,
+        excludePatterns: excludePatternsArray.length > 0 ? excludePatternsArray : undefined,
+        chunkSize: chunkSize,
       });
 
       // Trigger scan for new folder
@@ -85,7 +116,9 @@ export const CodeIndexConfig: React.FC = () => {
       // Reset form
       setFolderPath('');
       setSelectedPatterns(['*.go', '*.ts', '*.tsx', '*.js']);
+      setCustomIncludePatterns('');
       setExcludePatterns('node_modules,dist,build,.git');
+      setChunkSize('m');
       setDialogOpen(false);
     } catch (err) {
       console.error('Failed to add folder:', err);
@@ -285,7 +318,7 @@ export const CodeIndexConfig: React.FC = () => {
       </Card>
 
       {/* Add Folder Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Add Folder to Index</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 1 }}>
@@ -320,12 +353,45 @@ export const CodeIndexConfig: React.FC = () => {
 
             <TextField
               fullWidth
+              label="Custom Include Patterns"
+              placeholder="*.json,*.yaml,*.md"
+              value={customIncludePatterns}
+              onChange={(e) => setCustomIncludePatterns(e.target.value)}
+              helperText="Comma-separated list of additional file patterns to include"
+            />
+
+            <TextField
+              fullWidth
               label="Exclude Patterns"
               placeholder="node_modules,dist,build,.git"
               value={excludePatterns}
               onChange={(e) => setExcludePatterns(e.target.value)}
               helperText="Comma-separated list of patterns to exclude"
             />
+
+            <FormControl component="fieldset">
+              <FormLabel component="legend">Chunk Size</FormLabel>
+              <RadioGroup
+                value={chunkSize}
+                onChange={(e) => setChunkSize(e.target.value as 'xs' | 's' | 'm' | 'l' | 'xl')}
+              >
+                {CHUNK_SIZE_OPTIONS.map((option) => (
+                  <FormControlLabel
+                    key={option.value}
+                    value={option.value}
+                    control={<Radio />}
+                    label={
+                      <Box>
+                        <Typography variant="body2">{option.label}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {option.description}
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                ))}
+              </RadioGroup>
+            </FormControl>
           </Box>
         </DialogContent>
         <DialogActions>

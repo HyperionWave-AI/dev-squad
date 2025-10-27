@@ -5,6 +5,7 @@ import type {
   SearchResult,
   IndexStatus,
   SearchOptions,
+  AddFolderConfig,
 } from '../types/codeIndex';
 
 const BASE_URL = '/api/v1/code-index';
@@ -30,10 +31,7 @@ class RestCodeClient {
   /**
    * Add a folder to the code index
    */
-  async addFolder(params: {
-    folderPath: string;
-    description?: string;
-  }): Promise<{ success: boolean; configId: string }> {
+  async addFolder(config: AddFolderConfig): Promise<{ success: boolean; configId: string }> {
     const result = await this.fetchJSON<{
       success: boolean;
       message: string;
@@ -43,8 +41,10 @@ class RestCodeClient {
       {
         method: 'POST',
         body: JSON.stringify({
-          folderPath: params.folderPath,
-          description: params.description,
+          folderPath: config.folderPath,
+          includePatterns: config.includePatterns,
+          excludePatterns: config.excludePatterns,
+          chunkSize: config.chunkSize,
         }),
       }
     );
