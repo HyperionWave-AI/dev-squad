@@ -3,6 +3,7 @@
  *
  * Displays list of child subchats for a parent chat with create button.
  * Fetches subchats on mount and handles loading/empty states.
+ * Responsive design optimized for mobile, tablet, and desktop viewports.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -15,13 +16,17 @@ import {
   Paper,
   Collapse,
   Container,
-  Divider,
+  useTheme,
+  useMediaQuery,
 } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import { subchatService, type Subchat } from '../services/subchatService';
 import SubchatCard from './SubchatCard';
-import { SubchatCreationDialog } from './SubchatCreationDialog';
+import SubchatCreationDialog from './SubchatCreationDialog';
 import SubchatDetailView from './SubchatDetailView';
+
+interface SubchatListProps {
+  parentChatId: string;
   onSubchatClick?: (subchatId: string) => void;
   onSubchatCreated?: () => void | Promise<void>; // Callback to refresh parent sessions list
 }
@@ -31,6 +36,9 @@ export const SubchatList: React.FC<SubchatListProps> = ({
   onSubchatClick,
   onSubchatCreated: onSubchatCreatedCallback,
 }) => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+
   const [subchats, setSubchats] = useState<Subchat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -99,23 +107,98 @@ export const SubchatList: React.FC<SubchatListProps> = ({
     setExpandedSubchatId((prev) => (prev === subchatId ? null : subchatId));
   };
 
+  // Responsive typography scaling
+  const getResponsiveTypography = () => ({
+    h5: {
+      fontSize: {
+        xs: '1.25rem', // 20px on mobile
+        sm: '1.5rem',  // 24px on tablet
+        md: '1.75rem', // 28px on desktop
+      },
+      lineHeight: {
+        xs: 1.3,
+        sm: 1.4,
+        md: 1.5,
+      },
+    },
+    h6: {
+      fontSize: {
+        xs: '1rem',    // 16px on mobile
+        sm: '1.125rem', // 18px on tablet
+        md: '1.25rem',  // 20px on desktop
+      },
+    },
+    body1: {
+      fontSize: {
+        xs: '0.875rem', // 14px on mobile
+        sm: '1rem',     // 16px on tablet+
+      },
+    },
+    body2: {
+      fontSize: {
+        xs: '0.75rem',  // 12px on mobile
+        sm: '0.875rem', // 14px on tablet+
+      },
+    },
+  });
+
+  // Responsive spacing and sizing
+  const getResponsiveSpacing = () => ({
+    containerPadding: {
+      xs: 2, // 16px on mobile
+      sm: 3, // 24px on tablet
+      md: 4, // 32px on desktop
+    },
+    cardPadding: {
+      xs: 2, // 16px on mobile
+      sm: 2.5, // 20px on tablet
+      md: 3, // 24px on desktop
+    },
+    buttonMinHeight: {
+      xs: 44, // Touch-friendly 44px minimum
+      sm: 40,
+      md: 36,
+    },
+    gridSpacing: {
+      xs: 2, // 16px on mobile
+      sm: 2.5, // 20px on tablet
+      md: 3, // 24px on desktop
+    },
+  });
+
+  const responsiveStyles = getResponsiveTypography();
+  const spacing = getResponsiveSpacing();
+
   if (loading) {
     return (
-      <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Container 
+        maxWidth="lg" 
+        sx={{ 
+          py: spacing.containerPadding,
+          px: { xs: 2, sm: 3 }
+        }}
+      >
         <Box 
           display="flex" 
           justifyContent="center" 
           alignItems="center" 
-          minHeight={300}
+          minHeight={{ xs: 200, sm: 250, md: 300 }}
           sx={{
             backgroundColor: 'background.paper',
-            borderRadius: 2,
+            borderRadius: { xs: 1, sm: 2 },
             boxShadow: 1,
           }}
         >
           <Box textAlign="center">
-            <CircularProgress size={48} sx={{ mb: 2 }} />
-            <Typography variant="body2" color="text.secondary">
+            <CircularProgress
+              size={44}
+              sx={{ mb: 2 }}
+            />
+            <Typography 
+              variant="body2" 
+              color="text.secondary"
+              sx={{ fontSize: responsiveStyles.body2.fontSize }}
+            >
               Loading subchats...
             </Typography>
           </Box>
@@ -129,24 +212,49 @@ export const SubchatList: React.FC<SubchatListProps> = ({
   const completedSubchats = subchats.filter((s) => s.status !== 'active');
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Box sx={{ backgroundColor: 'background.paper', borderRadius: 2, boxShadow: 1, p: 3 }}>
+    <Container 
+      maxWidth="lg" 
+      sx={{ 
+        py: spacing.containerPadding,
+        px: { xs: 2, sm: 3 }
+      }}
+    >
+      <Box sx={{ 
+        backgroundColor: 'background.paper', 
+        borderRadius: { xs: 1, sm: 2 }, 
+        boxShadow: 1, 
+        p: spacing.cardPadding 
+      }}>
         {/* Header with Create button */}
         <Box
           display="flex"
           justifyContent="space-between"
           alignItems="center"
-          mb={4}
+          mb={{ xs: 3, sm: 4 }}
           sx={{
             flexDirection: { xs: 'column', sm: 'row' },
             gap: { xs: 2, sm: 0 },
+            alignItems: { xs: 'stretch', sm: 'center' },
           }}
         >
-          <Box>
-            <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 1 }}>
+          <Box sx={{ textAlign: { xs: 'center', sm: 'left' } }}>
+            <Typography 
+              variant="h5" 
+              component="h2" 
+              sx={{ 
+                fontWeight: 600, 
+                mb: 1,
+                fontSize: responsiveStyles.h5.fontSize,
+                lineHeight: responsiveStyles.h5.lineHeight,
+              }}
+            >
               Subchats
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography 
+              variant="body2" 
+              color="text.secondary"
+              sx={{ fontSize: responsiveStyles.body2.fontSize }}
+            >
               {subchats.length} {subchats.length === 1 ? 'subchat' : 'subchats'} total
             </Typography>
           </Box>
@@ -156,11 +264,17 @@ export const SubchatList: React.FC<SubchatListProps> = ({
             onClick={() => setDialogOpen(true)}
             sx={{
               minWidth: { xs: '100%', sm: 'auto' },
-              py: 1.5,
-              px: 3,
-              borderRadius: 2,
+              minHeight: spacing.buttonMinHeight,
+              py: { xs: 1.5, sm: 1.25 },
+              px: { xs: 3, sm: 2.5, md: 3 },
+              borderRadius: { xs: 1.5, sm: 2 },
               textTransform: 'none',
               fontWeight: 600,
+              fontSize: { xs: '0.875rem', sm: '1rem' },
+              // Touch-friendly spacing on mobile
+              '&:active': {
+                transform: isMobile ? 'scale(0.98)' : 'none',
+              },
             }}
           >
             Create Subchat
@@ -173,7 +287,8 @@ export const SubchatList: React.FC<SubchatListProps> = ({
             severity="error" 
             sx={{ 
               mb: 3, 
-              borderRadius: 2,
+              borderRadius: { xs: 1, sm: 2 },
+              fontSize: responsiveStyles.body2.fontSize,
               '& .MuiAlert-message': {
                 width: '100%',
               },
@@ -184,99 +299,124 @@ export const SubchatList: React.FC<SubchatListProps> = ({
         )}
 
         {/* Empty state */}
-        {!loading && !error && subchats.length === 0 && (
+        {subchats.length === 0 && !error && (
           <Paper
             variant="outlined"
             sx={{
-              p: 6,
+              p: { xs: 4, sm: 6 },
               textAlign: 'center',
               backgroundColor: 'background.default',
-              borderRadius: 3,
+              borderRadius: { xs: 2, sm: 3 },
               border: '2px dashed',
               borderColor: 'divider',
+              minHeight: { xs: 200, sm: 250, md: 300 },
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
           >
-            <Box sx={{ maxWidth: 400, mx: 'auto' }}>
-              <Typography variant="h6" color="text.primary" gutterBottom sx={{ fontWeight: 600 }}>
-                No subchats yet
-              </Typography>
-              <Typography variant="body1" color="text.secondary" paragraph sx={{ mb: 3 }}>
-                Create a subchat to delegate work to a specialist agent and organize your workflow
-              </Typography>
-              <Button
-                variant="contained"
-                startIcon={<AddIcon />}
-                onClick={() => setDialogOpen(true)}
-                sx={{
-                  py: 1.5,
-                  px: 4,
-                  borderRadius: 2,
-                  textTransform: 'none',
-                  fontWeight: 600,
-                }}
-              >
-                Create First Subchat
-              </Button>
-            </Box>
+            <Typography 
+              variant="h6" 
+              color="text.secondary" 
+              gutterBottom
+              sx={{ 
+                fontSize: responsiveStyles.h6.fontSize,
+                mb: 2,
+              }}
+            >
+              No subchats yet
+            </Typography>
+            <Typography 
+              variant="body1" 
+              color="text.secondary" 
+              paragraph
+              sx={{ 
+                fontSize: responsiveStyles.body1.fontSize,
+                maxWidth: { xs: '100%', sm: 400 },
+                lineHeight: 1.6,
+              }}
+            >
+              Create your first subchat to start collaborating with specialist agents on specific topics or tasks.
+            </Typography>
+            <Button
+              variant="outlined"
+              startIcon={<AddIcon />}
+              onClick={() => setDialogOpen(true)}
+              sx={{
+                mt: 2,
+                minHeight: spacing.buttonMinHeight,
+                px: { xs: 3, sm: 4 },
+                borderRadius: { xs: 1.5, sm: 2 },
+                textTransform: 'none',
+                fontWeight: 500,
+                fontSize: responsiveStyles.body1.fontSize,
+              }}
+            >
+              Create First Subchat
+            </Button>
           </Paper>
         )}
 
-        {/* Running Subchats Section */}
+        {/* Running/Active Subchats Section */}
         {runningSubchats.length > 0 && (
-          <Box mb={5}>
-            <Box display="flex" alignItems="center" mb={3}>
+          <Box mb={4}>
+            <Box 
+              display="flex" 
+              alignItems="center" 
+              mb={3}
+              sx={{
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+                pb: 2,
+              }}
+            >
               <Typography 
                 variant="h6" 
                 sx={{ 
-                  fontWeight: 600, 
-                  color: 'primary.main',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
+                  fontWeight: 600,
+                  fontSize: responsiveStyles.h6.fontSize,
+                  mr: 2,
                 }}
               >
-                Running
-                <Box
-                  component="span"
-                  sx={{
-                    backgroundColor: 'primary.main',
-                    color: 'primary.contrastText',
-                    borderRadius: '12px',
-                    px: 1.5,
-                    py: 0.5,
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                  }}
-                >
-                  {runningSubchats.length}
-                </Box>
+                Active Subchats
+              </Typography>
+              <Typography 
+                variant="body2" 
+                color="text.secondary"
+                sx={{
+                  backgroundColor: 'primary.main',
+                  color: 'primary.contrastText',
+                  px: 1.5,
+                  py: 0.5,
+                  borderRadius: 1,
+                  fontSize: responsiveStyles.body2.fontSize,
+                  fontWeight: 500,
+                }}
+              >
+                {runningSubchats.length}
               </Typography>
             </Box>
-            <Box
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: {
-                  xs: '1fr',
-                  sm: 'repeat(auto-fit, minmax(320px, 1fr))',
-                  lg: 'repeat(auto-fit, minmax(350px, 1fr))',
-                },
-                gap: 3,
-              }}
-            >
+            <Box>
               {runningSubchats.map((subchat) => (
-                <Box key={subchat.id}>
+                <Box 
+                  key={subchat.id}
+                  sx={{
+                    mb: 2,
+                    '&:last-child': {
+                      mb: 0,
+                    },
+                  }}
+                >
                   <SubchatCard
                     subchat={subchat}
-                    onClick={handleCardClick}
+                    onClick={() => handleCardClick(subchat.id)}
+                    onToggleDetails={() => handleToggleDetails(subchat.id)}
                     isExpanded={expandedSubchatId === subchat.id}
-                    onToggleDetails={handleToggleDetails}
                   />
                   <Collapse in={expandedSubchatId === subchat.id}>
-                    <Box sx={{ mt: 2, ml: 1 }}>
-                      <SubchatDetailView
-                        subchatId={subchat.id}
-                        onClose={() => setExpandedSubchatId(null)}
-                      />
+                    <Box mt={2}>
+                      <SubchatDetailView subchatId={subchat.id} />
                     </Box>
                   </Collapse>
                 </Box>
@@ -285,67 +425,67 @@ export const SubchatList: React.FC<SubchatListProps> = ({
           </Box>
         )}
 
-        {/* Divider between sections */}
-        {runningSubchats.length > 0 && completedSubchats.length > 0 && (
-          <Divider sx={{ my: 4 }} />
-        )}
-
-        {/* Completed/Failed Subchats Section */}
+        {/* Completed Subchats Section */}
         {completedSubchats.length > 0 && (
           <Box>
-            <Box display="flex" alignItems="center" mb={3}>
+            <Box 
+              display="flex" 
+              alignItems="center" 
+              mb={3}
+              sx={{
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+                pb: 2,
+              }}
+            >
               <Typography 
                 variant="h6" 
                 sx={{ 
-                  fontWeight: 600, 
-                  color: 'text.secondary',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
+                  fontWeight: 600,
+                  fontSize: responsiveStyles.h6.fontSize,
+                  mr: 2,
                 }}
               >
-                Completed
-                <Box
-                  component="span"
-                  sx={{
-                    backgroundColor: 'grey.200',
-                    color: 'text.secondary',
-                    borderRadius: '12px',
-                    px: 1.5,
-                    py: 0.5,
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                  }}
-                >
-                  {completedSubchats.length}
-                </Box>
+                Completed Subchats
+              </Typography>
+              <Typography 
+                variant="body2" 
+                color="text.secondary"
+                sx={{
+                  backgroundColor: 'success.main',
+                  color: 'success.contrastText',
+                  px: 1.5,
+                  py: 0.5,
+                  borderRadius: 1,
+                  fontSize: responsiveStyles.body2.fontSize,
+                  fontWeight: 500,
+                }}
+              >
+                {completedSubchats.length}
               </Typography>
             </Box>
-            <Box
+            <Box 
               sx={{
                 display: 'grid',
                 gridTemplateColumns: {
                   xs: '1fr',
-                  sm: 'repeat(auto-fit, minmax(320px, 1fr))',
-                  lg: 'repeat(auto-fit, minmax(350px, 1fr))',
+                  sm: 'repeat(2, 1fr)',
+                  lg: 'repeat(3, 1fr)',
                 },
-                gap: 3,
+                gap: spacing.gridSpacing,
               }}
             >
               {completedSubchats.map((subchat) => (
                 <Box key={subchat.id}>
                   <SubchatCard
                     subchat={subchat}
-                    onClick={handleCardClick}
+                    onClick={() => handleCardClick(subchat.id)}
+                    onToggleDetails={() => handleToggleDetails(subchat.id)}
                     isExpanded={expandedSubchatId === subchat.id}
-                    onToggleDetails={handleToggleDetails}
                   />
                   <Collapse in={expandedSubchatId === subchat.id}>
-                    <Box sx={{ mt: 2, ml: 1 }}>
-                      <SubchatDetailView
-                        subchatId={subchat.id}
-                        onClose={() => setExpandedSubchatId(null)}
-                      />
+                    <Box mt={2}>
+                      <SubchatDetailView subchatId={subchat.id} />
                     </Box>
                   </Collapse>
                 </Box>
@@ -353,15 +493,15 @@ export const SubchatList: React.FC<SubchatListProps> = ({
             </Box>
           </Box>
         )}
-
-        {/* Creation dialog */}
-        <SubchatCreationDialog
-          open={dialogOpen}
-          onClose={() => setDialogOpen(false)}
-          parentChatId={parentChatId}
-          onSubchatCreated={handleSubchatCreated}
-        />
       </Box>
+
+      {/* Creation Dialog */}
+      <SubchatCreationDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        parentChatId={parentChatId}
+        onSubchatCreated={handleSubchatCreated}
+      />
     </Container>
   );
 };

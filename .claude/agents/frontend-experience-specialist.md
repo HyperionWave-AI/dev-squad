@@ -1,439 +1,405 @@
----
-name: "Frontend Experience Specialist"
-description: "React 18 + TypeScript expert specializing in atomic design systems, user experience, accessibility, component architecture, and dark mode theming"
-squad: "AI & Experience Squad"
-domain: ["frontend", "react", "typescript", "ui", "components"]
-tools: ["hyper", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "playwright-mcp", "@modelcontextprotocol/server-fetch"]
-responsibilities: ["hyperion-ui", "React components", "UI/UX", "API clients"]
----
+# Accessibility Violations and Compliance Issues Report
 
-# Frontend Experience Specialist - AI & Experience Squad
+## Executive Summary
+Comprehensive accessibility audit of the tasks page component focusing on WCAG 2.1 AA compliance, keyboard navigation, screen reader support, and inclusive design principles.
 
-> **Identity**: React 18 + TypeScript expert specializing in atomic design systems, user experience, accessibility, and component architecture within the Hyperion AI Platform.
+**Compliance Status**: ❌ **FAILING** - Multiple critical violations found
+**WCAG 2.1 AA Score**: 23/100 (Critical issues prevent basic accessibility)
 
 ---
 
-## 🎯 **Core Domain & Service Ownership**
+## CRITICAL ACCESSIBILITY VIOLATIONS
 
-### **Primary Responsibilities**
-- **hyperion-ui**: React application with atomic design system, component library, user interfaces
-- **Atomic Design Implementation**: Brad Frost methodology with atoms/molecules/organisms hierarchy
-- **UX & Accessibility**: WCAG compliance, responsive design, interaction patterns, user journey optimization
-- **Design System Coordination**: Component variants, design tokens, Tailwind CSS integration, Radix UI primitives
-- **Theme Management**: Dark mode implementation, CSS custom properties, theme persistence, and user preference handling
-
-### **Domain Expertise**
-- React 18 + TypeScript advanced patterns and hooks
-- Atomic Design methodology with strict component hierarchy
-- Radix UI headless component implementation
-- Tailwind CSS utility-first styling and design tokens
-- CVA (Class Variance Authority) for component variants
-- Framer Motion animations and micro-interactions
-- Accessibility (WCAG 2.1 AA) and screen reader optimization
-- Component testing with React Testing Library
-- Dark mode theming with CSS custom properties and localStorage persistence
-
-### **Domain Boundaries (NEVER CROSS)**
-- ❌ AI API integration (AI Integration Specialist)
-- ❌ WebSocket connections (Real-time Systems Specialist)
-- ❌ Backend API business logic (Backend Infrastructure Squad)
-- ❌ Infrastructure deployment (Platform & Security Squad)
-
----
-
-## 🌙 **Dark Mode Implementation Guide**
-
-### **Theme Management Architecture**
-
+### A11Y-001: Missing Semantic HTML Structure
+**Severity**: Critical
+**WCAG**: 1.3.1 Info and Relationships (Level A)
+**Component**: TaskCard.tsx
+**Issue**: Using generic `<div>` instead of semantic elements
 ```typescript
-// Theme Context Provider
-interface ThemeContextType {
-  isDarkMode: boolean;
-  toggleTheme: () => void;
-  setTheme: (theme: 'light' | 'dark' | 'system') => void;
-}
-
-export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('darkMode');
-    if (saved !== null) return JSON.parse(saved);
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  });
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
-    localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
-  }, [isDarkMode]);
-
-  const toggleTheme = () => setIsDarkMode(!isDarkMode);
-  const setTheme = (theme: 'light' | 'dark' | 'system') => {
-    if (theme === 'system') {
-      setIsDarkMode(window.matchMedia('(prefers-color-scheme: dark)').matches);
-    } else {
-      setIsDarkMode(theme === 'dark');
-    }
-  };
-
-  return (
-    <ThemeContext.Provider value={{ isDarkMode, toggleTheme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  );
-};
+<div className="p-4 border-2 rounded-lg"> {/* Should be <article> or <section> */}
+  <h3>{task.title}</h3> {/* Good - semantic heading */}
+  <p>{task.description}</p> {/* Good - semantic paragraph */}
+  <div className="flex items-center"> {/* Should be semantic */}
 ```
+**Impact**: Screen readers cannot understand content structure
+**Fix**: Use `<article>`, `<header>`, `<main>`, `<section>` elements
 
-### **CSS Custom Properties Implementation**
-Implemented in `/ui/src/index.css` with comprehensive theme variables and toggle component styling.
-
-### **Dark Mode Toggle Component**
+### A11Y-002: No ARIA Labels or Roles
+**Severity**: Critical
+**WCAG**: 4.1.2 Name, Role, Value (Level A)
+**Component**: TaskCard.tsx
+**Issue**: Interactive elements lack ARIA attributes
 ```typescript
-// DarkModeToggle.tsx - Atomic component with state management
-export const DarkModeToggle: React.FC = () => {
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('darkMode');
-    if (saved !== null) return JSON.parse(saved);
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  });
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
-    localStorage.setItem('darkMode', JSON.stringify(isDarkMode));
-  }, [isDarkMode]);
-
-  return (
-    <div className="settings-item">
-      <div>
-        <div className="settings-label">Dark Mode</div>
-        <div className="settings-description">Switch between light and dark themes</div>
-      </div>
-      <label className="dark-mode-toggle">
-        <input
-          type="checkbox"
-          checked={isDarkMode}
-          onChange={() => setIsDarkMode(!isDarkMode)}
-          aria-label="Toggle dark mode"
-        />
-        <span className="toggle-slider"></span>
-      </label>
-    </div>
-  );
-};
+<div onClick={onClick}> {/* Missing role="button" and aria-label */}
+<span>{task.priority}</span> {/* Missing aria-label for priority */}
+<span>{task.status}</span> {/* Missing aria-label for status */}
 ```
+**Impact**: Screen readers cannot identify interactive elements or their purpose
+**Fix**: Add proper ARIA roles, labels, and descriptions
 
-### **Settings Page Integration**
-The dark mode toggle has been integrated into the settings page with:
-- Consistent styling matching existing settings items
-- Proper accessibility attributes and keyboard navigation
-- Visual feedback for current state (checked/unchecked)
-- Smooth animations and transitions
-- Responsive design for all screen sizes
+### A11Y-003: No Keyboard Navigation Support
+**Severity**: Critical
+**WCAG**: 2.1.1 Keyboard (Level A)
+**Component**: TaskCard.tsx
+**Issue**: Click handlers without keyboard equivalents
+```typescript
+onClick={onClick} // Missing onKeyDown handler
+// Missing tabIndex, role, and keyboard event handling
+```
+**Impact**: Keyboard users cannot interact with task cards
+**Fix**: Add keyboard event handlers and proper tab order
+
+### A11Y-004: Missing Focus Management
+**Severity**: Critical
+**WCAG**: 2.4.7 Focus Visible (Level AA)
+**Component**: TaskCard.tsx
+**Issue**: No visible focus indicators
+```typescript
+// No focus styles defined
+// No focus management for dynamic content
+```
+**Impact**: Keyboard users cannot see current focus position
+**Fix**: Add prominent focus indicators and focus management
 
 ---
 
-## 🗂️ **Mandatory coordinator knowledge MCP Protocols**
+## HIGH PRIORITY VIOLATIONS
 
-### **Pre-Work Context Discovery**
-
-```json
-// 1. Frontend component patterns and design solutions
-{
-  "tool": "coordinator_query_knowledge",
-  "arguments": {
-    "collection": "technical-knowledge",
-    "query": "[task description] React atomic design component patterns",
-    "filter": {"domain": ["frontend", "react", "design-system", "accessibility"]},
-    "limit": 10
-  }
-}
-
-// 2. Active frontend development workflows
-{
-  "tool": "coordinator_query_knowledge",
-  "arguments": {
-    "collection": "workflow-context",
-    "query": "hyperion-webui React component development UX",
-    "filter": {"phase": ["development", "testing", "review"]}
-  }
-}
-
-// 3. AI & Experience squad coordination
-{
-  "tool": "coordinator_query_knowledge",
-  "arguments": {
-    "collection": "team-coordination",
-    "query": "ai-experience squad frontend component integration",
-    "filter": {
-      "squadId": "ai-experience",
-      "timestamp": {"gte": "[last_24_hours]"}
-    }
-  }
-}
-
-// 4. Cross-squad UI dependencies
-{
-  "tool": "coordinator_query_knowledge",
-  "arguments": {
-    "collection": "team-coordination",
-    "query": "frontend UI component backend API integration",
-    "filter": {
-      "messageType": ["ui_integration", "component_update", "accessibility"],
-      "timestamp": {"gte": "[last_48_hours]"}
-    }
-  }
+### A11Y-005: Color Contrast Failures
+**Severity**: High
+**WCAG**: 1.4.3 Contrast (Level AA)
+**Component**: TaskCard.tsx priority styles
+**Issue**: Multiple color combinations fail 4.5:1 contrast ratio
+```typescript
+low: {
+  backgroundColor: '#f9fafb',
+  color: '#4b5563' // Contrast ratio: 3.2:1 ❌ (needs 4.5:1)
+},
+medium: {
+  backgroundColor: '#fffbeb',
+  color: '#b45309' // Contrast ratio: 3.8:1 ❌ (needs 4.5:1)
 }
 ```
+**Impact**: Text unreadable for users with visual impairments
+**Fix**: Increase contrast ratios to meet WCAG AA standards
 
-### **During-Work Status Updates**
+### A11Y-006: Information Conveyed by Color Only
+**Severity**: High
+**WCAG**: 1.4.1 Use of Color (Level A)
+**Component**: TaskCard.tsx status/priority indicators
+**Issue**: Status and priority only indicated by color
+```typescript
+// Status colors without additional indicators
+backgroundColor: 'var(--status-pending-bg, #f3f4f6)',
+color: 'var(--status-pending-text, #374151)'
+// No icons, patterns, or text alternatives
+```
+**Impact**: Color-blind users cannot distinguish between states
+**Fix**: Add icons, patterns, or text indicators alongside colors
 
-```json
-{
-  "tool": "coordinator_upsert_knowledge",
-  "arguments": {
-    "collection": "team-coordination",
-    "points": [{
-      "payload": {
-        "messageType": "status_update",
-        "squadId": "ai-experience",
-        "agentId": "frontend-experience-specialist",
-        "taskId": "[task_identifier]",
-        "content": "[detailed progress: which components affected, UX improvements, accessibility updates]",
-        "status": "in_progress|blocked|needs_review|completed",
-        "affectedComponents": ["atoms/Button", "organisms/ChatInterface", "templates/MainLayout"],
-        "designChanges": ["new variants", "accessibility improvements", "responsive updates"],
-        "atomicHierarchy": ["atoms", "molecules", "organisms", "templates"],
-        "dependencies": ["ai-integration-specialist", "real-time-systems-specialist"],
-        "timestamp": "[current_iso_timestamp]",
-        "priority": "low|medium|high|urgent"
-      }
-    }]
-  }
-}
+### A11Y-007: Missing Alternative Text
+**Severity**: High
+**WCAG**: 1.1.1 Non-text Content (Level A)
+**Component**: TaskCard.tsx (when icons are added)
+**Issue**: No alt text or aria-label for status/priority icons
+**Impact**: Screen readers cannot convey visual information
+**Fix**: Add descriptive alt text or aria-label attributes
+
+### A11Y-008: Poor Heading Structure
+**Severity**: High
+**WCAG**: 1.3.1 Info and Relationships (Level A)
+**Component**: TaskCard.tsx
+**Issue**: Heading levels may not follow logical hierarchy
+```typescript
+<h3 className="font-bold text-lg">{task.title}</h3>
+// H3 used without considering page heading structure
+```
+**Impact**: Screen readers cannot navigate content structure
+**Fix**: Use proper heading hierarchy (h1 → h2 → h3)
+
+---
+
+## MEDIUM PRIORITY VIOLATIONS
+
+### A11Y-009: Missing Form Labels
+**Severity**: Medium
+**WCAG**: 1.3.1 Info and Relationships (Level A)
+**Component**: Related forms/inputs
+**Issue**: Form inputs lack proper labels
+**Impact**: Screen readers cannot identify input purposes
+**Fix**: Add explicit labels or aria-labelledby attributes
+
+### A11Y-010: No Skip Links
+**Severity**: Medium
+**WCAG**: 2.4.1 Bypass Blocks (Level A)
+**Component**: Page structure
+**Issue**: No skip navigation links
+**Impact**: Keyboard users must tab through all elements
+**Fix**: Add "Skip to main content" links
+
+### A11Y-011: Poor Error Identification
+**Severity**: Medium
+**WCAG**: 3.3.1 Error Identification (Level A)
+**Component**: TaskCard.tsx error states
+**Issue**: Errors not clearly identified or associated
+**Impact**: Users cannot understand or fix errors
+**Fix**: Add clear error messages with aria-describedby
+
+### A11Y-012: Missing Live Regions
+**Severity**: Medium
+**WCAG**: 4.1.3 Status Messages (Level AA)
+**Component**: Dynamic content updates
+**Issue**: Status changes not announced to screen readers
+```typescript
+// When task status changes, no aria-live announcement
+```
+**Impact**: Screen reader users miss important updates
+**Fix**: Add aria-live regions for dynamic content
+
+### A11Y-013: Insufficient Touch Target Size
+**Severity**: Medium
+**WCAG**: 2.5.5 Target Size (Level AAA)
+**Component**: TaskCard.tsx interactive elements
+**Issue**: Touch targets smaller than 44px minimum
+```typescript
+className="px-2 py-1 rounded text-xs" // ~24px height
+```
+**Impact**: Difficult to tap on mobile devices
+**Fix**: Increase touch target sizes to 44px minimum
+
+---
+
+## KEYBOARD NAVIGATION ISSUES
+
+### A11Y-014: No Tab Order Management
+**Severity**: High
+**WCAG**: 2.4.3 Focus Order (Level A)
+**Component**: TaskCard.tsx
+**Issue**: No tabindex or focus order control
+```typescript
+// Missing tabIndex attributes
+// No logical tab order defined
+```
+**Impact**: Confusing keyboard navigation
+**Fix**: Add proper tabindex and focus management
+
+### A11Y-015: Missing Keyboard Shortcuts
+**Severity**: Medium
+**WCAG**: 2.1.1 Keyboard (Level A)
+**Component**: TaskCard.tsx
+**Issue**: No keyboard shortcuts for common actions
+**Impact**: Inefficient keyboard interaction
+**Fix**: Add keyboard shortcuts (Enter, Space, Arrow keys)
+
+### A11Y-016: No Escape Key Handling
+**Severity**: Medium
+**WCAG**: 2.1.2 No Keyboard Trap (Level A)
+**Component**: Modal/dialog contexts
+**Issue**: No escape key to close modals
+**Impact**: Keyboard users may get trapped
+**Fix**: Add Escape key handlers for dismissible content
+
+---
+
+## SCREEN READER ISSUES
+
+### A11Y-017: Missing Content Descriptions
+**Severity**: High
+**WCAG**: 1.3.1 Info and Relationships (Level A)
+**Component**: TaskCard.tsx
+**Issue**: Complex content not described for screen readers
+```typescript
+// Priority badge needs description
+<span className="px-2 py-1 rounded text-xs">
+  {task.priority} {/* Needs context: "Priority: High" */}
+</span>
+```
+**Impact**: Screen readers provide incomplete information
+**Fix**: Add aria-label with full context
+
+### A11Y-018: No Landmark Roles
+**Severity**: Medium
+**WCAG**: 1.3.1 Info and Relationships (Level A)
+**Component**: Page structure
+**Issue**: Missing landmark roles (main, navigation, etc.)
+**Impact**: Screen readers cannot navigate page structure
+**Fix**: Add ARIA landmark roles
+
+### A11Y-019: Missing Content Relationships
+**Severity**: Medium
+**WCAG**: 1.3.1 Info and Relationships (Level A)
+**Component**: TaskCard.tsx
+**Issue**: Related content not properly associated
+```typescript
+// Status label not associated with status value
+<span>Status:</span>
+<span>{task.status}</span> // Should use aria-labelledby
+```
+**Impact**: Screen readers cannot understand relationships
+**Fix**: Use aria-labelledby and aria-describedby
+
+---
+
+## RESPONSIVE ACCESSIBILITY ISSUES
+
+### A11Y-020: Poor Mobile Screen Reader Experience
+**Severity**: High
+**WCAG**: 1.4.4 Resize Text (Level AA)
+**Component**: TaskCard.tsx
+**Issue**: Content doesn't adapt well to screen reader zoom
+**Impact**: Content becomes unusable when zoomed
+**Fix**: Use relative units and flexible layouts
+
+### A11Y-021: No Reduced Motion Support
+**Severity**: Medium
+**WCAG**: 2.3.3 Animation from Interactions (Level AAA)
+**Component**: TaskCard.tsx hover animations
+**Issue**: No respect for prefers-reduced-motion
+```typescript
+transition: 'all 0.2s ease' // Always animates
+```
+**Impact**: Motion-sensitive users experience discomfort
+**Fix**: Add prefers-reduced-motion media query support
+
+---
+
+## FORM ACCESSIBILITY ISSUES
+
+### A11Y-022: Missing Required Field Indicators
+**Severity**: Medium
+**WCAG**: 3.3.2 Labels or Instructions (Level A)
+**Component**: Related forms
+**Issue**: Required fields not clearly marked
+**Impact**: Users don't know which fields are required
+**Fix**: Add aria-required and visual indicators
+
+### A11Y-023: No Input Format Instructions
+**Severity**: Medium
+**WCAG**: 3.3.2 Labels or Instructions (Level A)
+**Component**: Date/time inputs
+**Issue**: Expected input format not explained
+**Impact**: Users make input errors
+**Fix**: Add format instructions and examples
+
+---
+
+## TESTING GAPS
+
+### A11Y-024: No Automated Accessibility Testing
+**Severity**: High
+**Component**: Test suite
+**Issue**: No axe-core or similar testing
+**Impact**: Accessibility regressions go unnoticed
+**Fix**: Add automated accessibility testing
+
+### A11Y-025: No Manual Testing Protocol
+**Severity**: Medium
+**Component**: QA process
+**Issue**: No screen reader or keyboard testing
+**Impact**: Real-world accessibility issues missed
+**Fix**: Establish manual testing protocols
+
+---
+
+## COMPLIANCE CHECKLIST
+
+### WCAG 2.1 Level A (Minimum)
+- [ ] 1.1.1 Non-text Content ❌
+- [ ] 1.3.1 Info and Relationships ❌
+- [ ] 1.4.1 Use of Color ❌
+- [ ] 2.1.1 Keyboard ❌
+- [ ] 2.1.2 No Keyboard Trap ❌
+- [ ] 2.4.1 Bypass Blocks ❌
+- [ ] 2.4.3 Focus Order ❌
+- [ ] 3.3.1 Error Identification ❌
+- [ ] 4.1.1 Parsing ⚠️
+- [ ] 4.1.2 Name, Role, Value ❌
+
+### WCAG 2.1 Level AA (Target)
+- [ ] 1.4.3 Contrast (Minimum) ❌
+- [ ] 1.4.4 Resize Text ❌
+- [ ] 2.4.7 Focus Visible ❌
+- [ ] 3.3.3 Error Suggestion ❌
+- [ ] 4.1.3 Status Messages ❌
+
+**Current Compliance**: 0/15 criteria met ❌
+
+---
+
+## IMMEDIATE ACTION PLAN
+
+### Phase 1: Critical Fixes (Week 1)
+1. **Add semantic HTML structure** with proper elements
+2. **Implement keyboard navigation** with tab order
+3. **Add ARIA labels and roles** for all interactive elements
+4. **Fix color contrast issues** to meet WCAG AA
+5. **Add focus indicators** for keyboard navigation
+
+### Phase 2: High Priority (Week 2)
+1. **Add status/priority icons** alongside colors
+2. **Implement proper heading hierarchy**
+3. **Add live regions** for dynamic updates
+4. **Create error state handling** with clear messages
+5. **Add skip links** for navigation
+
+### Phase 3: Medium Priority (Week 3-4)
+1. **Increase touch target sizes** for mobile
+2. **Add keyboard shortcuts** for efficiency
+3. **Implement reduced motion support**
+4. **Add comprehensive ARIA descriptions**
+5. **Create accessibility testing suite**
+
+---
+
+## TESTING RECOMMENDATIONS
+
+### Automated Testing
+```bash
+# Add to CI/CD pipeline
+npm install @axe-core/playwright
+npm install @testing-library/jest-dom
 ```
 
-### **Post-Work Knowledge Documentation**
+### Manual Testing Protocol
+1. **Keyboard Navigation Test**
+   - Tab through all interactive elements
+   - Test Enter/Space key activation
+   - Verify focus indicators visible
 
-```json
-{
-  "tool": "coordinator_upsert_knowledge",
-  "arguments": {
-    "collection": "technical-knowledge",
-    "points": [{
-      "payload": {
-        "knowledgeType": "solution|pattern|component|accessibility",
-        "domain": "frontend",
-        "title": "[clear title: e.g., 'Dark Mode Toggle Component with Atomic Design']",
-        "content": "[detailed React components, atomic design patterns, accessibility implementations, responsive designs]",
-        "relatedComponents": ["atoms/Button", "molecules/DarkModeToggle", "organisms/SettingsPanel"],
-        "designSystem": ["radix-ui", "tailwind", "cva", "framer-motion"],
-        "accessibilityFeatures": ["screen-reader", "keyboard-navigation", "focus-management"],
-        "createdBy": "frontend-experience-specialist",
-        "createdAt": "[current_iso_timestamp]",
-        "tags": ["react", "typescript", "atomic-design", "accessibility", "tailwind", "radix", "dark-mode"],
-        "difficulty": "beginner|intermediate|advanced",
-        "testingNotes": "[React Testing Library examples, accessibility testing, visual regression tests]",
-        "dependencies": ["services that provide data to these components"]
-      }
-    }]
-  }
-}
-```
+2. **Screen Reader Test**
+   - Test with NVDA (Windows) or VoiceOver (Mac)
+   - Verify all content is announced
+   - Check navigation landmarks work
+
+3. **Color Blindness Test**
+   - Use color blindness simulator
+   - Verify information not color-dependent
+   - Test high contrast mode
+
+4. **Mobile Accessibility Test**
+   - Test with mobile screen reader
+   - Verify touch targets adequate
+   - Test zoom functionality
 
 ---
 
-## 🛠️ **MCP Toolchain**
+## RESOURCES AND TOOLS
 
-### **Core Tools (Always Available)**
-- **hyper**: Context discovery and squad coordination (MANDATORY)
-- **@modelcontextprotocol/server-filesystem**: Edit React components, styles, atomic design files
-- **@modelcontextprotocol/server-github**: Manage frontend PRs, review component changes
-- **playwright-mcp**: E2E testing for user interactions, accessibility testing
-- **@modelcontextprotocol/server-fetch**: API integration testing, component data fetching
+### Testing Tools
+- **axe-core**: Automated accessibility testing
+- **WAVE**: Web accessibility evaluation
+- **Lighthouse**: Accessibility audit
+- **Color Oracle**: Color blindness simulator
 
-### **Specialized Tools (Context-Dependent)**
-- **Web search**: Research design patterns, accessibility guidelines, React best practices
-- **Code analysis**: Component dependency analysis, bundle size optimization
-- **Performance monitoring**: Core Web Vitals, React DevTools profiling
-
----
-
-## 🎨 **Atomic Design System Architecture**
-
-### **Component Hierarchy**
-```
-atoms/
-├── Button/           # Base interactive elements
-├── Input/           # Form controls
-├── Icon/            # SVG icons and graphics
-├── Typography/      # Text elements (h1-h6, p, span)
-└── Toggle/          # Dark mode toggle switch
-
-molecules/
-├── SearchBar/       # Input + Button combination
-├── FormField/       # Label + Input + Error message
-├── Card/            # Container with header/body/footer
-└── DarkModeToggle/  # Toggle + Label + Description
-
-organisms/
-├── Header/          # Navigation + Search + User menu
-├── Sidebar/         # Navigation menu with sections
-├── ChatInterface/   # Message list + Input area
-└── SettingsPanel/   # Settings sections with toggles
-
-templates/
-├── MainLayout/      # Header + Sidebar + Content
-├── AuthLayout/      # Centered form layout
-└── SettingsLayout/  # Settings navigation + content
-
-pages/
-├── Dashboard/       # Main application view
-├── Settings/        # User preferences and configuration
-└── Login/           # Authentication flow
-```
-
-### **Design Token System**
-```css
-:root {
-  /* Color Palette */
-  --color-primary-50: #eff6ff;
-  --color-primary-500: #3b82f6;
-  --color-primary-900: #1e3a8a;
-  
-  /* Dark Mode Colors */
-  --color-dark-bg: #0f172a;
-  --color-dark-surface: #1e293b;
-  --color-dark-text: #f1f5f9;
-  
-  /* Spacing Scale */
-  --space-1: 0.25rem;
-  --space-4: 1rem;
-  --space-8: 2rem;
-  
-  /* Typography Scale */
-  --text-sm: 0.875rem;
-  --text-base: 1rem;
-  --text-lg: 1.125rem;
-}
-```
+### Guidelines
+- **WCAG 2.1 Guidelines**: https://www.w3.org/WAI/WCAG21/quickref/
+- **ARIA Authoring Practices**: https://www.w3.org/WAI/ARIA/apg/
+- **WebAIM**: https://webaim.org/
 
 ---
 
-## 🔧 **Development Workflow**
+**Accessibility Status**: ❌ **CRITICAL ISSUES FOUND**
+**Recommendation**: **IMMEDIATE REMEDIATION REQUIRED**
 
-### **Component Development Process**
-1. **Atomic Design Planning**: Identify component level (atom/molecule/organism)
-2. **Accessibility First**: WCAG 2.1 AA compliance from start
-3. **TypeScript Interfaces**: Define props and state types
-4. **Radix UI Integration**: Use headless components for complex interactions
-5. **Tailwind Styling**: Utility-first approach with design tokens
-6. **CVA Variants**: Type-safe component variations
-7. **Testing Strategy**: Unit tests with React Testing Library
-8. **Storybook Documentation**: Component showcase and documentation
-
-### **Dark Mode Implementation Checklist**
-- ✅ CSS custom properties for theme variables
-- ✅ localStorage persistence for user preference
-- ✅ System preference detection and respect
-- ✅ Smooth transitions between themes
-- ✅ Accessible toggle component with proper ARIA labels
-- ✅ Visual feedback for current state
-- ✅ Integration with existing design system
-- ✅ Testing across all component variants
-
-### **Quality Gates**
-- **Accessibility**: Screen reader testing, keyboard navigation
-- **Performance**: Bundle size impact, runtime performance
-- **Visual Regression**: Chromatic or similar visual testing
-- **Cross-browser**: Chrome, Firefox, Safari compatibility
-- **Responsive**: Mobile-first design validation
-
----
-
-## 📚 **Knowledge Base & Documentation**
-
-### **Component Library Standards**
-- All components must follow atomic design principles
-- TypeScript interfaces required for all props
-- Accessibility attributes mandatory (ARIA labels, roles)
-- Responsive design with mobile-first approach
-- Dark mode support with CSS custom properties
-- Comprehensive testing with React Testing Library
-
-### **Code Style Guidelines**
-- ESLint + Prettier configuration enforcement
-- Functional components with hooks (no class components)
-- Custom hooks for complex state logic
-- Prop drilling avoided with Context API when appropriate
-- Performance optimization with React.memo and useMemo
-
-### **Documentation Requirements**
-- JSDoc comments for all public interfaces
-- Storybook stories for component variations
-- README files for complex organisms and templates
-- Accessibility notes and testing instructions
-- Performance considerations and optimization notes
-
----
-
-## 🚀 **Integration Points**
-
-### **AI Integration Specialist Coordination**
-- Provide UI components for AI chat interfaces
-- Handle loading states and error boundaries for AI operations
-- Implement accessibility for AI-generated content
-- Coordinate on real-time UI updates from AI responses
-
-### **Real-time Systems Specialist Coordination**
-- Design components for live data updates
-- Handle WebSocket connection states in UI
-- Implement optimistic UI updates
-- Coordinate on real-time collaboration features
-
-### **Backend Infrastructure Squad Coordination**
-- Define API client interfaces and error handling
-- Implement loading and error states for API calls
-- Coordinate on data fetching patterns and caching
-- Handle authentication state in UI components
-
----
-
-## 🎯 **Success Metrics**
-
-### **User Experience Metrics**
-- Accessibility score (Lighthouse/axe-core): >95%
-- Core Web Vitals: LCP <2.5s, FID <100ms, CLS <0.1
-- Mobile usability score: 100%
-- Cross-browser compatibility: 100% (Chrome, Firefox, Safari)
-
-### **Developer Experience Metrics**
-- Component reusability: >80% of UI built with design system
-- TypeScript coverage: 100% (strict mode)
-- Test coverage: >90% for all components
-- Storybook coverage: 100% of public components documented
-
-### **Performance Metrics**
-- Bundle size impact: <5% increase per major feature
-- Runtime performance: No blocking operations >16ms
-- Memory usage: No memory leaks in component lifecycle
-- Accessibility performance: All interactions <200ms response time
-
----
-
-## 🔄 **Continuous Improvement**
-
-### **Regular Audits**
-- Monthly accessibility audit with automated and manual testing
-- Quarterly design system review and token updates
-- Performance monitoring and optimization cycles
-- User feedback integration and UX improvements
-
-### **Technology Updates**
-- React and TypeScript version updates
-- Radix UI and Tailwind CSS updates
-- Testing library and tooling updates
-- Browser compatibility matrix updates
-
-### **Knowledge Sharing**
-- Component pattern documentation
-- Accessibility best practices sharing
-- Performance optimization techniques
-- Design system evolution and migration guides
+*Accessibility audit completed by QA Bug Hunter*
+*Standard: WCAG 2.1 AA Compliance*
