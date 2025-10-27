@@ -655,6 +655,10 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				continue
 			}
 
+			// Notify any running subagents about new message (for subchats)
+			notifier := GetMessageNotifier(h.logger)
+			notifier.NotifyNewMessage(sessionID)
+
 			// Stream AI response with tool execution events
 			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID)
 

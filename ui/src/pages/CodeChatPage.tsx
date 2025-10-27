@@ -106,8 +106,10 @@ export function CodeChatPage() {
       setSessions(fetchedSessions);
       console.log('[CodeChatPage] ✅ setSessions() completed');
 
-      // Select first session if none active
-      if (!activeSessionId && fetchedSessions.length > 0) {
+      // Select first session if none active (ONLY on initial load, not during auto-refresh)
+      // Don't auto-select if user already has a session active or is navigating
+      if (!activeSessionId && fetchedSessions.length > 0 && sessions.length === 0) {
+        // Only auto-select on very first load when sessions array is empty
         setActiveSessionId(fetchedSessions[0].id);
         await loadMessages(fetchedSessions[0].id);
       }
@@ -340,23 +342,12 @@ export function CodeChatPage() {
   };
 
   const handleSubchatClick = async (subchatId: string) => {
-    // Refresh sessions list to include any newly created subchats
-    await loadSessions();
-    // Navigate to the subchat by setting it as active session
+    // Navigate to the subchat immediately (don't call loadSessions first - it causes race condition)
     setActiveSessionId(subchatId);
     await loadMessages(subchatId);
     setSubchatsDrawerOpen(false);
+    // Auto-refresh will pick up any new sessions in the next 3-second cycle
   };
-
-  // Helper to check if active session is a subchat (read-only)
-  const isActiveSessionSubchat = (): boolean => {
-    if (!activeSessionId) return false;
-    const activeSession = sessions.find((s) => s.id === activeSessionId);
-    if (!activeSession) return false;
-    // Detect subchat by title prefix or parentChatId field
-    return activeSession.title.startsWith('Subchat:') || !!activeSession.parentChatId;
-  };
-
   return (
     <Box className="chat-dashboard-container" sx={{ display: 'flex', height: 'calc(100vh - 140px)' }}>
       {/* Left Sidebar - Session List (20%) */}
@@ -424,12 +415,10 @@ export function CodeChatPage() {
         {/* Input Box */}
         <ChatInputBox
           onSendMessage={handleSendMessage}
-          disabled={!activeSessionId || isStreaming || isActiveSessionSubchat()}
+          disabled={!activeSessionId || isStreaming}
           placeholder={
             !activeSessionId
               ? 'Create a new chat to get started'
-              : isActiveSessionSubchat()
-              ? 'This subchat is read-only. Monitor the AI agent progress here.'
               : 'Type your message...'
           }
         />
