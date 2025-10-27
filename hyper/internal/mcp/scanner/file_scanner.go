@@ -18,6 +18,8 @@ type FileScanner struct {
 	supportedExtensions map[string]string // extension -> language
 	maxFileSize         int64             // max file size in bytes
 	chunkSize           int               // lines per chunk
+	includePatterns     []string          // custom include patterns (e.g., ["*.go", "*.ts"])
+	excludePatterns     []string          // custom exclude patterns (e.g., ["node_modules", "dist"])
 }
 
 // NewFileScanner creates a new file scanner
@@ -71,6 +73,106 @@ func NewFileScanner() *FileScanner {
 	}
 }
 
+// NewFileScannerWithConfig creates a file scanner with custom configuration
+func NewFileScannerWithConfig(includePatterns, excludePatterns []string, chunkSize string) *FileScanner {
+	// Convert t-shirt size to line count
+	chunkLines := storage.ChunkSizeToLines(chunkSize)
+
+	fs := &FileScanner{
+		supportedExtensions: map[string]string{
+			".go":   "go",
+			".js":   "javascript",
+			".ts":   "typescript",
+			".jsx":  "javascript",
+			".tsx":  "typescript",
+			".py":   "python",
+			".java": "java",
+			".c":    "c",
+			".cpp":  "cpp",
+			".h":    "c",
+			".hpp":  "cpp",
+			".cs":   "csharp",
+			".rb":   "ruby",
+			".php":  "php",
+			".rs":   "rust",
+			".swift": "swift",
+			".kt":   "kotlin",
+			".m":    "objective-c",
+			".scala": "scala",
+			".r":    "r",
+			".sql":  "sql",
+			".sh":   "shell",
+			".bash": "shell",
+			".yaml": "yaml",
+			".yml":  "yaml",
+			".json": "json",
+			".xml":  "xml",
+			".html": "html",
+			".css":  "css",
+			".scss": "scss",
+			".less": "less",
+			".vue":  "vue",
+			".md":   "markdown",
+		},
+		maxFileSize:     10 * 1024 * 1024, // 10 MB
+		chunkSize:       chunkLines,
+		includePatterns: includePatterns,
+		excludePatterns: excludePatterns,
+	}
+
+	return fs
+}
+
+// shouldExcludePath checks if a path should be excluded based on patterns
+func (fs *FileScanner) shouldExcludePath(path string, basePath string) bool {
+	// If no custom exclude patterns, use defaults
+	excludePatterns := fs.excludePatterns
+	if len(excludePatterns) == 0 {
+		excludePatterns = []string{"node_modules", "dist", "build", ".git", "vendor", ".next", "coverage", "__pycache__", ".vscode", ".idea", "test-results", "out"}
+	}
+
+	// Get relative path for pattern matching
+	relativePath, err := filepath.Rel(basePath, path)
+	if err != nil {
+		relativePath = path
+	}
+
+	// Check each exclude pattern
+	for _, pattern := range excludePatterns {
+		// Check if path contains the pattern (simple substring match for directories)
+		if strings.Contains(relativePath, pattern) {
+			return true
+		}
+		// Also try glob match
+		matched, _ := filepath.Match(pattern, filepath.Base(path))
+		if matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldIncludeFile checks if a file should be included based on patterns
+func (fs *FileScanner) shouldIncludeFile(filePath string) bool {
+	// If custom patterns are set, use them
+	if len(fs.includePatterns) > 0 {
+		fileName := filepath.Base(filePath)
+		for _, pattern := range fs.includePatterns {
+			matched, _ := filepath.Match(pattern, fileName)
+			if matched {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Otherwise, use extension-based matching
+	ext := filepath.Ext(filePath)
+	_, supported := fs.supportedExtensions[ext]
+	return supported
+}
+
 // ScanDirectory scans a directory and returns file information
 func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile, error) {
 	var files []*storage.IndexedFile
@@ -80,24 +182,33 @@ func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile,
 			return err
 		}
 
-		// Skip directories
+		// Skip directories that match exclude patterns
 		if info.IsDir() {
-			// Skip common directories to ignore
-			dirName := filepath.Base(path)
-			if dirName == ".git" || dirName == "node_modules" || dirName == "vendor" ||
-				dirName == "dist" || dirName == "build" || dirName == ".vscode" ||
-				dirName == ".idea" || dirName == "__pycache__" || dirName == "test-results" ||
-				dirName == "coverage" || dirName == ".next" || dirName == "out" {
+			if fs.shouldExcludePath(path, folderPath) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// Check if file extension is supported
+		// Check if file should be excluded
+		if fs.shouldExcludePath(path, folderPath) {
+			return nil
+		}
+
+		// Check if file should be included based on patterns
+		if !fs.shouldIncludeFile(path) {
+			return nil
+		}
+
+		// Determine language from extension
 		ext := filepath.Ext(path)
 		language, supported := fs.supportedExtensions[ext]
 		if !supported {
-			return nil
+			// For custom patterns, default to file extension without dot
+			language = strings.TrimPrefix(ext, ".")
+			if language == "" {
+				language = "unknown"
+			}
 		}
 
 		// Check file size
