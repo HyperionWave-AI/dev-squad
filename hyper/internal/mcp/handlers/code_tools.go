@@ -206,8 +206,15 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 		return createCodeIndexErrorResult(fmt.Sprintf("failed to update folder status: %s", err.Error())), nil
 	}
 
+	// Create scanner with folder-specific configuration
+	includePatterns := folder.GetIncludePatterns()
+	excludePatterns := folder.GetExcludePatterns()
+	chunkSize := folder.GetChunkSize()
+
+	fileScanner := scanner.NewFileScannerWithConfig(includePatterns, excludePatterns, chunkSize)
+
 	// Scan directory for files
-	scannedFiles, err := h.fileScanner.ScanDirectory(projectRoot)
+	scannedFiles, err := fileScanner.ScanDirectory(projectRoot)
 	if err != nil {
 		h.codeIndexStorage.UpdateFolderStatus(folder.ID, "error", err.Error())
 		return createCodeIndexErrorResult(fmt.Sprintf("failed to scan directory: %s", err.Error())), nil
@@ -237,8 +244,8 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 			scannedFile.ID = uuid.New().String()
 		}
 
-		// Create chunks
-		chunks, err := h.fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
+		// Create chunks using the configured scanner
+		chunks, err := fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
 		if err != nil {
 			h.logger.Warn("Failed to create chunks", zap.String("file", scannedFile.Path), zap.Error(err))
 			continue

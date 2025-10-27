@@ -55,3 +55,10 @@ export interface SearchOptions {
   folderPath?: string;  // Optional: filter results to specific folder
   retrieve?: 'chunk' | 'full';  // Optional: content retrieval mode
 }
+
+export interface AddFolderConfig {
+  folderPath: string;
+  includePatterns?: string[];
+  excludePatterns?: string[];
+  chunkSize?: 'xs' | 's' | 'm' | 'l' | 'xl';
+}
