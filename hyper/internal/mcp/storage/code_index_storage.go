@@ -107,6 +107,33 @@ func (s *CodeIndexStorage) AddFolder(path, description string) (*IndexedFolder, 
 	return folder, nil
 }
 
+// AddFolderWithConfig adds a new folder with custom configuration
+func (s *CodeIndexStorage) AddFolderWithConfig(path, description string, includePatterns, excludePatterns []string, chunkSize string) (*IndexedFolder, error) {
+	folder := &IndexedFolder{
+		Path:            path,
+		Description:     description,
+		AddedAt:         time.Now(),
+		Status:          "active",
+		FileCount:       0,
+		IncludePatterns: includePatterns,
+		ExcludePatterns: excludePatterns,
+		ChunkSize:       chunkSize,
+	}
+
+	result, err := s.foldersCol.InsertOne(context.Background(), folder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert folder: %w", err)
+	}
+
+	// Convert ObjectID to string
+	if oid, ok := result.InsertedID.(primitive.ObjectID); ok {
+		folder.ID = oid.Hex()
+	} else {
+		folder.ID = fmt.Sprintf("%v", result.InsertedID)
+	}
+	return folder, nil
+}
+
 // RemoveFolder removes a folder and all its associated files and chunks
 func (s *CodeIndexStorage) RemoveFolder(folderID string) error {
 	ctx := context.Background()
