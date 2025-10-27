@@ -23,6 +23,7 @@ var
 tmp
 hyper/tmp
 hyper/tmp/coordinator
+hyper/coordinator
 
 third_party
 
