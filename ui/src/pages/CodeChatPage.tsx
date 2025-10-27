@@ -103,8 +103,21 @@ export function CodeChatPage() {
         parentChatId: s.parentChatId
       })));
 
-      console.log('[CodeChatPage] Calling setSessions() with', fetchedSessions.length, 'sessions');
-      setSessions(fetchedSessions);
+      // Deduplicate sessions by ID (prevents race condition artifacts)
+      const sessionMap = new Map<string, typeof fetchedSessions[0]>();
+      fetchedSessions.forEach(session => {
+        sessionMap.set(session.id, session);
+      });
+      const deduplicatedSessions = Array.from(sessionMap.values());
+
+      if (deduplicatedSessions.length !== fetchedSessions.length) {
+        console.warn('[CodeChatPage] ⚠️ Removed duplicate sessions:',
+          fetchedSessions.length - deduplicatedSessions.length,
+          'duplicates found');
+      }
+
+      console.log('[CodeChatPage] Calling setSessions() with', deduplicatedSessions.length, 'sessions');
+      setSessions(deduplicatedSessions);
       console.log('[CodeChatPage] ✅ setSessions() completed');
 
       // Select first session if none active (ONLY on initial load, not during auto-refresh)
