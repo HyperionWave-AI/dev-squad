@@ -3,6 +3,7 @@
  *
  * Modal dialog for creating a new subchat with subagent assignment.
  * Allows user to select a subagent and optionally assign task/todo IDs.
+ * Fully responsive design optimized for mobile, tablet, and desktop viewports.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -21,15 +22,16 @@ import {
   Stack,
   Chip,
   IconButton,
-  Divider,
   useTheme,
   useMediaQuery,
+  Paper,
 } from '@mui/material';
 import {
   Close as CloseIcon,
   Person as PersonIcon,
   Assignment as TaskIcon,
   CheckCircle as TodoIcon,
+  Info as InfoIcon,
 } from '@mui/icons-material';
 import { subchatService, type Subagent } from '../services/subchatService';
 
@@ -48,7 +50,7 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
 }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  
+
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -136,6 +138,52 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
   // Get selected subagent details
   const selectedSubagentDetails = subagents.find(agent => agent.name === selectedSubagent);
 
+  // Responsive typography and spacing
+  const getResponsiveStyles = () => ({
+    dialogTitle: {
+      fontSize: {
+        xs: '1.125rem', // 18px on mobile
+        sm: '1.25rem',  // 20px on tablet
+        md: '1.5rem',   // 24px on desktop
+      },
+    },
+    subtitle: {
+      fontSize: {
+        xs: '0.875rem', // 14px on mobile
+        sm: '1rem',     // 16px on tablet+
+      },
+    },
+    body: {
+      fontSize: {
+        xs: '0.875rem', // 14px on mobile
+        sm: '1rem',     // 16px on tablet+
+      },
+    },
+    caption: {
+      fontSize: {
+        xs: '0.75rem',  // 12px on mobile
+        sm: '0.875rem', // 14px on tablet+
+      },
+    },
+    buttonMinHeight: {
+      xs: 44, // Touch-friendly minimum
+      sm: 40,
+      md: 36,
+    },
+    padding: {
+      xs: 2,  // 16px on mobile
+      sm: 3,  // 24px on tablet
+      md: 4,  // 32px on desktop
+    },
+    spacing: {
+      xs: 2,  // 16px on mobile
+      sm: 2.5, // 20px on tablet
+      md: 3,  // 24px on desktop
+    },
+  });
+
+  const styles = getResponsiveStyles();
+
   return (
     <Dialog 
       open={open} 
@@ -145,8 +193,10 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
       fullScreen={isMobile}
       PaperProps={{
         sx: {
-          borderRadius: isMobile ? 0 : 3,
+          borderRadius: isMobile ? 0 : { xs: 2, sm: 3 },
           maxHeight: isMobile ? '100vh' : '90vh',
+          m: isMobile ? 0 : { xs: 1, sm: 2 },
+          width: isMobile ? '100%' : 'auto',
         },
       }}
     >
@@ -154,61 +204,131 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
       <DialogTitle
         sx={{
           display: 'flex',
-          alignItems: 'center',
           justifyContent: 'space-between',
           pb: 2,
+          px: styles.padding,
+          pt: styles.padding,
           borderBottom: '1px solid',
           borderColor: 'divider',
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: { xs: 2, sm: 0 },
+          alignItems: { xs: 'flex-start', sm: 'center' },
         }}
       >
-        <Box display="flex" alignItems="center" gap={1.5}>
-          <Box
-            sx={{
-              p: 1,
-              borderRadius: 2,
-              backgroundColor: 'primary.50',
-              color: 'primary.main',
-            }}
-          >
-            <PersonIcon />
-          </Box>
-          <Box>
-            <Typography variant="h6" component="div" sx={{ fontWeight: 600 }}>
-              Create New Subchat
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Delegate work to a specialist agent
-            </Typography>
-          </Box>
-        </Box>
-        <IconButton
-          onClick={handleClose}
-          disabled={creating}
-          sx={{
-            color: 'text.secondary',
-            '&:hover': {
-              backgroundColor: 'error.50',
-              color: 'error.main',
-            },
+        <Box 
+          display="flex" 
+          alignItems="center" 
+          gap={1.5}
+          sx={{ 
+            width: { xs: '100%', sm: 'auto' },
+            justifyContent: { xs: 'space-between', sm: 'flex-start' },
           }}
         >
-          <CloseIcon />
-        </IconButton>
+          <Box display="flex" alignItems="center" gap={1.5}>
+            <Box
+              sx={{
+                p: { xs: 0.75, sm: 1 },
+                borderRadius: 2,
+                backgroundColor: 'primary.50',
+                color: 'primary.main',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <PersonIcon sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }} />
+            </Box>
+            <Box>
+              <Typography 
+                variant="h6" 
+                component="div" 
+                sx={{ 
+                  fontWeight: 600,
+                  fontSize: styles.dialogTitle.fontSize,
+                  lineHeight: 1.2,
+                }}
+              >
+                Create New Subchat
+              </Typography>
+              <Typography 
+                variant="body2" 
+                color="text.secondary"
+                sx={{ 
+                  fontSize: styles.caption.fontSize,
+                  display: { xs: 'none', sm: 'block' },
+                }}
+              >
+                Delegate work to a specialist agent
+              </Typography>
+            </Box>
+          </Box>
+          {isMobile && (
+            <IconButton
+              onClick={handleClose}
+              disabled={creating}
+              sx={{
+                color: 'text.secondary',
+                minWidth: 44,
+                minHeight: 44,
+                '&:hover': {
+                  backgroundColor: 'error.50',
+                  color: 'error.main',
+                },
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+          )}
+        </Box>
+        {!isMobile && (
+          <IconButton
+            onClick={handleClose}
+            disabled={creating}
+            sx={{
+              color: 'text.secondary',
+              minWidth: 44,
+              minHeight: 44,
+              '&:hover': {
+                backgroundColor: 'error.50',
+                color: 'error.main',
+              },
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        )}
+        {isMobile && (
+          <Typography 
+            variant="body2" 
+            color="text.secondary"
+            sx={{ 
+              fontSize: styles.caption.fontSize,
+              width: '100%',
+              mt: 1,
+            }}
+          >
+            Delegate work to a specialist agent
+          </Typography>
+        )}
       </DialogTitle>
 
-      <DialogContent sx={{ p: 0 }}>
-        <Box sx={{ p: 3 }}>
+      <DialogContent sx={{ p: 0, overflow: 'hidden' }}>
+        <Box sx={{ p: styles.padding }}>
           {loading && (
             <Box 
               display="flex" 
               flexDirection="column"
               alignItems="center" 
               justifyContent="center"
-              py={6}
+              py={{ xs: 4, sm: 6 }}
               gap={2}
             >
-              <CircularProgress size={48} />
-              <Typography variant="body2" color="text.secondary">
+              <CircularProgress size={44} />
+              <Typography 
+                variant="body2" 
+                color="text.secondary"
+                sx={{ fontSize: styles.caption.fontSize }}
+              >
                 Loading available agents...
               </Typography>
             </Box>
@@ -218,8 +338,12 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
             <Alert 
               severity="error" 
               sx={{ 
-                mb: 3,
-                borderRadius: 2,
+                mb: styles.spacing,
+                borderRadius: { xs: 1, sm: 2 },
+                fontSize: styles.caption.fontSize,
+                '& .MuiAlert-message': {
+                  fontSize: styles.body.fontSize,
+                },
               }}
               onClose={() => setError(null)}
             >
@@ -231,15 +355,24 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
             <Alert 
               severity="success" 
               sx={{ 
-                mb: 3,
-                borderRadius: 2,
+                mb: styles.spacing,
+                borderRadius: { xs: 1, sm: 2 },
               }}
             >
               <Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                <Typography 
+                  variant="subtitle2" 
+                  sx={{ 
+                    fontWeight: 600,
+                    fontSize: styles.body.fontSize,
+                  }}
+                >
                   Subchat created successfully!
                 </Typography>
-                <Typography variant="body2">
+                <Typography 
+                  variant="body2"
+                  sx={{ fontSize: styles.caption.fontSize }}
+                >
                   Redirecting to the new subchat...
                 </Typography>
               </Box>
@@ -247,10 +380,17 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
           )}
 
           {!loading && (
-            <Stack spacing={3}>
+            <Stack spacing={styles.spacing}>
               {/* Subagent Selection */}
               <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
+                <Typography 
+                  variant="subtitle1" 
+                  sx={{ 
+                    fontWeight: 600, 
+                    mb: 2,
+                    fontSize: styles.subtitle.fontSize,
+                  }}
+                >
                   Select Specialist Agent
                 </Typography>
                 <TextField
@@ -263,17 +403,31 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
                   disabled={creating}
                   sx={{
                     '& .MuiOutlinedInput-root': {
-                      borderRadius: 2,
+                      borderRadius: { xs: 1, sm: 2 },
+                      minHeight: styles.buttonMinHeight,
+                    },
+                    '& .MuiInputLabel-root': {
+                      fontSize: styles.body.fontSize,
+                    },
+                    '& .MuiSelect-select': {
+                      fontSize: styles.body.fontSize,
                     },
                   }}
                   helperText="Each agent specializes in different areas of development"
+                  FormHelperTextProps={{
+                    sx: { fontSize: styles.caption.fontSize }
+                  }}
                 >
                   {Object.entries(groupedSubagents).map(([category, agents]) => [
                     <MenuItem key={category} disabled sx={{ py: 1 }}>
                       <Typography 
                         variant="subtitle2" 
                         color="primary.main"
-                        sx={{ fontWeight: 600, textTransform: 'uppercase', fontSize: '0.75rem' }}
+                        sx={{ 
+                          fontWeight: 600, 
+                          textTransform: 'uppercase', 
+                          fontSize: { xs: '0.6875rem', sm: '0.75rem' },
+                        }}
                       >
                         {category}
                       </Typography>
@@ -283,18 +437,34 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
                         key={agent.name} 
                         value={agent.name}
                         sx={{ 
-                          py: 1.5,
-                          pl: 3,
+                          py: { xs: 1.5, sm: 1.25 },
+                          pl: { xs: 2.5, sm: 3 },
+                          minHeight: styles.buttonMinHeight,
                           '&:hover': {
                             backgroundColor: 'primary.50',
                           },
                         }}
                       >
                         <Box sx={{ width: '100%' }}>
-                          <Typography variant="body1" sx={{ fontWeight: 500, mb: 0.5 }}>
+                          <Typography 
+                            variant="body1" 
+                            sx={{ 
+                              fontWeight: 500, 
+                              mb: 0.5,
+                              fontSize: styles.body.fontSize,
+                            }}
+                          >
                             {agent.name}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary" display="block">
+                          <Typography 
+                            variant="caption" 
+                            color="text.secondary" 
+                            display="block"
+                            sx={{ 
+                              fontSize: styles.caption.fontSize,
+                              lineHeight: 1.3,
+                            }}
+                          >
                             {agent.description}
                           </Typography>
                         </Box>
@@ -306,160 +476,193 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
 
               {/* Selected Agent Details */}
               {selectedSubagentDetails && (
-                <Box
+                <Paper
+                  variant="outlined"
                   sx={{
-                    p: 2.5,
-                    borderRadius: 2,
+                    p: styles.padding,
                     backgroundColor: 'primary.50',
-                    border: '1px solid',
                     borderColor: 'primary.200',
+                    borderRadius: { xs: 1, sm: 2 },
                   }}
                 >
-                  <Box display="flex" alignItems="center" gap={1.5} mb={1.5}>
+                  <Box display="flex" alignItems="flex-start" gap={2}>
                     <Box
                       sx={{
-                        p: 0.75,
+                        p: 1,
                         borderRadius: 1.5,
                         backgroundColor: 'primary.main',
-                        color: 'white',
+                        color: 'primary.contrastText',
+                        minWidth: 'auto',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                       }}
                     >
-                      <PersonIcon fontSize="small" />
+                      <PersonIcon sx={{ fontSize: { xs: '1rem', sm: '1.25rem' } }} />
                     </Box>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                      {selectedSubagentDetails.name}
-                    </Typography>
-                    <Chip 
-                      label={selectedSubagentDetails.category} 
-                      size="small"
-                      sx={{
-                        backgroundColor: 'primary.100',
-                        color: 'primary.dark',
-                        fontWeight: 500,
-                      }}
-                    />
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography 
+                        variant="subtitle2" 
+                        sx={{ 
+                          fontWeight: 600, 
+                          color: 'primary.main',
+                          fontSize: styles.body.fontSize,
+                        }}
+                      >
+                        {selectedSubagentDetails.name}
+                      </Typography>
+                      <Typography 
+                        variant="body2" 
+                        color="text.secondary" 
+                        sx={{ 
+                          mt: 0.5,
+                          fontSize: styles.caption.fontSize,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {selectedSubagentDetails.description}
+                      </Typography>
+                      {selectedSubagentDetails.tools && selectedSubagentDetails.tools.length > 0 && (
+                        <Box sx={{ mt: 1.5, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {selectedSubagentDetails.tools.slice(0, isMobile ? 3 : 5).map((tool, index) => (
+                            <Chip
+                              key={index}
+                              label={tool}
+                              size="small"
+                              sx={{
+                                backgroundColor: 'primary.100',
+                                color: 'primary.dark',
+                                fontSize: { xs: '0.6875rem', sm: '0.75rem' },
+                                height: { xs: 24, sm: 28 },
+                                '& .MuiChip-label': {
+                                  px: { xs: 1, sm: 1.5 },
+                                },
+                              }}
+                            />
+                          ))}
+                          {selectedSubagentDetails.tools.length > (isMobile ? 3 : 5) && (
+                            <Chip
+                              label={`+${selectedSubagentDetails.tools.length - (isMobile ? 3 : 5)} more`}
+                              size="small"
+                              sx={{
+                                backgroundColor: 'grey.200',
+                                color: 'text.secondary',
+                                fontSize: { xs: '0.6875rem', sm: '0.75rem' },
+                                height: { xs: 24, sm: 28 },
+                              }}
+                            />
+                          )}
+                        </Box>
+                      )}
+                    </Box>
                   </Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    {selectedSubagentDetails.description}
-                  </Typography>
-                </Box>
+                </Paper>
               )}
 
-                          />
-                        ))}
-                      </Stack>
-                    </Box>
-                  )}
-                </Box>
-              )}
-
-              <Divider sx={{ my: 2 }} />
-
-              {/* Optional Task/Todo Assignment */}
+              {/* Optional Task/TODO Assignment */}
               <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
-                  Optional Context (Advanced)
+                <Typography 
+                  variant="subtitle1" 
+                  sx={{ 
+                    fontWeight: 600, 
+                    mb: 2,
+                    fontSize: styles.subtitle.fontSize,
+                  }}
+                >
+                  Optional Assignment
                 </Typography>
-                <Stack spacing={2}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                   <TextField
                     fullWidth
                     label="Task ID"
                     value={taskId}
                     onChange={(e) => setTaskId(e.target.value)}
                     disabled={creating}
-                    sx={{
-                      '& .MuiOutlinedInput-root': {
-                        borderRadius: 2,
-                      },
-                    }}
-                    helperText="Link this subchat to a specific task (optional)"
+                    placeholder="e.g., task-123"
                     InputProps={{
                       startAdornment: (
-                        <Box sx={{ mr: 1, color: 'text.secondary' }}>
-                          <TaskIcon fontSize="small" />
+                        <Box sx={{ mr: 1, display: 'flex', alignItems: 'center' }}>
+                          <TaskIcon sx={{ color: 'text.secondary', fontSize: '1.25rem' }} />
                         </Box>
                       ),
+                    }}
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: { xs: 1, sm: 2 },
+                        minHeight: styles.buttonMinHeight,
+                      },
+                      '& .MuiInputLabel-root': {
+                        fontSize: styles.body.fontSize,
+                      },
+                      '& .MuiOutlinedInput-input': {
+                        fontSize: styles.body.fontSize,
+                      },
+                    }}
+                    helperText="Link to specific task"
+                    FormHelperTextProps={{
+                      sx: { fontSize: styles.caption.fontSize }
                     }}
                   />
                   <TextField
                     fullWidth
-                    label="Todo ID"
+                    label="TODO ID"
                     value={todoId}
                     onChange={(e) => setTodoId(e.target.value)}
                     disabled={creating}
-                    sx={{
-                      '& .MuiOutlinedInput-root': {
-                        borderRadius: 2,
-                      },
-                    }}
-                    helperText="Link this subchat to a specific todo item (optional)"
+                    placeholder="e.g., todo-456"
                     InputProps={{
                       startAdornment: (
-                        <Box sx={{ mr: 1, color: 'text.secondary' }}>
-                          <TodoIcon fontSize="small" />
+                        <Box sx={{ mr: 1, display: 'flex', alignItems: 'center' }}>
+                          <TodoIcon sx={{ color: 'text.secondary', fontSize: '1.25rem' }} />
                         </Box>
                       ),
+                    }}
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        borderRadius: { xs: 1, sm: 2 },
+                        minHeight: styles.buttonMinHeight,
+                      },
+                      '& .MuiInputLabel-root': {
+                        fontSize: styles.body.fontSize,
+                      },
+                      '& .MuiOutlinedInput-input': {
+                        fontSize: styles.body.fontSize,
+                      },
+                    }}
+                    helperText="Link to specific TODO item"
+                    FormHelperTextProps={{
+                      sx: { fontSize: styles.caption.fontSize }
                     }}
                   />
                 </Stack>
               </Box>
 
-              {/* Placeholder Buttons Section */}
-              <Box sx={{ 
-                p: 2.5, 
-                borderRadius: 2,
-                backgroundColor: 'grey.50',
-                border: '1px solid',
-                borderColor: 'grey.200'
-              }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 2, color: 'text.secondary' }}>
-                  Quick Actions
-                </Typography>
-                <Stack direction="row" spacing={2} justifyContent="flex-start" flexWrap="wrap" useFlexGap>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    sx={{ 
-                      borderRadius: 2, 
-                      textTransform: 'none',
-                      minWidth: 100,
-                      '&:hover': {
-                        backgroundColor: 'primary.50',
-                      }
-                    }}
-                  >
-                    Action 1
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    sx={{ 
-                      borderRadius: 2, 
-                      textTransform: 'none',
-                      minWidth: 100,
-                      '&:hover': {
-                        backgroundColor: 'primary.50',
-                      }
-                    }}
-                  >
-                    Action 2
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    sx={{ 
-                      borderRadius: 2, 
-                      textTransform: 'none',
-                      minWidth: 100,
-                      '&:hover': {
-                        backgroundColor: 'primary.50',
-                      }
-                    }}
-                  >
-                    Action 3
-                  </Button>
-                </Stack>
-              </Box>
+              {/* Info Box */}
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: styles.padding,
+                  backgroundColor: 'info.50',
+                  borderColor: 'info.200',
+                  borderRadius: { xs: 1, sm: 2 },
+                }}
+              >
+                <Box display="flex" gap={2}>
+                  <InfoIcon sx={{ color: 'info.main', fontSize: '1.25rem', mt: 0.25 }} />
+                  <Box>
+                    <Typography 
+                      variant="body2" 
+                      color="info.dark"
+                      sx={{ 
+                        fontSize: styles.caption.fontSize,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      The subchat will inherit the context from this conversation and allow the selected agent to work independently on the assigned task.
+                    </Typography>
+                  </Box>
+                </Box>
+              </Paper>
             </Stack>
           )}
         </Box>
@@ -467,19 +670,28 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
 
       <DialogActions
         sx={{
-          p: 3,
+          p: styles.padding,
+          pt: 2,
           borderTop: '1px solid',
           borderColor: 'divider',
-          gap: 2,
+          flexDirection: { xs: 'column-reverse', sm: 'row' },
+          gap: { xs: 1.5, sm: 1 },
+          '& > :not(:first-of-type)': {
+            ml: { xs: 0, sm: 1 },
+          },
         }}
       >
         <Button
           onClick={handleClose}
           disabled={creating}
           sx={{
-            borderRadius: 2,
+            minHeight: styles.buttonMinHeight,
+            px: { xs: 3, sm: 2.5 },
+            borderRadius: { xs: 1, sm: 1.5 },
             textTransform: 'none',
-            px: 3,
+            fontSize: styles.body.fontSize,
+            width: { xs: '100%', sm: 'auto' },
+            order: { xs: 2, sm: 1 },
           }}
         >
           Cancel
@@ -488,24 +700,28 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
           type="submit"
           variant="contained"
           onClick={handleSubmit}
-          disabled={!selectedSubagent || creating}
+          disabled={!selectedSubagent || creating || loading}
+          startIcon={creating ? <CircularProgress size={16} /> : <PersonIcon />}
           sx={{
-            borderRadius: 2,
+            minHeight: styles.buttonMinHeight,
+            px: { xs: 3, sm: 2.5 },
+            borderRadius: { xs: 1, sm: 1.5 },
             textTransform: 'none',
-            px: 4,
             fontWeight: 600,
+            fontSize: styles.body.fontSize,
+            width: { xs: '100%', sm: 'auto' },
+            order: { xs: 1, sm: 2 },
+            // Touch feedback on mobile
+            '&:active': {
+              transform: isMobile ? 'scale(0.98)' : 'none',
+            },
           }}
         >
-          {creating ? (
-            <Box display="flex" alignItems="center" gap={1}>
-              <CircularProgress size={16} color="inherit" />
-              Creating...
-            </Box>
-          ) : (
-            'Create Subchat'
-          )}
+          {creating ? 'Creating...' : 'Create Subchat'}
         </Button>
       </DialogActions>
     </Dialog>
   );
 };
+
+export default SubchatCreationDialog;

@@ -24,6 +24,7 @@ import (
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/middleware"
 	"hyper/internal/services"
+	userstorage "hyper/internal/storage"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -363,6 +364,25 @@ func StartHTTPServer(
 
 	logger.Info("Knowledge API routes registered",
 		zap.String("popularCollectionsPath", "/api/v1/knowledge/popular-collections"))
+
+	// Initialize user settings storage and handler
+	userSettingsStorage, err := userstorage.NewUserSettingsStorage(mongoDatabase, logger)
+	if err != nil {
+		logger.Error("Failed to initialize user settings storage", zap.Error(err))
+		return err
+	}
+	userSettingsHandler := handlers.NewUserSettingsHandler(userSettingsStorage, logger)
+
+	// Register user settings routes
+	userGroup := r.Group("/api/v1/user")
+	{
+		userGroup.GET("/settings", userSettingsHandler.GetUserSettings)
+		userGroup.PATCH("/settings", userSettingsHandler.UpdateUserSettings)
+	}
+
+	logger.Info("User Settings API routes registered",
+		zap.String("getPath", "/api/v1/user/settings"),
+		zap.String("patchPath", "/api/v1/user/settings"))
 
 	// Subchat storage already initialized earlier for execute_subagent tool
 	// Use it to seed system subagents and create handlers

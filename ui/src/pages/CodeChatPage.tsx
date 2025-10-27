@@ -13,6 +13,7 @@ import { ChatMessageView } from '../components/ChatMessageView';
 import { ChatInputBox } from '../components/ChatInputBox';
 import { AgentSelector } from '../components/AgentSelector';
 import { SubchatList } from '../components/SubchatList';
+import { ConversationModeToggle } from '../components/ConversationModeToggle';
 import {
   createSession,
   getSessions,
@@ -162,8 +163,18 @@ export function CodeChatPage() {
               toolCalls: tools.toolCalls.length > 0 ? tools.toolCalls : undefined,
               toolResults: tools.toolResults.size > 0 ? tools.toolResults : undefined,
             };
-            setMessages((prev) => [...prev, newMessage]);
-            console.log('[CodeChatPage] AI response completed with', tools.toolCalls.length, 'tool calls');
+            console.log('[CodeChatPage] ✅ Creating completed AI message:', {
+              id: newMessage.id,
+              hasContent: !!finalContent,
+              toolCallsCount: tools.toolCalls.length,
+              toolResultsCount: tools.toolResults.size,
+              toolCalls: tools.toolCalls.map(tc => tc.tool),
+            });
+            setMessages((prev) => {
+              const updated = [...prev, newMessage];
+              console.log('[CodeChatPage] ✅ Messages array updated. New length:', updated.length);
+              return updated;
+            });
           }
 
           // Refresh sessions list in case AI created subchats via tool calls
@@ -187,6 +198,24 @@ export function CodeChatPage() {
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
         console.log('[CodeChatPage] Tool call received:', tool, id);
+
+        // If we have accumulated content before the tool call, save it as a separate message
+        if (streamingContentRef.current.trim()) {
+          const messageBeforeToolCall: ChatMessage = {
+            id: `msg-${Date.now()}`,
+            sessionId,
+            role: 'assistant',
+            content: streamingContentRef.current,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, messageBeforeToolCall]);
+          console.log('[CodeChatPage] Saved message before tool call');
+
+          // Clear streaming content for next message
+          streamingContentRef.current = '';
+          setStreamingContent('');
+        }
+
         const toolCall: ToolCall = {
           id,
           tool,
@@ -312,7 +341,8 @@ export function CodeChatPage() {
   };
 
   const handleSendMessage = (text: string) => {
-    if (!activeSessionId || isStreaming || !wsConnectionRef.current) return;
+    // Allow sending messages even while streaming (user interruption support)
+    if (!activeSessionId || !wsConnectionRef.current) return;
 
     // Optimistically add user message
     const userMessage: ChatMessage = {
@@ -372,7 +402,7 @@ export function CodeChatPage() {
           backgroundColor: 'background.default',
         }}
       >
-        {/* Top Bar with Agent Selector and Subchats Button */}
+        {/* Top Bar with Agent Selector, Conversation Mode Toggle, and Subchats Button */}
         <Box
           sx={{
             display: 'flex',
@@ -380,6 +410,7 @@ export function CodeChatPage() {
             gap: 1,
             borderBottom: '1px solid',
             borderColor: 'divider',
+            p: 1,
           }}
         >
           <Box sx={{ flex: 1 }}>
@@ -390,6 +421,7 @@ export function CodeChatPage() {
               disabled={isStreaming}
             />
           </Box>
+          <ConversationModeToggle />
           <IconButton
             onClick={() => setSubchatsDrawerOpen(!subchatsDrawerOpen)}
             disabled={!activeSessionId}
@@ -415,7 +447,7 @@ export function CodeChatPage() {
         {/* Input Box */}
         <ChatInputBox
           onSendMessage={handleSendMessage}
-          disabled={!activeSessionId || isStreaming}
+          disabled={!activeSessionId}
           placeholder={
             !activeSessionId
               ? 'Create a new chat to get started'
