@@ -6,14 +6,17 @@ import (
 
 // IndexedFolder represents a folder that is being tracked for code indexing
 type IndexedFolder struct {
-	ID          string    `bson:"_id,omitempty" json:"id"`
-	Path        string    `bson:"path" json:"path"`                               // Absolute path to the folder
-	Description string    `bson:"description,omitempty" json:"description"`       // Optional description
-	AddedAt     time.Time `bson:"addedAt" json:"addedAt"`                         // When folder was added
-	LastScanned time.Time `bson:"lastScanned,omitempty" json:"lastScanned"`       // Last scan timestamp
-	FileCount   int       `bson:"fileCount" json:"fileCount"`                     // Number of indexed files
-	Status      string    `bson:"status" json:"status"`                           // active, scanning, error
-	Error       string    `bson:"error,omitempty" json:"error,omitempty"`         // Last error if any
+	ID              string    `bson:"_id,omitempty" json:"id"`
+	Path            string    `bson:"path" json:"path"`                                       // Absolute path to the folder
+	Description     string    `bson:"description,omitempty" json:"description"`               // Optional description
+	AddedAt         time.Time `bson:"addedAt" json:"addedAt"`                                 // When folder was added
+	LastScanned     time.Time `bson:"lastScanned,omitempty" json:"lastScanned"`               // Last scan timestamp
+	FileCount       int       `bson:"fileCount" json:"fileCount"`                             // Number of indexed files
+	Status          string    `bson:"status" json:"status"`                                   // active, scanning, error
+	Error           string    `bson:"error,omitempty" json:"error,omitempty"`                 // Last error if any
+	IncludePatterns []string  `bson:"includePatterns,omitempty" json:"includePatterns"`       // File patterns to include (e.g., ["*.go", "*.ts"])
+	ExcludePatterns []string  `bson:"excludePatterns,omitempty" json:"excludePatterns"`       // Patterns to exclude (e.g., ["node_modules", "dist"])
+	ChunkSize       string    `bson:"chunkSize,omitempty" json:"chunkSize"`                   // T-shirt size: xs|s|m|l|xl
 }
 
 // IndexedFile represents a single file in the code index
@@ -70,4 +73,46 @@ type IndexStatus struct {
 	ActiveFolders  int       `json:"activeFolders"`
 	ScanningFolders int       `json:"scanningFolders"`
 	ErrorFolders   int       `json:"errorFolders"`
+}
+
+// GetIncludePatterns returns include patterns with defaults if empty
+func (f *IndexedFolder) GetIncludePatterns() []string {
+	if len(f.IncludePatterns) == 0 {
+		return []string{"*.go", "*.ts", "*.js", "*.tsx", "*.jsx", "*.py"}
+	}
+	return f.IncludePatterns
+}
+
+// GetExcludePatterns returns exclude patterns with defaults if empty
+func (f *IndexedFolder) GetExcludePatterns() []string {
+	if len(f.ExcludePatterns) == 0 {
+		return []string{"node_modules", "dist", "build", ".git", "vendor", ".next", "coverage", "__pycache__"}
+	}
+	return f.ExcludePatterns
+}
+
+// GetChunkSize returns chunk size with default if empty
+func (f *IndexedFolder) GetChunkSize() string {
+	if f.ChunkSize == "" {
+		return "m"
+	}
+	return f.ChunkSize
+}
+
+// ChunkSizeToLines converts t-shirt size to line count
+func ChunkSizeToLines(size string) int {
+	switch size {
+	case "xs":
+		return 50
+	case "s":
+		return 100
+	case "m":
+		return 200
+	case "l":
+		return 400
+	case "xl":
+		return 800
+	default:
+		return 200 // default to medium
+	}
 }
