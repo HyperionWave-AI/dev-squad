@@ -1,482 +1,302 @@
-# Error Handling and Edge Cases Analysis Report
+import { test, expect } from '@playwright/test';
 
-## Executive Summary
-Comprehensive analysis of error handling mechanisms, edge case coverage, and resilience patterns in the tasks page component. This report identifies critical gaps in error recovery, data validation, and user experience during failure scenarios.
+test.describe('Kanban Drag and Drop Functionality', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    // Navigate to tasks/kanban page
+    await page.click('[data-testid="tasks-nav"]');
+    await page.waitForLoadState('networkidle');
+  });
 
-**Error Handling Maturity**: ⚠️ **INADEQUATE** - Multiple critical gaps found
-**Edge Case Coverage**: 15% - Most scenarios unhandled
-**User Experience During Errors**: ❌ **POOR** - Users left confused during failures
+  test('should drag task between columns successfully', async ({ page }) => {
+    // Wait for tasks to load
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    // Find first task in Pending column
+    const pendingColumn = page.locator('[data-testid="kanban-column"]:has-text("Pending")');
+    const taskToDrag = pendingColumn.locator('[data-testid="task-card"]').first();
+    
+    // Find In Progress column
+    const inProgressColumn = page.locator('[data-testid="kanban-column"]:has-text("In Progress")');
+    
+    // Get initial task counts
+    const initialPendingCount = await pendingColumn.locator('[data-testid="task-count"]').textContent();
+    const initialInProgressCount = await inProgressColumn.locator('[data-testid="task-count"]').textContent();
+    
+    // Perform drag and drop
+    await taskToDrag.dragTo(inProgressColumn);
+    
+    // Wait for optimistic update
+    await page.waitForTimeout(500);
+    
+    // Verify task moved to new column
+    const taskInNewColumn = inProgressColumn.locator('[data-testid="task-card"]').first();
+    await expect(taskInNewColumn).toBeVisible();
+    
+    // Verify task counts updated
+    const newPendingCount = await pendingColumn.locator('[data-testid="task-count"]').textContent();
+    const newInProgressCount = await inProgressColumn.locator('[data-testid="task-count"]').textContent();
+    
+    expect(parseInt(newPendingCount || '0')).toBe(parseInt(initialPendingCount || '0') - 1);
+    expect(parseInt(newInProgressCount || '0')).toBe(parseInt(initialInProgressCount || '0') + 1);
+  });
 
----
+  test('should handle drag cancellation', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const pendingColumn = page.locator('[data-testid="kanban-column"]:has-text("Pending")');
+    const taskToDrag = pendingColumn.locator('[data-testid="task-card"]').first();
+    
+    // Start drag
+    await taskToDrag.hover();
+    await page.mouse.down();
+    
+    // Move slightly but not to a valid drop zone
+    await page.mouse.move(100, 100);
+    
+    // Cancel drag by pressing Escape
+    await page.keyboard.press('Escape');
+    
+    // Verify task remains in original position
+    await expect(pendingColumn.locator('[data-testid="task-card"]').first()).toBeVisible();
+  });
 
-## CRITICAL ERROR HANDLING GAPS
+  test('should provide visual feedback during drag', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const taskToDrag = page.locator('[data-testid="task-card"]').first();
+    const targetColumn = page.locator('[data-testid="kanban-column"]').nth(1);
+    
+    // Start drag
+    await taskToDrag.hover();
+    await page.mouse.down();
+    
+    // Check for drag visual feedback
+    await expect(taskToDrag).toHaveClass(/dragging|drag-preview/);
+    
+    // Move over target column
+    await targetColumn.hover();
+    
+    // Check for drop zone visual feedback
+    await expect(targetColumn).toHaveClass(/drag-over|drop-zone-active/);
+    
+    // Complete drag
+    await page.mouse.up();
+  });
 
-### ERR-001: No Error Boundaries
-**Severity**: Critical
-**Component**: TaskCard.tsx
-**Issue**: Component crashes propagate to entire application
-```typescript
-// Current: No error boundary wrapper
-export const TaskCard: React.FC<TaskCardProps> = ({ task, onClick }) => {
-  // Any error here crashes the entire kanban board
-  return (
-    <div>
-      {task.tags.map((tag) => ( // Crashes if task.tags is null
-        <span key={tag}>{tag}</span>
-      ))}
-    </div>
-  );
-};
-```
-**Risk**: Single malformed task crashes entire board
-**Impact**: Complete application failure, poor user experience
-**Fix**: Implement React Error Boundary with fallback UI
+  test('should handle keyboard drag and drop', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const taskToDrag = page.locator('[data-testid="task-card"]').first();
+    
+    // Focus on task
+    await taskToDrag.focus();
+    await expect(taskToDrag).toBeFocused();
+    
+    // Initiate keyboard drag with Space
+    await page.keyboard.press('Space');
+    
+    // Navigate to target column with arrow keys
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    
+    // Drop with Space
+    await page.keyboard.press('Space');
+    
+    // Verify task moved
+    const inProgressColumn = page.locator('[data-testid="kanban-column"]:has-text("In Progress")');
+    await expect(inProgressColumn.locator('[data-testid="task-card"]').first()).toBeVisible();
+  });
 
-### ERR-002: No Data Validation
-**Severity**: Critical
-**Component**: TaskCard.tsx
-**Issue**: No validation of incoming task data
-```typescript
-// Dangerous assumptions about data structure:
-{task.title} // Could be null/undefined
-{task.tags.map(...)} // Could crash if tags is null
-{new Date(task.createdAt)} // Could be Invalid Date
-```
-**Risk**: Runtime errors, application crashes
-**Impact**: Broken UI, poor user experience
-**Fix**: Add comprehensive data validation with TypeScript guards
+  test('should handle drag to same column (no-op)', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const pendingColumn = page.locator('[data-testid="kanban-column"]:has-text("Pending")');
+    const taskToDrag = pendingColumn.locator('[data-testid="task-card"]').first();
+    
+    const initialCount = await pendingColumn.locator('[data-testid="task-count"]').textContent();
+    
+    // Drag task to same column
+    await taskToDrag.dragTo(pendingColumn);
+    
+    // Verify count unchanged
+    const finalCount = await pendingColumn.locator('[data-testid="task-count"]').textContent();
+    expect(finalCount).toBe(initialCount);
+  });
 
-### ERR-003: No Network Error Handling
-**Severity**: Critical
-**Component**: Kanban Board integration
-**Issue**: No handling of API failures during drag-drop
-```typescript
-// From drag-drop tests - no error recovery shown:
-await taskToDrag.dragTo(targetColumn);
-// What happens if API call fails?
-// No rollback mechanism visible
-```
-**Risk**: UI shows incorrect state after failed operations
-**Impact**: Data inconsistency, user confusion
-**Fix**: Implement proper error recovery with rollback
-
-### ERR-004: Missing Try-Catch Blocks
-**Severity**: High
-**Component**: TaskCard.tsx event handlers
-**Issue**: No error handling in event handlers
-```typescript
-onMouseEnter={(e) => {
-  e.currentTarget.style.boxShadow = 'var(--shadow-lg)'; // Could fail
-  e.currentTarget.style.transform = 'translateY(-1px)'; // Could fail
-}}
-onClick={onClick} // onClick could throw, no error handling
-```
-**Risk**: Unhandled exceptions, poor user experience
-**Impact**: Broken interactions, application instability
-**Fix**: Add try-catch blocks around all event handlers
-
----
-
-## DATA VALIDATION ISSUES
-
-### ERR-005: No Type Guards
-**Severity**: High
-**Component**: TaskCard.tsx
-**Issue**: No runtime type checking for task data
-```typescript
-// Should validate task structure:
-interface HumanTask {
-  title: string;
-  description: string;
-  tags: string[];
-  status: TaskStatus;
-  priority: Priority;
-  createdAt: string;
-}
-
-// No validation that incoming data matches interface
-```
-**Risk**: Runtime errors with malformed data
-**Fix**: Implement runtime type guards with libraries like zod
-
-### ERR-006: No Null/Undefined Checks
-**Severity**: High
-**Component**: TaskCard.tsx
-**Issue**: Direct property access without null checks
-```typescript
-// Dangerous patterns:
-{task.title} // What if task is null?
-{task.tags.length > 0 && (...)} // What if tags is undefined?
-{task.tags.map(...)} // Crashes if tags is null
-```
-**Risk**: TypeError exceptions
-**Fix**: Add defensive programming with optional chaining
-
-### ERR-007: No Date Validation
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No validation of date strings
-```typescript
-{new Date(task.createdAt).toLocaleDateString()}
-// What if createdAt is invalid date string?
-// Results in "Invalid Date" displayed to user
-```
-**Risk**: Invalid date display, poor UX
-**Fix**: Add date validation with fallback values
-
-### ERR-008: No Enum Validation
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No validation of status/priority enums
-```typescript
-statusStyles[task.status] // What if status is invalid enum value?
-priorityStyles[task.priority] // What if priority is invalid?
-```
-**Risk**: Undefined styles, broken UI
-**Fix**: Add enum validation with fallback styles
-
----
-
-## EDGE CASE SCENARIOS
-
-### ERR-009: Empty Data Handling
-**Severity**: High
-**Component**: TaskCard.tsx
-**Issue**: No handling of empty or minimal data
-```typescript
-// Edge cases not handled:
-// - Empty title: ""
-// - Empty description: ""
-// - Empty tags array: []
-// - Very long title/description
-// - Special characters in content
-```
-**Risk**: Broken layout, poor UX
-**Fix**: Add empty state handling and content truncation
-
-### ERR-010: Large Data Sets
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No handling of large content
-```typescript
-// What happens with:
-// - 1000+ character descriptions?
-// - 50+ tags?
-// - Very long task titles?
-// - Large number of tasks?
-```
-**Risk**: Performance issues, broken layout
-**Fix**: Implement content truncation and virtualization
-
-### ERR-011: Special Characters and Encoding
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No handling of special characters
-```typescript
-// Potential issues:
-// - Unicode characters in titles
-// - HTML entities in descriptions
-// - Emoji in content
-// - RTL text content
-```
-**Risk**: Display issues, encoding problems
-**Fix**: Add proper text encoding and sanitization
-
-### ERR-012: Concurrent Operations
-**Severity**: High
-**Component**: Drag-drop operations
-**Issue**: No handling of simultaneous operations
-```typescript
-// Race conditions possible:
-// - Multiple users dragging same task
-// - Drag while auto-refresh occurs
-// - Multiple API calls for same task
-```
-**Risk**: Data corruption, inconsistent state
-**Fix**: Implement operation locking and conflict resolution
-
----
-
-## USER EXPERIENCE DURING ERRORS
-
-### ERR-013: No Error Messages
-**Severity**: High
-**Component**: TaskCard.tsx
-**Issue**: Users not informed when errors occur
-```typescript
-// Silent failures:
-// - Failed to load task data
-// - Failed to update task status
-// - Failed to render task card
-```
-**Risk**: Users unaware of problems
-**Impact**: Confusion, lost work
-**Fix**: Add user-friendly error messages
-
-### ERR-014: No Loading States During Recovery
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No indication during error recovery
-**Risk**: Users think application is frozen
-**Fix**: Add loading indicators during recovery operations
-
-### ERR-015: No Retry Mechanisms
-**Severity**: High
-**Component**: API integration
-**Issue**: No way for users to retry failed operations
-```typescript
-// Missing retry functionality:
-// - Retry failed task updates
-// - Retry failed data loading
-// - Retry failed drag operations
-```
-**Risk**: Users stuck with failed operations
-**Fix**: Add retry buttons and automatic retry with exponential backoff
-
-### ERR-016: No Graceful Degradation
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: Component fails completely instead of partial functionality
-**Risk**: Complete loss of functionality
-**Fix**: Implement graceful degradation with reduced functionality
-
----
-
-## NETWORK AND API ERROR HANDLING
-
-### ERR-017: No Timeout Handling
-**Severity**: High
-**Component**: API calls
-**Issue**: No timeout configuration for API requests
-```typescript
-// Missing timeout handling:
-// - Long-running API calls
-// - Stuck network requests
-// - Unresponsive server scenarios
-```
-**Risk**: Hanging requests, poor UX
-**Fix**: Add configurable timeouts with user feedback
-
-### ERR-018: No Offline Support
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No handling of offline scenarios
-```typescript
-// Offline scenarios not handled:
-// - Network disconnection during drag
-// - Offline task viewing
-// - Queue operations for when online
-```
-**Risk**: Poor experience on unstable connections
-**Fix**: Add offline detection and queuing
-
-### ERR-019: No Rate Limiting Handling
-**Severity**: Medium
-**Component**: API integration
-**Issue**: No handling of rate limit responses
-**Risk**: Failed operations without user awareness
-**Fix**: Add rate limit detection and backoff
-
-### ERR-020: No Server Error Differentiation
-**Severity**: Medium
-**Component**: API error handling
-**Issue**: All server errors treated the same
-```typescript
-// Should differentiate:
-// - 400 Bad Request (user error)
-// - 401 Unauthorized (auth error)
-// - 403 Forbidden (permission error)
-// - 404 Not Found (resource error)
-// - 500 Server Error (system error)
-```
-**Risk**: Inappropriate error messages
-**Fix**: Add specific error handling per status code
-
----
-
-## MEMORY AND PERFORMANCE EDGE CASES
-
-### ERR-021: Memory Leak Prevention
-**Severity**: High
-**Component**: TaskCard.tsx event handlers
-**Issue**: No cleanup of event listeners or timers
-```typescript
-onMouseEnter={(e) => {
-  // Event handler recreated on every render
-  // Potential memory leak with many cards
-}}
-```
-**Risk**: Memory accumulation, performance degradation
-**Fix**: Use useCallback and proper cleanup
-
-### ERR-022: No Performance Monitoring
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No detection of performance issues
-**Risk**: Slow rendering goes unnoticed
-**Fix**: Add performance monitoring and alerts
-
-### ERR-023: No Resource Cleanup
-**Severity**: Medium
-**Component**: TaskCard.tsx
-**Issue**: No cleanup on component unmount
-**Risk**: Resource leaks
-**Fix**: Add useEffect cleanup functions
-
----
-
-## SECURITY ERROR HANDLING
-
-### ERR-024: No Input Sanitization
-**Severity**: Critical
-**Component**: TaskCard.tsx
-**Issue**: No sanitization of task content
-```typescript
-<h3>{task.title}</h3> // Direct rendering - XSS risk
-<p>{task.description}</p> // Direct rendering - XSS risk
-```
-**Risk**: XSS attacks, security vulnerabilities
-**Fix**: Add content sanitization
-
-### ERR-025: No CSRF Protection
-**Severity**: High
-**Component**: API calls
-**Issue**: No CSRF token validation
-**Risk**: Cross-site request forgery attacks
-**Fix**: Add CSRF protection to API calls
-
----
-
-## TESTING GAPS FOR ERROR SCENARIOS
-
-### ERR-026: No Error Scenario Tests
-**Severity**: High
-**Component**: Test suite
-**Issue**: Tests don't cover error scenarios
-```typescript
-// Missing tests for:
-// - Malformed task data
-// - Network failures
-// - API errors
-// - Component crashes
-// - Edge case data
-```
-**Risk**: Error scenarios go untested
-**Fix**: Add comprehensive error scenario testing
-
-### ERR-027: No Load Testing
-**Severity**: Medium
-**Component**: Performance tests
-**Issue**: No testing with large data sets
-**Risk**: Performance issues in production
-**Fix**: Add load testing with realistic data volumes
-
----
-
-## ERROR RECOVERY PATTERNS
-
-### ERR-028: No Circuit Breaker Pattern
-**Severity**: Medium
-**Component**: API integration
-**Issue**: No protection against cascading failures
-**Risk**: System overload during outages
-**Fix**: Implement circuit breaker pattern
-
-### ERR-029: No Fallback Data Sources
-**Severity**: Medium
-**Component**: Data loading
-**Issue**: No alternative data sources during failures
-**Risk**: Complete data unavailability
-**Fix**: Add cached data fallbacks
-
-### ERR-030: No Progressive Enhancement
-**Severity**: Low
-**Component**: TaskCard.tsx
-**Issue**: No graceful feature degradation
-**Risk**: All-or-nothing functionality
-**Fix**: Implement progressive enhancement
-
----
-
-## RECOMMENDATIONS
-
-### Immediate Critical Fixes:
-1. **Add Error Boundaries** around TaskCard components
-2. **Implement data validation** with type guards
-3. **Add try-catch blocks** in all event handlers
-4. **Add network error handling** with retry mechanisms
-5. **Implement input sanitization** for security
-
-### Short-term Improvements:
-1. **Add comprehensive null checks** with optional chaining
-2. **Implement user-friendly error messages**
-3. **Add loading states** during error recovery
-4. **Create fallback UI components** for failed states
-5. **Add timeout handling** for API requests
-
-### Long-term Enhancements:
-1. **Implement offline support** with operation queuing
-2. **Add performance monitoring** and alerting
-3. **Create comprehensive error testing suite**
-4. **Implement circuit breaker patterns**
-5. **Add progressive enhancement** features
-
----
-
-## ERROR HANDLING IMPLEMENTATION EXAMPLE
-
-```typescript
-// Improved TaskCard with error handling
-export const TaskCard: React.FC<TaskCardProps> = ({ task, onClick }) => {
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Data validation
-  const validatedTask = useMemo(() => {
-    try {
-      return validateTask(task);
-    } catch (err) {
-      setError('Invalid task data');
-      return null;
+  test('should handle multiple rapid drags', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const tasks = await page.locator('[data-testid="task-card"]').all();
+    const targetColumn = page.locator('[data-testid="kanban-column"]').nth(1);
+    
+    // Perform multiple rapid drags
+    for (let i = 0; i < Math.min(3, tasks.length); i++) {
+      await tasks[i].dragTo(targetColumn);
+      await page.waitForTimeout(100); // Small delay between drags
     }
-  }, [task]);
+    
+    // Verify all tasks moved
+    const movedTasks = await targetColumn.locator('[data-testid="task-card"]').count();
+    expect(movedTasks).toBeGreaterThanOrEqual(3);
+  });
 
-  // Error boundary fallback
-  if (error) {
-    return <TaskCardError error={error} onRetry={() => setError(null)} />;
-  }
+  test('should handle drag with network error', async ({ page }) => {
+    // Intercept API calls and simulate failure
+    await page.route('**/api/tasks/**', route => {
+      route.abort('failed');
+    });
+    
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const pendingColumn = page.locator('[data-testid="kanban-column"]:has-text("Pending")');
+    const taskToDrag = pendingColumn.locator('[data-testid="task-card"]').first();
+    const targetColumn = page.locator('[data-testid="kanban-column"]').nth(1);
+    
+    // Perform drag
+    await taskToDrag.dragTo(targetColumn);
+    
+    // Wait for error handling
+    await page.waitForTimeout(2000);
+    
+    // Verify error message appears
+    await expect(page.locator('[role="alert"]')).toBeVisible();
+    
+    // Verify task rolled back to original position
+    await expect(pendingColumn.locator('[data-testid="task-card"]').first()).toBeVisible();
+  });
 
-  if (!validatedTask) {
-    return <TaskCardSkeleton />;
-  }
+  test('should handle drag with slow network', async ({ page }) => {
+    // Simulate slow network
+    await page.route('**/api/tasks/**', async route => {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      route.continue();
+    });
+    
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const taskToDrag = page.locator('[data-testid="task-card"]').first();
+    const targetColumn = page.locator('[data-testid="kanban-column"]').nth(1);
+    
+    // Perform drag
+    await taskToDrag.dragTo(targetColumn);
+    
+    // Verify optimistic update happened immediately
+    await expect(targetColumn.locator('[data-testid="task-card"]').first()).toBeVisible();
+    
+    // Verify loading indicator appears
+    await expect(page.locator('[data-testid="loading-indicator"]')).toBeVisible();
+    
+    // Wait for network request to complete
+    await page.waitForTimeout(4000);
+    
+    // Verify loading indicator disappears
+    await expect(page.locator('[data-testid="loading-indicator"]')).not.toBeVisible();
+  });
 
-  // Safe event handlers
-  const handleClick = useCallback(() => {
-    try {
-      onClick?.();
-    } catch (err) {
-      setError('Failed to handle click');
-      console.error('TaskCard click error:', err);
+  test('should preserve task order within columns', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const sourceColumn = page.locator('[data-testid="kanban-column"]').first();
+    const tasks = await sourceColumn.locator('[data-testid="task-card"]').all();
+    
+    if (tasks.length < 2) {
+      test.skip('Need at least 2 tasks for order testing');
     }
-  }, [onClick]);
+    
+    // Get initial order
+    const initialOrder = await Promise.all(
+      tasks.map(task => task.locator('[data-testid="task-title"]').textContent())
+    );
+    
+    // Drag first task to different column and back
+    const targetColumn = page.locator('[data-testid="kanban-column"]').nth(1);
+    await tasks[0].dragTo(targetColumn);
+    await page.waitForTimeout(500);
+    await targetColumn.locator('[data-testid="task-card"]').first().dragTo(sourceColumn);
+    await page.waitForTimeout(500);
+    
+    // Verify order preserved
+    const finalTasks = await sourceColumn.locator('[data-testid="task-card"]').all();
+    const finalOrder = await Promise.all(
+      finalTasks.map(task => task.locator('[data-testid="task-title"]').textContent())
+    );
+    
+    expect(finalOrder).toEqual(initialOrder);
+  });
 
-  return (
-    <ErrorBoundary fallback={<TaskCardError />}>
-      <div onClick={handleClick}>
-        {/* Safe rendering with fallbacks */}
-        <h3>{validatedTask.title || 'Untitled Task'}</h3>
-        <p>{validatedTask.description || 'No description'}</p>
-        {/* ... rest of component */}
-      </div>
-    </ErrorBoundary>
-  );
-};
-```
+  test('should handle drag with invalid drop zones', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const taskToDrag = page.locator('[data-testid="task-card"]').first();
+    const invalidDropZone = page.locator('header'); // Header is not a valid drop zone
+    
+    // Attempt to drag to invalid zone
+    await taskToDrag.dragTo(invalidDropZone);
+    
+    // Verify task returns to original position
+    const originalColumn = page.locator('[data-testid="kanban-column"]').first();
+    await expect(originalColumn.locator('[data-testid="task-card"]').first()).toBeVisible();
+  });
 
----
+  test('should handle concurrent drags from different users', async ({ page, context }) => {
+    // Create second page to simulate another user
+    const page2 = await context.newPage();
+    await page2.goto('/');
+    await page2.click('[data-testid="tasks-nav"]');
+    await page2.waitForLoadState('networkidle');
+    
+    await page.waitForSelector('[data-testid="task-card"]');
+    await page2.waitForSelector('[data-testid="task-card"]');
+    
+    // Simulate concurrent drags
+    const task1 = page.locator('[data-testid="task-card"]').first();
+    const task2 = page2.locator('[data-testid="task-card"]').nth(1);
+    
+    const targetColumn1 = page.locator('[data-testid="kanban-column"]').nth(1);
+    const targetColumn2 = page2.locator('[data-testid="kanban-column"]').nth(2);
+    
+    // Perform concurrent drags
+    await Promise.all([
+      task1.dragTo(targetColumn1),
+      task2.dragTo(targetColumn2)
+    ]);
+    
+    // Wait for both operations to complete
+    await page.waitForTimeout(2000);
+    await page2.waitForTimeout(2000);
+    
+    // Verify both operations succeeded or handled gracefully
+    // At minimum, no errors should be thrown
+    await expect(page.locator('[role="alert"]')).not.toBeVisible();
+    await expect(page2.locator('[role="alert"]')).not.toBeVisible();
+    
+    await page2.close();
+  });
 
-**Error Handling Status**: ❌ **CRITICAL GAPS FOUND**
-**Recommendation**: **IMMEDIATE REMEDIATION REQUIRED**
-
-*Error handling analysis completed by QA Bug Hunter*
-*Focus: Resilience, data validation, and user experience during failures*
+  test('should maintain accessibility during drag operations', async ({ page }) => {
+    await page.waitForSelector('[data-testid="task-card"]');
+    
+    const taskToDrag = page.locator('[data-testid="task-card"]').first();
+    
+    // Focus on task
+    await taskToDrag.focus();
+    
+    // Verify ARIA attributes during drag
+    await page.keyboard.press('Space'); // Start keyboard drag
+    
+    // Check for proper ARIA states
+    await expect(taskToDrag).toHaveAttribute('aria-grabbed', 'true');
+    
+    // Check for live region announcements
+    const liveRegion = page.locator('[aria-live="assertive"]');
+    await expect(liveRegion).toContainText(/grabbed|selected|dragging/i);
+    
+    // Complete drag
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Space');
+    
+    // Verify completion announcement
+    await expect(liveRegion).toContainText(/dropped|moved|completed/i);
+  });
+});
