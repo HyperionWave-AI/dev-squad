@@ -44,6 +44,7 @@ import { HTTPToolsPage } from './pages/HTTPToolsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SubagentsPage } from './pages/SubagentsPage';
 import { SubchatTestPage } from './pages/SubchatTestPage';
+import { ConversationModeProvider } from './contexts/ConversationModeContext';
 
 function App() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -261,292 +262,294 @@ function App() {
 
   return (
     <ThemeProvider theme={getTheme(themeMode)}>
-      <CssBaseline />
-      <Box sx={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        minHeight: '100vh', 
-        width: '100vw', 
-        overflow: 'hidden',
-        backgroundColor: 'background.default',
-      }}>
-        {/* Enhanced AppBar Header - Mobile-First Responsive Design */}
-        <AppBar
-          position="sticky"
-          elevation={0}
-          sx={{
-            backgroundColor: 'background.paper',
-            color: 'text.primary',
-            borderBottom: '1px solid',
-            borderColor: 'divider',
-            width: '100%',
-            zIndex: (theme) => theme.zIndex.drawer + 1,
-            boxShadow: themeMode === 'light' 
-              ? '0 1px 3px rgba(0, 0, 0, 0.1)' 
-              : '0 1px 3px rgba(0, 0, 0, 0.3)',
-          }}
-        >
-          <Toolbar 
-            sx={{ 
-              gap: { xs: 1, sm: 2 },
-              px: { xs: 2, sm: 3, md: 4 },
-              minHeight: { xs: 56, sm: 64 },
+      <ConversationModeProvider>
+        <CssBaseline />
+        <Box sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: '100vh',
+          width: '100vw',
+          overflow: 'hidden',
+          backgroundColor: 'background.default',
+        }}>
+          {/* Enhanced AppBar Header - Mobile-First Responsive Design */}
+          <AppBar
+            position="sticky"
+            elevation={0}
+            sx={{
+              backgroundColor: 'background.paper',
+              color: 'text.primary',
+              borderBottom: '1px solid',
+              borderColor: 'divider',
               width: '100%',
-              justifyContent: 'space-between',
-              alignItems: 'center',
+              zIndex: (theme) => theme.zIndex.drawer + 1,
+              boxShadow: themeMode === 'light'
+                ? '0 1px 3px rgba(0, 0, 0, 0.1)'
+                : '0 1px 3px rgba(0, 0, 0, 0.3)',
             }}
           >
-            {/* Left Section: Mobile Menu + Logo */}
-            <Box sx={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: { xs: 1, sm: 2 },
-              minWidth: 0,
-              flex: '1 1 auto',
-            }}>
-              {/* Mobile Menu Button - Enhanced */}
-              {isMobile && (
-                <IconButton
-                  edge="start"
-                  color="inherit"
-                  aria-label="Open navigation menu"
-                  onClick={handleMobileMenuToggle}
-                  sx={{ 
-                    mr: 1,
-                    p: 1.5,
-                    minWidth: 44,
-                    minHeight: 44,
-                    '&:hover': {
-                      backgroundColor: 'action.hover',
-                    },
-                    '&:focus': {
-                      outline: '2px solid',
-                      outlineColor: 'primary.main',
-                      outlineOffset: '2px',
-                    },
-                  }}
-                >
-                  <MenuIcon />
-                </IconButton>
-              )}
-
-              {/* Logo and Title - Enhanced Responsive Design */}
-              <Box sx={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: { xs: 1, sm: 2 }, 
+            <Toolbar
+              sx={{
+                gap: { xs: 1, sm: 2 },
+                px: { xs: 2, sm: 3, md: 4 },
+                minHeight: { xs: 56, sm: 64 },
+                width: '100%',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              {/* Left Section: Mobile Menu + Logo */}
+              <Box sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: { xs: 1, sm: 2 },
                 minWidth: 0,
                 flex: '1 1 auto',
               }}>
-                <Typography
-                  variant="h1"
-                  component="h1"
-                  sx={{
-                    fontSize: { 
-                      xs: '1.1rem', 
-                      sm: '1.25rem', 
-                      md: '1.4rem',
-                      lg: '1.5rem' 
-                    },
-                    fontWeight: 700,
-                    background: themeMode === 'light' 
-                      ? 'linear-gradient(135deg, #2563eb 0%, #9333ea 100%)'
-                      : 'linear-gradient(135deg, #60a5fa 0%, #c084fc 100%)',
-                    backgroundClip: 'text',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    lineHeight: 1.2,
-                    letterSpacing: '-0.01em',
-                  }}
-                >
-                  {isMobile ? '🚀 Hyperion' : '🚀 Hyperion Coordinator'}
-                </Typography>
-
-                {/* Current Page Indicator - Enhanced */}
-                {currentPage && !isMobile && (
-                  <Chip
-                    icon={currentPage.icon}
-                    label={currentPage.label}
-                    size="small"
-                    variant="outlined"
+                {/* Mobile Menu Button - Enhanced */}
+                {isMobile && (
+                  <IconButton
+                    edge="start"
+                    color="inherit"
+                    aria-label="Open navigation menu"
+                    onClick={handleMobileMenuToggle}
                     sx={{
-                      ml: 2,
-                      height: 28,
-                      fontSize: '0.75rem',
-                      fontWeight: 500,
-                      borderColor: 'primary.main',
-                      color: 'primary.main',
-                      backgroundColor: themeMode === 'light' ? 'primary.50' : 'rgba(96, 165, 250, 0.1)',
-                      '& .MuiChip-icon': {
-                        color: 'primary.main',
-                        fontSize: '1rem',
+                      mr: 1,
+                      p: 1.5,
+                      minWidth: 44,
+                      minHeight: 44,
+                      '&:hover': {
+                        backgroundColor: 'action.hover',
+                      },
+                      '&:focus': {
+                        outline: '2px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: '2px',
                       },
                     }}
-                  />
+                  >
+                    <MenuIcon />
+                  </IconButton>
                 )}
-              </Box>
-            </Box>
 
-            {/* Desktop Navigation - Enhanced Responsive Design */}
-            {!isMobile && (
-              <Box sx={{ 
-                display: 'flex', 
-                alignItems: 'center',
-                gap: { sm: 1, md: 2 },
-                flex: '0 0 auto',
-              }}>
-                {/* High Priority Navigation Items */}
-                {navigationItems
-                  .filter(item => item.priority === 'high')
-                  .map((item) => (
-                    <Button
-                      key={item.path}
-                      startIcon={item.icon}
-                      onClick={() => handleNavigate(item.path)}
-                      variant={location.pathname === item.path ? 'contained' : 'text'}
-                      size={isTablet ? 'small' : 'medium'}
+                {/* Logo and Title - Enhanced Responsive Design */}
+                <Box sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: { xs: 1, sm: 2 },
+                  minWidth: 0,
+                  flex: '1 1 auto',
+                }}>
+                  <Typography
+                    variant="h1"
+                    component="h1"
+                    sx={{
+                      fontSize: {
+                        xs: '1.1rem',
+                        sm: '1.25rem',
+                        md: '1.4rem',
+                        lg: '1.5rem'
+                      },
+                      fontWeight: 700,
+                      background: themeMode === 'light'
+                        ? 'linear-gradient(135deg, #2563eb 0%, #9333ea 100%)'
+                        : 'linear-gradient(135deg, #60a5fa 0%, #c084fc 100%)',
+                      backgroundClip: 'text',
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      lineHeight: 1.2,
+                      letterSpacing: '-0.01em',
+                    }}
+                  >
+                    {isMobile ? '🚀 Hyperion' : '🚀 Hyperion Coordinator'}
+                  </Typography>
+
+                  {/* Current Page Indicator - Enhanced */}
+                  {currentPage && !isMobile && (
+                    <Chip
+                      icon={currentPage.icon}
+                      label={currentPage.label}
+                      size="small"
+                      variant="outlined"
                       sx={{
-                        minWidth: { sm: 80, md: 100 },
-                        minHeight: 40,
-                        px: { sm: 1.5, md: 2 },
-                        fontSize: { sm: '0.8rem', md: '0.875rem' },
+                        ml: 2,
+                        height: 28,
+                        fontSize: '0.75rem',
                         fontWeight: 500,
-                        textTransform: 'none',
-                        borderRadius: 2,
-                        '&:hover': {
-                          backgroundColor: location.pathname === item.path 
-                            ? 'primary.dark' 
-                            : 'action.hover',
-                        },
-                        '&:focus': {
-                          outline: '2px solid',
-                          outlineColor: 'primary.main',
-                          outlineOffset: '2px',
+                        borderColor: 'primary.main',
+                        color: 'primary.main',
+                        backgroundColor: themeMode === 'light' ? 'primary.50' : 'rgba(96, 165, 250, 0.1)',
+                        '& .MuiChip-icon': {
+                          color: 'primary.main',
+                          fontSize: '1rem',
                         },
                       }}
-                    >
-                      {isTablet ? '' : item.label}
-                    </Button>
-                  ))}
-
-                {/* Medium Priority Items - Tablet+ */}
-                {!isTablet && navigationItems
-                  .filter(item => item.priority === 'medium')
-                  .map((item) => (
-                    <Button
-                      key={item.path}
-                      startIcon={item.icon}
-                      onClick={() => handleNavigate(item.path)}
-                      variant={location.pathname === item.path ? 'contained' : 'text'}
-                      size="medium"
-                      sx={{
-                        minWidth: 100,
-                        minHeight: 40,
-                        px: 2,
-                        fontSize: '0.875rem',
-                        fontWeight: 500,
-                        textTransform: 'none',
-                        borderRadius: 2,
-                        '&:hover': {
-                          backgroundColor: location.pathname === item.path 
-                            ? 'primary.dark' 
-                            : 'action.hover',
-                        },
-                        '&:focus': {
-                          outline: '2px solid',
-                          outlineColor: 'primary.main',
-                          outlineOffset: '2px',
-                        },
-                      }}
-                    >
-                      {item.label}
-                    </Button>
-                  ))}
-
-                {/* Refresh Button - Enhanced */}
-                <IconButton
-                  onClick={handleRefresh}
-                  aria-label="Refresh data"
-                  size={isTablet ? 'small' : 'medium'}
-                  sx={{
-                    ml: 1,
-                    minWidth: 40,
-                    minHeight: 40,
-                    '&:hover': {
-                      backgroundColor: 'action.hover',
-                      transform: 'rotate(90deg)',
-                    },
-                    '&:focus': {
-                      outline: '2px solid',
-                      outlineColor: 'primary.main',
-                      outlineOffset: '2px',
-                    },
-                    transition: 'all 0.2s ease-in-out',
-                  }}
-                >
-                  <Refresh />
-                </IconButton>
-                
-                {/* Theme Toggle Button */}
-                <IconButton
-                  onClick={toggleTheme}
-                  aria-label={`Switch to ${themeMode === 'light' ? 'dark' : 'light'} theme`}
-                  size={isTablet ? 'small' : 'medium'}
-                  sx={{
-                    ml: 1,
-                    minWidth: 40,
-                    minHeight: 40,
-                    color: 'text.primary',
-                    '&:hover': {
-                      backgroundColor: 'action.hover',
-                    },
-                    '&:focus': {
-                      outline: '2px solid',
-                      outlineColor: 'primary.main',
-                      outlineOffset: '2px',
-                    },
-                    transition: 'all 0.2s ease-in-out',
-                  }}
-                >
-                  {themeMode === 'light' ? <DarkMode /> : <LightMode />}
-                </IconButton>
+                    />
+                  )}
+                </Box>
               </Box>
-            )}
-          </Toolbar>
-        </AppBar>
 
-        {/* Mobile Navigation Drawer */}
-        <MobileDrawer />
+              {/* Desktop Navigation - Enhanced Responsive Design */}
+              {!isMobile && (
+                <Box sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: { sm: 1, md: 2 },
+                  flex: '0 0 auto',
+                }}>
+                  {/* High Priority Navigation Items */}
+                  {navigationItems
+                    .filter(item => item.priority === 'high')
+                    .map((item) => (
+                      <Button
+                        key={item.path}
+                        startIcon={item.icon}
+                        onClick={() => handleNavigate(item.path)}
+                        variant={location.pathname === item.path ? 'contained' : 'text'}
+                        size={isTablet ? 'small' : 'medium'}
+                        sx={{
+                          minWidth: { sm: 80, md: 100 },
+                          minHeight: 40,
+                          px: { sm: 1.5, md: 2 },
+                          fontSize: { sm: '0.8rem', md: '0.875rem' },
+                          fontWeight: 500,
+                          textTransform: 'none',
+                          borderRadius: 2,
+                          '&:hover': {
+                            backgroundColor: location.pathname === item.path
+                              ? 'primary.dark'
+                              : 'action.hover',
+                          },
+                          '&:focus': {
+                            outline: '2px solid',
+                            outlineColor: 'primary.main',
+                            outlineOffset: '2px',
+                          },
+                        }}
+                      >
+                        {isTablet ? '' : item.label}
+                      </Button>
+                    ))}
 
-        {/* Main Content Area - Enhanced Layout */}
-        <Box
-          component="main"
-          sx={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            width: '100%',
-            minHeight: 0, // Allow flex shrinking
-            backgroundColor: 'background.default',
-            overflow: 'hidden',
-          }}
-        >
-          <Routes>
-            <Route path="/" element={<Navigate to="/chat" replace />} />
-            <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
-            <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
-            <Route path="/subchat-test" element={<SubchatTestPage key={refreshKey} />} /> {/* TODO: Remove before commit */}
-            <Route path="/knowledge" element={<KnowledgeBrowser key={refreshKey} />} />
-            <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
-            <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
-            <Route path="/subagents" element={<SubagentsPage key={refreshKey} />} />
-            <Route path="/settings" element={<SettingsPage key={refreshKey} />} />
-          </Routes>
+                  {/* Medium Priority Items - Tablet+ */}
+                  {!isTablet && navigationItems
+                    .filter(item => item.priority === 'medium')
+                    .map((item) => (
+                      <Button
+                        key={item.path}
+                        startIcon={item.icon}
+                        onClick={() => handleNavigate(item.path)}
+                        variant={location.pathname === item.path ? 'contained' : 'text'}
+                        size="medium"
+                        sx={{
+                          minWidth: 100,
+                          minHeight: 40,
+                          px: 2,
+                          fontSize: '0.875rem',
+                          fontWeight: 500,
+                          textTransform: 'none',
+                          borderRadius: 2,
+                          '&:hover': {
+                            backgroundColor: location.pathname === item.path
+                              ? 'primary.dark'
+                              : 'action.hover',
+                          },
+                          '&:focus': {
+                            outline: '2px solid',
+                            outlineColor: 'primary.main',
+                            outlineOffset: '2px',
+                          },
+                        }}
+                      >
+                        {item.label}
+                      </Button>
+                    ))}
+
+                  {/* Refresh Button - Enhanced */}
+                  <IconButton
+                    onClick={handleRefresh}
+                    aria-label="Refresh data"
+                    size={isTablet ? 'small' : 'medium'}
+                    sx={{
+                      ml: 1,
+                      minWidth: 40,
+                      minHeight: 40,
+                      '&:hover': {
+                        backgroundColor: 'action.hover',
+                        transform: 'rotate(90deg)',
+                      },
+                      '&:focus': {
+                        outline: '2px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: '2px',
+                      },
+                      transition: 'all 0.2s ease-in-out',
+                    }}
+                  >
+                    <Refresh />
+                  </IconButton>
+
+                  {/* Theme Toggle Button */}
+                  <IconButton
+                    onClick={toggleTheme}
+                    aria-label={`Switch to ${themeMode === 'light' ? 'dark' : 'light'} theme`}
+                    size={isTablet ? 'small' : 'medium'}
+                    sx={{
+                      ml: 1,
+                      minWidth: 40,
+                      minHeight: 40,
+                      color: 'text.primary',
+                      '&:hover': {
+                        backgroundColor: 'action.hover',
+                      },
+                      '&:focus': {
+                        outline: '2px solid',
+                        outlineColor: 'primary.main',
+                        outlineOffset: '2px',
+                      },
+                      transition: 'all 0.2s ease-in-out',
+                    }}
+                  >
+                    {themeMode === 'light' ? <DarkMode /> : <LightMode />}
+                  </IconButton>
+                </Box>
+              )}
+            </Toolbar>
+          </AppBar>
+
+          {/* Mobile Navigation Drawer */}
+          <MobileDrawer />
+
+          {/* Main Content Area - Enhanced Layout */}
+          <Box
+            component="main"
+            sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              width: '100%',
+              minHeight: 0, // Allow flex shrinking
+              backgroundColor: 'background.default',
+              overflow: 'hidden',
+            }}
+          >
+            <Routes>
+              <Route path="/" element={<Navigate to="/chat" replace />} />
+              <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
+              <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
+              <Route path="/subchat-test" element={<SubchatTestPage key={refreshKey} />} /> {/* TODO: Remove before commit */}
+              <Route path="/knowledge" element={<KnowledgeBrowser key={refreshKey} />} />
+              <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
+              <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
+              <Route path="/subagents" element={<SubagentsPage key={refreshKey} />} />
+              <Route path="/settings" element={<SettingsPage key={refreshKey} />} />
+            </Routes>
+          </Box>
         </Box>
-      </Box>
+      </ConversationModeProvider>
     </ThemeProvider>
   );
 }

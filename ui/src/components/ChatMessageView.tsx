@@ -6,12 +6,14 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { Box, Typography, Paper, CircularProgress } from '@mui/material';
+import { Box, Typography, Paper } from '@mui/material';
 import { Person, SmartToy } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import type { ChatMessage, ToolCall, ToolResult } from '../services/chatService';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolResultCard } from './ToolResultCard';
+import { useConversationMode } from '../contexts/ConversationModeContext';
+import { TaskProgressIndicator } from './TaskProgressIndicator';
 
 interface ChatMessageViewProps {
   messages: ChatMessage[];
@@ -32,6 +34,10 @@ export function ChatMessageView({
 }: ChatMessageViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { mode } = useConversationMode();
+
+  // Only show tool calls/results in debug mode
+  const showToolDetails = mode === 'debug';
 
   // Auto-scroll to bottom when new messages arrive or tool calls update
   useEffect(() => {
@@ -55,6 +61,28 @@ export function ChatMessageView({
 
     // Handle system messages
     if (isSystem) {
+      // Filter out scaffold enforcement messages
+      const scaffoldPatterns = [
+        'FORCED WRITE SCAFFOLD',
+        'WRITE-ONLY MODE ENFORCEMENT',
+        'CURRENT EXECUTION SCORE',
+        'IMPLEMENT NOW - DO NOT READ',
+        'Your NEXT tool call MUST be',
+        'You are BLOCKED from calling',
+        'SCORING:',
+        '🚨',
+        '╔══════════════════════════════════════════════════════════════╗',
+      ];
+
+      const isScaffoldMessage = scaffoldPatterns.some(pattern =>
+        message.content.includes(pattern)
+      );
+
+      // Don't render scaffold messages
+      if (isScaffoldMessage) {
+        return null;
+      }
+
       return (
         <Box
           key={message.id}
@@ -82,8 +110,8 @@ export function ChatMessageView({
       );
     }
 
-    // Handle tool_call messages
-    if (isToolCall && message.toolCall) {
+    // Handle tool_call messages - only in debug mode
+    if (isToolCall && message.toolCall && showToolDetails) {
       return (
         <Box
           key={message.id}
@@ -107,8 +135,8 @@ export function ChatMessageView({
       );
     }
 
-    // Handle tool_result messages
-    if (isToolResult && message.toolResult) {
+    // Handle tool_result messages - only in debug mode
+    if (isToolResult && message.toolResult && showToolDetails) {
       return (
         <Box
           key={message.id}
@@ -129,6 +157,11 @@ export function ChatMessageView({
           </Box>
         </Box>
       );
+    }
+
+    // Skip tool_call and tool_result messages in default mode (return null to not render them)
+    if ((isToolCall || isToolResult) && !showToolDetails) {
+      return null;
     }
 
     return (
@@ -228,8 +261,8 @@ export function ChatMessageView({
               )}
             </Paper>
 
-            {/* Tool execution cards */}
-            {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+            {/* Tool execution cards - debug mode shows technical details */}
+            {!isUser && showToolDetails && message.toolCalls && message.toolCalls.length > 0 && (
               <Box sx={{ mt: 1 }}>
                 {message.toolCalls.map((toolCall) => {
                   const isPending = pendingToolCalls.has(toolCall.id);
@@ -257,6 +290,27 @@ export function ChatMessageView({
                 })}
               </Box>
             )}
+
+            {/* User-friendly tool execution summary - default mode shows completed tools */}
+            {!isUser && !showToolDetails && message.toolCalls && message.toolCalls.length > 0 && (() => {
+              console.log('[ChatMessageView] 🎨 Rendering persistent tool indicator for message:', {
+                messageId: message.id,
+                toolCallsCount: message.toolCalls.length,
+                tools: message.toolCalls.map(tc => tc.tool),
+              });
+              return (
+                <Box sx={{ mt: 1 }}>
+                  <TaskProgressIndicator
+                    mode="working"
+                    toolCalls={message.toolCalls.map(tc => ({
+                      id: tc.id,
+                      tool: tc.tool,
+                      isPending: false, // All tools in a completed message are done
+                    }))}
+                  />
+                </Box>
+              );
+            })()}
 
             {/* Timestamp */}
             <Typography
@@ -390,8 +444,8 @@ export function ChatMessageView({
               </Box>
             )}
 
-            {/* Streaming Tool Calls (Real-time) */}
-            {isStreaming && streamingToolCalls.length > 0 && (
+            {/* Streaming Tool Calls (Real-time) - only in debug mode */}
+            {isStreaming && showToolDetails && streamingToolCalls.length > 0 && (
               <Box sx={{ px: 2, mb: 2 }}>
                 {streamingToolCalls.map((toolCall) => {
                   const isPending = pendingToolCalls.has(toolCall.id);
@@ -420,49 +474,45 @@ export function ChatMessageView({
               </Box>
             )}
 
-            {/* Typing Indicator */}
-            {isStreaming && !streamingContent && streamingToolCalls.length === 0 && (
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'flex-start',
-                  mb: 2,
-                  px: 2,
-                }}
-              >
-                <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
-                  <Box
-                    sx={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: '50%',
-                      backgroundColor: 'grey.300',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <SmartToy sx={{ fontSize: 20, color: 'grey.700' }} />
-                  </Box>
-                  <Paper
-                    elevation={1}
-                    sx={{
-                      px: 2,
-                      py: 1.5,
-                      backgroundColor: 'grey.100',
-                      borderRadius: 2,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1,
-                    }}
-                  >
-                    <CircularProgress size={16} />
-                    <Typography variant="body2" color="text.secondary">
-                      Thinking...
-                    </Typography>
-                  </Paper>
-                </Box>
-              </Box>
+            {/* Enhanced Progress Indicator - shown in default mode when tools are executing OR completed */}
+            {!showToolDetails && streamingToolCalls.length > 0 && (() => {
+              console.log('[ChatMessageView] 🔄 Rendering real-time streaming indicator:', {
+                streamingToolCallsCount: streamingToolCalls.length,
+                pendingCount: pendingToolCalls.size,
+                tools: streamingToolCalls.map(tc => ({
+                  tool: tc.tool,
+                  isPending: pendingToolCalls.has(tc.id),
+                })),
+              });
+
+              // Detect if coordinator tools are being called (orchestration mode)
+              const coordinatorTools = ['coordinator_create_human_task', 'coordinator_create_agent_task',
+                'create_agent_task', 'code_index_search', 'execute_subagent'];
+              const isOrchestrating = streamingToolCalls.some(tc =>
+                coordinatorTools.includes(tc.tool)
+              );
+
+              // Map tool calls to the format expected by TaskProgressIndicator
+              const toolCallsInfo = streamingToolCalls.map(tc => ({
+                id: tc.id,
+                tool: tc.tool,
+                isPending: pendingToolCalls.has(tc.id),
+              }));
+
+              return (
+                <TaskProgressIndicator
+                  mode={isOrchestrating ? 'orchestrating' : 'working'}
+                  toolCalls={toolCallsInfo}
+                />
+              );
+            })()}
+
+            {/* Enhanced Thinking Indicator */}
+            {isStreaming && !streamingContent && streamingToolCalls.length === 0 && pendingToolCalls.size === 0 && (
+              <TaskProgressIndicator
+                mode="thinking"
+                currentStep="Processing your request and planning next steps..."
+              />
             )}
           </>
         )}

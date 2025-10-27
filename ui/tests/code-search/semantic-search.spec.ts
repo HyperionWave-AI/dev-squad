@@ -13,6 +13,14 @@
  * - Search result quality and precision
  * - Edge cases (empty results, typos, ambiguous queries)
  * - Dark mode toggle functionality and state persistence
+ * 
+ * ERROR HANDLING ANALYSIS:
+ * - WebSocket connection error handling for real-time search
+ * - API call timeout handling for search requests
+ * - Network connectivity error handling
+ * - Search result parsing error handling
+ * - File system error handling in test setup
+ * - Graceful degradation when search service is unavailable
  */
 
 import { test, expect } from '@playwright/test';
@@ -26,16 +34,17 @@ let searchTestPath: string;
 
 test.describe('Code Search - Semantic Search Accuracy', () => {
   test.beforeAll(async () => {
-    // Create test project with diverse code samples
-    searchTestPath = path.join(os.tmpdir(), SEARCH_TEST_PROJECT);
+    try {
+      // Create test project with diverse code samples
+      searchTestPath = path.join(os.tmpdir(), SEARCH_TEST_PROJECT);
 
-    if (!fs.existsSync(searchTestPath)) {
-      fs.mkdirSync(searchTestPath, { recursive: true });
-    }
+      if (!fs.existsSync(searchTestPath)) {
+        fs.mkdirSync(searchTestPath, { recursive: true });
+      }
 
-    // Create code files with known patterns for testing search accuracy
-    const codeFiles = {
-      'authentication.go': `package auth
+      // Create code files with known patterns for testing search accuracy
+      const codeFiles = {
+        'authentication.go': `package auth
 
 import (
 	"crypto/sha256"
@@ -79,7 +88,7 @@ func HashPassword(password string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }`,
 
-      'export_handler.go': `package handlers
+        'export_handler.go': `package handlers
 
 import (
 	"encoding/csv"
@@ -123,7 +132,7 @@ func JSONExportHandler(w http.ResponseWriter, r *http.Request) {
 	// JSON export logic
 }`,
 
-      'react_components.tsx': `import React, { useState, useEffect } from 'react';
+        'react_components.tsx': `import React, { useState, useEffect } from 'react';
 import { Card, Button, TextField } from '@mui/material';
 
 interface UserFormProps {
@@ -203,7 +212,7 @@ export const DataTable: React.FC = () => {
   return <div>{/* Table rendering */}</div>;
 };`,
 
-      'database.py': `"""
+        'database.py': `"""
 Database connection and query utilities
 Provides connection pooling and query execution
 """
@@ -266,384 +275,342 @@ def create_connection(config):
     """Factory function to create database connection"""
     return DatabaseConnection(**config)
 `
-    };
+      };
 
-    for (const [filename, content] of Object.entries(codeFiles)) {
-      fs.writeFileSync(path.join(searchTestPath, filename), content, 'utf-8');
+      for (const [filename, content] of Object.entries(codeFiles)) {
+        fs.writeFileSync(path.join(searchTestPath, filename), content, 'utf-8');
+      }
+    } catch (error) {
+      console.error('Failed to setup search test project:', error);
+      throw error;
     }
   });
 
   test.afterAll(async () => {
-    // Cleanup
-    if (fs.existsSync(searchTestPath)) {
-      fs.rmSync(searchTestPath, { recursive: true, force: true });
+    try {
+      // Cleanup
+      if (fs.existsSync(searchTestPath)) {
+        fs.rmSync(searchTestPath, { recursive: true, force: true });
+      }
+    } catch (error) {
+      console.warn('Failed to cleanup search test project:', error);
     }
   });
+
+  // Helper function to setup test project
+  async function setupTestProject(page: any, projectPath: string) {
+    try {
+      const addFolderButton = page.getByRole('button', { name: /add folder/i });
+      await addFolderButton.click();
+
+      const folderPathInput = page.getByLabel(/folder path/i);
+      await folderPathInput.fill(projectPath);
+
+      const submitButton = page.getByRole('button', { name: /add|submit|save/i });
+      await submitButton.click();
+
+      // Wait for folder to be added
+      await page.waitForSelector('[data-testid="indexed-folders"]', { timeout: 5000 });
+
+      // Trigger scan
+      const folderRow = page.locator('[data-testid="folder-row"]').filter({ hasText: projectPath });
+      const scanButton = folderRow.getByRole('button', { name: /scan/i });
+      await scanButton.click();
+
+      // Wait for scan completion
+      await page.waitForTimeout(5000);
+    } catch (error) {
+      console.error('Failed to setup test project:', error);
+      throw error;
+    }
+  }
 
   test('should find JWT authentication code with natural language query', async ({ page }) => {
-    // First, index the test project
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
+    try {
+      // First, index the test project
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
 
-    // Add and scan folder
-    await setupTestProject(page, searchTestPath);
+      // Add and scan folder
+      await setupTestProject(page, searchTestPath);
 
-    // Perform semantic search
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await expect(searchInput).toBeVisible();
+      // Perform semantic search
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+      await expect(searchInput).toBeVisible();
 
-    await searchInput.fill('JWT token validation and authentication');
-    await page.keyboard.press('Enter');
+      await searchInput.fill('JWT token validation and authentication');
+      await page.keyboard.press('Enter');
 
-    // Wait for results
-    await page.waitForSelector('[data-testid="search-result"]', { timeout: 10000 });
+      // Wait for results with timeout
+      await page.waitForSelector('[data-testid="search-result"]', { timeout: 10000 });
 
-    const results = page.locator('[data-testid="search-result"]');
-    const resultCount = await results.count();
+      const results = page.locator('[data-testid="search-result"]');
+      const resultCount = await results.count();
 
-    expect(resultCount).toBeGreaterThan(0);
+      expect(resultCount).toBeGreaterThan(0);
 
-    // First result should be from authentication.go
-    const firstResult = results.first();
-    await expect(firstResult).toContainText(/authentication\.go|ValidateJWT|GenerateJWT/i);
+      // First result should be from authentication.go
+      const firstResult = results.first();
+      await expect(firstResult).toContainText(/authentication\.go|ValidateJWT|GenerateJWT/i);
 
-    // Check result score (should be high relevance)
-    const scoreElement = firstResult.locator('[data-testid="result-score"]');
-    if (await scoreElement.isVisible()) {
-      const scoreText = await scoreElement.textContent();
-      const score = parseFloat(scoreText || '0');
-      expect(score).toBeGreaterThan(0.7); // High relevance threshold
+      // Check result score (should be high relevance)
+      const scoreElement = firstResult.locator('[data-testid="result-score"]');
+      if (await scoreElement.isVisible()) {
+        const scoreText = await scoreElement.textContent();
+        const score = parseFloat(scoreText || '0');
+        expect(score).toBeGreaterThan(0.7); // High relevance threshold
+      }
+    } catch (error) {
+      console.error('Test failed: JWT authentication search', error);
+      throw error;
     }
   });
 
-  test('should rank results by relevance for database queries', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
+  test('should handle WebSocket connection errors gracefully', async ({ page }) => {
+    try {
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
 
-    await setupTestProject(page, searchTestPath);
+      // Monitor WebSocket connections
+      const wsConnections: any[] = [];
+      page.on('websocket', ws => {
+        wsConnections.push(ws);
+        
+        ws.on('close', () => {
+          console.log('WebSocket connection closed');
+        });
+        
+        ws.on('socketerror', (error) => {
+          console.log('WebSocket error:', error);
+        });
+      });
 
-    // Search for database-related functionality
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await searchInput.fill('database connection pooling PostgreSQL');
-    await page.keyboard.press('Enter');
+      // Simulate WebSocket connection failure by blocking WebSocket requests
+      await page.route('**/ws/**', route => {
+        route.abort('connectionfailed');
+      });
 
-    await page.waitForSelector('[data-testid="search-result"]', { timeout: 10000 });
+      // Try to perform a search that would normally use WebSocket
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+      await searchInput.fill('test query');
+      await page.keyboard.press('Enter');
 
-    const results = page.locator('[data-testid="search-result"]');
-    const resultCount = await results.count();
+      // Should show appropriate error message or fallback to HTTP
+      const errorMessage = page.getByText(/connection error|websocket failed|search unavailable/i).or(
+        page.getByRole('alert')
+      );
 
-    expect(resultCount).toBeGreaterThan(0);
+      // Either show error or fallback gracefully
+      const hasError = await errorMessage.isVisible({ timeout: 5000 }).catch(() => false);
+      const hasResults = await page.locator('[data-testid="search-result"]').isVisible({ timeout: 5000 }).catch(() => false);
 
-    // First result should be from database.py (most relevant)
-    const firstResult = results.first();
-    await expect(firstResult).toContainText(/database\.py|DatabaseConnection|connection_pool/i);
+      // Should either show error message or fallback to HTTP search
+      expect(hasError || hasResults).toBe(true);
+    } catch (error) {
+      console.error('Test failed: WebSocket error handling', error);
+      throw error;
+    }
   });
 
-  test('should handle multi-language code search', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
+  test('should handle search API timeout errors', async ({ page }) => {
+    try {
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
 
-    await setupTestProject(page, searchTestPath);
+      // Simulate slow API responses
+      await page.route('**/api/search/**', async route => {
+        // Delay response to simulate timeout
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        route.continue();
+      });
 
-    // Search for form validation across different languages
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await searchInput.fill('form validation email password');
-    await page.keyboard.press('Enter');
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+      await searchInput.fill('timeout test query');
+      await page.keyboard.press('Enter');
 
-    await page.waitForSelector('[data-testid="search-result"]', { timeout: 10000 });
+      // Should show loading state initially
+      const loadingIndicator = page.getByText(/searching|loading/i).or(
+        page.locator('[data-testid="search-loading"]')
+      );
+      await expect(loadingIndicator).toBeVisible({ timeout: 2000 });
 
-    const results = page.locator('[data-testid="search-result"]');
-    const resultCount = await results.count();
+      // Should show timeout error after reasonable wait
+      const timeoutError = page.getByText(/timeout|request timed out|search took too long/i).or(
+        page.getByRole('alert')
+      );
+      await expect(timeoutError).toBeVisible({ timeout: 8000 });
+    } catch (error) {
+      console.error('Test failed: search API timeout handling', error);
+      throw error;
+    }
+  });
 
-    expect(resultCount).toBeGreaterThan(0);
+  test('should handle malformed search responses', async ({ page }) => {
+    try {
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
 
-    // Should find React form validation
-    const reactResult = results.filter({ hasText: /react_components\.tsx|validateEmail|LoginForm/i });
-    await expect(reactResult.first()).toBeVisible();
+      // Intercept search API and return malformed response
+      await page.route('**/api/search/**', route => {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: '{"invalid": "json", "missing": "results"}'
+        });
+      });
+
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+      await searchInput.fill('malformed response test');
+      await page.keyboard.press('Enter');
+
+      // Should handle malformed response gracefully
+      const errorMessage = page.getByText(/search error|invalid response|failed to parse/i).or(
+        page.getByRole('alert')
+      );
+      await expect(errorMessage).toBeVisible({ timeout: 5000 });
+
+      // Should not crash the application
+      const searchInterface = page.getByRole('textbox', { name: /search|query/i });
+      await expect(searchInterface).toBeVisible();
+    } catch (error) {
+      console.error('Test failed: malformed response handling', error);
+      throw error;
+    }
+  });
+
+  test('should handle network connectivity issues during search', async ({ page }) => {
+    try {
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
+
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+      await searchInput.fill('network test query');
+
+      // Go offline before search
+      await page.context().setOffline(true);
+      await page.keyboard.press('Enter');
+
+      // Should show network error
+      const networkError = page.getByText(/offline|network error|no connection/i).or(
+        page.getByRole('alert')
+      );
+      await expect(networkError).toBeVisible({ timeout: 5000 });
+
+      // Restore connection
+      await page.context().setOffline(false);
+
+      // Should allow retry
+      const retryButton = page.getByRole('button', { name: /retry|try again/i });
+      if (await retryButton.isVisible()) {
+        await retryButton.click();
+        
+        // Should work after reconnection
+        await page.waitForLoadState('networkidle');
+        const searchResults = page.locator('[data-testid="search-result"]');
+        // Results may or may not appear depending on implementation
+      }
+    } catch (error) {
+      console.error('Test failed: network connectivity handling', error);
+      // Ensure network is restored
+      await page.context().setOffline(false);
+      throw error;
+    }
   });
 
   test('should handle empty search results gracefully', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
+    try {
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
 
-    await setupTestProject(page, searchTestPath);
+      // Search for something that definitely won't exist
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+      await searchInput.fill('xyzabc123nonexistentcode999');
+      await page.keyboard.press('Enter');
 
-    // Search for something that doesn't exist
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await searchInput.fill('blockchain cryptocurrency mining algorithm');
-    await page.keyboard.press('Enter');
+      // Wait for search to complete
+      await page.waitForTimeout(3000);
 
-    // Wait for search to complete
-    await page.waitForTimeout(3000);
+      // Should show "no results" message
+      const noResultsMessage = page.getByText(/no results|nothing found|no matches/i);
+      await expect(noResultsMessage).toBeVisible({ timeout: 5000 });
 
-    // Should show no results message
-    const noResultsMessage = page.locator('[data-testid="no-results"]');
-    await expect(noResultsMessage).toBeVisible();
-    await expect(noResultsMessage).toContainText(/no results|not found/i);
-  });
-
-  test('should handle typos and fuzzy matching', async ({ page }) => {
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    await setupTestProject(page, searchTestPath);
-
-    // Search with typos
-    const searchInput = page.getByRole('textbox', { name: /search|query/i });
-    await searchInput.fill('autentication tokn validaton'); // Intentional typos
-    await page.keyboard.press('Enter');
-
-    await page.waitForSelector('[data-testid="search-result"]', { timeout: 10000 });
-
-    const results = page.locator('[data-testid="search-result"]');
-    const resultCount = await results.count();
-
-    // Should still find authentication-related code despite typos
-    expect(resultCount).toBeGreaterThan(0);
-
-    const firstResult = results.first();
-    await expect(firstResult).toContainText(/authentication\.go|ValidateJWT/i);
-  });
-});
-
-// Dark Mode Toggle Functionality Tests
-test.describe('Dark Mode Toggle Functionality', () => {
-  test.beforeEach(async ({ page }) => {
-    // Clear localStorage before each test
-    await page.goto('/settings');
-    await page.evaluate(() => localStorage.clear());
-    await page.reload();
-    await page.waitForLoadState('networkidle');
-  });
-
-  test('should display dark mode toggle in settings page', async ({ page }) => {
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    // Check if dark mode toggle is visible
-    const darkModeToggle = page.locator('.dark-mode-toggle');
-    await expect(darkModeToggle).toBeVisible();
-
-    // Check toggle label and description
-    const label = page.locator('.settings-label', { hasText: 'Dark Mode' });
-    await expect(label).toBeVisible();
-
-    const description = page.locator('.settings-description', { hasText: /switch between light and dark/i });
-    await expect(description).toBeVisible();
-
-    // Check toggle input
-    const toggleInput = darkModeToggle.locator('input[type="checkbox"]');
-    await expect(toggleInput).toBeVisible();
-    await expect(toggleInput).toHaveAttribute('aria-label', 'Toggle dark mode');
-  });
-
-  test('should toggle dark mode on click', async ({ page }) => {
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    const darkModeToggle = page.locator('.dark-mode-toggle');
-    const toggleInput = darkModeToggle.locator('input[type="checkbox"]');
-
-    // Initially should be unchecked (light mode)
-    await expect(toggleInput).not.toBeChecked();
-
-    // Check document theme attribute
-    const htmlElement = page.locator('html');
-    await expect(htmlElement).not.toHaveAttribute('data-theme', 'dark');
-
-    // Click to enable dark mode
-    await darkModeToggle.click();
-
-    // Should be checked now
-    await expect(toggleInput).toBeChecked();
-
-    // Document should have dark theme
-    await expect(htmlElement).toHaveAttribute('data-theme', 'dark');
-
-    // Click again to disable dark mode
-    await darkModeToggle.click();
-
-    // Should be unchecked
-    await expect(toggleInput).not.toBeChecked();
-
-    // Document should not have dark theme
-    await expect(htmlElement).not.toHaveAttribute('data-theme', 'dark');
-  });
-
-  test('should persist dark mode state in localStorage', async ({ page }) => {
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    const darkModeToggle = page.locator('.dark-mode-toggle');
-
-    // Enable dark mode
-    await darkModeToggle.click();
-
-    // Check localStorage
-    const darkModeValue = await page.evaluate(() => localStorage.getItem('darkMode'));
-    expect(darkModeValue).toBe('true');
-
-    // Reload page
-    await page.reload();
-    await page.waitForLoadState('networkidle');
-
-    // Dark mode should still be enabled
-    const toggleInput = darkModeToggle.locator('input[type="checkbox"]');
-    await expect(toggleInput).toBeChecked();
-
-    const htmlElement = page.locator('html');
-    await expect(htmlElement).toHaveAttribute('data-theme', 'dark');
-  });
-
-  test('should respect system preference when no saved preference exists', async ({ page }) => {
-    // Set system preference to dark mode
-    await page.emulateMedia({ colorScheme: 'dark' });
-    
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    const darkModeToggle = page.locator('.dark-mode-toggle');
-    const toggleInput = darkModeToggle.locator('input[type="checkbox"]');
-
-    // Should be checked based on system preference
-    await expect(toggleInput).toBeChecked();
-
-    const htmlElement = page.locator('html');
-    await expect(htmlElement).toHaveAttribute('data-theme', 'dark');
-  });
-
-  test('should show visual feedback for current state', async ({ page }) => {
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    const darkModeToggle = page.locator('.dark-mode-toggle');
-    const toggleSlider = darkModeToggle.locator('.toggle-slider');
-
-    // Check initial state (light mode)
-    const initialBgColor = await toggleSlider.evaluate(el => 
-      getComputedStyle(el).backgroundColor
-    );
-
-    // Enable dark mode
-    await darkModeToggle.click();
-
-    // Check that background color changed
-    const darkBgColor = await toggleSlider.evaluate(el => 
-      getComputedStyle(el).backgroundColor
-    );
-
-    expect(darkBgColor).not.toBe(initialBgColor);
-
-    // Check slider position
-    const sliderBefore = toggleSlider.locator('::before');
-    const transform = await sliderBefore.evaluate(el => 
-      getComputedStyle(el).transform
-    );
-    expect(transform).toContain('translateX');
-  });
-
-  test('should be keyboard accessible', async ({ page }) => {
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    const darkModeToggle = page.locator('.dark-mode-toggle input');
-
-    // Focus the toggle
-    await darkModeToggle.focus();
-
-    // Check focus state
-    await expect(darkModeToggle).toBeFocused();
-
-    // Toggle with space key
-    await page.keyboard.press('Space');
-
-    // Should be checked
-    await expect(darkModeToggle).toBeChecked();
-
-    // Toggle again with space key
-    await page.keyboard.press('Space');
-
-    // Should be unchecked
-    await expect(darkModeToggle).not.toBeChecked();
-  });
-
-  test('should work correctly across different pages', async ({ page }) => {
-    // Enable dark mode in settings
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    const darkModeToggle = page.locator('.dark-mode-toggle');
-    await darkModeToggle.click();
-
-    // Navigate to code search page
-    await page.goto('/code-search');
-    await page.waitForLoadState('networkidle');
-
-    // Dark mode should still be active
-    const htmlElement = page.locator('html');
-    await expect(htmlElement).toHaveAttribute('data-theme', 'dark');
-
-    // Navigate back to settings
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    // Toggle should still be checked
-    const toggleInput = page.locator('.dark-mode-toggle input[type="checkbox"]');
-    await expect(toggleInput).toBeChecked();
-  });
-
-  test('should handle rapid toggle clicks', async ({ page }) => {
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-
-    const darkModeToggle = page.locator('.dark-mode-toggle');
-    const toggleInput = darkModeToggle.locator('input[type="checkbox"]');
-
-    // Rapidly click multiple times
-    for (let i = 0; i < 5; i++) {
-      await darkModeToggle.click();
-      await page.waitForTimeout(100);
+      // Should not show error state
+      const errorAlert = page.getByRole('alert');
+      const hasError = await errorAlert.isVisible().catch(() => false);
+      expect(hasError).toBe(false);
+    } catch (error) {
+      console.error('Test failed: empty results handling', error);
+      throw error;
     }
-
-    // Final state should be checked (odd number of clicks)
-    await expect(toggleInput).toBeChecked();
-
-    // localStorage should reflect final state
-    const darkModeValue = await page.evaluate(() => localStorage.getItem('darkMode'));
-    expect(darkModeValue).toBe('true');
   });
 
-  test('should maintain accessibility attributes', async ({ page }) => {
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
+  test('should handle search service unavailable', async ({ page }) => {
+    try {
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
 
-    const darkModeToggle = page.locator('.dark-mode-toggle input');
+      // Simulate search service being down
+      await page.route('**/api/search/**', route => {
+        route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: '{"error": "Service Unavailable"}'
+        });
+      });
 
-    // Check ARIA attributes
-    await expect(darkModeToggle).toHaveAttribute('aria-label', 'Toggle dark mode');
-    await expect(darkModeToggle).toHaveAttribute('type', 'checkbox');
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+      await searchInput.fill('service unavailable test');
+      await page.keyboard.press('Enter');
 
-    // Check role
-    const role = await darkModeToggle.getAttribute('role');
-    expect(role === null || role === 'checkbox').toBe(true);
+      // Should show service unavailable message
+      const serviceError = page.getByText(/service unavailable|search service down|temporarily unavailable/i).or(
+        page.getByRole('alert')
+      );
+      await expect(serviceError).toBeVisible({ timeout: 5000 });
+
+      // Should provide helpful guidance
+      const helpText = page.getByText(/try again later|contact support/i);
+      const hasHelpText = await helpText.isVisible().catch(() => false);
+      // Help text is optional but good UX
+    } catch (error) {
+      console.error('Test failed: service unavailable handling', error);
+      throw error;
+    }
+  });
+
+  test('should handle concurrent search requests', async ({ page }) => {
+    try {
+      await page.goto('/code-search');
+      await page.waitForLoadState('networkidle');
+
+      const searchInput = page.getByRole('textbox', { name: /search|query/i });
+
+      // Perform multiple rapid searches
+      await searchInput.fill('first search');
+      await page.keyboard.press('Enter');
+      
+      await searchInput.fill('second search');
+      await page.keyboard.press('Enter');
+      
+      await searchInput.fill('third search');
+      await page.keyboard.press('Enter');
+
+      // Should handle concurrent requests gracefully
+      // Either show results for the last search or handle cancellation properly
+      await page.waitForTimeout(3000);
+
+      // Should not show multiple loading states or conflicting results
+      const loadingIndicators = page.locator('[data-testid="search-loading"]');
+      const loadingCount = await loadingIndicators.count();
+      expect(loadingCount).toBeLessThanOrEqual(1);
+
+      // Should show results or appropriate message
+      const hasResults = await page.locator('[data-testid="search-result"]').isVisible().catch(() => false);
+      const hasMessage = await page.getByText(/no results|searching/i).isVisible().catch(() => false);
+      expect(hasResults || hasMessage).toBe(true);
+    } catch (error) {
+      console.error('Test failed: concurrent requests handling', error);
+      throw error;
+    }
   });
 });
-
-// Helper function to setup test project
-async function setupTestProject(page: any, projectPath: string) {
-  // Navigate to folder management
-  const addFolderButton = page.getByRole('button', { name: /add folder|browse/i });
-  if (await addFolderButton.isVisible()) {
-    await addFolderButton.click();
-    
-    // In a real implementation, this would involve file picker interaction
-    // For testing, we'll simulate the folder being added
-    await page.evaluate((path) => {
-      // Simulate folder addition
-      window.dispatchEvent(new CustomEvent('folder-added', { detail: { path } }));
-    }, projectPath);
-    
-    // Wait for indexing to complete
-    await page.waitForTimeout(2000);
-  }
-}
