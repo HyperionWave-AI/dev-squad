@@ -15,7 +15,8 @@ import (
 
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
-	"hyper/internal/mcp/handlers"
+	"hyper/internal/handlers"
+	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
 
@@ -1922,7 +1923,7 @@ func (t *SetCurrentSubagentTool) Execute(ctx context.Context, input map[string]i
 
 // DiscoverToolsExecutor implements the discover_tools tool executor
 type DiscoverToolsExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *DiscoverToolsExecutor) Name() string {
@@ -1957,7 +1958,7 @@ func (e *DiscoverToolsExecutor) Execute(ctx context.Context, args map[string]int
 
 // GetToolSchemaExecutor implements the get_tool_schema tool executor
 type GetToolSchemaExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *GetToolSchemaExecutor) Name() string {
@@ -1988,7 +1989,7 @@ func (e *GetToolSchemaExecutor) Execute(ctx context.Context, args map[string]int
 
 // ExecuteToolExecutor implements the execute_tool tool executor
 type ExecuteToolExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *ExecuteToolExecutor) Name() string {
@@ -2023,7 +2024,7 @@ func (e *ExecuteToolExecutor) Execute(ctx context.Context, args map[string]inter
 
 // McpAddServerExecutor implements the mcp_add_server tool executor
 type McpAddServerExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *McpAddServerExecutor) Name() string {
@@ -2062,7 +2063,7 @@ func (e *McpAddServerExecutor) Execute(ctx context.Context, args map[string]inte
 
 // McpRediscoverServerExecutor implements the mcp_rediscover_server tool executor
 type McpRediscoverServerExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *McpRediscoverServerExecutor) Name() string {
@@ -2093,7 +2094,7 @@ func (e *McpRediscoverServerExecutor) Execute(ctx context.Context, args map[stri
 
 // McpRemoveServerExecutor implements the mcp_remove_server tool executor
 type McpRemoveServerExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *McpRemoveServerExecutor) Name() string {
@@ -2145,6 +2146,7 @@ type ChatServiceInterface interface {
 	CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
 	CreateSessionWithParent(ctx context.Context, userID, companyID, title string, parentChatID *primitive.ObjectID) (*models.ChatSession, error)
 	GetSession(ctx context.Context, sessionID primitive.ObjectID, companyID string) (*models.ChatSession, error)
+	GetMessages(ctx context.Context, sessionID primitive.ObjectID, companyID string, limit, offset int) (*models.GetMessagesResponse, error)
 	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
 	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
 	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
@@ -2604,6 +2606,15 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		// Continue execution even if message save fails
 	}
 
+	// Register for message notifications (for user interruptions)
+	notifier := handlers.GetMessageNotifier(t.logger)
+	notifyCh := notifier.RegisterSession(chatSession.ID)
+	defer notifier.UnregisterSession(chatSession.ID)
+
+	t.logger.Info("🔔 Registered subagent session for message notifications",
+		zap.String("sessionId", chatSession.ID.Hex()),
+		zap.String("subchatId", subchatID))
+
 	// Create initial messages with SYSTEM prompt for phase isolation
 	messages := []aiservice.Message{
 		{
@@ -2666,14 +2677,73 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	t.logger.Info("╚═══════════════════════════════════════════════════════════════════",
 		zap.String("subchatId", subchatID))
 
-	for event := range aiStream {
+	// Track stream state for interrupt handling
+	streamActive := true
+	fullSystemPrompt := systemPrompt // Store system prompt for message rebuilding on interrupt
+
+	for streamActive {
 		select {
 		case <-ctx.Done():
 			t.logger.Warn("⏱️ Subagent execution cancelled by timeout",
 				zap.String("subchatId", subchatID))
 			t.handleExecutionFailure(agentTask.ID, "Execution timeout")
 			return
-		default:
+
+		case <-notifyCh:
+			// USER MESSAGE INTERRUPT
+			t.logger.Info("💬 User message interrupt detected, fetching new messages",
+				zap.String("sessionId", chatSession.ID.Hex()),
+				zap.String("subchatId", subchatID))
+
+			// Drain current stream if active
+			if aiStream != nil {
+				go func() {
+					for range aiStream {
+						// discard remaining events
+					}
+				}()
+			}
+
+			// Fetch all messages including new user message
+			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, companyID, 100, 0)
+			if err != nil {
+				t.logger.Error("Failed to fetch messages after interrupt", zap.Error(err))
+				continue
+			}
+
+			// Rebuild message context with system prompt + conversation history
+			messages = []aiservice.Message{
+				{Role: "system", Content: fullSystemPrompt},
+			}
+			for _, msg := range messagesResp.Messages {
+				messages = append(messages, aiservice.Message{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+
+			t.logger.Info("🔄 Resuming subagent with updated context",
+				zap.Int("messageCount", len(messages)),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Restart AI stream with updated context
+			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+			if err != nil {
+				t.logger.Error("Failed to restart AI stream after interrupt", zap.Error(err))
+				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Stream restart failed: %v", err))
+				return
+			}
+
+			// Continue to next select iteration
+			continue
+
+		case event, ok := <-aiStream:
+			if !ok {
+				// Stream closed naturally
+				streamActive = false
+				break
+			}
+
 			switch event.Type {
 			case aiservice.StreamEventToken:
 				fullResponse += event.Content
@@ -3328,7 +3398,7 @@ func RegisterCoordinatorTools(
 	registry *aiservice.ToolRegistry,
 	taskStorage storage.TaskStorage,
 	knowledgeStorage storage.KnowledgeStorage,
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler,
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler,
 	subchatStorage *storage.SubchatStorage,
 	aiService AIServiceInterface,
 	chatService ChatServiceInterface,
