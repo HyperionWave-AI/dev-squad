@@ -1,8 +1,8 @@
 /**
  * SubchatTest Page Component
  * 
- * A placeholder page with three action buttons following the existing design system patterns.
- * Uses Material-UI components for consistency with SubchatList and SubchatCreationDialog.
+ * A responsive placeholder page with three action buttons following mobile-first design patterns.
+ * Uses Material-UI components with responsive breakpoints and mobile-optimized touch targets.
  */
 
 import { useState } from 'react';
@@ -43,27 +43,46 @@ export const SubchatTestPage = () => {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Box sx={{ backgroundColor: 'background.paper', borderRadius: 2, boxShadow: 1, p: 3 }}>
-        {/* Centered placeholder section */}
+    <Container 
+      maxWidth="lg" 
+      sx={{ 
+        py: { xs: 2, sm: 3, md: 4 },
+        px: { xs: 1, sm: 2 }
+      }}
+    >
+      <Box 
+        sx={{ 
+          backgroundColor: 'background.paper', 
+          borderRadius: { xs: 1, sm: 2 }, 
+          boxShadow: { xs: 0, sm: 1 }, 
+          p: { xs: 1.5, sm: 2, md: 3 }
+        }}
+      >
+        {/* Responsive centered placeholder section */}
         <Paper
           variant="outlined"
           sx={{
-            p: 6,
+            p: { xs: 3, sm: 4, md: 6 },
             textAlign: 'center',
             backgroundColor: 'background.default',
-            borderRadius: 3,
+            borderRadius: { xs: 2, sm: 3 },
             border: '2px dashed',
             borderColor: 'divider',
-            minHeight: 400,
+            minHeight: { xs: 'auto', sm: 350, md: 400 },
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
           }}
         >
-          <Box sx={{ maxWidth: 600, mx: 'auto' }}>
-            {/* Welcome heading */}
+          <Box 
+            sx={{ 
+              maxWidth: { xs: '100%', sm: 500, md: 600 }, 
+              mx: 'auto',
+              width: '100%'
+            }}
+          >
+            {/* Responsive welcome heading */}
             <Typography 
               variant="h4" 
               component="h1"
@@ -71,35 +90,45 @@ export const SubchatTestPage = () => {
               gutterBottom 
               sx={{ 
                 fontWeight: 600,
-                mb: 2,
+                mb: { xs: 1.5, sm: 2 },
+                fontSize: { 
+                  xs: '1.75rem', 
+                  sm: '2.125rem', 
+                  md: '2.5rem' 
+                },
               }}
             >
               Welcome to Subchat Test
             </Typography>
             
-            {/* Description text */}
+            {/* Responsive description text */}
             <Typography 
               variant="body1" 
               color="text.secondary" 
               paragraph 
               sx={{ 
-                mb: 4,
-                fontSize: '1.1rem',
-                lineHeight: 1.6,
+                mb: { xs: 3, sm: 4 },
+                fontSize: { xs: '1rem', sm: '1.05rem', md: '1.1rem' },
+                lineHeight: { xs: 1.5, sm: 1.6 },
+                px: { xs: 0, sm: 1 }
               }}
             >
               This is your testing environment for subchat functionality. 
               Choose an action below to explore and test the subchat features with specialist agents.
             </Typography>
             
-            {/* Status indicators */}
+            {/* Responsive status indicators */}
             {(buttonStates.started || buttonStates.configured || buttonStates.analyzed) && (
-              <Box sx={{ mb: 3 }}>
+              <Box sx={{ mb: { xs: 2, sm: 3 } }}>
                 {buttonStates.started && (
                   <Typography 
                     variant="body2" 
                     color="success.main" 
-                    sx={{ fontWeight: 500, mb: 0.5 }}
+                    sx={{ 
+                      fontWeight: 500, 
+                      mb: 0.5,
+                      fontSize: { xs: '0.875rem', sm: '0.875rem' }
+                    }}
                   >
                     ✓ Testing environment started
                   </Typography>
@@ -108,7 +137,11 @@ export const SubchatTestPage = () => {
                   <Typography 
                     variant="body2" 
                     color="info.main" 
-                    sx={{ fontWeight: 500, mb: 0.5 }}
+                    sx={{ 
+                      fontWeight: 500, 
+                      mb: 0.5,
+                      fontSize: { xs: '0.875rem', sm: '0.875rem' }
+                    }}
                   >
                     ✓ Configuration completed
                   </Typography>
@@ -117,7 +150,11 @@ export const SubchatTestPage = () => {
                   <Typography 
                     variant="body2" 
                     color="warning.main" 
-                    sx={{ fontWeight: 500, mb: 0.5 }}
+                    sx={{ 
+                      fontWeight: 500, 
+                      mb: 0.5,
+                      fontSize: { xs: '0.875rem', sm: '0.875rem' }
+                    }}
                   >
                     ✓ Analysis initiated
                   </Typography>
@@ -125,14 +162,17 @@ export const SubchatTestPage = () => {
               </Box>
             )}
             
-            {/* Three action buttons */}
+            {/* Responsive action buttons with mobile-first design */}
             <Stack 
               direction={{ xs: 'column', sm: 'row' }} 
-              spacing={2} 
+              spacing={{ xs: 2, sm: 2 }} 
               justifyContent="center"
-              sx={{ mb: 3 }}
+              sx={{ 
+                mb: { xs: 2, sm: 3 },
+                alignItems: { xs: 'stretch', sm: 'center' }
+              }}
             >
-              {/* Get Started button */}
+              {/* Get Started button - mobile optimized */}
               <Button
                 variant="contained"
                 size="large"
@@ -141,13 +181,14 @@ export const SubchatTestPage = () => {
                 disabled={buttonStates.started}
                 aria-label="Get started with subchat testing"
                 sx={{
-                  py: 1.5,
-                  px: 3,
+                  py: { xs: 1.75, sm: 1.5 },
+                  px: { xs: 2, sm: 3 },
                   borderRadius: 2,
                   textTransform: 'none',
                   fontWeight: 600,
-                  fontSize: '1rem',
-                  minWidth: 140,
+                  fontSize: { xs: '1rem', sm: '1rem' },
+                  minWidth: { xs: 'auto', sm: 140 },
+                  minHeight: { xs: 48, sm: 'auto' }, // 48px minimum touch target
                   boxShadow: 2,
                   '&:hover': {
                     boxShadow: 4,
@@ -164,7 +205,7 @@ export const SubchatTestPage = () => {
                 {buttonStates.started ? 'Started' : 'Get Started'}
               </Button>
 
-              {/* Configure button */}
+              {/* Configure button - mobile optimized */}
               <Button
                 variant="outlined"
                 size="large"
@@ -173,13 +214,14 @@ export const SubchatTestPage = () => {
                 disabled={buttonStates.configured}
                 aria-label="Configure subchat settings"
                 sx={{
-                  py: 1.5,
-                  px: 3,
+                  py: { xs: 1.75, sm: 1.5 },
+                  px: { xs: 2, sm: 3 },
                   borderRadius: 2,
                   textTransform: 'none',
                   fontWeight: 600,
-                  fontSize: '1rem',
-                  minWidth: 140,
+                  fontSize: { xs: '1rem', sm: '1rem' },
+                  minWidth: { xs: 'auto', sm: 140 },
+                  minHeight: { xs: 48, sm: 'auto' }, // 48px minimum touch target
                   borderWidth: 2,
                   '&:hover': {
                     borderWidth: 2,
@@ -196,7 +238,7 @@ export const SubchatTestPage = () => {
                 {buttonStates.configured ? 'Configured' : 'Configure'}
               </Button>
 
-              {/* Analyze button */}
+              {/* Analyze button - mobile optimized */}
               <Button
                 variant="contained"
                 size="large"
@@ -206,13 +248,14 @@ export const SubchatTestPage = () => {
                 aria-label="Analyze subchat performance"
                 color="warning"
                 sx={{
-                  py: 1.5,
-                  px: 3,
+                  py: { xs: 1.75, sm: 1.5 },
+                  px: { xs: 2, sm: 3 },
                   borderRadius: 2,
                   textTransform: 'none',
                   fontWeight: 600,
-                  fontSize: '1rem',
-                  minWidth: 140,
+                  fontSize: { xs: '1rem', sm: '1rem' },
+                  minWidth: { xs: 'auto', sm: 140 },
+                  minHeight: { xs: 48, sm: 'auto' }, // 48px minimum touch target
                   boxShadow: 2,
                   '&:hover': {
                     boxShadow: 4,
@@ -230,14 +273,16 @@ export const SubchatTestPage = () => {
               </Button>
             </Stack>
             
-            {/* Additional help text */}
+            {/* Responsive help text */}
             <Typography 
               variant="caption" 
               color="text.secondary" 
               display="block"
               sx={{ 
-                mt: 3,
+                mt: { xs: 2, sm: 3 },
                 fontStyle: 'italic',
+                fontSize: { xs: '0.75rem', sm: '0.75rem' },
+                px: { xs: 1, sm: 0 }
               }}
             >
               Choose any of the actions above to begin your subchat testing journey
