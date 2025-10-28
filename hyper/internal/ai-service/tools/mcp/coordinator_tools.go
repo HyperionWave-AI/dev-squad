@@ -2217,13 +2217,13 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 	agentTaskID, ok := input["agentTaskId"].(string)
 	if !ok || agentTaskID == "" {
 		return nil, fmt.Errorf(
-			"❌ Parameter validation failed: agentTaskId is required and must be a string\n\n"+
-				"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n"+
-				"1. Send a developer-friendly message to user:\n"+
-				"   \"Tool error: execute_subagent failed - missing task ID parameter.\n"+
-				"    Fixing by: retrieving the task ID from the create_agent_task result.\"\n"+
-				"2. Check the create_agent_task response for 'taskId' field\n"+
-				"3. Call execute_subagent with agentTaskId set to that taskId value\n\n"+
+			"❌ Parameter validation failed: agentTaskId is required and must be a string\n\n" +
+				"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n" +
+				"1. Send a developer-friendly message to user:\n" +
+				"   \"Tool error: execute_subagent failed - missing task ID parameter.\n" +
+				"    Fixing by: retrieving the task ID from the create_agent_task result.\"\n" +
+				"2. Check the create_agent_task response for 'taskId' field\n" +
+				"3. Call execute_subagent with agentTaskId set to that taskId value\n\n" +
 				"Example: execute_subagent({ agentTaskId: \"<taskId from previous step>\" })")
 	}
 
@@ -2244,10 +2244,10 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 				zap.String("parentChatId", providedID))
 		} else {
 			return nil, fmt.Errorf(
-				"❌ Context error: parentChatId could not be determined\n\n"+
-					"Details: Not in session context and not provided by AI (or AI provided 'main' placeholder)\n\n"+
-					"⚠️ This is likely a system issue, not your fault.\n"+
-					"Inform user: \"Tool error: execute_subagent failed - unable to determine parent chat session.\n"+
+				"❌ Context error: parentChatId could not be determined\n\n" +
+					"Details: Not in session context and not provided by AI (or AI provided 'main' placeholder)\n\n" +
+					"⚠️ This is likely a system issue, not your fault.\n" +
+					"Inform user: \"Tool error: execute_subagent failed - unable to determine parent chat session.\n" +
 					"             This may be a context initialization issue. Please try again or contact support.\"")
 		}
 	}
@@ -2549,6 +2549,138 @@ func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.Agent
 	return true, matchedFiles, nil
 }
 
+// convertToolCallToPlainEnglish converts a tool call to a user-friendly plain English description
+func convertToolCallToPlainEnglish(toolName string, args map[string]interface{}) string {
+	switch toolName {
+	case "read_file":
+		if filePath, ok := args["file_path"].(string); ok {
+			// Extract just the filename for brevity
+			parts := strings.Split(filePath, "/")
+			filename := parts[len(parts)-1]
+			return fmt.Sprintf("📖 Reading file: %s", filename)
+		}
+		return "📖 Reading a file..."
+
+	case "write_file":
+		if filePath, ok := args["file_path"].(string); ok {
+			parts := strings.Split(filePath, "/")
+			filename := parts[len(parts)-1]
+			return fmt.Sprintf("✍️ Writing to file: %s", filename)
+		}
+		return "✍️ Writing to a file..."
+
+	case "apply_patch":
+		if filePath, ok := args["file_path"].(string); ok {
+			parts := strings.Split(filePath, "/")
+			filename := parts[len(parts)-1]
+			return fmt.Sprintf("🔧 Applying changes to: %s", filename)
+		}
+		return "🔧 Applying code changes..."
+
+	case "bash":
+		if command, ok := args["command"].(string); ok {
+			// Truncate long commands
+			if len(command) > 60 {
+				command = command[:60] + "..."
+			}
+			return fmt.Sprintf("⚡ Running command: %s", command)
+		}
+		return "⚡ Running a command..."
+
+	case "coordinator_update_todo_status":
+		if status, ok := args["status"].(string); ok {
+			if status == "completed" {
+				return "✅ Marking TODO as completed"
+			} else if status == "in_progress" {
+				return "▶️ Starting work on TODO"
+			}
+		}
+		return "📝 Updating TODO status..."
+
+	case "coordinator_upsert_knowledge":
+		return "💾 Saving knowledge entry..."
+
+	default:
+		return fmt.Sprintf("🔧 Using tool: %s", toolName)
+	}
+}
+
+// convertToolResultToPlainEnglish converts a tool result to a user-friendly plain English message
+func convertToolResultToPlainEnglish(toolName string, output interface{}, errorMsg string) string {
+	if errorMsg != "" {
+		// Handle errors
+		switch toolName {
+		case "read_file":
+			return fmt.Sprintf("❌ Failed to read file: %s", errorMsg)
+		case "write_file":
+			return fmt.Sprintf("❌ Failed to write file: %s", errorMsg)
+		case "apply_patch":
+			return fmt.Sprintf("❌ Failed to apply patch: %s", errorMsg)
+		case "bash":
+			return fmt.Sprintf("❌ Command failed: %s", errorMsg)
+		default:
+			return fmt.Sprintf("❌ Tool error: %s", errorMsg)
+		}
+	}
+
+	// Handle successes
+	switch toolName {
+	case "read_file":
+		if str, ok := output.(string); ok {
+			lineCount := len(strings.Split(str, "\n"))
+			return fmt.Sprintf("✓ File read successfully (%d lines)", lineCount)
+		}
+		return "✓ File read successfully"
+
+	case "write_file":
+		return "✓ File written successfully"
+
+	case "apply_patch":
+		return "✓ Changes applied successfully"
+
+	case "bash":
+		if str, ok := output.(string); ok {
+			// Show first line of output if it's short
+			lines := strings.Split(strings.TrimSpace(str), "\n")
+			if len(lines) > 0 && len(lines[0]) < 80 && len(lines[0]) > 0 {
+				return fmt.Sprintf("✓ Command completed: %s", lines[0])
+			}
+		}
+		return "✓ Command completed successfully"
+
+	case "coordinator_update_todo_status":
+		return "✓ TODO status updated"
+
+	case "coordinator_upsert_knowledge":
+		return "✓ Knowledge saved"
+
+	default:
+		return "✓ Tool completed"
+	}
+}
+
+// isSystemEnforcementMessage checks if a message is a system enforcement message that should be filtered
+func isSystemEnforcementMessage(content string) bool {
+	systemPatterns := []string{
+		"WRITE-ONLY MODE",
+		"FORCED WRITE SCAFFOLD",
+		"╔══════════════",
+		"🚨 WRITE-ONLY MODE ENFORCEMENT",
+		"EXECUTION SCORE:",
+		"📊 EXECUTION SCORE",
+		"CACHED FILE CONTENT",
+		"⚠️ CACHED FILE CONTENT",
+		"CURRENT EXECUTION SCORE:",
+	}
+
+	for _, pattern := range systemPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // executeSubagentInBackground runs the subagent AI streaming in a background goroutine
 func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string) {
 	// Create a new background context with generous timeout for long-running tasks
@@ -2584,6 +2716,9 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Invalid parent chat ID: %v", err))
 		return
 	}
+
+	// Emit progress notification - subchat started
+	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("🤖 Starting subchat: %s", agentTask.AgentName))
 
 	// Get parent session to inherit userID and companyID
 	parentSession, err := t.chatService.GetSession(ctx, parentSessionID, "dev-company")
@@ -2695,6 +2830,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		t.logger.Error("Failed to start AI streaming for subagent",
 			zap.String("subchatId", subchatID),
 			zap.Error(err))
+		handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat failed: %s", agentTask.AgentName))
 		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI streaming failed: %v", err))
 		return
 	}
@@ -2730,6 +2866,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		case <-ctx.Done():
 			t.logger.Warn("⏱️ Subagent execution cancelled by timeout",
 				zap.String("subchatId", subchatID))
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat timeout: %s", agentTask.AgentName))
 			t.handleExecutionFailure(agentTask.ID, "Execution timeout")
 			return
 
@@ -2792,6 +2929,15 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 			case aiservice.StreamEventToken:
 				fullResponse += event.Content
 
+				// Stream AI messages to progress channel (filter out system messages)
+				if event.Content != "" && !isSystemEnforcementMessage(event.Content) {
+					// Only emit substantive messages (not just whitespace or single characters)
+					trimmed := strings.TrimSpace(event.Content)
+					if len(trimmed) > 5 { // Only emit messages with substance
+						handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, event.Content)
+					}
+				}
+
 			case aiservice.StreamEventToolCall:
 				toolCallCount++
 
@@ -2802,6 +2948,10 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					zap.String("toolName", event.ToolCall.Name),
 					zap.Any("args", event.ToolCall.Args),
 					zap.Time("timestamp", time.Now()))
+
+				// Emit progress notification with plain English tool call description
+				plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)
+				handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, plainEnglishToolCall)
 
 				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
 				if event.ToolCall.Name == "read_file" {
@@ -2914,6 +3064,10 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				}
 
 			case aiservice.StreamEventToolResult:
+				// Emit progress notification with plain English tool result
+				plainEnglishResult := convertToolResultToPlainEnglish(event.ToolResult.Name, event.ToolResult.Output, event.ToolResult.Error)
+				handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, plainEnglishResult)
+
 				// Summarize tool result to prevent context bloat
 				var originalSize int
 				var summarizedOutput string
@@ -3187,18 +3341,52 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.Int("toolCalls", toolCallCount),
 		zap.Int("completedTodos", completedTodos),
 		zap.Int("totalTodos", len(agentTask.Todos)))
+
+	// Emit progress notification - subchat completed
+	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("✅ Subchat completed: %s", agentTask.AgentName))
 }
 
 // buildExecutionPhaseSystemPrompt creates a strict system prompt using OPERATIONAL enforcement language
 // Uses concrete "WRITE-ONLY MODE" instead of abstract "PHASE: EXECUTE" for better model compliance
 func (t *ExecuteSubagentTool) buildExecutionPhaseSystemPrompt() string {
 	return `╔══════════════════════════════════════════════════════════════╗
-║                  WRITE-ONLY MODE ACTIVATED                    ║
+║            GUIDED EXECUTION MODE ACTIVATED                    ║
 ╚══════════════════════════════════════════════════════════════╝
 
-🚨 YOU ARE NOW IN WRITE-ONLY MODE 🚨
+🎯 YOUR MISSION: Execute the task efficiently while keeping the user informed
 
-ALLOWED TOOLS (you may ONLY use these):
+═══════════════════════════════════════════════════════════════
+📢 COMMUNICATION REQUIREMENTS (CRITICAL):
+═══════════════════════════════════════════════════════════════
+
+YOU MUST communicate with the user throughout execution:
+
+✅ BEFORE each TODO: Announce what you're working on
+   Example: "Working on adding error handling to the authentication module..."
+
+✅ DURING implementation: Briefly explain your approach
+   Example: "I'll add a try-catch block and log errors to the console."
+
+✅ AFTER tool calls: Explain what you just did
+   Example: "I've updated the login function with proper error handling."
+
+✅ ON errors: Explain what went wrong and your next step
+   Example: "Test failed: missing import. I'll add the required import now."
+
+✅ WHEN blocked: Ask the user for guidance
+   Example: "I need clarification: should I use async/await or promises?"
+
+✅ ON completion: Summarize what was accomplished
+   Example: "Completed: Added error handling with logging to 3 files."
+
+❌ NEVER be silent - the user is watching and needs updates
+❌ NEVER create new tasks when asked about progress - just respond
+❌ NEVER show scoring or enforcement messages to the user
+
+═══════════════════════════════════════════════════════════════
+🔧 AVAILABLE TOOLS:
+═══════════════════════════════════════════════════════════════
+
 ✅ read_file       - Read source file ONCE per file
 ✅ write_file      - Write/create files
 ✅ apply_patch     - Apply code changes
@@ -3207,65 +3395,54 @@ ALLOWED TOOLS (you may ONLY use these):
 ✅ coordinator_upsert_knowledge   - Save decisions
 
 BLOCKED TOOLS (these will FAIL):
-❌ code_index_search - Discovery disabled in WRITE-ONLY MODE
-❌ list_directory    - Discovery disabled in WRITE-ONLY MODE
+❌ code_index_search - Discovery disabled in execution mode
+❌ list_directory    - Discovery disabled in execution mode
 ❌ All coordinator tools (for task creation, listing, etc.)
 
 ═══════════════════════════════════════════════════════════════
-
-⏱️ MANDATORY WORKFLOW - YOU MUST COMPLETE WITHIN 3 STEPS PER TODO:
-
-Step 1: read_file on target file (ONCE ONLY)
-Step 2: write_file or apply_patch to implement changes
-Step 3: coordinator_update_todo_status to mark TODO completed
-
-REPEAT for next TODO.
-
+⏱️ EFFICIENT WORKFLOW (3-5 tool calls per TODO):
 ═══════════════════════════════════════════════════════════════
 
-🎯 EXECUTION SCORING (visible after each tool call):
-
-+20 points: write_file or apply_patch executed
-+10 points: coordinator_update_todo_status (completed)
- +5 points: read_file (first read of a file)
- -5 points: read_file (duplicate read of same file)
--10 points: calling same tool twice with identical args
--20 points: exceeding 1 read without a write
--50 points: exceeding 3 reads without a write (HARD LIMIT)
-
-Target score: +30 per TODO (read once, write once, update status)
+For each TODO:
+1. ANNOUNCE: Tell user what you're working on
+2. READ: Use read_file on target file (ONCE per file)
+3. EXPLAIN: Briefly describe your implementation approach
+4. IMPLEMENT: Use write_file or apply_patch
+5. VERIFY: Run tests with bash if applicable, report results
+6. COMPLETE: Use coordinator_update_todo_status with notes
+7. REPORT: Tell user what you accomplished
 
 ═══════════════════════════════════════════════════════════════
-
-⚠️ ENFORCEMENT RULES (RUNTIME - NOT SUGGESTIONS):
-
-0. READ ONLY FILES SPECIFIED IN TASK
-   • Task specifies EXACT file paths to modify
-   • Do NOT explore, search, or read other files
-   • Do NOT call list_directory - IT IS BLOCKED
-   • Use the exact paths provided in filesModified
-
-1. File content is CACHED after first read_file
-   • Subsequent read_file on same file returns cached summary
-   • You will NOT receive full content again - implement now
-
-2. After 1 read_file call without write:
-   • You receive a FORCED WRITE SCAFFOLD
-   • You MUST complete the scaffold and submit immediately
-
-3. You MAY NOT read any file more than ONCE
-   • Second read returns: "CACHED - use previous content"
-   • This forces you to implement, not re-read
-
-4. Maximum 3 tool calls per TODO:
-   • Call 1: read_file
-   • Call 2: write_file/apply_patch
-   • Call 3: coordinator_update_todo_status
-   • Extra calls trigger immediate scoring penalty
-
+⚠️ EFFICIENCY RULES (RUNTIME ENFORCEMENT):
 ═══════════════════════════════════════════════════════════════
 
+• READ ONLY FILES SPECIFIED IN TASK - exact paths in filesModified
+• Read each file ONCE - file content is cached after first read
+• Aim for 3-5 tool calls per TODO maximum
+• Do NOT explore, search, or read unrelated files
+• Do NOT call list_directory - IT IS BLOCKED
+
+═══════════════════════════════════════════════════════════════
+💬 USER INTERACTION GUIDELINES:
+═══════════════════════════════════════════════════════════════
+
+IF user asks "what's the status?" or "what are you doing?":
+→ Respond with current progress, do NOT create a new task
+→ Example: "I'm currently working on the authentication module (TODO 2 of 4).
+   I've completed the error handling and I'm now adding unit tests."
+
+IF user says "stop" or "wait":
+→ Acknowledge and pause for instructions
+→ Example: "Understood, pausing execution. What would you like me to do?"
+
+IF a tool call fails:
+→ Explain the error clearly and your recovery plan
+→ Example: "The test failed with 'module not found'. I'll install the missing
+   dependency now."
+
+═══════════════════════════════════════════════════════════════
 📋 TASK CONTRACT (arriving in next message):
+═══════════════════════════════════════════════════════════════
 
 You will receive:
 • Exact file paths to modify (use these EXACT paths)
@@ -3276,6 +3453,7 @@ You must produce:
 • Modified files (via write_file or apply_patch)
 • Updated TODO status for each item
 • Knowledge entries for key decisions
+• Clear communication to the user throughout
 
 ═══════════════════════════════════════════════════════════════
 

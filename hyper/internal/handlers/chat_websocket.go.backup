@@ -787,10 +787,10 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			if err != nil {
 				// Check if this is a normal disconnection
 				if websocket.IsCloseError(err,
-					websocket.CloseGoingAway,          // 1001: browser navigation
-					websocket.CloseAbnormalClosure,    // 1006: abnormal closure
-					websocket.CloseNormalClosure,      // 1000: normal closure
-					websocket.CloseNoStatusReceived) { // 1005: no status (browser refresh/close)
+					websocket.CloseGoingAway,           // 1001: browser navigation
+					websocket.CloseAbnormalClosure,     // 1006: abnormal closure
+					websocket.CloseNormalClosure,       // 1000: normal closure
+					websocket.CloseNoStatusReceived) {  // 1005: no status (browser refresh/close)
 					h.logger.Debug("Client disconnected from WebSocket",
 						zap.String("sessionId", sessionID.Hex()),
 						zap.String("reason", err.Error()))
@@ -839,41 +839,6 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			notifier := GetMessageNotifier(h.logger)
 			notifier.NotifyNewMessage(sessionID)
 
-			// Check if this message is interrupting an active subchat
-			isInterrupting := notifier.IsSessionRegistered(sessionID)
-			if isInterrupting {
-				h.logger.Info("User message is interrupting active subchat",
-					zap.String("sessionId", sessionID.Hex()),
-					zap.String("userId", userID))
-
-				// Generate and save interruption acknowledgment
-				acknowledgmentText := "⚠️ Task interrupted by user. Processing your new request..."
-				_, err := h.chatService.SaveMessage(aiCtx, sessionID, "assistant", acknowledgmentText, companyID)
-				if err != nil {
-					h.logger.Error("Failed to save interruption acknowledgment", zap.Error(err))
-					// Continue anyway - at least try to stream it
-				}
-
-				// Stream acknowledgment to WebSocket immediately
-				acknowledgmentMsg := models.StreamMessage{
-					Type:    "token",
-					Content: acknowledgmentText,
-				}
-				if err := conn.WriteJSON(acknowledgmentMsg); err != nil {
-					h.logger.Error("Failed to stream interruption acknowledgment", zap.Error(err))
-				} else {
-					h.logger.Debug("Streamed interruption acknowledgment to client")
-				}
-
-				// Send done message for acknowledgment
-				doneMsg := models.StreamMessage{
-					Type: "done",
-				}
-				if err := conn.WriteJSON(doneMsg); err != nil {
-					h.logger.Error("Failed to send done message after acknowledgment", zap.Error(err))
-				}
-			}
-
 			// Stream AI response with tool execution events
 			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID)
 
@@ -898,26 +863,6 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 		h.sendError(conn, "Failed to retrieve session")
 		return
 	}
-
-	// Register for progress notifications (for subchat execution)
-	progressCh := GetProgressNotifier(h.logger).RegisterSession(sessionID)
-	defer GetProgressNotifier(h.logger).UnregisterSession(sessionID)
-
-	// Launch goroutine to stream progress notifications to WebSocket
-	go func() {
-		for progress := range progressCh {
-			progressMsg := models.StreamMessage{
-				Type:    "token",
-				Content: "\n\n" + progress.Message + "\n\n",
-			}
-			if err := conn.WriteJSON(progressMsg); err != nil {
-				h.logger.Debug("Failed to send progress notification (client may have disconnected)",
-					zap.String("sessionId", sessionID.Hex()),
-					zap.Error(err))
-				return
-			}
-		}
-	}()
 
 	// Step 2: Determine active agent and fetch system prompt
 	var systemPromptText string
@@ -957,7 +902,7 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 			// No custom prompt configured - detect model and use appropriate default
 			aiConfig := h.aiService.GetConfig()
 			isClaudeModel := strings.Contains(strings.ToLower(aiConfig.Model), "claude") ||
-				strings.Contains(strings.ToLower(aiConfig.Provider), "anthropic")
+			                 strings.Contains(strings.ToLower(aiConfig.Provider), "anthropic")
 
 			if isClaudeModel {
 				systemPromptText = ClaudeSystemPrompt
