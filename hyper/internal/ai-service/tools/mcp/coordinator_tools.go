@@ -526,15 +526,23 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 						"• Discovery tools (code_index_search, list_directory) are BLOCKED\n"+
 						"• YOU must run code_index_search BEFORE creating this task\n"+
 						"• TODOs must be implementation steps only\n\n"+
+						"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n"+
+						"1. Send a developer-friendly message to user explaining the error:\n"+
+						"   \"Tool error: create_agent_task failed - TODO contains forbidden keyword '%s'.\n"+
+						"    Subagents can't discover files (write-only mode).\n"+
+						"    Fixing by: running code_index_search myself to find the files, then creating\n"+
+						"    task with implementation-only to-dos.\"\n"+
+						"2. Run code_index_search to find the files yourself\n"+
+						"3. Create new agent task with implementation-only to-dos\n\n"+
 						"✅ GOOD TODO examples:\n"+
 						"  - 'Add responsive CSS to Settings.tsx lines 15-45'\n"+
-						"  - 'Update login validation in AuthForm.tsx'\n"+
+						"  - 'Update login validation in AuthForm.tsx line 89'\n"+
 						"  - 'Test changes work on mobile viewport'\n\n"+
 						"❌ BAD TODO examples:\n"+
 						"  - 'Search for Settings component'  ← Discovery step!\n"+
 						"  - 'Find the auth logic'  ← Discovery step!\n"+
 						"  - 'Locate CSS files'  ← Discovery step!",
-					i+1, keyword, todo)
+					i+1, keyword, todo, keyword)
 			}
 		}
 	}
@@ -678,7 +686,20 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 			}
 		}
 		if len(missingFiles) > 0 {
-			return nil, fmt.Errorf("file validation failed: the following files do not exist:\n%s\n\nPlease verify the file paths from code_index_search results and ensure they are copied exactly", strings.Join(missingFiles, "\n"))
+			return nil, fmt.Errorf(
+				"❌ File path validation failed: the following files do not exist:\n%s\n\n"+
+					"🚨 MOST COMMON CAUSE: You typed file paths manually instead of using FILE_PATHS_TO_USE array\n\n"+
+					"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n"+
+					"1. Send a developer-friendly message to user:\n"+
+					"   \"Tool error: create_agent_task failed - file path doesn't exist.\n"+
+					"    These paths aren't in the FILE_PATHS_TO_USE array from search results.\n"+
+					"    Fixing by: using exact paths from the code_index_search results.\"\n"+
+					"2. Check the code_index_search result for FILE_PATHS_TO_USE array\n"+
+					"3. Copy-paste EXACT paths from that array (do not type manually)\n"+
+					"4. Retry create_agent_task with corrected file paths\n\n"+
+					"✅ CORRECT: Use paths from FILE_PATHS_TO_USE: [\"/path/from/search/result.tsx\"]\n"+
+					"❌ WRONG: Manually typed path: \"./ui/src/MyGuess.tsx\"",
+				strings.Join(missingFiles, "\n"))
 		}
 	}
 
@@ -1047,8 +1068,18 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 	}
 
 	forceCreate := false
+	// Handle both boolean and string types (defensive programming)
+	// AI might send "true" as a string instead of boolean
 	if fc, ok := input["forceCreate"].(bool); ok {
 		forceCreate = fc
+	} else if fcStr, ok := input["forceCreate"].(string); ok {
+		// Accept "true", "True", "TRUE" as truthy values
+		forceCreate = (fcStr == "true" || fcStr == "True" || fcStr == "TRUE")
+		if forceCreate {
+			zap.L().Warn("forceCreate sent as string instead of boolean",
+				zap.String("value", fcStr),
+				zap.String("converted_to", "true"))
+		}
 	}
 
 	// Generate hash of prompt for tracking retry attempts
@@ -2185,7 +2216,15 @@ func (t *ExecuteSubagentTool) InputSchema() map[string]interface{} {
 func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	agentTaskID, ok := input["agentTaskId"].(string)
 	if !ok || agentTaskID == "" {
-		return nil, fmt.Errorf("agentTaskId is required and must be a string")
+		return nil, fmt.Errorf(
+			"❌ Parameter validation failed: agentTaskId is required and must be a string\n\n"+
+				"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n"+
+				"1. Send a developer-friendly message to user:\n"+
+				"   \"Tool error: execute_subagent failed - missing task ID parameter.\n"+
+				"    Fixing by: retrieving the task ID from the create_agent_task result.\"\n"+
+				"2. Check the create_agent_task response for 'taskId' field\n"+
+				"3. Call execute_subagent with agentTaskId set to that taskId value\n\n"+
+				"Example: execute_subagent({ agentTaskId: \"<taskId from previous step>\" })")
 	}
 
 	// ALWAYS try to get session ID from context first (most reliable)
@@ -2204,7 +2243,12 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 				zap.String("agentTaskId", agentTaskID),
 				zap.String("parentChatId", providedID))
 		} else {
-			return nil, fmt.Errorf("parentChatId could not be determined: not in context and not provided by AI (or AI provided 'main' placeholder)")
+			return nil, fmt.Errorf(
+				"❌ Context error: parentChatId could not be determined\n\n"+
+					"Details: Not in session context and not provided by AI (or AI provided 'main' placeholder)\n\n"+
+					"⚠️ This is likely a system issue, not your fault.\n"+
+					"Inform user: \"Tool error: execute_subagent failed - unable to determine parent chat session.\n"+
+					"             This may be a context initialization issue. Please try again or contact support.\"")
 		}
 	}
 
