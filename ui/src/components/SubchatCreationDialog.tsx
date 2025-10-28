@@ -52,7 +52,6 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
 }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const isTablet = useMediaQuery(theme.breakpoints.down('md'));
 
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -182,7 +181,7 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
       fullWidth
       fullScreen={isMobile}
       TransitionComponent={isMobile ? Slide : Fade}
-      TransitionProps={isMobile ? { direction: 'up' } : {}}
+      TransitionProps={isMobile ? { direction: 'up' } as any : undefined}
       // Enhanced dialog container positioning for side drawer
       sx={{
         '& .MuiDialog-container': {
@@ -284,6 +283,10 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
             <Stack spacing={isMobile ? 2.5 : 3}>
               {/* Error Alert */}
               {error && (
+                <Alert
+                  severity="error"
+                  sx={{
+                    borderRadius: 1.5,
                     '& .MuiAlert-message': {
                       fontSize: '0.875rem',
                     },
