@@ -2252,6 +2252,18 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
+	// Extract company ID from context
+	var companyID string
+	if companyIDValue, hasCompanyID := ctx.Value("companyID").(string); hasCompanyID && companyIDValue != "" {
+		companyID = companyIDValue
+		t.logger.Info("✅ Using company ID from context",
+			zap.String("agentTaskId", agentTaskID),
+			zap.String("companyID", companyID))
+	} else {
+		t.logger.Warn("⚠️ Company ID not found in context, will try to extract from parent session",
+			zap.String("agentTaskId", agentTaskID))
+	}
+
 	t.logger.Info("🚀 execute_subagent tool called",
 		zap.String("agentTaskId", agentTaskID),
 		zap.String("parentChatId", parentChatID))
@@ -2289,7 +2301,7 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 		zap.String("agentName", agentTask.AgentName))
 
 	// Spawn background goroutine to execute the subagent
-	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID)
+	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID, companyID)
 
 	return map[string]interface{}{
 		"subchatId":   subchat.ID,
@@ -2682,7 +2694,7 @@ func isSystemEnforcementMessage(content string) bool {
 }
 
 // executeSubagentInBackground runs the subagent AI streaming in a background goroutine
-func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string) {
+func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string, companyID string) {
 	// Create a new background context with generous timeout for long-running tasks
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -2720,28 +2732,57 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	// Emit progress notification - subchat started
 	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("🤖 Starting subchat: %s", agentTask.AgentName))
 
-	// Get parent session to inherit userID and companyID
-	parentSession, err := t.chatService.GetSession(ctx, parentSessionID, "dev-company")
-	if err != nil {
-		t.logger.Error("Failed to get parent chat session",
-			zap.String("parentChatId", parentChatID),
-			zap.Error(err))
-		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v", err))
-		return
+	// If companyID was not provided from context, we need to fetch parent session to get it
+	// Otherwise, we can skip fetching parent session just for companyID
+	var userID string
+	var finalCompanyID string
+
+	if companyID != "" {
+		// Company ID provided from context - still need to fetch parent session for userID
+		t.logger.Info("Using company ID from context, fetching parent session for user ID",
+			zap.String("companyID", companyID))
+		parentSession, err := t.chatService.GetSession(ctx, parentSessionID, companyID)
+		if err != nil {
+			t.logger.Error("Failed to get parent chat session",
+				zap.String("parentChatId", parentChatID),
+				zap.String("companyId", companyID),
+				zap.Error(err))
+			t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v", err))
+			return
+		}
+		userID = parentSession.UserID
+		finalCompanyID = companyID
+	} else {
+		// Company ID not in context - fetch parent session to get both userID and companyID
+		// This is a fallback for cases where context doesn't have companyID
+		t.logger.Warn("Company ID not in context, attempting to extract from parent session")
+
+		// Try with empty companyID first (some implementations might not enforce it)
+		parentSession, err := t.chatService.GetSession(ctx, parentSessionID, "")
+		if err != nil {
+			// If that fails, this is likely a configuration issue
+			t.logger.Error("Failed to get parent chat session without company ID",
+				zap.String("parentChatId", parentChatID),
+				zap.Error(err))
+			t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v (companyID not available in context)", err))
+			return
+		}
+		userID = parentSession.UserID
+		finalCompanyID = parentSession.CompanyID
+
+		t.logger.Info("Extracted company ID from parent session",
+			zap.String("companyID", finalCompanyID))
 	}
 
-	// Use parent session's userID and companyID for subchat
-	userID := parentSession.UserID
-	companyID := parentSession.CompanyID
 	sessionTitle := fmt.Sprintf("Subchat: %s - %s", agentTask.AgentName, agentTask.Role)
 
 	t.logger.Info("Creating subchat session with parent's credentials",
 		zap.String("subchatId", subchatID),
 		zap.String("parentChatId", parentChatID),
 		zap.String("userId", userID),
-		zap.String("companyId", companyID))
+		zap.String("companyId", finalCompanyID))
 
-	chatSession, err := t.chatService.CreateSessionWithParent(ctx, userID, companyID, sessionTitle, &parentSessionID)
+	chatSession, err := t.chatService.CreateSessionWithParent(ctx, userID, finalCompanyID, sessionTitle, &parentSessionID)
 	if err != nil {
 		t.logger.Error("Failed to create chat session for subchat",
 			zap.String("subchatId", subchatID),
@@ -2777,7 +2818,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.Int("todoCount", len(agentTask.Todos)))
 
 	// Save initial user message (task details only - system prompt is separate)
-	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "user", taskPrompt, companyID)
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "user", taskPrompt, finalCompanyID)
 	if err != nil {
 		t.logger.Warn("Failed to save initial user message",
 			zap.String("subchatId", subchatID),
@@ -2886,7 +2927,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 			}
 
 			// Fetch all messages including new user message
-			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, companyID, 100, 0)
+			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
 			if err != nil {
 				t.logger.Error("Failed to fetch messages after interrupt", zap.Error(err))
 				continue
@@ -3071,7 +3112,7 @@ Acknowledge the message and continue your work.
 							zap.Int("trimmedLength", len(trimmed)))
 
 						// 💾 SAVE TO DATABASE for persistence (so messages survive page refresh)
-						_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, companyID)
+						_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, finalCompanyID)
 						if err != nil {
 							t.logger.Warn("Failed to save streaming text chunk to database",
 								zap.String("subchatId", subchatID),
@@ -3200,7 +3241,7 @@ Acknowledge the message and continue your work.
 					zap.Int("toolCallNumber", toolCallCount))
 
 				// Save tool call to subchat messages
-				_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, companyID)
+				_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, finalCompanyID)
 				if err != nil {
 					t.logger.Error("Failed to save tool call",
 						zap.String("subchatId", subchatID),
@@ -3278,7 +3319,7 @@ Acknowledge the message and continue your work.
 					summarizedOutput += forceScaffold
 
 					// Save scaffold as visible message
-					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", forceScaffold, companyID)
+					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", forceScaffold, finalCompanyID)
 					if err != nil {
 						t.logger.Warn("Failed to save forced scaffold message",
 							zap.String("subchatId", subchatID),
@@ -3327,7 +3368,7 @@ Acknowledge the message and continue your work.
 						zap.Int("summarizedSize", len(summarizedOutput)))
 				}
 
-				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, summarizedOutput, event.ToolResult.Error, event.ToolResult.DurationMs, companyID)
+				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, summarizedOutput, event.ToolResult.Error, event.ToolResult.DurationMs, finalCompanyID)
 				if err != nil {
 					t.logger.Error("Failed to save tool result",
 						zap.String("subchatId", subchatID),
