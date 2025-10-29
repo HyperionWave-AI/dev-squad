@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/scanner"
@@ -121,11 +122,20 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 			continue
 		}
 
-		// Generate embeddings for chunks
+		// Generate embeddings for chunks WITH METADATA CONTEXT
 		var qdrantPoints []storage.CodeIndexPoint
 		for _, chunk := range chunks {
-			// Generate embedding
-			embedding, err := a.embeddingClient.CreateEmbedding(chunk.Content)
+			// CRITICAL FIX: Add file metadata to embedding for better semantic search
+			// Format: "File: TaskDashboard.tsx\nPath: ui/src/components/TaskDashboard.tsx\nLanguage: typescript\n\n[code]"
+			fileName := filepath.Base(scannedFile.Path)
+			contentWithContext := fmt.Sprintf("File: %s\nPath: %s\nLanguage: %s\n\n%s",
+				fileName,
+				scannedFile.RelativePath,
+				scannedFile.Language,
+				chunk.Content)
+
+			// Generate embedding with context
+			embedding, err := a.embeddingClient.CreateEmbedding(contentWithContext)
 			if err != nil {
 				a.logger.Warn("Failed to create embedding",
 					zap.String("file", scannedFile.Path),
