@@ -369,7 +369,7 @@ export function ChatMessageView({
           <>
             {messages.map((message) => renderMessage(message))}
 
-            {/* Streaming Message */}
+            {/* Streaming Message - ALWAYS show if there's content, even during tool execution */}
             {isStreaming && streamingContent && (
               <Box
                 sx={{
