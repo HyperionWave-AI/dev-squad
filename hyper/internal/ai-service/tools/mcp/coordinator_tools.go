@@ -2892,9 +2892,131 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				continue
 			}
 
-			// Rebuild message context with system prompt + conversation history
+			// Extract latest user message for categorization
+			var latestUserMessage string
+			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
+				if messagesResp.Messages[i].Role == "user" {
+					latestUserMessage = messagesResp.Messages[i].Content
+					break
+				}
+			}
+
+			// Categorize the interrupt to determine intent
+			category, guidance, err := t.categorizeInterrupt(ctx, latestUserMessage)
+			if err != nil {
+				t.logger.Warn("Failed to categorize interrupt, defaulting to CONTINUE",
+					zap.Error(err),
+					zap.String("userMessage", latestUserMessage))
+				category = "CONTINUE"
+				guidance = "Continue with your work but acknowledge the user's message if relevant"
+			}
+
+			t.logger.Info("🎯 Interrupt categorized",
+				zap.String("category", category),
+				zap.String("guidance", guidance),
+				zap.String("userMessage", latestUserMessage))
+
+			// Emit progress notification about interrupt
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID,
+				fmt.Sprintf("📨 User interrupt received: %s", category))
+
+			// Build interrupt-aware system prompt guidance based on category
+			var interruptGuidance string
+			switch category {
+			case "STOP":
+				interruptGuidance = fmt.Sprintf(`
+⚠️ CRITICAL: USER INTERRUPT - STOP CURRENT TASK
+The user has sent a message indicating they want to STOP the current task.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. IMMEDIATELY acknowledge the user's message in your FIRST response
+2. STOP all current work - do not make ANY tool calls until you respond
+3. Ask the user what they would like you to do instead
+4. DO NOT continue with the original task unless they explicitly say to continue
+
+Start your response with: "I've stopped the current task. [address their message directly]"
+`, latestUserMessage, guidance)
+
+			case "MODIFY":
+				interruptGuidance = fmt.Sprintf(`
+🔄 USER INTERRUPT - MODIFY APPROACH
+The user wants to modify or adjust the current approach.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, acknowledge the user's request in your response (use text, not just tool calls)
+2. Explain how you'll adjust your approach based on their guidance
+3. THEN proceed with the modified approach using tool calls
+
+Start your response with: "I'll adjust my approach. [explain the changes]"
+`, latestUserMessage, guidance)
+
+			case "CLARIFY":
+				interruptGuidance = fmt.Sprintf(`
+❓ USER INTERRUPT - NEEDS CLARIFICATION
+The user has a question or needs clarification about your work.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. Answer their question directly and clearly in your FIRST response
+2. Do NOT make any tool calls before responding to their question
+3. After answering, ask if they want you to continue or adjust
+4. Wait for their response before making more tool calls
+
+Start your response by directly addressing their question.
+`, latestUserMessage, guidance)
+
+			case "STATUS":
+				interruptGuidance = fmt.Sprintf(`
+📊 USER INTERRUPT - STATUS CHECK
+The user is checking progress or giving encouragement.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, give a brief status update (what you've completed, what's next)
+2. Acknowledge their message warmly
+3. THEN continue with your work
+
+Keep your status response brief (2-3 sentences) before continuing.
+`, latestUserMessage, guidance)
+
+			case "CONTINUE":
+				interruptGuidance = fmt.Sprintf(`
+✅ USER MESSAGE NOTED
+The user sent a message that doesn't require action changes.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+Briefly acknowledge their message if appropriate (1 sentence), then continue your work.
+`, latestUserMessage, guidance)
+
+			default:
+				interruptGuidance = fmt.Sprintf(`
+📨 USER MESSAGE RECEIVED
+User's message: "%s"
+
+Acknowledge the message and continue your work.
+`, latestUserMessage)
+			}
+
+			// Rebuild message context with interrupt-aware system prompt
 			messages = []aiservice.Message{
-				{Role: "system", Content: fullSystemPrompt},
+				{Role: "system", Content: fullSystemPrompt + "\n\n" + interruptGuidance},
 			}
 			for _, msg := range messagesResp.Messages {
 				messages = append(messages, aiservice.Message{
@@ -2903,11 +3025,12 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				})
 			}
 
-			t.logger.Info("🔄 Resuming subagent with updated context",
+			t.logger.Info("🔄 Resuming subagent with interrupt-aware context",
 				zap.Int("messageCount", len(messages)),
+				zap.String("category", category),
 				zap.String("sessionId", chatSession.ID.Hex()))
 
-			// Restart AI stream with updated context
+			// Restart AI stream with updated, interrupt-aware context
 			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
 			if err != nil {
 				t.logger.Error("Failed to restart AI stream after interrupt", zap.Error(err))
@@ -2929,13 +3052,34 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 			case aiservice.StreamEventToken:
 				fullResponse += event.Content
 
+				// 📝 LOG EVERY TEXT TOKEN RECEIVED FROM AI
+				t.logger.Info("💬 AI TEXT TOKEN RECEIVED",
+					zap.String("subchatId", subchatID),
+					zap.String("sessionId", chatSession.ID.Hex()),
+					zap.String("content", event.Content),
+					zap.Int("contentLength", len(event.Content)),
+					zap.Bool("isSystemMessage", isSystemEnforcementMessage(event.Content)))
+
 				// Stream AI messages to progress channel (filter out system messages)
 				if event.Content != "" && !isSystemEnforcementMessage(event.Content) {
 					// Only emit substantive messages (not just whitespace or single characters)
 					trimmed := strings.TrimSpace(event.Content)
 					if len(trimmed) > 5 { // Only emit messages with substance
+						t.logger.Info("✅ EMITTING TEXT TO PROGRESS NOTIFIER",
+							zap.String("subchatId", subchatID),
+							zap.String("content", event.Content),
+							zap.Int("trimmedLength", len(trimmed)))
 						handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, event.Content)
+					} else {
+						t.logger.Info("⏭️ SKIPPING SHORT TEXT (< 5 chars)",
+							zap.String("subchatId", subchatID),
+							zap.String("content", event.Content),
+							zap.Int("trimmedLength", len(trimmed)))
 					}
+				} else {
+					t.logger.Info("🚫 FILTERED OUT (empty or system message)",
+						zap.String("subchatId", subchatID),
+						zap.String("content", event.Content))
 				}
 
 			case aiservice.StreamEventToolCall:
@@ -3613,6 +3757,94 @@ func (t *ExecuteSubagentTool) handleExecutionFailure(agentTaskID, errorMsg strin
 			zap.String("agentTaskId", agentTaskID),
 			zap.Error(err))
 	}
+}
+
+// InterruptCategorization holds the result of interrupt analysis
+type InterruptCategorization struct {
+	Category string `json:"category"`
+	Guidance string `json:"guidance"`
+}
+
+// categorizeInterrupt analyzes user interrupt message to determine intent and provide guidance
+func (t *ExecuteSubagentTool) categorizeInterrupt(ctx context.Context, userMessage string) (string, string, error) {
+	categorizationPrompt := fmt.Sprintf(`You are an interrupt analyzer. Analyze this user message sent while an AI agent was working:
+
+User message: "%s"
+
+Categorize the interrupt intent:
+- STOP: User wants to completely stop current work and do something different (e.g., "stop", "nevermind", "do this instead")
+- MODIFY: User wants to change/adjust the current approach (e.g., "use X instead of Y", "add also Z", "change this")
+- CLARIFY: User has a question or needs clarification (e.g., "why are you doing X?", "what does Y mean?")
+- STATUS: User checking progress or giving encouragement (e.g., "how's it going?", "good job!", "what are you doing now?")
+- CONTINUE: Message doesn't require action change (e.g., "ok", "thanks", general comments)
+
+Respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "category": "STOP|MODIFY|CLARIFY|STATUS|CONTINUE",
+  "guidance": "Brief instruction for the agent (1 sentence)"
+}`, userMessage)
+
+	// Quick Claude API call for categorization (use minimal tokens)
+	messages := []aiservice.Message{
+		{Role: "user", Content: categorizationPrompt},
+	}
+
+	t.logger.Debug("Categorizing interrupt", zap.String("userMessage", userMessage))
+
+	// Use streaming API to get categorization (collect full response)
+	stream, err := t.aiService.StreamChatWithTools(ctx, messages, 1) // maxToolCalls=1 (no tools needed)
+	if err != nil {
+		t.logger.Warn("Failed to start categorization stream", zap.Error(err))
+		return "CONTINUE", "", err
+	}
+
+	// Collect the full response from stream
+	var response strings.Builder
+	for event := range stream {
+		if event.Type == aiservice.StreamEventToken {
+			response.WriteString(event.Content)
+		}
+	}
+
+	responseStr := response.String()
+	t.logger.Debug("Raw categorization response", zap.String("response", responseStr))
+
+	// Try to extract JSON from response (handle markdown code blocks)
+	jsonStr := responseStr
+	if strings.Contains(responseStr, "```json") {
+		start := strings.Index(responseStr, "```json") + 7
+		end := strings.LastIndex(responseStr, "```")
+		if start > 7 && end > start {
+			jsonStr = responseStr[start:end]
+		}
+	} else if strings.Contains(responseStr, "```") {
+		start := strings.Index(responseStr, "```") + 3
+		end := strings.LastIndex(responseStr, "```")
+		if start > 3 && end > start {
+			jsonStr = responseStr[start:end]
+		}
+	}
+
+	// Parse JSON response
+	var result InterruptCategorization
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonStr)), &result); err != nil {
+		t.logger.Warn("Failed to parse categorization JSON, defaulting to CONTINUE",
+			zap.Error(err),
+			zap.String("jsonStr", jsonStr))
+		return "CONTINUE", "", err
+	}
+
+	// Validate category
+	validCategories := map[string]bool{
+		"STOP": true, "MODIFY": true, "CLARIFY": true, "STATUS": true, "CONTINUE": true,
+	}
+	if !validCategories[result.Category] {
+		t.logger.Warn("Invalid category returned, defaulting to CONTINUE",
+			zap.String("category", result.Category))
+		return "CONTINUE", "", fmt.Errorf("invalid category: %s", result.Category)
+	}
+
+	return result.Category, result.Guidance, nil
 }
 
 // RegisterCoordinatorTools registers all coordinator tools with the tool registry
