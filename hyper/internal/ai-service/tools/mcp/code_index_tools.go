@@ -52,6 +52,16 @@ type CodeIndexSearchTool struct {
 	logger           *zap.Logger
 }
 
+// NewCodeIndexSearchTool creates a new code search tool instance
+func NewCodeIndexSearchTool(codeIndexStorage *storage.CodeIndexStorage, embeddingClient embeddings.EmbeddingClient, qdrantClient *storage.QdrantClient, logger *zap.Logger) *CodeIndexSearchTool {
+	return &CodeIndexSearchTool{
+		codeIndexStorage: codeIndexStorage,
+		embeddingClient:  embeddingClient,
+		qdrantClient:     qdrantClient,
+		logger:           logger,
+	}
+}
+
 func (t *CodeIndexSearchTool) Name() string {
 	return "code_index_search"
 }

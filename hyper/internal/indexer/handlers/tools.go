@@ -420,12 +420,17 @@ func (h *ToolHandler) handleScan(ctx context.Context, args map[string]interface{
 			continue
 		}
 
-		// Generate embeddings for chunks
+		// Generate embeddings for chunks WITH METADATA CONTEXT (unified format)
 		var qdrantPoints []storage.QdrantPoint
 		fileName := filepath.Base(scannedFile.Path)
 		for _, chunk := range chunks {
-			// Generate embedding with file name context for better search relevance
-			contentWithContext := fmt.Sprintf("File: %s\n%s", fileName, chunk.Content)
+			// UNIFIED FORMAT: Add file metadata to embedding for better semantic search
+			// Format: "File: TaskDashboard.tsx\nPath: ui/src/components/TaskDashboard.tsx\nLanguage: typescript\n\n[code]"
+			contentWithContext := fmt.Sprintf("File: %s\nPath: %s\nLanguage: %s\n\n%s",
+				fileName,
+				scannedFile.RelativePath,
+				scannedFile.Language,
+				chunk.Content)
 			embedding, err := h.embeddingClient.CreateEmbedding(contentWithContext)
 			if err != nil {
 				h.logger.Warn("Failed to create embedding",
