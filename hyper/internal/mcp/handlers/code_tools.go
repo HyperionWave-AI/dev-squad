@@ -136,6 +136,13 @@ func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 					Type:        "string",
 					Description: "Optional: filter results to a specific folder path",
 				},
+				"fileTypes": {
+					Type:        "array",
+					Description: "Optional: filter results by file extensions (e.g., ['.go', '.ts']). Only returns files matching these types.",
+					Items: &jsonschema.Schema{
+						Type: "string",
+					},
+				},
 				"retrieve": {
 					Type:        "string",
 					Description: "Content retrieval mode: 'chunk' (default - 200 lines), 'chunk-s' (50 lines), 'chunk-m' (100 lines), 'chunk-l' (200 lines), 'chunk-xl' (400 lines), or 'full' (entire file)",
@@ -335,6 +342,95 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 	}, nil
 }
 
+// fileExtensionToLanguage maps file extensions to language names
+// This matches the language metadata stored during indexing
+func fileExtensionToLanguage(extension string) string {
+	extensionMap := map[string]string{
+		".go":      "go",
+		".js":      "javascript",
+		".ts":      "typescript",
+		".jsx":     "javascript",
+		".tsx":     "typescript",
+		".py":      "python",
+		".java":    "java",
+		".c":       "c",
+		".cpp":     "cpp",
+		".h":       "c",
+		".hpp":     "cpp",
+		".cs":      "csharp",
+		".rb":      "ruby",
+		".php":     "php",
+		".rs":      "rust",
+		".swift":   "swift",
+		".kt":      "kotlin",
+		".m":       "objective-c",
+		".scala":   "scala",
+		".r":       "r",
+		".sql":     "sql",
+		".sh":      "shell",
+		".bash":    "shell",
+		".yaml":    "yaml",
+		".yml":     "yaml",
+		".json":    "json",
+		".xml":     "xml",
+		".html":    "html",
+		".css":     "css",
+		".scss":    "scss",
+		".less":    "less",
+		".vue":     "vue",
+		".md":      "markdown",
+	}
+
+	// Normalize extension to lowercase with leading dot
+	normalizedExt := strings.ToLower(extension)
+	if !strings.HasPrefix(normalizedExt, ".") {
+		normalizedExt = "." + normalizedExt
+	}
+
+	if lang, ok := extensionMap[normalizedExt]; ok {
+		return lang
+	}
+	return ""
+}
+
+// buildFileTypeFilter creates a Qdrant filter for file types
+// Returns nil if no file types specified
+func buildFileTypeFilter(fileTypes []interface{}) map[string]interface{} {
+	if len(fileTypes) == 0 {
+		return nil
+	}
+
+	// Convert file extensions to language names
+	var languages []string
+	for _, ft := range fileTypes {
+		if ext, ok := ft.(string); ok {
+			if lang := fileExtensionToLanguage(ext); lang != "" {
+				languages = append(languages, lang)
+			}
+		}
+	}
+
+	if len(languages) == 0 {
+		return nil
+	}
+
+	// Build Qdrant filter with "should" clause for OR logic
+	// Match any of the selected languages
+	shouldClauses := make([]map[string]interface{}, 0, len(languages))
+	for _, lang := range languages {
+		shouldClauses = append(shouldClauses, map[string]interface{}{
+			"key": "language",
+			"match": map[string]interface{}{
+				"value": lang,
+			},
+		})
+	}
+
+	return map[string]interface{}{
+		"should": shouldClauses,
+	}
+}
+
 // parseRetrieveMode parses the retrieve mode parameter and returns the retrieve type, chunk size in lines, and t-shirt size
 // Maps: chunk-s→50/s, chunk-m→100/m, chunk-l→200/l, chunk-xl→400/xl, chunk→200/l (backward compat), full→0/empty
 func parseRetrieveMode(mode string) (retrieveType string, chunkLines int, tshirtSize string) {
@@ -383,6 +479,12 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		}
 	}
 
+	// Extract fileTypes parameter (optional array of file extensions)
+	var fileTypes []interface{}
+	if ft, ok := args["fileTypes"].([]interface{}); ok {
+		fileTypes = ft
+	}
+
 	// Parse retrieve mode (default: "chunk")
 	retrieveModeParam := "chunk"
 	if mode, ok := args["retrieve"].(string); ok {
@@ -417,8 +519,16 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		return createCodeIndexErrorResult(fmt.Sprintf("failed to create query embedding: %s", err.Error())), nil
 	}
 
-	// Search in Qdrant using the correct collection
-	searchResp, err := h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	// Build file type filter if fileTypes parameter is provided
+	filter := buildFileTypeFilter(fileTypes)
+
+	// Search in Qdrant using the correct collection with optional filter
+	var searchResp *storage.CodeIndexSearchResponse
+	if filter != nil {
+		searchResp, err = h.qdrantClient.SearchCodeIndexWithFilter(collectionName, queryEmbedding, limit, filter)
+	} else {
+		searchResp, err = h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	}
 	if err != nil {
 		return createCodeIndexErrorResult(fmt.Sprintf("failed to search in collection '%s': %s", collectionName, err.Error())), nil
 	}
