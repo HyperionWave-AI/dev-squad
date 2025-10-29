@@ -1025,6 +1025,93 @@ func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 	})
 }
 
+// fileExtensionToLanguage maps file extensions to language names
+// This matches the language metadata stored during indexing
+func fileExtensionToLanguage(extension string) string {
+	extensionMap := map[string]string{
+		".go":      "go",
+		".js":      "javascript",
+		".ts":      "typescript",
+		".jsx":     "javascript",
+		".tsx":     "typescript",
+		".py":      "python",
+		".java":    "java",
+		".c":       "c",
+		".cpp":     "cpp",
+		".h":       "c",
+		".hpp":     "cpp",
+		".cs":      "csharp",
+		".rb":      "ruby",
+		".php":     "php",
+		".rs":      "rust",
+		".swift":   "swift",
+		".kt":      "kotlin",
+		".m":       "objective-c",
+		".scala":   "scala",
+		".r":       "r",
+		".sql":     "sql",
+		".sh":      "shell",
+		".bash":    "shell",
+		".yaml":    "yaml",
+		".yml":     "yaml",
+		".json":    "json",
+		".xml":     "xml",
+		".html":    "html",
+		".css":     "css",
+		".scss":    "scss",
+		".less":    "less",
+		".vue":     "vue",
+		".md":      "markdown",
+	}
+
+	// Normalize extension to lowercase with leading dot
+	normalizedExt := strings.ToLower(extension)
+	if !strings.HasPrefix(normalizedExt, ".") {
+		normalizedExt = "." + normalizedExt
+	}
+
+	if lang, ok := extensionMap[normalizedExt]; ok {
+		return lang
+	}
+	return ""
+}
+
+// buildFileTypeFilter creates a Qdrant filter for file types
+// Returns nil if no file types specified
+func buildFileTypeFilter(fileTypes []string) map[string]interface{} {
+	if len(fileTypes) == 0 {
+		return nil
+	}
+
+	// Convert file extensions to language names
+	var languages []string
+	for _, ext := range fileTypes {
+		if lang := fileExtensionToLanguage(ext); lang != "" {
+			languages = append(languages, lang)
+		}
+	}
+
+	if len(languages) == 0 {
+		return nil
+	}
+
+	// Build Qdrant filter with "should" clause for OR logic
+	// Match any of the selected languages
+	shouldClauses := make([]map[string]interface{}, 0, len(languages))
+	for _, lang := range languages {
+		shouldClauses = append(shouldClauses, map[string]interface{}{
+			"key": "language",
+			"match": map[string]interface{}{
+				"value": lang,
+			},
+		})
+	}
+
+	return map[string]interface{}{
+		"should": shouldClauses,
+	}
+}
+
 // SearchCode searches the code index
 // POST /api/v1/code-index/search
 func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
@@ -1068,8 +1155,16 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		}
 	}
 
-	// Search in Qdrant
-	searchResp, err := h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	// Build file type filter if fileTypes parameter is provided
+	filter := buildFileTypeFilter(req.FileTypes)
+
+	// Search in Qdrant with optional filter
+	var searchResp *storage.CodeIndexSearchResponse
+	if filter != nil {
+		searchResp, err = h.qdrantClient.SearchCodeIndexWithFilter(collectionName, queryEmbedding, limit, filter)
+	} else {
+		searchResp, err = h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search: " + err.Error()})
 		return
