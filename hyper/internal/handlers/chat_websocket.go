@@ -842,39 +842,27 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			// Check if this message is interrupting an active subchat
 			isInterrupting := notifier.IsSessionRegistered(sessionID)
 			if isInterrupting {
-				h.logger.Info("User message is interrupting active subchat",
+				h.logger.Info("User message sent to active subchat - delegating to subchat interrupt handler",
 					zap.String("sessionId", sessionID.Hex()),
 					zap.String("userId", userID))
 
-				// Generate and save interruption acknowledgment
-				acknowledgmentText := "⚠️ Task interrupted by user. Processing your new request..."
-				_, err := h.chatService.SaveMessage(aiCtx, sessionID, "assistant", acknowledgmentText, companyID)
-				if err != nil {
-					h.logger.Error("Failed to save interruption acknowledgment", zap.Error(err))
-					// Continue anyway - at least try to stream it
-				}
+				// CRITICAL FIX: Do NOT handle interruptions in main chat!
+				// The subchat's own interrupt handler (in coordinator_tools.go:2873)
+				// will pick up the notification via notifyCh and handle it properly.
+				// This prevents the "I'm a coordinator" bug where main chat responds
+				// to subchat interruptions with the coordinator system prompt.
 
-				// Stream acknowledgment to WebSocket immediately
-				acknowledgmentMsg := models.StreamMessage{
-					Type:    "token",
-					Content: acknowledgmentText,
-				}
-				if err := conn.WriteJSON(acknowledgmentMsg); err != nil {
-					h.logger.Error("Failed to stream interruption acknowledgment", zap.Error(err))
-				} else {
-					h.logger.Debug("Streamed interruption acknowledgment to client")
-				}
+				// NotifyNewMessage already called above - subchat will receive via <-notifyCh
+				// Let the subchat maintain its execution context and agent identity
 
-				// Send done message for acknowledgment
-				doneMsg := models.StreamMessage{
-					Type: "done",
-				}
-				if err := conn.WriteJSON(doneMsg); err != nil {
-					h.logger.Error("Failed to send done message after acknowledgment", zap.Error(err))
-				}
+				// Reset processing state and wait for next message
+				processingMutex.Lock()
+				isProcessing = false
+				processingMutex.Unlock()
+				continue // Skip to next message, don't call streamAIResponse
 			}
 
-			// Stream AI response with tool execution events
+			// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
 			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID)
 
 			// Reset processing state after response complete
