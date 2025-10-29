@@ -165,6 +165,25 @@ export function SubchatDetailView({ subchatId, onClose }: SubchatDetailViewProps
         }
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
+        console.log('[SubchatDetailView] Tool call received:', tool, id);
+
+        // If we have accumulated content before the tool call, save it as a separate message
+        if (streamingContentRef.current.trim()) {
+          const messageBeforeToolCall: ChatMessage = {
+            id: `msg-${Date.now()}`,
+            sessionId,
+            role: 'assistant',
+            content: streamingContentRef.current,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, messageBeforeToolCall]);
+          console.log('[SubchatDetailView] Saved message before tool call');
+
+          // Clear streaming content for next message
+          streamingContentRef.current = '';
+          setStreamingContent('');
+        }
+
         const toolCall: ToolCall = {
           id,
           tool,
