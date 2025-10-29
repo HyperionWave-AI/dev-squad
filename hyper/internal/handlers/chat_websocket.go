@@ -1040,10 +1040,11 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	}
 
 	// Step 6: Stream AI response via ai-service with tool support
-	// Inject session ID into context for tool access (e.g., execute_subagent)
+	// Inject session ID and company ID into context for tool access (e.g., execute_subagent)
 	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
+	ctxWithCompany := context.WithValue(ctxWithSession, "companyID", companyID)
 	maxToolCalls := h.aiService.GetConfig().MaxToolCalls
-	aiStream, err := h.aiService.StreamChatWithTools(ctxWithSession, langchainMessages, maxToolCalls)
+	aiStream, err := h.aiService.StreamChatWithTools(ctxWithCompany, langchainMessages, maxToolCalls)
 	if err != nil {
 		h.logger.Error("Failed to get AI response", zap.Error(err))
 		h.sendError(conn, "Failed to get AI response: "+err.Error())
