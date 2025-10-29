@@ -3069,7 +3069,23 @@ Acknowledge the message and continue your work.
 							zap.String("subchatId", subchatID),
 							zap.String("content", event.Content),
 							zap.Int("trimmedLength", len(trimmed)))
-						handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, event.Content)
+
+						// 💾 SAVE TO DATABASE for persistence (so messages survive page refresh)
+						_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, companyID)
+						if err != nil {
+							t.logger.Warn("Failed to save streaming text chunk to database",
+								zap.String("subchatId", subchatID),
+								zap.String("sessionId", chatSession.ID.Hex()),
+								zap.Error(err))
+						} else {
+							t.logger.Debug("💾 Saved text chunk to database",
+								zap.String("subchatId", subchatID),
+								zap.String("sessionId", chatSession.ID.Hex()),
+								zap.Int("chunkLength", len(event.Content)))
+						}
+
+						// 📡 Send to WebSocket (CRITICAL: use subchat session, not parent!)
+						handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, event.Content)
 					} else {
 						t.logger.Info("⏭️ SKIPPING SHORT TEXT (< 5 chars)",
 							zap.String("subchatId", subchatID),
@@ -3095,7 +3111,7 @@ Acknowledge the message and continue your work.
 
 				// Emit progress notification with plain English tool call description
 				plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)
-				handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, plainEnglishToolCall)
+				handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishToolCall)
 
 				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
 				if event.ToolCall.Name == "read_file" {
@@ -3210,7 +3226,7 @@ Acknowledge the message and continue your work.
 			case aiservice.StreamEventToolResult:
 				// Emit progress notification with plain English tool result
 				plainEnglishResult := convertToolResultToPlainEnglish(event.ToolResult.Name, event.ToolResult.Output, event.ToolResult.Error)
-				handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, plainEnglishResult)
+				handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishResult)
 
 				// Summarize tool result to prevent context bloat
 				var originalSize int
@@ -3351,17 +3367,12 @@ Acknowledge the message and continue your work.
 		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)))
 	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
 
-	t.logger.Info("📝 Saving final AI response to subchat",
+	// NOTE: We now save text chunks as they stream (lines 3073-3085), so we don't need to save
+	// the full response here. This prevents duplicate messages in the database.
+	// The fullResponse variable is still useful for logging and validation purposes.
+	t.logger.Info("📝 Text chunks already saved during streaming (no final save needed)",
 		zap.String("subchatId", subchatID),
-		zap.Int("responseLength", len(fullResponse)))
-
-	// Save final AI response to subchat
-	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", fullResponse, companyID)
-	if err != nil {
-		t.logger.Error("Failed to save subagent final response",
-			zap.String("subchatId", subchatID),
-			zap.Error(err))
-	}
+		zap.Int("totalResponseLength", len(fullResponse)))
 
 	// ========================================
 	// VALIDATION LAYER 1: File Modification Validation
