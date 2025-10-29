@@ -422,9 +422,11 @@ func (h *ToolHandler) handleScan(ctx context.Context, args map[string]interface{
 
 		// Generate embeddings for chunks
 		var qdrantPoints []storage.QdrantPoint
+		fileName := filepath.Base(scannedFile.Path)
 		for _, chunk := range chunks {
-			// Generate embedding
-			embedding, err := h.embeddingClient.CreateEmbedding(chunk.Content)
+			// Generate embedding with file name context for better search relevance
+			contentWithContext := fmt.Sprintf("File: %s\n%s", fileName, chunk.Content)
+			embedding, err := h.embeddingClient.CreateEmbedding(contentWithContext)
 			if err != nil {
 				h.logger.Warn("Failed to create embedding",
 					zap.String("file", scannedFile.Path),

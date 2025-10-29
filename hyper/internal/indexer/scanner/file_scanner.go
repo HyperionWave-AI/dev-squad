@@ -55,10 +55,9 @@ func NewFileScanner() *FileScanner {
 			".scss": "scss",
 			".less": "less",
 			".vue":  "vue",
-			".md":   "markdown",
 		},
 		maxFileSize: 10 * 1024 * 1024, // 10 MB
-		chunkSize:   200,               // 200 lines per chunk
+		chunkSize:   100,               // 100 lines per chunk (smaller = more precise search)
 	}
 }
 
