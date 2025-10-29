@@ -1559,10 +1559,29 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 	// Create output channel for events
 	eventChan := make(chan StreamEvent, 100)
 
+	// SECURITY: Validate that no blocked coordinator tools are in the allowed list
+	// This prevents subchats from creating subchats or calling coordinator functions
+	blockedToolsForSubchats := []string{
+		"execute_subagent",              // CRITICAL: Prevent subchats from creating subchats
+		"coordinator_create_human_task", // Subchats cannot create human tasks
+		"coordinator_create_agent_task", // Subchats cannot create agent tasks (use create_agent_task wrapper)
+		"coordinator_list_human_tasks",  // Subchats should not list human tasks
+		"coordinator_list_agent_tasks",  // Subchats should not list agent tasks
+		"create_agent_task",             // Subchats use predefined tasks only
+	}
+
+	for _, blocked := range blockedToolsForSubchats {
+		for _, allowed := range allowedToolNames {
+			if allowed == blocked {
+				return nil, fmt.Errorf("SECURITY VIOLATION: Tool '%s' is blocked in subchat context. Subchats cannot create subchats or call coordinator functions", blocked)
+			}
+		}
+	}
+
 	// Get FILTERED tools for LangChain (only allowed tools)
 	tools := s.toolRegistry.GetFilteredToolsForLangChain(allowedToolNames)
 
-	log.Printf("[ChatService] Filtered %d tools for subagent (from allowlist of %d tools)", len(tools), len(allowedToolNames))
+	log.Printf("[ChatService] Filtered %d tools for subagent (from allowlist of %d tools) - Security validated", len(tools), len(allowedToolNames))
 
 	// Check if provider supports tools
 	supportsTools := false
@@ -1848,14 +1867,34 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						result.Output = newOutput
 					}
 				} else {
-					// Execute tool (no cached result available)
-					// Inject humanTaskId from workflowState into context for auto-population
-					toolCtx := ctx
-					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
-						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+					// RUNTIME SECURITY CHECK: Block coordinator tools even if AI tries to call them
+					// This is a defense-in-depth measure (should be caught earlier by filtering)
+					isBlocked := false
+					for _, blocked := range blockedToolsForSubchats {
+						if toolCall.Name == blocked {
+							isBlocked = true
+							result = ToolResult{
+								ID:         toolCall.ID,
+								Name:       toolCall.Name,
+								Output:     nil,
+								Error:      fmt.Sprintf("🚫 SECURITY BLOCK: Tool '%s' is not allowed in subchat context. Subchats cannot create subchats or call coordinator functions. Use only allowed tools: read_file, write_file, apply_patch, bash, coordinator_update_todo_status, coordinator_upsert_knowledge", toolCall.Name),
+								DurationMs: 0,
+							}
+							log.Printf("[SECURITY] Blocked attempt to call '%s' in filtered context - Tool not in allowlist", toolCall.Name)
+							break
+						}
 					}
-					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
-					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
+
+					if !isBlocked {
+						// Execute tool (no cached result available)
+						// Inject humanTaskId from workflowState into context for auto-population
+						toolCtx := ctx
+						if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+							toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+						}
+						result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
+						log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
+					}
 
 					// Store in cache for future duplicate calls
 					resultCache.Set(signature, &result)
