@@ -104,12 +104,15 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
         todoId: todoId || undefined,
       });
 
+      // Validate that sessionId exists before showing success
+      if (!subchat.sessionId) {
+        throw new Error('Subchat created but session ID is missing. Please refresh and try again.');
+      }
+
       setSuccess(true);
       setTimeout(() => {
         // Pass session ID (not subchat ID) for navigation
-        if (subchat.sessionId) {
-          onSubchatCreated(subchat.sessionId);
-        }
+        onSubchatCreated(subchat.sessionId);
         handleClose();
       }, 1000);
     } catch (err) {
