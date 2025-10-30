@@ -18,8 +18,13 @@ import {
   Container,
   useTheme,
   useMediaQuery,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
-import { Add as AddIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { subchatService, type Subchat } from '../services/subchatService';
 import SubchatCard from './SubchatCard';
 import SubchatCreationDialog from './SubchatCreationDialog';
@@ -44,6 +49,9 @@ export const SubchatList: React.FC<SubchatListProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [expandedSubchatId, setExpandedSubchatId] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [subchatToDelete, setSubchatToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const loadSubchats = useCallback(async (isBackgroundRefresh = false) => {
     // Don't show loading spinner for background refreshes
@@ -105,6 +113,35 @@ export const SubchatList: React.FC<SubchatListProps> = ({
 
   const handleToggleDetails = (subchatId: string) => {
     setExpandedSubchatId((prev) => (prev === subchatId ? null : subchatId));
+  };
+
+  const handleDeleteClick = (subchatId: string) => {
+    setSubchatToDelete(subchatId);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!subchatToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      await subchatService.deleteSubchat(subchatToDelete);
+      // Remove from UI
+      setSubchats((prev) => prev.filter((s) => s.id !== subchatToDelete));
+      setDeleteDialogOpen(false);
+      setSubchatToDelete(null);
+      // Optionally refresh the list to be sure
+      loadSubchats(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete subchat');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteDialogOpen(false);
+    setSubchatToDelete(null);
   };
 
   // Responsive typography scaling
@@ -411,6 +448,7 @@ export const SubchatList: React.FC<SubchatListProps> = ({
                   <SubchatCard
                     subchat={subchat}
                     onClick={() => handleCardClick(subchat.id)}
+                    onDelete={handleDeleteClick}
                     onToggleDetails={() => handleToggleDetails(subchat.id)}
                     isExpanded={expandedSubchatId === subchat.id}
                   />
@@ -480,6 +518,7 @@ export const SubchatList: React.FC<SubchatListProps> = ({
                   <SubchatCard
                     subchat={subchat}
                     onClick={() => handleCardClick(subchat.id)}
+                    onDelete={handleDeleteClick}
                     onToggleDetails={() => handleToggleDetails(subchat.id)}
                     isExpanded={expandedSubchatId === subchat.id}
                   />
@@ -502,6 +541,35 @@ export const SubchatList: React.FC<SubchatListProps> = ({
         parentChatId={parentChatId}
         onSubchatCreated={handleSubchatCreated}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={handleDeleteCancel}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Delete Subchat?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to delete this subchat? This action cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button onClick={handleDeleteCancel} disabled={isDeleting} variant="outlined">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDeleteConfirm}
+            color="error"
+            variant="contained"
+            disabled={isDeleting}
+            startIcon={isDeleting ? <CircularProgress size={16} sx={{ color: 'inherit' }} /> : <DeleteIcon />}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Container>
   );
 };

@@ -404,6 +404,7 @@ func StartHTTPServer(
 		subchatGroup.POST("", subchatHandler.CreateSubchat)
 		subchatGroup.GET("/:id", subchatHandler.GetSubchat)
 		subchatGroup.PUT("/:id/status", subchatHandler.UpdateSubchatStatus)
+		subchatGroup.DELETE("/:id", subchatHandler.DeleteSubchat)
 	}
 
 	// Register chat-subchats routes

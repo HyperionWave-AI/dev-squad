@@ -275,6 +275,29 @@ func (h *SubchatHandler) UpdateSubchatStatus(c *gin.Context) {
 	})
 }
 
+// DeleteSubchat soft-deletes a subchat by ID
+// DELETE /api/v1/subchats/:id
+func (h *SubchatHandler) DeleteSubchat(c *gin.Context) {
+	id := c.Param("id")
+
+	err := h.subchatStorage.DeleteSubchat(id)
+	if err != nil {
+		h.logger.Error("Failed to delete subchat", zap.String("id", id), zap.Error(err))
+
+		// Check if it's a not found error
+		if err.Error() == fmt.Sprintf("subchat not found or already deleted: %s", id) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Subchat not found or already deleted"})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete subchat"})
+		return
+	}
+
+	h.logger.Info("Successfully deleted subchat", zap.String("id", id))
+	c.Status(http.StatusNoContent)
+}
+
 // Helper function to convert storage model to response DTO
 func (h *SubchatHandler) toSubchatResponse(subchat *storage.Subchat) SubchatResponse {
 	return SubchatResponse{
