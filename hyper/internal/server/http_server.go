@@ -398,10 +398,15 @@ func StartHTTPServer(
 	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, chatService, logger)
 	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
 
-	// Register subchat routes
+	// Initialize rate limiter for subchat creation (10 requests per minute per user)
+	subchatRateLimiter := middleware.NewRateLimiter(10, time.Minute, logger)
+	logger.Info("🚦 Rate limiter initialized", zap.Int("maxRequests", 10), zap.Duration("per", time.Minute))
+
+	// Register subchat routes with rate limiting on POST
 	subchatGroup := r.Group("/api/v1/subchats")
 	{
-		subchatGroup.POST("", subchatHandler.CreateSubchat)
+		// Apply rate limiting only to POST (creation) endpoint
+		subchatGroup.POST("", subchatRateLimiter.Middleware(), subchatHandler.CreateSubchat)
 		subchatGroup.GET("/:id", subchatHandler.GetSubchat)
 		subchatGroup.PUT("/:id/status", subchatHandler.UpdateSubchatStatus)
 		subchatGroup.DELETE("/:id", subchatHandler.DeleteSubchat)
