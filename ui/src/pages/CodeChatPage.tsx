@@ -392,7 +392,7 @@ export function CodeChatPage() {
     // Auto-refresh will pick up any new sessions in the next 3-second cycle
   };
   return (
-    <Box className="chat-dashboard-container" sx={{ display: 'flex', height: 'calc(100vh - 140px)' }}>
+    <Box className="chat-dashboard-container" sx={{ display: 'flex', height: 'calc(100vh - 80px)' }}>
       {/* Left Sidebar - Session List (20%) */}
       <Box sx={{ width: '20%', minWidth: 250, maxWidth: 350 }}>
         <ChatSessionList
@@ -412,6 +412,7 @@ export function CodeChatPage() {
         sx={{
           flex: 1,
           display: 'flex',
+          flexDirection: 'column',
           backgroundColor: 'background.default',
         }}
       >
@@ -424,6 +425,7 @@ export function CodeChatPage() {
             borderBottom: '1px solid',
             borderColor: 'divider',
             p: 1,
+            flexShrink: 0,
           }}
         >
           <Box sx={{ flex: 1 }}>
@@ -446,7 +448,7 @@ export function CodeChatPage() {
         </Box>
 
         {/* Messages View */}
-        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
           <ChatMessageView
             messages={messages}
             isStreaming={isStreaming}
@@ -458,15 +460,17 @@ export function CodeChatPage() {
         </Box>
 
         {/* Input Box */}
-        <ChatInputBox
-          onSendMessage={handleSendMessage}
-          disabled={!activeSessionId}
-          placeholder={
-            !activeSessionId
-              ? 'Create a new chat to get started'
-              : 'Type your message...'
-          }
-        />
+        <Box sx={{ flexShrink: 0 }}>
+          <ChatInputBox
+            onSendMessage={handleSendMessage}
+            disabled={!activeSessionId}
+            placeholder={
+              !activeSessionId
+                ? 'Create a new chat to get started'
+                : 'Type your message...'
+            }
+          />
+        </Box>
       </Box>
 
       {/* Subchats Drawer */}
