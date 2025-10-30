@@ -6,7 +6,7 @@
  * Responsive design optimized for mobile, tablet, and desktop viewports.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Button,
@@ -53,6 +53,12 @@ export const SubchatList: React.FC<SubchatListProps> = ({
   const [subchatToDelete, setSubchatToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Calculate running subchats (memoized to avoid recalculation on every render)
+  const runningSubchats = useMemo(
+    () => subchats.filter((s) => s.status === 'active'),
+    [subchats]
+  );
+
   const loadSubchats = useCallback(async (isBackgroundRefresh = false) => {
     // Don't show loading spinner for background refreshes
     if (!isBackgroundRefresh) {
@@ -71,17 +77,40 @@ export const SubchatList: React.FC<SubchatListProps> = ({
     }
   }, [parentChatId]);
 
+  // Initial load effect
   useEffect(() => {
     loadSubchats();
-
-    // Set up auto-refresh polling every 5 seconds for real-time updates
-    const intervalId = setInterval(() => {
-      loadSubchats(true); // Pass true to indicate background refresh
-    }, 5000);
-
-    // Clean up interval on unmount or when parentChatId changes
-    return () => clearInterval(intervalId);
   }, [loadSubchats]);
+
+  // Page Visibility API - immediate refresh when tab becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        loadSubchats(true); // Background refresh when tab becomes visible
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [loadSubchats]);
+
+  // Conditional polling - only poll when there are active subchats
+  useEffect(() => {
+    // Only set up polling if there are running subchats AND tab is visible
+    if (runningSubchats.length === 0 || document.hidden) {
+      return; // No polling needed
+    }
+
+    // Poll every 15 seconds for active subchats (reduced from 5s)
+    const intervalId = setInterval(() => {
+      if (!document.hidden) {
+        loadSubchats(true); // Pass true to indicate background refresh
+      }
+    }, 15000);
+
+    // Clean up interval on unmount or when dependencies change
+    return () => clearInterval(intervalId);
+  }, [loadSubchats, runningSubchats.length]);
 
   const handleSubchatCreated = async (subchatId: string) => {
     console.log('[SubchatList] handleSubchatCreated called with subchatId:', subchatId);
@@ -244,9 +273,11 @@ export const SubchatList: React.FC<SubchatListProps> = ({
     );
   }
 
-  // Separate running/active subchats from completed/failed ones
-  const runningSubchats = subchats.filter((s) => s.status === 'active');
-  const completedSubchats = subchats.filter((s) => s.status !== 'active');
+  // Separate completed/failed subchats (runningSubchats already calculated at top)
+  const completedSubchats = useMemo(
+    () => subchats.filter((s) => s.status !== 'active'),
+    [subchats]
+  );
 
   return (
     <Container 
