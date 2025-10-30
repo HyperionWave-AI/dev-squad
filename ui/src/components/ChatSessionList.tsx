@@ -155,7 +155,7 @@ const GRAPH_CONFIG = {
   branchLineWidth: 1.5,
   graphLeftMargin: 16,
   nodeXPosition: 24,
-  itemHeight: 60, // Approximate height per list item
+  itemHeight: 56, // Increased for better breathing room
   branchOffsetX: 12, // Horizontal offset for branch lines
 };
 
@@ -487,7 +487,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
           sx={{
             height: '100%',
             overflowY: 'auto',
-            pl: 7, // Leave space for Git graph
+            pl: 4, // Reduced from 7 to 4 for tighter spacing with graph
           }}
         >
           {sessions.length === 0 ? (
@@ -511,20 +511,27 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                     disablePadding
                     sx={{
                       pl: treeNode.depth * 2, // Indent based on depth
-                      borderLeft: isActive ? 2 : 0,
+                      borderLeft: isActive ? '4px solid' : 0,
                       borderColor: 'primary.main',
-                      backgroundColor: isActive ? 'action.selected' : 'transparent',
+                      backgroundColor: isActive ? 'rgba(25, 118, 210, 0.08)' : 'transparent',
+                      borderRadius: isActive ? '0 8px 8px 0' : 0,
+                      mb: 1, // Increased spacing between items
+                      transition: 'all 0.2s ease-in-out',
                       '&:hover': {
-                        backgroundColor: isActive ? 'action.selected' : 'action.hover',
+                        backgroundColor: isActive ? 'rgba(25, 118, 210, 0.12)' : 'action.hover',
+                        '& .action-buttons': {
+                          opacity: 1,
+                        },
                       },
                     }}
                   >
                     <ListItemButton
                       onClick={() => onSessionSelect(session.id)}
                       sx={{
-                        py: 1.5,
+                        py: 1.5, // Increased vertical padding
+                        px: 2, // Increased horizontal padding
                         minHeight: GRAPH_CONFIG.itemHeight,
-                        alignItems: 'flex-start',
+                        alignItems: 'center', // Center align for better visual balance
                       }}
                     >
                       {/* Expand/Collapse button for parent chats */}
@@ -533,8 +540,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                           size="small"
                           onClick={(e) => handleToggleExpand(session.id, e)}
                           sx={{
-                            mr: 1,
-                            mt: 0.5,
+                            mr: 1.5,
                             transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
                             transition: 'transform 0.2s',
                           }}
@@ -544,7 +550,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                       )}
 
                       {/* Chat icon */}
-                      <Box sx={{ mr: 1.5, mt: 0.5, flexShrink: 0 }}>
+                      <Box sx={{ mr: 2, flexShrink: 0 }}>
                         {isSubchatNode ? (
                           <SmartToy
                             fontSize="small"
@@ -578,12 +584,13 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                             sx={{
                               color: 'text.secondary',
                               display: 'block',
-                              mt: 0.5,
+                              mt: 0.75, // More space above date
+                              fontSize: '0.75rem',
                             }}
                           >
                             {new Date(session.createdAt).toLocaleDateString()}
                             {hasChildren && (
-                              <span style={{ marginLeft: 8 }}>
+                              <span style={{ marginLeft: 12 }}>
                                 • {treeNode.children.length} subchat{treeNode.children.length !== 1 ? 's' : ''}
                               </span>
                             )}
@@ -591,23 +598,41 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                         }
                       />
 
-                      {/* Action buttons */}
-                      <Box sx={{ display: 'flex', gap: 0.5, ml: 1 }}>
+                      {/* Action buttons - show on hover */}
+                      <Box
+                        className="action-buttons"
+                        sx={{
+                          display: 'flex',
+                          gap: 1, // Increased gap between buttons
+                          ml: 'auto', // Push to the right
+                          opacity: isActive ? 1 : 0, // Show when active, hide otherwise
+                          transition: 'opacity 0.2s ease-in-out',
+                        }}
+                      >
                         {onRenameSession && (
                           <IconButton
                             size="small"
                             onClick={(e) => handleRenameClick(session.id, session.title, e)}
-                            sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
+                            sx={{
+                              padding: '6px',
+                              '&:hover': {
+                                backgroundColor: 'action.hover',
+                                color: 'primary.main',
+                              },
+                            }}
                           >
-                            <Typography variant="caption">✏️</Typography>
+                            <Typography variant="caption" sx={{ fontSize: '1.1rem' }}>✏️</Typography>
                           </IconButton>
                         )}
                         <IconButton
                           size="small"
                           onClick={(e) => handleDeleteClick(session.id, e)}
                           sx={{
-                            opacity: 0.7,
-                            '&:hover': { opacity: 1, color: 'error.main' },
+                            padding: '6px',
+                            '&:hover': {
+                              backgroundColor: 'error.lighter',
+                              color: 'error.main',
+                            },
                           }}
                         >
                           <Delete fontSize="small" />

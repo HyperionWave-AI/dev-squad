@@ -31,7 +31,7 @@ import {
   Close as CloseIcon,
   LightMode,
   DarkMode,
-  Science
+  Hub
 } from '@mui/icons-material';
 import { getTheme, getPreferredTheme, setThemePreference } from './theme';
 import { KanbanBoard } from './components/KanbanBoard';
@@ -41,7 +41,7 @@ import { CodeChatPage } from './pages/CodeChatPage';
 import { HTTPToolsPage } from './pages/HTTPToolsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SubagentsPage } from './pages/SubagentsPage';
-import { SubchatTest } from './components/SubchatTest';
+import { MCPServersPage } from './pages/MCPServersPage';
 import { ConversationModeProvider } from './contexts/ConversationModeContext';
 
 function App() {
@@ -50,6 +50,10 @@ function App() {
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light');
   const location = useLocation();
   const navigate = useNavigate();
+  // Enhanced responsive breakpoints with better mobile-first approach
+  // const muiTheme = useTheme();
+  // const isMobile = useMediaQuery(muiTheme.breakpoints.down('sm')); // <600px
+  // const isTablet = useMediaQuery(muiTheme.breakpoints.between('sm', 'md')); // 600px - 900px
 
   // Initialize theme mode on component mount
   useEffect(() => {
@@ -81,9 +85,9 @@ function App() {
   const navigationItems = [
     { path: '/chat', label: 'Chat', icon: <Chat />, priority: 'high' },
     { path: '/tasks', label: 'Tasks', icon: <Dashboard />, priority: 'high' },
-    { path: '/subchat-test', label: 'Subchat Test', icon: <Science />, priority: 'high' }, // TODO: Remove before commit
     { path: '/knowledge', label: 'Knowledge', icon: <Psychology />, priority: 'medium' },
     { path: '/code', label: 'Code', icon: <Code />, priority: 'medium' },
+    { path: '/mcp-servers', label: 'MCP Servers', icon: <Hub />, priority: 'medium' },
     { path: '/tools', label: 'Tools', icon: <Build />, priority: 'low' },
     { path: '/subagents', label: 'Subagents', icon: <SmartToy />, priority: 'low' },
     { path: '/settings', label: 'Settings', icon: <Settings />, priority: 'low' },
@@ -444,7 +448,7 @@ function App() {
               <Route path="/knowledge" element={<KnowledgeBrowser key={refreshKey} />} />
               <Route path="/code" element={<CodeSearchPage />} />
               <Route path="/chat" element={<CodeChatPage />} />
-              <Route path="/subchat-test" element={<SubchatTest />} />
+              <Route path="/mcp-servers" element={<MCPServersPage />} />
               <Route path="/tools" element={<HTTPToolsPage />} />
               <Route path="/subagents" element={<SubagentsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

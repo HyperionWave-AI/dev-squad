@@ -220,8 +220,8 @@ export function ChatMessageView({
             >
               {isUser ? (
                 <Typography
-                  variant="body1"
-                  sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  variant="body2"
+                  sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.9rem' }}
                 >
                   {message.content}
                 </Typography>
