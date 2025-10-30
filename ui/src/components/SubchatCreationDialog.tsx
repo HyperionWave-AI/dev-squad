@@ -112,7 +112,8 @@ export const SubchatCreationDialog: React.FC<SubchatCreationDialogProps> = ({
       setSuccess(true);
       setTimeout(() => {
         // Pass session ID (not subchat ID) for navigation
-        onSubchatCreated(subchat.sessionId);
+        // Non-null assertion safe because we validated sessionId exists above
+        onSubchatCreated(subchat.sessionId!);
         handleClose();
       }, 1000);
     } catch (err) {
