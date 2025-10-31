@@ -824,6 +824,18 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			isProcessing = true
 			processingMutex.Unlock()
 
+			// Emit user message to WebSocket immediately (before database save)
+			userMsgEvent := models.StreamMessage{
+				Type:    "user_message",
+				Content: userMsg.Content,
+			}
+			if err := conn.WriteJSON(userMsgEvent); err != nil {
+				h.logger.Warn("Failed to emit user message to WebSocket",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Error(err))
+				// Continue processing even if emit fails
+			}
+
 			// Save user message to database
 			_, err = h.chatService.SaveMessage(aiCtx, sessionID, "user", userMsg.Content, companyID)
 			if err != nil {
@@ -1051,13 +1063,39 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 		return
 	}
 
-	// Step 7: Stream mixed content (tokens and tool events) to WebSocket client
+	// Step 7: Register for interrupt notifications (for prioritized interrupt handling)
+	notifier := GetMessageNotifier(h.logger)
+	interruptCh := notifier.RegisterSession(sessionID)
+	defer notifier.UnregisterSession(sessionID)
+
+	// Step 8: Stream mixed content (tokens and tool events) to WebSocket client with prioritized interrupt handling
 	fullResponse := ""
 	tokenCount := 0
 	toolCallCount := 0
 	clientDisconnected := false // Track client disconnect state
 
 	for event := range aiStream {
+		// PRIORITY SELECT: Non-blocking interrupt check (runs before every AI event)
+		select {
+		case <-interruptCh:
+			h.logger.Info("🚨 User interrupt detected during AI streaming - processing interrupt",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Int("tokensStreamed", tokenCount))
+			// Emit notification to client that interrupt was detected
+			if !clientDisconnected {
+				interruptNotice := models.StreamMessage{
+					Type:    "token",
+					Content: "\n\n⏸️ _Interrupt detected - processing your message..._\n\n",
+				}
+				conn.WriteJSON(interruptNotice)
+			}
+			// Continue processing the event - don't return here
+			// The interrupt handler in the main loop will process the new message
+		default:
+			// No interrupt, continue with normal processing
+		}
+
+		// NORMAL SELECT: Process AI stream events
 		select {
 		case <-ctx.Done():
 			h.logger.Info("Context cancelled during streaming",

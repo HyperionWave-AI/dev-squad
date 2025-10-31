@@ -21,6 +21,7 @@ import {
   deleteSession,
   updateSession,
   connectChatStream,
+  refetchMessages,
   type ChatSession,
   type ChatMessage,
   type ChatStreamConnection,
@@ -376,6 +377,20 @@ export function CodeChatPage() {
     try {
       wsConnectionRef.current.sendMessage(text);
       console.log('[CodeChatPage] Message sent via WebSocket:', text);
+
+      // Refetch messages after 500ms to confirm persistence
+      setTimeout(async () => {
+        if (activeSessionId && wsConnectionRef.current) {
+          try {
+            const refreshedMessages = await refetchMessages(activeSessionId);
+            setMessages(refreshedMessages);
+            console.log('[CodeChatPage] Messages refetched after send');
+          } catch (err) {
+            console.error('[CodeChatPage] Failed to refetch messages:', err);
+            // Don't show error to user - optimistic update is still visible
+          }
+        }
+      }, 500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
       setIsStreaming(false);
