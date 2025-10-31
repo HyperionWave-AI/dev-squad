@@ -5,14 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"time"
+	"strings"
 
 	"hyper/internal/mcp/storage"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.uber.org/zap"
 )
 
 // ToolsDiscoveryHandler manages MCP tools discovery operations
@@ -20,17 +20,299 @@ type ToolsDiscoveryHandler struct {
 	toolsStorage     storage.ToolsStorageInterface
 	metadataRegistry *ToolMetadataRegistry
 	mcpServer        *mcp.Server
-	httpClient       *http.Client // For discovering tools from external MCP servers
+	logger           *zap.Logger
+}
+
+// headerRoundTripper is a custom http.RoundTripper that adds headers to every request
+type headerRoundTripper struct {
+	headers map[string]interface{}
+	base    http.RoundTripper
+}
+
+// RoundTrip implements http.RoundTripper interface
+func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone the request to avoid modifying the original
+	reqCopy := req.Clone(req.Context())
+
+	// Add custom headers
+	for key, value := range h.headers {
+		if strValue, ok := value.(string); ok {
+			reqCopy.Header.Set(key, strValue)
+		}
+	}
+
+	// Use base transport to execute the request
+	return h.base.RoundTrip(reqCopy)
+}
+
+// createCustomHTTPClient creates an http.Client with custom headers support
+func createCustomHTTPClient(headers map[string]interface{}) *http.Client {
+	if headers == nil || len(headers) == 0 {
+		return http.DefaultClient
+	}
+
+	return &http.Client{
+		Transport: &headerRoundTripper{
+			headers: headers,
+			base:    http.DefaultTransport,
+		},
+	}
+}
+
+// legacyJSONRPCRequest represents a JSON-RPC 2.0 request for legacy MCP servers
+type legacyJSONRPCRequest struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      int                    `json:"id"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+}
+
+// legacyJSONRPCResponse represents a JSON-RPC 2.0 response from legacy MCP servers
+type legacyJSONRPCResponse struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      int                    `json:"id"`
+	Result  map[string]interface{} `json:"result,omitempty"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// discoverLegacyTools discovers tools from a legacy MCP server using direct JSON-RPC
+func (h *ToolsDiscoveryHandler) discoverLegacyTools(ctx context.Context, serverURL string, headers map[string]interface{}) ([]map[string]interface{}, error) {
+	h.logger.Info("Using legacy MCP protocol (stateless JSON-RPC)",
+		zap.String("serverURL", serverURL),
+		zap.String("method", "tools/list"))
+
+	// Create JSON-RPC request
+	reqBody := legacyJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/list",
+		Params:  map[string]interface{}{},
+	}
+
+	reqBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON-RPC request: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		if strValue, ok := value.(string); ok {
+			req.Header.Set(key, strValue)
+		}
+	}
+
+	// Execute request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Parse response
+	var rpcResp legacyJSONRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w", err)
+	}
+
+	// Check for JSON-RPC error
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("JSON-RPC error: %s (code %d)", rpcResp.Error.Message, rpcResp.Error.Code)
+	}
+
+	// Extract tools from result
+	toolsList, ok := rpcResp.Result["tools"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format: 'tools' field not found or wrong type")
+	}
+
+	// Convert to map format
+	tools := make([]map[string]interface{}, 0, len(toolsList))
+	for _, toolItem := range toolsList {
+		if toolMap, ok := toolItem.(map[string]interface{}); ok {
+			tools = append(tools, toolMap)
+		}
+	}
+
+	h.logger.Info("Legacy tool discovery successful",
+		zap.String("serverURL", serverURL),
+		zap.Int("toolCount", len(tools)))
+
+	return tools, nil
+}
+
+// discoverLegacyResources discovers resources from a legacy MCP server using direct JSON-RPC
+func (h *ToolsDiscoveryHandler) discoverLegacyResources(ctx context.Context, serverURL string, headers map[string]interface{}) ([]map[string]interface{}, error) {
+	h.logger.Info("Using legacy MCP protocol (stateless JSON-RPC)",
+		zap.String("serverURL", serverURL),
+		zap.String("method", "resources/list"))
+
+	// Create JSON-RPC request
+	reqBody := legacyJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "resources/list",
+		Params:  map[string]interface{}{},
+	}
+
+	reqBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON-RPC request: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		if strValue, ok := value.(string); ok {
+			req.Header.Set(key, strValue)
+		}
+	}
+
+	// Execute request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Parse response
+	var rpcResp legacyJSONRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w", err)
+	}
+
+	// Check for JSON-RPC error
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("JSON-RPC error: %s (code %d)", rpcResp.Error.Message, rpcResp.Error.Code)
+	}
+
+	// Extract resources from result
+	resourcesList, ok := rpcResp.Result["resources"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format: 'resources' field not found or wrong type")
+	}
+
+	// Convert to map format
+	resources := make([]map[string]interface{}, 0, len(resourcesList))
+	for _, resourceItem := range resourcesList {
+		if resourceMap, ok := resourceItem.(map[string]interface{}); ok {
+			resources = append(resources, resourceMap)
+		}
+	}
+
+	h.logger.Info("Legacy resource discovery successful",
+		zap.String("serverURL", serverURL),
+		zap.Int("resourceCount", len(resources)))
+
+	return resources, nil
+}
+
+// discoverLegacyPrompts discovers prompts from a legacy MCP server using direct JSON-RPC
+func (h *ToolsDiscoveryHandler) discoverLegacyPrompts(ctx context.Context, serverURL string, headers map[string]interface{}) ([]map[string]interface{}, error) {
+	h.logger.Info("Using legacy MCP protocol (stateless JSON-RPC)",
+		zap.String("serverURL", serverURL),
+		zap.String("method", "prompts/list"))
+
+	// Create JSON-RPC request
+	reqBody := legacyJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "prompts/list",
+		Params:  map[string]interface{}{},
+	}
+
+	reqBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON-RPC request: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewReader(reqBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		if strValue, ok := value.(string); ok {
+			req.Header.Set(key, strValue)
+		}
+	}
+
+	// Execute request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Parse response
+	var rpcResp legacyJSONRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w", err)
+	}
+
+	// Check for JSON-RPC error
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("JSON-RPC error: %s (code %d)", rpcResp.Error.Message, rpcResp.Error.Code)
+	}
+
+	// Extract prompts from result
+	promptsList, ok := rpcResp.Result["prompts"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format: 'prompts' field not found or wrong type")
+	}
+
+	// Convert to map format
+	prompts := make([]map[string]interface{}, 0, len(promptsList))
+	for _, promptItem := range promptsList {
+		if promptMap, ok := promptItem.(map[string]interface{}); ok {
+			prompts = append(prompts, promptMap)
+		}
+	}
+
+	h.logger.Info("Legacy prompt discovery successful",
+		zap.String("serverURL", serverURL),
+		zap.Int("promptCount", len(prompts)))
+
+	return prompts, nil
+}
+
+// isSessionError checks if an error is related to session management
+func isSessionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "session not found") ||
+		strings.Contains(errMsg, "session") && strings.Contains(errMsg, "failed")
 }
 
 // NewToolsDiscoveryHandler creates a new tools discovery handler
-func NewToolsDiscoveryHandler(toolsStorage *storage.ToolsStorage, mcpServer *mcp.Server) *ToolsDiscoveryHandler {
+func NewToolsDiscoveryHandler(toolsStorage *storage.ToolsStorage, mcpServer *mcp.Server, logger *zap.Logger) *ToolsDiscoveryHandler {
 	return &ToolsDiscoveryHandler{
 		toolsStorage: toolsStorage,
 		mcpServer:    mcpServer,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		logger:       logger,
 	}
 }
 
@@ -296,14 +578,14 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 		)), nil, nil
 	}
 
-	// Get the server metadata to find the server URL
+	// Get the server metadata to find the server URL and headers
 	serverMetadata, err := h.toolsStorage.GetServer(ctx, toolMetadata.ServerName)
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to get server info: %s", err.Error())), nil, nil
 	}
 
-	// Execute the tool on the remote MCP server
-	result, err := h.executeToolOnServer(ctx, serverMetadata.ServerURL, toolName, toolArgs)
+	// Execute the tool on the remote MCP server with custom headers
+	result, err := h.executeToolOnServer(ctx, serverMetadata.ServerURL, serverMetadata.Headers, toolName, toolArgs)
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to execute tool: %s", err.Error())), nil, nil
 	}
@@ -311,125 +593,37 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 	return result, result, nil
 }
 
-// executeToolOnServer makes an HTTP call to an MCP server to execute a tool
-func (h *ToolsDiscoveryHandler) executeToolOnServer(ctx context.Context, serverURL, toolName string, toolArgs map[string]interface{}) (*mcp.CallToolResult, error) {
-	// Create MCP tools/call request
-	requestBody := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]interface{}{
-			"name":      toolName,
-			"arguments": toolArgs,
-		},
+// executeToolOnServer executes a tool on a remote MCP server using the official SDK
+func (h *ToolsDiscoveryHandler) executeToolOnServer(ctx context.Context, serverURL string, headers map[string]interface{}, toolName string, toolArgs map[string]interface{}) (*mcp.CallToolResult, error) {
+	// Create MCP client using official SDK
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "hyperion-mcp-discovery",
+		Version: "1.0.0",
+	}, nil)
+
+	// Create transport with custom HTTP client that injects headers
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:   serverURL,
+		HTTPClient: createCustomHTTPClient(headers),
 	}
 
-	bodyJSON, err := json.Marshal(requestBody)
+	// Connect to the remote MCP server
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("failed to connect to MCP server: %w", err)
 	}
+	defer session.Close()
 
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewReader(bodyJSON))
+	// Call the tool via the SDK
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      toolName,
+		Arguments: toolArgs,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to call tool: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-
-	// Execute request
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to server: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Read response
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	// Check for HTTP error
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	// Parse MCP response
-	var mcpResponse struct {
-		Result struct {
-			Content []json.RawMessage `json:"content"`
-			IsError bool              `json:"isError,omitempty"`
-		} `json:"result"`
-		Error *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal(respBody, &mcpResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	// Check for MCP error
-	if mcpResponse.Error != nil {
-		return nil, fmt.Errorf("MCP error %d: %s", mcpResponse.Error.Code, mcpResponse.Error.Message)
-	}
-
-	// Parse content items
-	var content []mcp.Content
-	for _, rawContent := range mcpResponse.Result.Content {
-		// Try to parse as TextContent first (most common)
-		var textContent struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(rawContent, &textContent); err == nil && textContent.Type == "text" {
-			content = append(content, &mcp.TextContent{Text: textContent.Text})
-			continue
-		}
-
-		// If not text, treat as generic content
-		// For now, just convert to text representation
-		content = append(content, &mcp.TextContent{Text: string(rawContent)})
-	}
-
-	// Build result
-	result := &mcp.CallToolResult{
-		Content: content,
-		IsError: mcpResponse.Result.IsError,
-	}
-
-	// If the tool execution failed, return error message
-	if result.IsError {
-		errorMsg := "tool execution failed"
-		if len(content) > 0 {
-			if textContent, ok := content[0].(*mcp.TextContent); ok {
-				errorMsg = textContent.Text
-			}
-		}
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{Text: fmt.Sprintf("Tool '%s' execution failed: %s", toolName, errorMsg)},
-			},
-			IsError: true,
-		}, nil
-	}
-
-	// Format success result
-	resultText := fmt.Sprintf("Tool '%s' executed successfully", toolName)
-	if len(content) > 0 {
-		if textContent, ok := content[0].(*mcp.TextContent); ok {
-			resultText = fmt.Sprintf("Tool '%s' executed successfully:\n\n%s", toolName, textContent.Text)
-		}
-	}
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: resultText},
-		},
-	}, nil
+	return result, nil
 }
 
 // registerMCPAddServer registers the mcp_add_server tool
@@ -555,7 +749,7 @@ func (h *ToolsDiscoveryHandler) HandleMCPAddServer(ctx context.Context, args map
 	headers, _ := args["headers"].(map[string]interface{})
 
 	// Add server to storage
-	if err := h.toolsStorage.AddServer(ctx, serverName, serverURL, description); err != nil {
+	if err := h.toolsStorage.AddServer(ctx, serverName, serverURL, description, headers); err != nil {
 		return createErrorResult(fmt.Sprintf("failed to add server: %s", err.Error())), nil, nil
 	}
 
@@ -566,7 +760,7 @@ func (h *ToolsDiscoveryHandler) HandleMCPAddServer(ctx context.Context, args map
 	}
 
 	// Store each tool
-	successCount := 0
+	toolSuccessCount := 0
 	for _, tool := range tools {
 		toolName := tool["name"].(string)
 		desc, _ := tool["description"].(string)
@@ -576,20 +770,83 @@ func (h *ToolsDiscoveryHandler) HandleMCPAddServer(ctx context.Context, args map
 			fmt.Printf("Warning: failed to store tool %s: %v\n", toolName, err)
 			continue
 		}
-		successCount++
+		toolSuccessCount++
 	}
 
-	resultText := fmt.Sprintf("Server '%s' added successfully!\n\nDiscovered %d tools, stored %d tools.\nServer URL: %s\nDescription: %s",
-		serverName, len(tools), successCount, serverURL, description)
+	// Discover resources from the server
+	resources, resourcesErr := h.discoverServerResources(ctx, serverURL, headers)
+	resourceSuccessCount := 0
+	if resourcesErr == nil {
+		for _, resource := range resources {
+			uri, _ := resource["uri"].(string)
+			name, _ := resource["name"].(string)
+			desc, _ := resource["description"].(string)
+			mimeType, _ := resource["mimeType"].(string)
+
+			if uri == "" {
+				continue // Skip resources without URI
+			}
+
+			if err := h.toolsStorage.StoreResourceMetadata(ctx, uri, name, desc, mimeType, serverName); err != nil {
+				fmt.Printf("Warning: failed to store resource %s: %v\n", uri, err)
+				continue
+			}
+			resourceSuccessCount++
+		}
+	}
+
+	// Discover prompts from the server
+	prompts, promptsErr := h.discoverServerPrompts(ctx, serverURL, headers)
+	promptSuccessCount := 0
+	if promptsErr == nil {
+		for _, prompt := range prompts {
+			name, _ := prompt["name"].(string)
+			desc, _ := prompt["description"].(string)
+			args, _ := prompt["arguments"].([]interface{})
+
+			// Convert arguments to []map[string]interface{}
+			var arguments []map[string]interface{}
+			for _, arg := range args {
+				if argMap, ok := arg.(map[string]interface{}); ok {
+					arguments = append(arguments, argMap)
+				}
+			}
+
+			if name == "" {
+				continue // Skip prompts without name
+			}
+
+			if err := h.toolsStorage.StorePromptMetadata(ctx, name, desc, arguments, serverName); err != nil {
+				fmt.Printf("Warning: failed to store prompt %s: %v\n", name, err)
+				continue
+			}
+			promptSuccessCount++
+		}
+	}
+
+	resultText := fmt.Sprintf("Server '%s' added successfully!\n\n"+
+		"Tools: Discovered %d, stored %d\n"+
+		"Resources: Discovered %d, stored %d\n"+
+		"Prompts: Discovered %d, stored %d\n\n"+
+		"Server URL: %s\nDescription: %s",
+		serverName,
+		len(tools), toolSuccessCount,
+		len(resources), resourceSuccessCount,
+		len(prompts), promptSuccessCount,
+		serverURL, description)
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: resultText},
 		},
 	}, map[string]interface{}{
-		"serverName":  serverName,
-		"toolCount":   successCount,
-		"totalTools":  len(tools),
+		"serverName":      serverName,
+		"toolCount":       toolSuccessCount,
+		"resourceCount":   resourceSuccessCount,
+		"promptCount":     promptSuccessCount,
+		"totalTools":      len(tools),
+		"totalResources":  len(resources),
+		"totalPrompts":    len(prompts),
 	}, nil
 }
 
@@ -607,19 +864,25 @@ func (h *ToolsDiscoveryHandler) HandleMCPRediscoverServer(ctx context.Context, a
 		return createErrorResult(fmt.Sprintf("failed to get server: %s", err.Error())), nil, nil
 	}
 
-	// Remove old tools
+	// Remove old tools, resources, and prompts
 	if err := h.toolsStorage.RemoveServerTools(ctx, serverName); err != nil {
 		return createErrorResult(fmt.Sprintf("failed to remove old tools: %s", err.Error())), nil, nil
 	}
+	if err := h.toolsStorage.RemoveServerResources(ctx, serverName); err != nil {
+		return createErrorResult(fmt.Sprintf("failed to remove old resources: %s", err.Error())), nil, nil
+	}
+	if err := h.toolsStorage.RemoveServerPrompts(ctx, serverName); err != nil {
+		return createErrorResult(fmt.Sprintf("failed to remove old prompts: %s", err.Error())), nil, nil
+	}
 
 	// Discover new tools from the server
-	tools, err := h.discoverServerTools(ctx, server.ServerURL, nil)
+	tools, err := h.discoverServerTools(ctx, server.ServerURL, server.Headers)
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to discover tools: %s", err.Error())), nil, nil
 	}
 
 	// Store each tool
-	successCount := 0
+	toolSuccessCount := 0
 	for _, tool := range tools {
 		toolName := tool["name"].(string)
 		desc, _ := tool["description"].(string)
@@ -629,20 +892,89 @@ func (h *ToolsDiscoveryHandler) HandleMCPRediscoverServer(ctx context.Context, a
 			fmt.Printf("Warning: failed to store tool %s: %v\n", toolName, err)
 			continue
 		}
-		successCount++
+		toolSuccessCount++
 	}
 
-	resultText := fmt.Sprintf("Server '%s' rediscovered successfully!\n\nDiscovered %d tools, stored %d tools.\nServer URL: %s",
-		serverName, len(tools), successCount, server.ServerURL)
+	// Discover resources from the server
+	resources, resourcesErr := h.discoverServerResources(ctx, server.ServerURL, server.Headers)
+	resourceSuccessCount := 0
+	if resourcesErr == nil {
+		for _, resource := range resources {
+			uri, _ := resource["uri"].(string)
+			name, _ := resource["name"].(string)
+			desc, _ := resource["description"].(string)
+			mimeType, _ := resource["mimeType"].(string)
+
+			if uri == "" {
+				continue // Skip resources without URI
+			}
+
+			if err := h.toolsStorage.StoreResourceMetadata(ctx, uri, name, desc, mimeType, serverName); err != nil {
+				fmt.Printf("Warning: failed to store resource %s: %v\n", uri, err)
+				continue
+			}
+			resourceSuccessCount++
+		}
+	}
+
+	// Discover prompts from the server
+	prompts, promptsErr := h.discoverServerPrompts(ctx, server.ServerURL, server.Headers)
+	promptSuccessCount := 0
+	if promptsErr == nil {
+		for _, prompt := range prompts {
+			name, _ := prompt["name"].(string)
+			desc, _ := prompt["description"].(string)
+			args, _ := prompt["arguments"].([]interface{})
+
+			// Convert arguments to []map[string]interface{}
+			var arguments []map[string]interface{}
+			for _, arg := range args {
+				if argMap, ok := arg.(map[string]interface{}); ok {
+					arguments = append(arguments, argMap)
+				}
+			}
+
+			if name == "" {
+				continue // Skip prompts without name
+			}
+
+			if err := h.toolsStorage.StorePromptMetadata(ctx, name, desc, arguments, serverName); err != nil {
+				fmt.Printf("Warning: failed to store prompt %s: %v\n", name, err)
+				continue
+			}
+			promptSuccessCount++
+		}
+	}
+
+	// Update server counts in the database
+	if err := h.toolsStorage.UpdateServerCounts(ctx, serverName, toolSuccessCount, resourceSuccessCount, promptSuccessCount); err != nil {
+		fmt.Printf("Warning: failed to update server counts: %v\n", err)
+		// Don't fail the operation - tools/resources/prompts are already stored
+	}
+
+	resultText := fmt.Sprintf("Server '%s' rediscovered successfully!\n\n"+
+		"Tools: Discovered %d, stored %d\n"+
+		"Resources: Discovered %d, stored %d\n"+
+		"Prompts: Discovered %d, stored %d\n\n"+
+		"Server URL: %s",
+		serverName,
+		len(tools), toolSuccessCount,
+		len(resources), resourceSuccessCount,
+		len(prompts), promptSuccessCount,
+		server.ServerURL)
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: resultText},
 		},
 	}, map[string]interface{}{
-		"serverName":  serverName,
-		"toolCount":   successCount,
-		"totalTools":  len(tools),
+		"serverName":      serverName,
+		"toolCount":       toolSuccessCount,
+		"resourceCount":   resourceSuccessCount,
+		"promptCount":     promptSuccessCount,
+		"totalTools":      len(tools),
+		"totalResources":  len(resources),
+		"totalPrompts":    len(prompts),
 	}, nil
 }
 
@@ -683,73 +1015,303 @@ func (h *ToolsDiscoveryHandler) HandleMCPRemoveServer(ctx context.Context, args 
 	}, nil
 }
 
-// discoverServerTools connects to an MCP server and lists its tools
+// discoverServerTools connects to an MCP server and lists its tools using the official SDK
 func (h *ToolsDiscoveryHandler) discoverServerTools(ctx context.Context, serverURL string, headers map[string]interface{}) ([]map[string]interface{}, error) {
-	// Create MCP tools/list request
-	requestBody := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/list",
+	// Log discovery attempt with URL and header info (keys only, not values for security)
+	headerKeys := make([]string, 0, len(headers))
+	for k := range headers {
+		headerKeys = append(headerKeys, k)
+	}
+	h.logger.Debug("Starting tool discovery",
+		zap.String("serverURL", serverURL),
+		zap.Int("headerCount", len(headers)),
+		zap.Strings("headerKeys", headerKeys))
+
+	// Try modern session-based MCP protocol first
+	h.logger.Info("Attempting modern MCP protocol (session-based)",
+		zap.String("serverURL", serverURL))
+
+	// Create MCP client using official SDK
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "hyperion-mcp-discovery",
+		Version: "1.0.0",
+	}, nil)
+
+	// Create transport with custom HTTP client that injects headers
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:   serverURL,
+		HTTPClient: createCustomHTTPClient(headers),
 	}
 
-	bodyJSON, err := json.Marshal(requestBody)
+	h.logger.Debug("Created MCP client and transport",
+		zap.String("clientName", "hyperion-mcp-discovery"),
+		zap.String("endpoint", serverURL))
+
+	// Connect to the remote MCP server
+	h.logger.Debug("Attempting SDK connection to MCP server")
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewReader(bodyJSON))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-
-	// Apply custom headers if provided
-	for key, val := range headers {
-		if strVal, ok := val.(string); ok {
-			req.Header.Set(key, strVal)
+		// Check if this is a session-related error
+		if isSessionError(err) {
+			h.logger.Info("Modern MCP protocol failed, falling back to legacy protocol",
+				zap.String("serverURL", serverURL),
+				zap.String("reason", "session not supported"))
+			// Fall back to legacy stateless JSON-RPC
+			return h.discoverLegacyTools(ctx, serverURL, headers)
 		}
+		h.logger.Debug("SDK connection failed",
+			zap.String("serverURL", serverURL),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to connect to MCP server: %w", err)
 	}
+	defer session.Close()
 
-	// Execute request
-	resp, err := h.httpClient.Do(req)
+	h.logger.Debug("SDK connection successful, calling ListTools")
+
+	// Call tools/list via the SDK
+	listResult, err := session.ListTools(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to server: %w", err)
+		// Check if this is a session-related error during the call
+		if isSessionError(err) {
+			h.logger.Info("Modern MCP protocol failed during ListTools, falling back to legacy protocol",
+				zap.String("serverURL", serverURL),
+				zap.String("reason", "session error during API call"))
+			// Fall back to legacy stateless JSON-RPC
+			return h.discoverLegacyTools(ctx, serverURL, headers)
+		}
+		h.logger.Debug("ListTools API call failed",
+			zap.String("serverURL", serverURL),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
-	defer resp.Body.Close()
 
-	// Read response
-	respBody, err := io.ReadAll(resp.Body)
+	h.logger.Info("Modern MCP protocol successful",
+		zap.String("serverURL", serverURL),
+		zap.Int("toolCount", len(listResult.Tools)))
+
+	// Convert SDK tools to map format for compatibility
+	tools := make([]map[string]interface{}, 0, len(listResult.Tools))
+	for _, tool := range listResult.Tools {
+		toolMap := map[string]interface{}{
+			"name":        tool.Name,
+			"description": tool.Description,
+			"inputSchema": tool.InputSchema,
+		}
+		tools = append(tools, toolMap)
+		h.logger.Debug("Discovered tool",
+			zap.String("serverURL", serverURL),
+			zap.String("toolName", tool.Name))
+	}
+
+	h.logger.Debug("Tool discovery complete",
+		zap.String("serverURL", serverURL),
+		zap.Int("totalTools", len(tools)))
+
+	return tools, nil
+}
+
+// discoverServerResources connects to an MCP server and lists its resources using the official SDK
+func (h *ToolsDiscoveryHandler) discoverServerResources(ctx context.Context, serverURL string, headers map[string]interface{}) ([]map[string]interface{}, error) {
+	// Log discovery attempt with URL and header info (keys only, not values for security)
+	headerKeys := make([]string, 0, len(headers))
+	for k := range headers {
+		headerKeys = append(headerKeys, k)
+	}
+	h.logger.Debug("Starting resource discovery",
+		zap.String("serverURL", serverURL),
+		zap.Int("headerCount", len(headers)),
+		zap.Strings("headerKeys", headerKeys))
+
+	// Try modern session-based MCP protocol first
+	h.logger.Info("Attempting modern MCP protocol (session-based) for resources",
+		zap.String("serverURL", serverURL))
+
+	// Create MCP client using official SDK
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "hyperion-mcp-discovery",
+		Version: "1.0.0",
+	}, nil)
+
+	// Create transport with custom HTTP client that injects headers
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:   serverURL,
+		HTTPClient: createCustomHTTPClient(headers),
+	}
+
+	h.logger.Debug("Created MCP client and transport for resources",
+		zap.String("clientName", "hyperion-mcp-discovery"),
+		zap.String("endpoint", serverURL))
+
+	// Connect to the remote MCP server
+	h.logger.Debug("Attempting SDK connection to MCP server for resources")
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		// Check if this is a session-related error
+		if isSessionError(err) {
+			h.logger.Info("Modern MCP protocol failed for resources, falling back to legacy protocol",
+				zap.String("serverURL", serverURL),
+				zap.String("reason", "session not supported"))
+			// Fall back to legacy stateless JSON-RPC
+			return h.discoverLegacyResources(ctx, serverURL, headers)
+		}
+		h.logger.Debug("SDK connection failed for resources",
+			zap.String("serverURL", serverURL),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to connect to MCP server: %w", err)
+	}
+	defer session.Close()
+
+	h.logger.Debug("SDK connection successful, calling ListResources")
+
+	// Call resources/list via the SDK
+	listResult, err := session.ListResources(ctx, nil)
+	if err != nil {
+		// Check if this is a session-related error during the call
+		if isSessionError(err) {
+			h.logger.Info("Modern MCP protocol failed during ListResources, falling back to legacy protocol",
+				zap.String("serverURL", serverURL),
+				zap.String("reason", "session error during API call"))
+			// Fall back to legacy stateless JSON-RPC
+			return h.discoverLegacyResources(ctx, serverURL, headers)
+		}
+		h.logger.Debug("ListResources API call failed",
+			zap.String("serverURL", serverURL),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to list resources: %w", err)
 	}
 
-	// Check for HTTP error
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(respBody))
+	h.logger.Info("Modern MCP protocol successful for resources",
+		zap.String("serverURL", serverURL),
+		zap.Int("resourceCount", len(listResult.Resources)))
+
+	// Convert SDK resources to map format for compatibility
+	resources := make([]map[string]interface{}, 0, len(listResult.Resources))
+	for _, resource := range listResult.Resources {
+		resourceMap := map[string]interface{}{
+			"uri":         resource.URI,
+			"name":        resource.Name,
+			"description": resource.Description,
+		}
+		if resource.MIMEType != "" {
+			resourceMap["mimeType"] = resource.MIMEType
+		}
+		resources = append(resources, resourceMap)
+		h.logger.Debug("Discovered resource",
+			zap.String("serverURL", serverURL),
+			zap.String("resourceURI", resource.URI),
+			zap.String("resourceName", resource.Name))
 	}
 
-	// Parse MCP response
-	var mcpResponse struct {
-		Result struct {
-			Tools []map[string]interface{} `json:"tools"`
-		} `json:"result"`
-		Error *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
+	h.logger.Debug("Resource discovery complete",
+		zap.String("serverURL", serverURL),
+		zap.Int("totalResources", len(resources)))
+
+	return resources, nil
+}
+
+// discoverServerPrompts connects to an MCP server and lists its prompts using the official SDK
+func (h *ToolsDiscoveryHandler) discoverServerPrompts(ctx context.Context, serverURL string, headers map[string]interface{}) ([]map[string]interface{}, error) {
+	// Log discovery attempt with URL and header info (keys only, not values for security)
+	headerKeys := make([]string, 0, len(headers))
+	for k := range headers {
+		headerKeys = append(headerKeys, k)
+	}
+	h.logger.Debug("Starting prompt discovery",
+		zap.String("serverURL", serverURL),
+		zap.Int("headerCount", len(headers)),
+		zap.Strings("headerKeys", headerKeys))
+
+	// Try modern session-based MCP protocol first
+	h.logger.Info("Attempting modern MCP protocol (session-based) for prompts",
+		zap.String("serverURL", serverURL))
+
+	// Create MCP client using official SDK
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "hyperion-mcp-discovery",
+		Version: "1.0.0",
+	}, nil)
+
+	// Create transport with custom HTTP client that injects headers
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:   serverURL,
+		HTTPClient: createCustomHTTPClient(headers),
 	}
 
-	if err := json.Unmarshal(respBody, &mcpResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	h.logger.Debug("Created MCP client and transport for prompts",
+		zap.String("clientName", "hyperion-mcp-discovery"),
+		zap.String("endpoint", serverURL))
+
+	// Connect to the remote MCP server
+	h.logger.Debug("Attempting SDK connection to MCP server for prompts")
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		// Check if this is a session-related error
+		if isSessionError(err) {
+			h.logger.Info("Modern MCP protocol failed for prompts, falling back to legacy protocol",
+				zap.String("serverURL", serverURL),
+				zap.String("reason", "session not supported"))
+			// Fall back to legacy stateless JSON-RPC
+			return h.discoverLegacyPrompts(ctx, serverURL, headers)
+		}
+		h.logger.Debug("SDK connection failed for prompts",
+			zap.String("serverURL", serverURL),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to connect to MCP server: %w", err)
+	}
+	defer session.Close()
+
+	h.logger.Debug("SDK connection successful, calling ListPrompts")
+
+	// Call prompts/list via the SDK
+	listResult, err := session.ListPrompts(ctx, nil)
+	if err != nil {
+		// Check if this is a session-related error during the call
+		if isSessionError(err) {
+			h.logger.Info("Modern MCP protocol failed during ListPrompts, falling back to legacy protocol",
+				zap.String("serverURL", serverURL),
+				zap.String("reason", "session error during API call"))
+			// Fall back to legacy stateless JSON-RPC
+			return h.discoverLegacyPrompts(ctx, serverURL, headers)
+		}
+		h.logger.Debug("ListPrompts API call failed",
+			zap.String("serverURL", serverURL),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to list prompts: %w", err)
 	}
 
-	// Check for MCP error
-	if mcpResponse.Error != nil {
-		return nil, fmt.Errorf("MCP error %d: %s", mcpResponse.Error.Code, mcpResponse.Error.Message)
+	h.logger.Info("Modern MCP protocol successful for prompts",
+		zap.String("serverURL", serverURL),
+		zap.Int("promptCount", len(listResult.Prompts)))
+
+	// Convert SDK prompts to map format for compatibility
+	prompts := make([]map[string]interface{}, 0, len(listResult.Prompts))
+	for _, prompt := range listResult.Prompts {
+		promptMap := map[string]interface{}{
+			"name":        prompt.Name,
+			"description": prompt.Description,
+		}
+		if len(prompt.Arguments) > 0 {
+			// Convert arguments to []map[string]interface{}
+			args := make([]map[string]interface{}, 0, len(prompt.Arguments))
+			for _, arg := range prompt.Arguments {
+				argMap := map[string]interface{}{
+					"name":        arg.Name,
+					"description": arg.Description,
+					"required":    arg.Required,
+				}
+				args = append(args, argMap)
+			}
+			promptMap["arguments"] = args
+		}
+		prompts = append(prompts, promptMap)
+		h.logger.Debug("Discovered prompt",
+			zap.String("serverURL", serverURL),
+			zap.String("promptName", prompt.Name))
 	}
 
-	return mcpResponse.Result.Tools, nil
+	h.logger.Debug("Prompt discovery complete",
+		zap.String("serverURL", serverURL),
+		zap.Int("totalPrompts", len(prompts)))
+
+	return prompts, nil
 }
