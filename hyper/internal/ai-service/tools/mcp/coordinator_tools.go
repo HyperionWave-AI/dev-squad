@@ -3538,8 +3538,206 @@ Acknowledge the message and continue your work.
 		zap.Int("completedTodos", completedTodos),
 		zap.Int("totalTodos", len(agentTask.Todos)))
 
-	// Emit progress notification - subchat completed
+	// Send completion message to subchat WebSocket
+	completionMessage := fmt.Sprintf("✅ **Task Completed!**\n\n**Agent:** %s\n**TODOs Completed:** %d/%d\n**Tool Calls:** %d\n**Files Modified:** %v\n\nThe task has been successfully completed. You can ask me questions or request changes!",
+		agentTask.AgentName, completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+	// Save completion message to database
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", completionMessage, finalCompanyID)
+	if err != nil {
+		t.logger.Warn("Failed to save completion message to database",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	// Emit completion message to WebSocket
+	handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, completionMessage)
 	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("✅ Subchat completed: %s", agentTask.AgentName))
+
+	t.logger.Info("💬 Task completed - now waiting for user messages",
+		zap.String("subchatId", subchatID),
+		zap.String("sessionId", chatSession.ID.Hex()))
+
+	// KEEP SUBCHAT ALIVE: Instead of returning, wait for new user messages
+	// This allows the user to continue interacting with the agent after task completion
+	for {
+		select {
+		case <-ctx.Done():
+			t.logger.Info("⏱️ Context cancelled while waiting for user messages",
+				zap.String("subchatId", subchatID))
+			return
+
+		case <-notifyCh:
+			// USER MESSAGE RECEIVED AFTER COMPLETION
+			t.logger.Info("💬 User message received after task completion - resuming AI",
+				zap.String("sessionId", chatSession.ID.Hex()),
+				zap.String("subchatId", subchatID))
+
+			// Fetch all messages including new user message
+			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
+			if err != nil {
+				t.logger.Error("Failed to fetch messages after completion", zap.Error(err))
+				continue
+			}
+
+			// Extract latest user message
+			var latestUserMessage string
+			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
+				if messagesResp.Messages[i].Role == "user" {
+					latestUserMessage = messagesResp.Messages[i].Content
+					break
+				}
+			}
+
+			t.logger.Info("🔄 Resuming AI after task completion with user question",
+				zap.String("userMessage", latestUserMessage),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Build post-completion system prompt
+			postCompletionPrompt := fmt.Sprintf(`You are %s. You have successfully completed the assigned task.
+
+**Task Summary:**
+- Agent: %s
+- TODOs Completed: %d/%d
+- Tool Calls: %d
+- Files Modified: %v
+
+The user has sent you a new message. You should:
+1. Answer their question or address their request directly
+2. Use tools if needed to implement changes or gather information
+3. Be helpful and responsive
+4. If they want changes, implement them using the available tools
+
+You have access to all the same tools as before. You can read files, write files, run commands, etc.`,
+				agentTask.AgentName, agentTask.AgentName, completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+			// Rebuild message context with post-completion system prompt
+			messages = []aiservice.Message{
+				{Role: "system", Content: postCompletionPrompt},
+			}
+			for _, msg := range messagesResp.Messages {
+				messages = append(messages, aiservice.Message{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+
+			t.logger.Info("🚀 Starting new AI stream for post-completion conversation",
+				zap.Int("messageCount", len(messages)),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Start new AI stream with updated context
+			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+			if err != nil {
+				t.logger.Error("Failed to start AI stream after completion", zap.Error(err))
+				continue
+			}
+
+			// Process the new AI stream (reuse existing event processing logic)
+			// Reset counters for new conversation turn
+			fullResponse = ""
+
+			for {
+				select {
+				case <-ctx.Done():
+					t.logger.Warn("⏱️ Context cancelled during post-completion stream",
+						zap.String("subchatId", subchatID))
+					return
+
+				case <-notifyCh:
+					// Another interrupt during post-completion conversation
+					t.logger.Info("💬 Another user message during post-completion conversation",
+						zap.String("sessionId", chatSession.ID.Hex()))
+					// Drain current stream
+					if aiStream != nil {
+						go func() {
+							for range aiStream {
+								// discard remaining events
+							}
+						}()
+					}
+					// Break to outer loop to fetch and process new message
+					goto FETCH_NEW_MESSAGE
+
+				case event, ok := <-aiStream:
+					if !ok {
+						// Stream closed naturally
+						t.logger.Info("✅ Post-completion stream completed",
+							zap.String("subchatId", subchatID))
+						goto WAIT_FOR_NEXT_MESSAGE
+					}
+
+					switch event.Type {
+					case aiservice.StreamEventToken:
+						fullResponse += event.Content
+
+						// Stream AI messages to progress channel
+						if event.Content != "" && !isSystemEnforcementMessage(event.Content) {
+							trimmed := strings.TrimSpace(event.Content)
+							if len(trimmed) > 5 {
+								// Save to database
+								_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, finalCompanyID)
+								if err != nil {
+									t.logger.Warn("Failed to save streaming text chunk",
+										zap.String("subchatId", subchatID),
+										zap.Error(err))
+								}
+
+								// Send to WebSocket
+								handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, event.Content)
+							}
+						}
+
+					case aiservice.StreamEventToolCall:
+						t.logger.Info("🔧 Tool call in post-completion conversation",
+							zap.String("subchatId", subchatID),
+							zap.String("toolName", event.ToolCall.Name))
+
+						// Execute tool and emit progress
+						plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)
+						handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishToolCall)
+
+						// Save tool call
+						_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, finalCompanyID)
+						if err != nil {
+							t.logger.Error("Failed to save tool call", zap.Error(err))
+						}
+
+					case aiservice.StreamEventToolResult:
+						t.logger.Info("✓ Tool result in post-completion conversation",
+							zap.String("subchatId", subchatID),
+							zap.String("toolName", event.ToolResult.Name))
+
+						// Save tool result
+						var output interface{}
+						if event.ToolResult.Error != "" {
+							output = event.ToolResult.Error
+						} else {
+							output = event.ToolResult.Output
+						}
+						outputStr := t.summarizeToolResult(event.ToolResult.Name, output)
+
+						_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, outputStr, event.ToolResult.Error, event.ToolResult.DurationMs, finalCompanyID)
+						if err != nil {
+							t.logger.Error("Failed to save tool result", zap.Error(err))
+						}
+
+					case aiservice.StreamEventError:
+						t.logger.Error("❌ AI service error during post-completion conversation",
+							zap.String("subchatId", subchatID),
+							zap.String("error", event.Error))
+						goto WAIT_FOR_NEXT_MESSAGE
+					}
+				}
+			}
+
+		FETCH_NEW_MESSAGE:
+			continue
+
+		WAIT_FOR_NEXT_MESSAGE:
+			continue
+		}
+	}
 }
 
 // buildExecutionPhaseSystemPrompt creates a strict system prompt using OPERATIONAL enforcement language
