@@ -570,7 +570,7 @@ func main() {
 
 	// Conditionally register MCP hub tools for external MCP client discovery
 	if mcpHubEnabled {
-		toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer)
+		toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer, logger)
 		if err := toolsDiscoveryHandler.RegisterToolsDiscoveryTools(mcpServer); err != nil {
 			logger.Fatal("Failed to register MCP hub tools", zap.Error(err))
 		}

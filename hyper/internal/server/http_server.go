@@ -177,7 +177,7 @@ func StartHTTPServer(
 	// Create tools discovery handler for MCP management tools
 	// Use the toolsStorage passed from main.go (initialized once)
 	// Pass mcpServer instance for direct tool execution (no HTTP bridge needed)
-	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer)
+	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer, logger)
 	logger.Info("Tools discovery handler created with direct MCP server access")
 
 	// Register MCP tools with the chat service
