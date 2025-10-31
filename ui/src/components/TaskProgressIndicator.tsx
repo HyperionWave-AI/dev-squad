@@ -40,6 +40,19 @@ const shimmer = keyframes`
   }
 `;
 
+// Typing dots animation
+const typingDots = keyframes`
+  0%, 20% {
+    opacity: 0.2;
+  }
+  40% {
+    opacity: 1;
+  }
+  60%, 100% {
+    opacity: 0.2;
+  }
+`;
+
 interface ToolCallInfo {
   id: string;
   tool: string;
@@ -196,9 +209,48 @@ export function TaskProgressIndicator({
                 variant="body1"
                 color={primaryColor}
                 fontWeight={600}
-                sx={{ mb: 0.5 }}
+                sx={{ mb: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}
               >
-                {mode === 'thinking' && 'AI is thinking...'}
+                {mode === 'thinking' && (
+                  <>
+                    AI is thinking
+                    <Box component="span" sx={{ display: 'inline-flex', gap: 0.3, ml: 0.3 }}>
+                      <Box
+                        component="span"
+                        sx={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          backgroundColor: 'currentColor',
+                          animation: `${typingDots} 1.4s infinite`,
+                          animationDelay: '0s',
+                        }}
+                      />
+                      <Box
+                        component="span"
+                        sx={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          backgroundColor: 'currentColor',
+                          animation: `${typingDots} 1.4s infinite`,
+                          animationDelay: '0.2s',
+                        }}
+                      />
+                      <Box
+                        component="span"
+                        sx={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          backgroundColor: 'currentColor',
+                          animation: `${typingDots} 1.4s infinite`,
+                          animationDelay: '0.4s',
+                        }}
+                      />
+                    </Box>
+                  </>
+                )}
                 {mode === 'orchestrating' && 'Orchestrating task...'}
                 {mode === 'working' && 'Executing task...'}
               </Typography>
