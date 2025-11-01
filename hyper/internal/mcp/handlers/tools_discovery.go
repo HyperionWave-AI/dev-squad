@@ -59,6 +59,25 @@ func createCustomHTTPClient(headers map[string]interface{}) *http.Client {
 	}
 }
 
+// truncateJSON safely truncates JSON to maxBytes for logging previews
+func truncateJSON(data interface{}, maxBytes int) string {
+	if data == nil {
+		return "{}"
+	}
+
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Sprintf("{error marshaling: %v}", err)
+	}
+
+	if len(jsonBytes) <= maxBytes {
+		return string(jsonBytes)
+	}
+
+	truncated := string(jsonBytes[:maxBytes])
+	return truncated + "...[truncated]"
+}
+
 // legacyJSONRPCRequest represents a JSON-RPC 2.0 request for legacy MCP servers
 type legacyJSONRPCRequest struct {
 	JSONRPC string                 `json:"jsonrpc"`
@@ -399,7 +418,15 @@ func (h *ToolsDiscoveryHandler) registerDiscoverTools(server *mcp.Server) error 
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
 		}
-		result, _, err := h.HandleDiscoverTools(ctx, args)
+		result, extractedData, err := h.HandleDiscoverTools(ctx, args)
+		if err != nil {
+			return result, err
+		}
+		// Wrap array results in an object for MCP protocol compliance
+		// StructuredContent must be an object, not an array
+		if extractedData != nil {
+			result.StructuredContent = map[string]interface{}{"tools": extractedData}
+		}
 		return result, err
 	})
 
@@ -428,7 +455,22 @@ func (h *ToolsDiscoveryHandler) registerGetToolSchema(server *mcp.Server) error 
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
 		}
-		result, _, err := h.HandleGetToolSchema(ctx, args)
+		result, extractedData, err := h.HandleGetToolSchema(ctx, args)
+		if err != nil {
+			return result, err
+		}
+		// MCP protocol requires StructuredContent to be an object (map)
+		// Wrap non-object types in {"data": ...}
+		if extractedData != nil {
+			switch extractedData.(type) {
+			case map[string]interface{}:
+				// Already an object, use as-is
+				result.StructuredContent = extractedData
+			default:
+				// Wrap primitives, arrays, etc. in an object
+				result.StructuredContent = map[string]interface{}{"data": extractedData}
+			}
+		}
 		return result, err
 	})
 
@@ -461,7 +503,24 @@ func (h *ToolsDiscoveryHandler) registerExecuteTool(server *mcp.Server) error {
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
 		}
-		result, _, err := h.HandleExecuteTool(ctx, args)
+		result, extractedData, err := h.HandleExecuteTool(ctx, args)
+		if err != nil {
+			return result, err
+		}
+		// MCP protocol requires StructuredContent to be an object (map)
+		// Wrap non-object types in {"data": ...}
+		if extractedData != nil {
+			switch extractedData.(type) {
+			case map[string]interface{}:
+				// Already an object, use as-is
+				result.StructuredContent = extractedData
+			default:
+				// Wrap primitives, arrays, etc. in an object
+				result.StructuredContent = map[string]interface{}{"data": extractedData}
+			}
+		}
+		h.logger.Debug("execute_tool registration: populated StructuredContent",
+			zap.String("preview", truncateJSON(result.StructuredContent, 200)))
 		return result, err
 	})
 
@@ -470,9 +529,13 @@ func (h *ToolsDiscoveryHandler) registerExecuteTool(server *mcp.Server) error {
 
 // HandleDiscoverTools handles the discover_tools tool call
 func (h *ToolsDiscoveryHandler) HandleDiscoverTools(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	h.logger.Info("discover_tools request started",
+		zap.String("argsPreview", truncateJSON(args, 200)))
+
 	// Extract query (required)
 	query, ok := args["query"].(string)
 	if !ok || query == "" {
+		h.logger.Warn("discover_tools failed: missing or invalid query parameter")
 		return createErrorResult("query parameter is required and must be a non-empty string"), nil, nil
 	}
 
@@ -488,9 +551,17 @@ func (h *ToolsDiscoveryHandler) HandleDiscoverTools(ctx context.Context, args ma
 		}
 	}
 
+	h.logger.Info("searching for tools",
+		zap.String("query", query),
+		zap.Int("limit", limit))
+
 	// Search for tools
 	matches, err := h.toolsStorage.SearchTools(ctx, query, limit)
 	if err != nil {
+		h.logger.Error("discover_tools failed",
+			zap.String("query", query),
+			zap.Int("limit", limit),
+			zap.Error(err))
 		return createErrorResult(fmt.Sprintf("failed to search tools: %s", err.Error())), nil, nil
 	}
 
@@ -513,6 +584,11 @@ func (h *ToolsDiscoveryHandler) HandleDiscoverTools(ctx context.Context, args ma
 
 	resultText := fmt.Sprintf("Found %d matching tools:\n\n%s", len(matches), string(resultsJSON))
 
+	h.logger.Info("discover_tools completed successfully",
+		zap.String("query", query),
+		zap.Int("matchCount", len(matches)),
+		zap.String("resultsPreview", truncateJSON(matches, 200)))
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: resultText},
@@ -522,15 +598,25 @@ func (h *ToolsDiscoveryHandler) HandleDiscoverTools(ctx context.Context, args ma
 
 // HandleGetToolSchema handles the get_tool_schema tool call
 func (h *ToolsDiscoveryHandler) HandleGetToolSchema(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	h.logger.Info("get_tool_schema request started",
+		zap.String("argsPreview", truncateJSON(args, 200)))
+
 	// Extract toolName (required)
 	toolName, ok := args["toolName"].(string)
 	if !ok || toolName == "" {
+		h.logger.Warn("get_tool_schema failed: missing or invalid toolName parameter")
 		return createErrorResult("toolName parameter is required and must be a non-empty string"), nil, nil
 	}
+
+	h.logger.Info("fetching tool schema",
+		zap.String("toolName", toolName))
 
 	// Get tool schema
 	metadata, err := h.toolsStorage.GetToolSchema(ctx, toolName)
 	if err != nil {
+		h.logger.Error("get_tool_schema failed",
+			zap.String("toolName", toolName),
+			zap.Error(err))
 		return createErrorResult(fmt.Sprintf("failed to get tool schema: %s", err.Error())), nil, nil
 	}
 
@@ -542,6 +628,10 @@ func (h *ToolsDiscoveryHandler) HandleGetToolSchema(ctx context.Context, args ma
 
 	resultText := fmt.Sprintf("Tool Schema for '%s':\n\n%s", toolName, string(schemaJSON))
 
+	h.logger.Info("get_tool_schema completed successfully",
+		zap.String("toolName", toolName),
+		zap.String("schemaPreview", truncateJSON(metadata, 200)))
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: resultText},
@@ -551,21 +641,34 @@ func (h *ToolsDiscoveryHandler) HandleGetToolSchema(ctx context.Context, args ma
 
 // HandleExecuteTool handles the execute_tool tool call
 func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	h.logger.Info("execute_tool request started",
+		zap.String("argsPreview", truncateJSON(args, 200)))
+
 	// Extract toolName (required)
 	toolName, ok := args["toolName"].(string)
 	if !ok || toolName == "" {
+		h.logger.Warn("execute_tool failed: missing or invalid toolName parameter")
 		return createErrorResult("toolName parameter is required and must be a non-empty string"), nil, nil
 	}
 
 	// Extract args (required)
 	toolArgs, ok := args["args"].(map[string]interface{})
 	if !ok {
+		h.logger.Warn("execute_tool failed: missing or invalid args parameter",
+			zap.String("toolName", toolName))
 		return createErrorResult("args parameter is required and must be a JSON object"), nil, nil
 	}
+
+	h.logger.Info("executing tool",
+		zap.String("toolName", toolName),
+		zap.String("toolArgsPreview", truncateJSON(toolArgs, 200)))
 
 	// Look up the tool metadata to find which server it belongs to
 	toolMetadata, err := h.toolsStorage.GetToolSchema(ctx, toolName)
 	if err != nil {
+		h.logger.Error("execute_tool failed: tool not found",
+			zap.String("toolName", toolName),
+			zap.Error(err))
 		return createErrorResult(fmt.Sprintf("tool not found: %s", err.Error())), nil, nil
 	}
 
@@ -581,16 +684,103 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 	// Get the server metadata to find the server URL and headers
 	serverMetadata, err := h.toolsStorage.GetServer(ctx, toolMetadata.ServerName)
 	if err != nil {
+		h.logger.Error("execute_tool failed: server not found",
+			zap.String("toolName", toolName),
+			zap.String("serverName", toolMetadata.ServerName),
+			zap.Error(err))
 		return createErrorResult(fmt.Sprintf("failed to get server info: %s", err.Error())), nil, nil
 	}
+
+	h.logger.Info("calling tool on remote MCP server",
+		zap.String("toolName", toolName),
+		zap.String("serverName", toolMetadata.ServerName),
+		zap.String("serverURL", serverMetadata.ServerURL))
 
 	// Execute the tool on the remote MCP server with custom headers
 	result, err := h.executeToolOnServer(ctx, serverMetadata.ServerURL, serverMetadata.Headers, toolName, toolArgs)
 	if err != nil {
+		h.logger.Error("execute_tool failed: remote execution error",
+			zap.String("toolName", toolName),
+			zap.String("serverName", toolMetadata.ServerName),
+			zap.String("serverURL", serverMetadata.ServerURL),
+			zap.Error(err))
 		return createErrorResult(fmt.Sprintf("failed to execute tool: %s", err.Error())), nil, nil
 	}
 
-	return result, result, nil
+	h.logger.Info("execute_tool completed successfully",
+		zap.String("toolName", toolName),
+		zap.String("serverName", toolMetadata.ServerName),
+		zap.String("resultPreview", truncateJSON(result, 200)))
+
+	extractedData := extractResultData(h, result)
+	h.logger.Info("execute_tool returning extracted data",
+		zap.String("extractedDataPreview", truncateJSON(extractedData, 200)))
+
+	return result, extractedData, nil
+}
+
+// extractResultData extracts meaningful data from CallToolResult for AI consumption
+// Priority: StructuredContent (if non-empty) > parsed Content[0].Text JSON > raw text
+func extractResultData(h *ToolsDiscoveryHandler, result *mcp.CallToolResult) interface{} {
+	if result == nil {
+		h.logger.Debug("extractResultData: result is nil")
+		return nil
+	}
+
+	h.logger.Debug("extractResultData: checking StructuredContent",
+		zap.Any("StructuredContent", result.StructuredContent),
+		zap.Int("ContentLength", len(result.Content)))
+
+	// Check if StructuredContent has meaningful data (not empty object/array)
+	if result.StructuredContent != nil {
+		switch v := result.StructuredContent.(type) {
+		case map[string]interface{}:
+			h.logger.Debug("extractResultData: StructuredContent is map", zap.Int("mapLen", len(v)))
+			if len(v) > 0 {
+				h.logger.Info("extractResultData: returning non-empty StructuredContent map")
+				return result.StructuredContent
+			}
+		case []interface{}:
+			h.logger.Debug("extractResultData: StructuredContent is array", zap.Int("arrayLen", len(v)))
+			if len(v) > 0 {
+				h.logger.Info("extractResultData: returning non-empty StructuredContent array")
+				return result.StructuredContent
+			}
+		default:
+			h.logger.Debug("extractResultData: StructuredContent is other type", zap.String("type", fmt.Sprintf("%T", v)))
+			// Non-empty primitive or other type
+			return result.StructuredContent
+		}
+	}
+
+	// Try to extract and parse Content[0].Text as JSON
+	if len(result.Content) > 0 {
+		h.logger.Debug("extractResultData: checking Content array", zap.Int("len", len(result.Content)))
+		if textContent, ok := result.Content[0].(*mcp.TextContent); ok && textContent.Text != "" {
+			text := textContent.Text
+			h.logger.Debug("extractResultData: found TextContent", zap.String("textPreview", truncateJSON(text, 100)))
+
+			// Try to parse as JSON
+			var jsonData interface{}
+			if err := json.Unmarshal([]byte(text), &jsonData); err == nil {
+				h.logger.Info("extractResultData: successfully parsed JSON from Content", zap.String("dataPreview", truncateJSON(jsonData, 100)))
+				// Successfully parsed JSON - return the parsed object
+				return jsonData
+			} else {
+				h.logger.Warn("extractResultData: failed to parse JSON from Content", zap.Error(err))
+			}
+
+			// Not valid JSON, return raw text
+			h.logger.Info("extractResultData: returning raw text from Content")
+			return text
+		} else {
+			h.logger.Debug("extractResultData: Content[0] is not TextContent or is empty")
+		}
+	}
+
+	// Fallback to StructuredContent even if empty (maintain backward compatibility)
+	h.logger.Warn("extractResultData: falling back to StructuredContent (may be empty)")
+	return result.StructuredContent
 }
 
 // executeToolOnServer executes a tool on a remote MCP server using the official SDK
@@ -619,11 +809,23 @@ func (h *ToolsDiscoveryHandler) executeToolOnServer(ctx context.Context, serverU
 		Name:      toolName,
 		Arguments: toolArgs,
 	})
+
+	// If we got a result, check if it's an error result
+	// MCP protocol: tool errors should be returned as results with IsError=true
+	// rather than Go errors
+	if result != nil {
+		// If the result has IsError=true, return it as-is (this is a tool execution error, not a connection error)
+		// Even if err != nil, the result takes precedence
+		return result, nil
+	}
+
+	// No result returned - this is a connection/protocol error
 	if err != nil {
 		return nil, fmt.Errorf("failed to call tool: %w", err)
 	}
 
-	return result, nil
+	// Shouldn't reach here, but handle gracefully
+	return nil, fmt.Errorf("no result returned from tool call")
 }
 
 // registerMCPAddServer registers the mcp_add_server tool
