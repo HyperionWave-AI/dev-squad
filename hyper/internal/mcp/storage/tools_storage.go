@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -102,17 +103,39 @@ type ToolsStorage struct {
 	promptsCollection   *mongo.Collection
 	serversCollection   *mongo.Collection
 	qdrantClient        QdrantClientInterface
+	toolsCollectionName string
 	logger              *zap.Logger
 }
 
 // NewToolsStorage creates a new tools storage instance
 func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface, logger *zap.Logger) (*ToolsStorage, error) {
+	// Read base collection name from environment variable with default fallback
+	baseCollectionName := os.Getenv("MCP_TOOLS_COLLECTION_NAME")
+	if baseCollectionName == "" {
+		baseCollectionName = "mcp-tools"
+	}
+
+	// Get vector dimensions from qdrant client to create dimension-specific collection name
+	// This prevents dimension mismatch errors when switching embedding providers
+	vectorDim := 768 // Default fallback (Ollama nomic-embed-text)
+	if qdrantClientTyped, ok := qdrantClient.(*QdrantClient); ok {
+		vectorDim = qdrantClientTyped.vectorDimension
+	}
+
+	// Append dimension to collection name (e.g., "mcp-tools_1024")
+	collectionName := fmt.Sprintf("%s_%d", baseCollectionName, vectorDim)
+
+	logger.Info("Initializing MCP tools storage",
+		zap.String("collection", collectionName),
+		zap.Int("vectorDimension", vectorDim))
+
 	storage := &ToolsStorage{
 		toolsCollection:     db.Collection("tools"),
 		resourcesCollection: db.Collection("mcp_resources"),
 		promptsCollection:   db.Collection("mcp_prompts"),
 		serversCollection:   db.Collection("mcp_servers"),
 		qdrantClient:        qdrantClient,
+		toolsCollectionName: collectionName,
 		logger:              logger,
 	}
 
@@ -262,10 +285,10 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 		}
 
 		// Ensure collection exists with correct dimensions
-		if err := s.qdrantClient.EnsureCollection("mcp-tools", vectorDim); err != nil {
+		if err := s.qdrantClient.EnsureCollection(s.toolsCollectionName, vectorDim); err != nil {
 			// Log error but don't fail - MongoDB has the data
 			s.logger.Warn("Failed to ensure Qdrant collection",
-				zap.String("collection", "mcp-tools"),
+				zap.String("collection", s.toolsCollectionName),
 				zap.Int("vectorDim", vectorDim),
 				zap.Error(err))
 		} else {
@@ -278,10 +301,10 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 				"serverName": serverName,
 			}
 
-			if err := s.qdrantClient.StorePoint("mcp-tools", metadata.ID, searchableText, pointMetadata); err != nil {
+			if err := s.qdrantClient.StorePoint(s.toolsCollectionName, metadata.ID, searchableText, pointMetadata); err != nil {
 				// Log error but don't fail - MongoDB has the data
 				s.logger.Warn("Failed to store tool in Qdrant",
-					zap.String("collection", "mcp-tools"),
+					zap.String("collection", s.toolsCollectionName),
 					zap.String("toolName", toolName),
 					zap.String("toolId", metadata.ID),
 					zap.Error(err))
@@ -304,7 +327,7 @@ func (s *ToolsStorage) SearchTools(ctx context.Context, query string, limit int)
 
 	// Try Qdrant vector search first
 	if s.qdrantClient != nil {
-		results, err := s.qdrantClient.SearchSimilar("mcp-tools", query, limit)
+		results, err := s.qdrantClient.SearchSimilar(s.toolsCollectionName, query, limit)
 		if err == nil && len(results) > 0 {
 			// Convert QdrantQueryResult to ToolMatch
 			matches := make([]*ToolMatch, 0, len(results))
@@ -332,7 +355,7 @@ func (s *ToolsStorage) SearchTools(ctx context.Context, query string, limit int)
 		// Log error but continue to MongoDB fallback
 		if err != nil {
 			s.logger.Warn("Qdrant search failed, falling back to MongoDB",
-				zap.String("collection", "mcp-tools"),
+				zap.String("collection", s.toolsCollectionName),
 				zap.String("query", query),
 				zap.Int("limit", limit),
 				zap.Error(err))
@@ -523,10 +546,10 @@ func (s *ToolsStorage) RemoveServerTools(ctx context.Context, serverName string)
 	// Delete from Qdrant
 	if s.qdrantClient != nil && len(toolIDs) > 0 {
 		for _, toolID := range toolIDs {
-			if err := s.qdrantClient.DeletePoint("mcp-tools", toolID); err != nil {
+			if err := s.qdrantClient.DeletePoint(s.toolsCollectionName, toolID); err != nil {
 				// Log error but don't fail
 				s.logger.Warn("Failed to delete tool from Qdrant",
-					zap.String("collection", "mcp-tools"),
+					zap.String("collection", s.toolsCollectionName),
 					zap.String("toolId", toolID),
 					zap.String("serverName", serverName),
 					zap.Error(err))
