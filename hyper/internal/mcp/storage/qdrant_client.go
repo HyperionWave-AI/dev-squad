@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,8 +24,11 @@ import (
 type QdrantClientInterface interface {
 	EnsureCollection(collectionName string, vectorSize int) error
 	StorePoint(collectionName string, id string, text string, metadata map[string]interface{}) error
-	SearchSimilar(collectionName string, query string, limit int) ([]*QdrantQueryResult, error)
+	SearchSimilar(collectionName string, query string, limit int, voteBoost ...float64) ([]*QdrantQueryResult, error)
+	SearchWithVoteFilter(collectionName string, query string, limit int, minVoteScore int, voteBoost ...float64) ([]*QdrantQueryResult, error)
 	DeletePoint(collectionName string, pointID string) error
+	DeleteCollection(collectionName string) error
+	UpdatePointPayload(collectionName string, pointID string, payload map[string]interface{}) error
 	Ping(ctx context.Context) error
 }
 
@@ -268,8 +272,11 @@ func (c *QdrantClient) StorePoint(collectionName string, id string, text string,
 	return nil
 }
 
-// SearchSimilar searches for similar points in Qdrant
-func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit int) ([]*QdrantQueryResult, error) {
+// SearchSimilar searches for similar points in Qdrant with optional vote-based ranking
+// voteBoost is an optional parameter (default: 0.0 for no boosting)
+// Formula: finalScore = semanticScore * (1 + voteBoost * normalizedVoteScore)
+// normalizedVoteScore = voteScore / (1 + abs(voteScore)) to keep it in [-1, 1] range
+func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit int, voteBoost ...float64) ([]*QdrantQueryResult, error) {
 	// Generate query embedding using configured function
 	queryVector, err := c.embeddingFunc(query)
 	if err != nil {
@@ -316,6 +323,12 @@ func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit 
 		return nil, fmt.Errorf("failed to decode search response: %w", err)
 	}
 
+	// Get vote boost factor (default 0.0 = no boosting)
+	boostFactor := 0.0
+	if len(voteBoost) > 0 {
+		boostFactor = voteBoost[0]
+	}
+
 	// Convert to QueryResult format
 	results := make([]*QdrantQueryResult, len(searchResponse.Result))
 	for i, result := range searchResponse.Result {
@@ -327,10 +340,139 @@ func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit 
 			CreatedAt:  parseTimeFromPayload(result.Payload, "createdAt"),
 		}
 
+		finalScore := result.Score
+
+		// Apply vote boosting if enabled
+		if boostFactor > 0 {
+			voteScore := getIntFromPayload(result.Payload, "voteScore")
+			// Normalize vote score to [-1, 1] range using voteScore / (1 + abs(voteScore))
+			normalizedVote := 0.0
+			if voteScore != 0 {
+				normalizedVote = float64(voteScore) / (1.0 + float64(abs(voteScore)))
+			}
+			// Apply boost: finalScore = semanticScore * (1 + boostFactor * normalizedVote)
+			finalScore = result.Score * (1.0 + boostFactor*normalizedVote)
+		}
+
 		results[i] = &QdrantQueryResult{
 			Entry: entry,
-			Score: result.Score,
+			Score: finalScore,
 		}
+	}
+
+	// Re-sort by final score if vote boosting was applied
+	if boostFactor > 0 {
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Score > results[j].Score
+		})
+	}
+
+	return results, nil
+}
+
+// SearchWithVoteFilter searches for similar points with vote score filtering
+// Only returns entries with voteScore >= minVoteScore
+// Supports optional vote boosting like SearchSimilar
+func (c *QdrantClient) SearchWithVoteFilter(collectionName string, query string, limit int, minVoteScore int, voteBoost ...float64) ([]*QdrantQueryResult, error) {
+	// Generate query embedding using configured function
+	queryVector, err := c.embeddingFunc(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+	}
+
+	// Create search request with vote score filter
+	// Qdrant filter format: { "must": [{ "key": "voteScore", "range": { "gte": minVoteScore } }] }
+	searchPayload := map[string]interface{}{
+		"vector":       queryVector,
+		"limit":        limit,
+		"with_payload": true,
+		"filter": map[string]interface{}{
+			"must": []map[string]interface{}{
+				{
+					"key": "voteScore",
+					"range": map[string]interface{}{
+						"gte": minVoteScore,
+					},
+				},
+			},
+		},
+	}
+
+	payloadBytes, err := json.Marshal(searchPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal search payload: %w", err)
+	}
+
+	searchURL := fmt.Sprintf("%s/collections/%s/points/search", c.baseURL, collectionName)
+	req, err := http.NewRequest("POST", searchURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("search failed: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var searchResponse struct {
+		Result []QdrantSearchResult `json:"result"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&searchResponse); err != nil {
+		return nil, fmt.Errorf("failed to decode search response: %w", err)
+	}
+
+	// Get vote boost factor (default 0.0 = no boosting)
+	boostFactor := 0.0
+	if len(voteBoost) > 0 {
+		boostFactor = voteBoost[0]
+	}
+
+	// Convert to QueryResult format
+	results := make([]*QdrantQueryResult, len(searchResponse.Result))
+	for i, result := range searchResponse.Result {
+		entry := &KnowledgeEntry{
+			ID:         result.ID,
+			Collection: collectionName,
+			Text:       getStringFromPayload(result.Payload, "text"),
+			Metadata:   result.Payload,
+			CreatedAt:  parseTimeFromPayload(result.Payload, "createdAt"),
+		}
+
+		finalScore := result.Score
+
+		// Apply vote boosting if enabled
+		if boostFactor > 0 {
+			voteScore := getIntFromPayload(result.Payload, "voteScore")
+			// Normalize vote score to [-1, 1] range using voteScore / (1 + abs(voteScore))
+			normalizedVote := 0.0
+			if voteScore != 0 {
+				normalizedVote = float64(voteScore) / (1.0 + float64(abs(voteScore)))
+			}
+			// Apply boost: finalScore = semanticScore * (1 + boostFactor * normalizedVote)
+			finalScore = result.Score * (1.0 + boostFactor*normalizedVote)
+		}
+
+		results[i] = &QdrantQueryResult{
+			Entry: entry,
+			Score: finalScore,
+		}
+	}
+
+	// Re-sort by final score if vote boosting was applied
+	if boostFactor > 0 {
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Score > results[j].Score
+		})
 	}
 
 	return results, nil
@@ -370,6 +512,42 @@ func (c *QdrantClient) DeletePoint(collectionName string, pointID string) error 
 	return nil
 }
 
+// UpdatePointPayload updates only the payload of an existing point without re-embedding
+// This is efficient for syncing metadata like vote scores without regenerating vectors
+func (c *QdrantClient) UpdatePointPayload(collectionName string, pointID string, payload map[string]interface{}) error {
+	requestBody := map[string]interface{}{
+		"points": []string{pointID},
+		"payload": payload,
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload update request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points/payload", c.baseURL, collectionName)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update payload: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update payload (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // Helper functions
 
 // generateSimpleEmbedding generates a simple hash-based embedding (placeholder)
@@ -400,6 +578,32 @@ func getStringFromPayload(payload map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+// getIntFromPayload safely extracts an int from payload
+func getIntFromPayload(payload map[string]interface{}, key string) int {
+	if val, ok := payload[key]; ok {
+		// Handle different numeric types
+		switch v := val.(type) {
+		case int:
+			return v
+		case int64:
+			return int(v)
+		case float64:
+			return int(v)
+		case float32:
+			return int(v)
+		}
+	}
+	return 0
+}
+
+// abs returns the absolute value of an int
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // parseTimeFromPayload safely parses time from payload
