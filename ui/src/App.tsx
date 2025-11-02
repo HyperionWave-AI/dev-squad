@@ -22,7 +22,6 @@ import {
 } from '@mui/material';
 import {
   Dashboard,
-  Psychology,
   Refresh,
   Code,
   Chat,
@@ -33,11 +32,12 @@ import {
   Close as CloseIcon,
   LightMode,
   DarkMode,
-  Hub
+  Hub,
+  LibraryBooks
 } from '@mui/icons-material';
 import { getTheme, getPreferredTheme, setThemePreference } from './theme';
 import { KanbanBoard } from './components/KanbanBoard';
-import { KnowledgeBrowser } from './components/KnowledgeBrowser';
+import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
 import { CodeSearchPage } from './pages/CodeSearchPage';
 import { CodeChatPage } from './pages/CodeChatPage';
 import { HTTPToolsPage } from './pages/HTTPToolsPage';
@@ -87,7 +87,7 @@ function App() {
   const navigationItems = [
     { path: '/chat', label: 'Chat', icon: <Chat />, priority: 'high' },
     { path: '/tasks', label: 'Tasks', icon: <Dashboard />, priority: 'high' },
-    { path: '/knowledge', label: 'Knowledge', icon: <Psychology />, priority: 'medium' },
+    { path: '/knowledge', label: 'Knowledge', icon: <LibraryBooks />, priority: 'medium' },
     { path: '/code', label: 'Code', icon: <Code />, priority: 'medium' },
     { path: '/mcp-servers', label: 'MCP Servers', icon: <Hub />, priority: 'medium' },
     { path: '/tools', label: 'Tools', icon: <Build />, priority: 'low' },
@@ -538,7 +538,7 @@ function App() {
             <Route path="/" element={<Navigate to="/chat" replace />} />
             <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
             <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
-            <Route path="/knowledge" element={<KnowledgeBrowser key={refreshKey} />} />
+            <Route path="/knowledge" element={<KnowledgeBasePage key={refreshKey} />} />
             <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
             <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
             <Route path="/mcp-servers" element={<MCPServersPage key={refreshKey} />} />
