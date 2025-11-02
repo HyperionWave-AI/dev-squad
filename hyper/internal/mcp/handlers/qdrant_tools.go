@@ -14,8 +14,9 @@ import (
 
 // QdrantToolHandler manages MCP Qdrant tool operations
 type QdrantToolHandler struct {
-	qdrantClient     storage.QdrantClientInterface
-	metadataRegistry *ToolMetadataRegistry
+	qdrantClient      storage.QdrantClientInterface
+	knowledgeStorage  storage.KnowledgeStorage
+	metadataRegistry  *ToolMetadataRegistry
 }
 
 // NewQdrantToolHandler creates a new Qdrant tool handler
@@ -23,6 +24,11 @@ func NewQdrantToolHandler(client storage.QdrantClientInterface) *QdrantToolHandl
 	return &QdrantToolHandler{
 		qdrantClient: client,
 	}
+}
+
+// SetKnowledgeStorage sets the knowledge storage for vote syncing operations
+func (h *QdrantToolHandler) SetKnowledgeStorage(storage storage.KnowledgeStorage) {
+	h.knowledgeStorage = storage
 }
 
 // SetMetadataRegistry sets the metadata registry for tool indexing
