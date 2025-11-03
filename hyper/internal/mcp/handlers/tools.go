@@ -156,7 +156,7 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 func (h *ToolHandler) registerUpsertKnowledge(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "coordinator_upsert_knowledge",
-		Description: "Store knowledge in the coordinator knowledge base. Use for storing task context, ADRs, data contracts, and coordination information.",
+		Description: "Store knowledge in the coordinator knowledge base. Use for storing task context, ADRs, data contracts, and coordination information. Optionally filter by taskId for task-scoped knowledge.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -170,7 +170,11 @@ func (h *ToolHandler) registerUpsertKnowledge(server *mcp.Server) error {
 				},
 				"metadata": {
 					Type:        "object",
-					Description: "Optional metadata (taskId, agentName, timestamp, etc.)",
+					Description: "Optional metadata (agentName, timestamp, etc.)",
+				},
+				"taskId": {
+					Type:        "string",
+					Description: "Optional task ID for task-scoped filtering (UUID format)",
 				},
 			},
 			Required: []string{"collection", "text"},
@@ -193,7 +197,7 @@ func (h *ToolHandler) registerUpsertKnowledge(server *mcp.Server) error {
 func (h *ToolHandler) registerQueryKnowledge(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "coordinator_query_knowledge",
-		Description: "Query the coordinator knowledge base. Returns most relevant knowledge entries with similarity scores.",
+		Description: "Query the coordinator knowledge base. Returns most relevant knowledge entries with similarity scores. Optionally filter by taskId for task-scoped queries.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -208,6 +212,10 @@ func (h *ToolHandler) registerQueryKnowledge(server *mcp.Server) error {
 				"limit": {
 					Type:        "number",
 					Description: "Maximum number of results (default: 5)",
+				},
+				"taskId": {
+					Type:        "string",
+					Description: "Optional task ID for filtering results by task (UUID format)",
 				},
 			},
 			Required: []string{"collection", "query"},
@@ -404,7 +412,13 @@ func (h *ToolHandler) handleUpsertKnowledge(ctx context.Context, args map[string
 		metadata = m
 	}
 
-	entry, err := h.knowledgeStorage.Upsert(collection, text, metadata)
+	// Extract optional taskId parameter
+	var taskId *string
+	if tid, ok := args["taskId"].(string); ok && tid != "" {
+		taskId = &tid
+	}
+
+	entry, err := h.knowledgeStorage.Upsert(collection, text, metadata, taskId)
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to upsert knowledge: %s", err.Error())), nil, nil
 	}
@@ -436,7 +450,13 @@ func (h *ToolHandler) handleQueryKnowledge(ctx context.Context, args map[string]
 		limit = int(l)
 	}
 
-	results, err := h.knowledgeStorage.Query(collection, query, limit)
+	// Extract optional taskId parameter
+	var taskId *string
+	if tid, ok := args["taskId"].(string); ok && tid != "" {
+		taskId = &tid
+	}
+
+	results, err := h.knowledgeStorage.Query(collection, query, limit, taskId)
 	if err != nil {
 		return createErrorResult(fmt.Sprintf("failed to query knowledge: %s", err.Error())), nil, nil
 	}

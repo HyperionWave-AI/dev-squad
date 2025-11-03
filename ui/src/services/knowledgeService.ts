@@ -341,6 +341,25 @@ class KnowledgeService {
 
     return response.json();
   }
+
+  /**
+   * Verify a knowledge article by creating a chat session
+   */
+  async verifyKnowledgeArticle(id: string): Promise<{ sessionId: string }> {
+    const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(id)}/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to verify knowledge article');
+    }
+
+    return response.json();
+  }
 }
 
 export const knowledgeService = new KnowledgeService();

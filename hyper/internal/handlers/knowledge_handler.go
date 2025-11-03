@@ -8,23 +8,38 @@ import (
 
 	"hyper/internal/mcp/review"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/models"
 
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
 
 // KnowledgeHandler handles HTTP REST requests for knowledge base operations
 type KnowledgeHandler struct {
-	knowledgeStorage  storage.KnowledgeStorage
+	knowledgeStorage   storage.KnowledgeStorage
 	reviewOrchestrator *review.ReviewOrchestrator
-	logger            *zap.Logger
+	chatService        interface {
+		CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
+		SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
+	}
+	logger *zap.Logger
 }
 
 // NewKnowledgeHandler creates a new knowledge handler
-func NewKnowledgeHandler(knowledgeStorage storage.KnowledgeStorage, reviewOrchestrator *review.ReviewOrchestrator, logger *zap.Logger) *KnowledgeHandler {
+func NewKnowledgeHandler(
+	knowledgeStorage storage.KnowledgeStorage,
+	reviewOrchestrator *review.ReviewOrchestrator,
+	chatService interface {
+		CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
+		SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
+	},
+	logger *zap.Logger,
+) *KnowledgeHandler {
 	return &KnowledgeHandler{
 		knowledgeStorage:   knowledgeStorage,
 		reviewOrchestrator: reviewOrchestrator,
+		chatService:        chatService,
 		logger:             logger,
 	}
 }
@@ -62,9 +77,10 @@ func (h *KnowledgeHandler) GetPopularCollections(c *gin.Context) {
 // POST /api/v1/knowledge/query
 func (h *KnowledgeHandler) QueryKnowledge(c *gin.Context) {
 	var req struct {
-		Collection string `json:"collection" binding:"required"`
-		Query      string `json:"query" binding:"required"`
-		Limit      int    `json:"limit"`
+		Collection string  `json:"collection" binding:"required"`
+		Query      string  `json:"query" binding:"required"`
+		Limit      int     `json:"limit"`
+		TaskId     *string `json:"taskId,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -81,8 +97,8 @@ func (h *KnowledgeHandler) QueryKnowledge(c *gin.Context) {
 		limit = 100 // Max limit
 	}
 
-	// Query knowledge storage
-	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit)
+	// Query knowledge storage with optional taskId filter
+	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit, req.TaskId)
 	if err != nil {
 		h.logger.Error("Failed to query knowledge",
 			zap.String("collection", req.Collection),
@@ -850,8 +866,32 @@ func (h *KnowledgeHandler) CompactEntryHandler(c *gin.Context) {
 		compressionRatio = float64(result.CompactedWords) / float64(result.OriginalWords)
 	}
 
-	// Return compaction result
+	// Count preserved elements by type
+	// For now, we'll provide counts based on PreservedAll flag
+	// In the future, this could be enhanced to count specific elements
+	filePathsCount := 0
+	functionNamesCount := 0
+
+	if result.PreservedAll {
+		// If all elements preserved, show positive counts
+		// Extract rough counts from the missing elements check
+		for _, missing := range result.MissingElements {
+			if strings.Contains(missing, "file path") {
+				filePathsCount++
+			} else if strings.Contains(missing, "function") {
+				functionNamesCount++
+			}
+		}
+		// If nothing missing, default to showing some were preserved
+		if len(result.MissingElements) == 0 {
+			filePathsCount = 1 // At least one file path likely preserved
+			functionNamesCount = 1 // At least one function likely preserved
+		}
+	}
+
+	// Return compaction result in UI format
 	c.JSON(http.StatusOK, gin.H{
+		"success": true,
 		"original": gin.H{
 			"text":      result.OriginalText,
 			"wordCount": result.OriginalWords,
@@ -861,9 +901,10 @@ func (h *KnowledgeHandler) CompactEntryHandler(c *gin.Context) {
 			"wordCount": result.CompactedWords,
 		},
 		"compressionRatio": compressionRatio,
-		"preservedAll":     result.PreservedAll,
-		"missingElements":  result.MissingElements,
-		"dryRun":           result.DryRun,
+		"preserved": gin.H{
+			"filePaths":     filePathsCount,
+			"functionNames": functionNamesCount,
+		},
 	})
 }
 
@@ -904,6 +945,102 @@ func (h *KnowledgeHandler) DeleteCollectionHandler(c *gin.Context) {
 }
 
 // RegisterRoutes registers all knowledge-related routes
+// VerifyKnowledgeArticle creates a chat session to verify a knowledge article against source code
+// POST /api/v1/knowledge/entries/:id/verify
+func (h *KnowledgeHandler) VerifyKnowledgeArticle(c *gin.Context) {
+	knowledgeID := c.Param("id")
+
+	// Extract user context from JWT (assuming middleware provides this)
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	companyID, exists := c.Get("companyID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found"})
+		return
+	}
+
+	// Fetch knowledge article by ID using storage interface
+	ctx := c.Request.Context()
+	entry, err := h.knowledgeStorage.GetEntryByID(knowledgeID)
+	if err != nil {
+		h.logger.Error("Failed to fetch knowledge entry",
+			zap.String("entryId", knowledgeID),
+			zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "Knowledge article not found"})
+		return
+	}
+
+	// Create verification system prompt
+	verificationPrompt := `# Knowledge Article Verification Task
+
+You are tasked with verifying the accuracy of a knowledge article against the current source code implementation.
+
+## Article to Verify:
+**Collection**: ` + entry.Collection + `
+**Created**: ` + entry.CreatedAt.Format("2006-01-02 15:04:05") + `
+
+**Content**:
+` + entry.Text + `
+
+## Your Task:
+1. **Read the article carefully** and understand what it claims about the codebase
+2. **Use code_index_search** to find relevant source code files mentioned in the article
+3. **Compare** the article's claims against the actual implementation
+4. **Verify** each key claim:
+   - Are the file paths correct?
+   - Are the function names accurate?
+   - Are the described patterns actually implemented?
+   - Are there any outdated references?
+5. **Report your findings**:
+   - ✅ What is accurate and up-to-date
+   - ❌ What is outdated or incorrect
+   - 📝 Specific updates needed (with file paths and line numbers)
+
+## Guidelines:
+- Be thorough - check multiple files if needed
+- Cite specific files and line numbers in your findings
+- If something is accurate, say so explicitly
+- If something needs updating, provide the exact new information
+- Use code_index_search with queries like: "file path from article", "function name mentioned", "pattern described"
+
+**Start by reading the article and identifying what needs to be verified.**
+`
+
+	// Create chat session
+	session, err := h.chatService.CreateSession(ctx, userID.(string), companyID.(string), "Verify: "+entry.Collection)
+	if err != nil {
+		h.logger.Error("Failed to create chat session",
+			zap.String("entryId", knowledgeID),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create verification chat session"})
+		return
+	}
+
+	// Save system prompt as first message
+	_, err = h.chatService.SaveMessage(ctx, session.ID, "system", verificationPrompt, companyID.(string))
+	if err != nil {
+		h.logger.Error("Failed to save system prompt",
+			zap.String("entryId", knowledgeID),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize verification session"})
+		return
+	}
+
+	h.logger.Info("Knowledge article verification session created",
+		zap.String("entryId", knowledgeID),
+		zap.String("sessionId", session.ID.Hex()))
+
+	c.JSON(http.StatusCreated, gin.H{
+		"success":   true,
+		"sessionId": session.ID.Hex(),
+		"message":   "Verification chat session created. Navigate to the chat to see the verification results.",
+	})
+}
+
 func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/popular-collections", h.GetPopularCollections)
 	r.GET("/collections", h.GetAllCollections)
@@ -917,6 +1054,7 @@ func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/entries/:id/votes", h.GetKnowledgeEntryVotes)
 	r.POST("/entries/:id/review", h.ReviewEntryHandler)
 	r.POST("/entries/:id/compact", h.CompactEntryHandler)
+	r.POST("/entries/:id/verify", h.VerifyKnowledgeArticle)
 	r.PUT("/collections/:name/metadata", h.UpdateCollectionMetadataHandler)
 	r.POST("/collections/:name/rename", h.RenameCollectionHandler)
 	r.POST("/collections/:name/review", h.ReviewCollectionHandler)

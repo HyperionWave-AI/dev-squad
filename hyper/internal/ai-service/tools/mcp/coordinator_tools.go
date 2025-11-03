@@ -958,8 +958,8 @@ func (t *QueryKnowledgeTool) Execute(ctx context.Context, input map[string]inter
 		}
 	}
 
-	// Query knowledge storage
-	results, err := t.storage.Query(collection, query, limit)
+	// Query knowledge storage (no taskId filtering in this context)
+	results, err := t.storage.Query(collection, query, limit, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query knowledge: %w", err)
 	}
@@ -1037,7 +1037,8 @@ func (t *UpsertKnowledgeTool) Execute(ctx context.Context, input map[string]inte
 		metadata = m
 	}
 
-	entry, err := t.storage.Upsert(collection, text, metadata)
+	// No taskId filtering in this legacy context
+	entry, err := t.storage.Upsert(collection, text, metadata, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert knowledge: %w", err)
 	}
