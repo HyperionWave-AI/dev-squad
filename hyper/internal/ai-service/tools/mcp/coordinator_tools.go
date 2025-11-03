@@ -17,11 +17,13 @@ import (
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/handlers"
+	reviewPkg "hyper/internal/mcp/review"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
 
@@ -956,8 +958,8 @@ func (t *QueryKnowledgeTool) Execute(ctx context.Context, input map[string]inter
 		}
 	}
 
-	// Query knowledge storage
-	results, err := t.storage.Query(collection, query, limit)
+	// Query knowledge storage (no taskId filtering in this context)
+	results, err := t.storage.Query(collection, query, limit, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query knowledge: %w", err)
 	}
@@ -1035,7 +1037,8 @@ func (t *UpsertKnowledgeTool) Execute(ctx context.Context, input map[string]inte
 		metadata = m
 	}
 
-	entry, err := t.storage.Upsert(collection, text, metadata)
+	// No taskId filtering in this legacy context
+	entry, err := t.storage.Upsert(collection, text, metadata, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert knowledge: %w", err)
 	}
@@ -1092,6 +1095,91 @@ func (t *GetPopularCollectionsTool) Execute(ctx context.Context, input map[strin
 	}
 
 	return stats, nil
+}
+
+// KnowledgeVoteTool implements the ToolExecutor interface for voting on knowledge entries
+type KnowledgeVoteTool struct {
+	storage storage.KnowledgeStorage
+}
+
+func (t *KnowledgeVoteTool) Name() string {
+	return "knowledge_vote"
+}
+
+func (t *KnowledgeVoteTool) Description() string {
+	return "Vote on a knowledge entry with + or - and a reason (max 10 words). Returns vote summary with upvotes, downvotes, net score, and user's current vote. One vote per user per entry (upsert pattern)."
+}
+
+func (t *KnowledgeVoteTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"entryId": map[string]interface{}{
+				"type":        "string",
+				"description": "UUID of the knowledge entry to vote on",
+			},
+			"vote": map[string]interface{}{
+				"type":        "string",
+				"description": "Vote value: '+' for upvote or '-' for downvote",
+				"enum":        []string{"+", "-"},
+			},
+			"reason": map[string]interface{}{
+				"type":        "string",
+				"description": "Reason for the vote (max 10 words)",
+			},
+		},
+		"required": []string{"entryId", "vote", "reason"},
+	}
+}
+
+func (t *KnowledgeVoteTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	entryID, ok := input["entryId"].(string)
+	if !ok || entryID == "" {
+		return nil, fmt.Errorf("entryId is required and must be a string")
+	}
+
+	vote, ok := input["vote"].(string)
+	if !ok || vote == "" {
+		return nil, fmt.Errorf("vote is required and must be a string")
+	}
+
+	reason, ok := input["reason"].(string)
+	if !ok || reason == "" {
+		return nil, fmt.Errorf("reason is required and must be a string")
+	}
+
+	// Extract user ID from context (JWT)
+	// For now, use a placeholder - this will be replaced with actual JWT extraction
+	userID := "system" // TODO: Extract from JWT context
+
+	// Record the vote
+	voteRecord, err := t.storage.VoteOnEntry(entryID, userID, vote, reason)
+	if err != nil {
+		return nil, fmt.Errorf("failed to vote on entry: %w", err)
+	}
+
+	// Get vote summary
+	summary, err := t.storage.GetEntryVotes(entryID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vote summary: %w", err)
+	}
+
+	return map[string]interface{}{
+		"voteRecorded": map[string]interface{}{
+			"entryId":   voteRecord.EntryID,
+			"userId":    voteRecord.UserID,
+			"vote":      voteRecord.Vote,
+			"reason":    voteRecord.Reason,
+			"createdAt": voteRecord.CreatedAt,
+			"updatedAt": voteRecord.UpdatedAt,
+		},
+		"summary": map[string]interface{}{
+			"upvotes":   summary.Upvotes,
+			"downvotes": summary.Downvotes,
+			"netScore":  summary.NetScore,
+			"userVote":  summary.UserVote,
+		},
+	}, nil
 }
 
 // CreateHumanTaskTool implements the ToolExecutor interface
@@ -3364,7 +3452,9 @@ func RegisterCoordinatorTools(
 	aiService AIServiceInterface,
 	chatService ChatServiceInterface,
 	aiSettingsService AISettingsServiceInterface,
+	aiConfig *aiservice.AIConfig, // AI configuration for compaction engine
 	logger *zap.Logger,
+	mongoDatabase ...*mongo.Database, // Optional: for review tools
 ) error {
 	tools := []aiservice.ToolExecutor{
 		// Existing tools
@@ -3375,6 +3465,7 @@ func RegisterCoordinatorTools(
 		// New tools
 		&UpsertKnowledgeTool{storage: knowledgeStorage},
 		&GetPopularCollectionsTool{storage: knowledgeStorage},
+		&KnowledgeVoteTool{storage: knowledgeStorage},
 		&CreateHumanTaskTool{storage: taskStorage},
 		&UpdateTaskStatusTool{storage: taskStorage},
 		&UpdateTodoStatusTool{storage: taskStorage},
@@ -3415,6 +3506,74 @@ func RegisterCoordinatorTools(
 			return fmt.Errorf("failed to register %s: %w", tool.Name(), err)
 		}
 	}
+
+	// Register review tools (knowledge quality review system)
+	// Note: Review tools are optional - only register if mongoDatabase is provided
+	if len(mongoDatabase) > 0 && mongoDatabase[0] != nil {
+		if err := registerReviewTools(registry, knowledgeStorage, mongoDatabase[0], aiConfig, logger); err != nil {
+			logger.Warn("Failed to register review tools", zap.Error(err))
+			// Don't fail the entire registration - review tools are optional
+		} else {
+			logger.Info("Review tools registered successfully")
+		}
+	}
+
+	return nil
+}
+
+// registerReviewTools initializes and registers knowledge review tools
+func registerReviewTools(
+	registry *aiservice.ToolRegistry,
+	knowledgeStorage storage.KnowledgeStorage,
+	mongoDatabase *mongo.Database,
+	aiConfig *aiservice.AIConfig,
+	logger *zap.Logger,
+) error {
+	// Get Qdrant client from knowledge storage
+	// We need to type assert to get access to the qdrantClient
+	_, ok := knowledgeStorage.(*storage.MongoKnowledgeStorage)
+	if !ok {
+		return fmt.Errorf("knowledge storage is not MongoKnowledgeStorage")
+	}
+
+	// Initialize review storage
+	reviewStorage, err := reviewPkg.NewMongoReviewStorage(mongoDatabase, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create review storage: %w", err)
+	}
+
+	// Get Qdrant client (we need reflection or a getter method - for now, create new engines without it)
+	// Initialize scoring engine (will work without Qdrant, with reduced functionality)
+	scoringEngine := reviewPkg.NewScoringEngine(nil, logger)
+
+	// Initialize action engine
+	actionEngine := reviewPkg.NewActionEngine(knowledgeStorage, reviewStorage, logger)
+
+	// Initialize compaction engine with AI config
+	compactionEngine, err := reviewPkg.NewCompactionEngine(aiConfig)
+	if err != nil {
+		logger.Warn("Failed to create compaction engine, compaction tools will be unavailable", zap.Error(err))
+		// Continue without compaction engine - review tools will still work
+		compactionEngine = nil
+	}
+
+	// Initialize orchestrator
+	orchestrator := reviewPkg.NewReviewOrchestrator(
+		scoringEngine,
+		actionEngine,
+		compactionEngine,
+		knowledgeStorage,
+		reviewStorage,
+		logger,
+	)
+
+	// Register review tools
+	if err := RegisterReviewTools(registry, orchestrator); err != nil {
+		return fmt.Errorf("failed to register review tools: %w", err)
+	}
+
+	logger.Info("Review tools initialized and registered",
+		zap.Int("toolCount", 4))
 
 	return nil
 }
