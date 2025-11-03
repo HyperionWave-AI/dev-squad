@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,50 +32,117 @@ type ToolMatch struct {
 	Score       float64 `json:"score"`
 }
 
+// ResourceMetadata represents metadata about an MCP resource
+type ResourceMetadata struct {
+	ID          string                 `json:"id" bson:"resourceId"`
+	URI         string                 `json:"uri" bson:"uri"`
+	Name        string                 `json:"name" bson:"name"`
+	Description string                 `json:"description" bson:"description"`
+	MimeType    string                 `json:"mimeType,omitempty" bson:"mimeType,omitempty"`
+	ServerName  string                 `json:"serverName" bson:"serverName"`
+	CreatedAt   time.Time              `json:"createdAt" bson:"createdAt"`
+	UpdatedAt   time.Time              `json:"updatedAt" bson:"updatedAt"`
+}
+
+// PromptMetadata represents metadata about an MCP prompt
+type PromptMetadata struct {
+	ID          string                 `json:"id" bson:"promptId"`
+	Name        string                 `json:"name" bson:"name"`
+	Description string                 `json:"description" bson:"description"`
+	Arguments   []map[string]interface{} `json:"arguments,omitempty" bson:"arguments,omitempty"`
+	ServerName  string                 `json:"serverName" bson:"serverName"`
+	CreatedAt   time.Time              `json:"createdAt" bson:"createdAt"`
+	UpdatedAt   time.Time              `json:"updatedAt" bson:"updatedAt"`
+}
+
 // ServerMetadata represents metadata about an MCP server
 type ServerMetadata struct {
-	ServerName  string    `json:"serverName" bson:"serverName"`
-	ServerURL   string    `json:"serverUrl" bson:"serverUrl"`
-	Description string    `json:"description" bson:"description"`
-	ToolCount   int       `json:"toolCount" bson:"toolCount"`
-	CreatedAt   time.Time `json:"createdAt" bson:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt" bson:"updatedAt"`
+	ServerName    string                 `json:"serverName" bson:"serverName"`
+	ServerURL     string                 `json:"serverUrl" bson:"serverUrl"`
+	Description   string                 `json:"description" bson:"description"`
+	Headers       map[string]interface{} `json:"headers,omitempty" bson:"headers,omitempty"`
+	ToolCount     int                    `json:"toolCount" bson:"toolCount"`
+	ResourceCount int                    `json:"resourceCount" bson:"resourceCount"`
+	PromptCount   int                    `json:"promptCount" bson:"promptCount"`
+	CreatedAt     time.Time              `json:"createdAt" bson:"createdAt"`
+	UpdatedAt     time.Time              `json:"updatedAt" bson:"updatedAt"`
 }
 
 // ToolsStorageInterface defines the interface for MCP tools storage operations
 type ToolsStorageInterface interface {
+	// Tool operations
 	StoreToolMetadata(ctx context.Context, toolName, description string, schema map[string]interface{}, serverName string) error
 	SearchTools(ctx context.Context, query string, limit int) ([]*ToolMatch, error)
 	GetToolSchema(ctx context.Context, toolName string) (*ToolMetadata, error)
 
+	// Resource operations
+	StoreResourceMetadata(ctx context.Context, uri, name, description, mimeType, serverName string) error
+	GetServerResources(ctx context.Context, serverName string) ([]*ResourceMetadata, error)
+
+	// Prompt operations
+	StorePromptMetadata(ctx context.Context, name, description string, arguments []map[string]interface{}, serverName string) error
+	GetServerPrompts(ctx context.Context, serverName string) ([]*PromptMetadata, error)
+
 	// Server management
-	AddServer(ctx context.Context, serverName, serverURL, description string) error
+	AddServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error
+	UpdateServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error
+	UpdateServerCounts(ctx context.Context, serverName string, toolCount, resourceCount, promptCount int) error
 	RemoveServer(ctx context.Context, serverName string) error
 	GetServer(ctx context.Context, serverName string) (*ServerMetadata, error)
+	GetServerTools(ctx context.Context, serverName string) ([]*ToolMetadata, error)
 	ListServers(ctx context.Context) ([]*ServerMetadata, error)
 	RemoveServerTools(ctx context.Context, serverName string) error
+	RemoveServerResources(ctx context.Context, serverName string) error
+	RemoveServerPrompts(ctx context.Context, serverName string) error
 }
 
 // ToolsStorage provides storage interface for MCP tools metadata
 type ToolsStorage struct {
-	toolsCollection   *mongo.Collection
-	serversCollection *mongo.Collection
-	qdrantClient      QdrantClientInterface
-	logger            *zap.Logger
+	toolsCollection     *mongo.Collection
+	resourcesCollection *mongo.Collection
+	promptsCollection   *mongo.Collection
+	serversCollection   *mongo.Collection
+	qdrantClient        QdrantClientInterface
+	toolsCollectionName string
+	logger              *zap.Logger
 }
 
 // NewToolsStorage creates a new tools storage instance
 func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface, logger *zap.Logger) (*ToolsStorage, error) {
+	// Read base collection name from environment variable with default fallback
+	baseCollectionName := os.Getenv("MCP_TOOLS_COLLECTION_NAME")
+	if baseCollectionName == "" {
+		baseCollectionName = "mcp-tools"
+	}
+
+	// Get vector dimensions from qdrant client to create dimension-specific collection name
+	// This prevents dimension mismatch errors when switching embedding providers
+	vectorDim := 768 // Default fallback (Ollama nomic-embed-text)
+	if qdrantClientTyped, ok := qdrantClient.(*QdrantClient); ok {
+		vectorDim = qdrantClientTyped.vectorDimension
+	}
+
+	// Append dimension to collection name (e.g., "mcp-tools_1024")
+	collectionName := fmt.Sprintf("%s_%d", baseCollectionName, vectorDim)
+
+	logger.Info("Initializing MCP tools storage",
+		zap.String("collection", collectionName),
+		zap.Int("vectorDimension", vectorDim))
+
 	storage := &ToolsStorage{
-		toolsCollection:   db.Collection("tools"),
-		serversCollection: db.Collection("mcp_servers"),
-		qdrantClient:      qdrantClient,
-		logger:            logger,
+		toolsCollection:     db.Collection("tools"),
+		resourcesCollection: db.Collection("mcp_resources"),
+		promptsCollection:   db.Collection("mcp_prompts"),
+		serversCollection:   db.Collection("mcp_servers"),
+		qdrantClient:        qdrantClient,
+		toolsCollectionName: collectionName,
+		logger:              logger,
 	}
 
 	// Create indexes
 	ctx := context.Background()
 
+	// Tools collection indexes
 	// Index on toolId
 	_, err := storage.toolsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "toolId", Value: 1}},
@@ -108,7 +176,59 @@ func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface, log
 		return nil, fmt.Errorf("failed to create description text index: %w", err)
 	}
 
-	// Create indexes for servers collection
+	// Resources collection indexes
+	// Index on resourceId (unique)
+	_, err = storage.resourcesCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "resourceId", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resourceId index: %w", err)
+	}
+
+	// Index on uri for fast lookup
+	_, err = storage.resourcesCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "uri", Value: 1}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create uri index: %w", err)
+	}
+
+	// Index on serverName for filtering resources by server
+	_, err = storage.resourcesCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "serverName", Value: 1}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource serverName index: %w", err)
+	}
+
+	// Prompts collection indexes
+	// Index on promptId (unique)
+	_, err = storage.promptsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "promptId", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create promptId index: %w", err)
+	}
+
+	// Index on name for fast lookup
+	_, err = storage.promptsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "name", Value: 1}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create prompt name index: %w", err)
+	}
+
+	// Index on serverName for filtering prompts by server
+	_, err = storage.promptsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "serverName", Value: 1}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create prompt serverName index: %w", err)
+	}
+
+	// Servers collection indexes
 	// Index on serverName (unique)
 	_, err = storage.serversCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "serverName", Value: 1}},
@@ -165,10 +285,10 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 		}
 
 		// Ensure collection exists with correct dimensions
-		if err := s.qdrantClient.EnsureCollection("mcp-tools", vectorDim); err != nil {
+		if err := s.qdrantClient.EnsureCollection(s.toolsCollectionName, vectorDim); err != nil {
 			// Log error but don't fail - MongoDB has the data
 			s.logger.Warn("Failed to ensure Qdrant collection",
-				zap.String("collection", "mcp-tools"),
+				zap.String("collection", s.toolsCollectionName),
 				zap.Int("vectorDim", vectorDim),
 				zap.Error(err))
 		} else {
@@ -181,10 +301,10 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 				"serverName": serverName,
 			}
 
-			if err := s.qdrantClient.StorePoint("mcp-tools", metadata.ID, searchableText, pointMetadata); err != nil {
+			if err := s.qdrantClient.StorePoint(s.toolsCollectionName, metadata.ID, searchableText, pointMetadata); err != nil {
 				// Log error but don't fail - MongoDB has the data
 				s.logger.Warn("Failed to store tool in Qdrant",
-					zap.String("collection", "mcp-tools"),
+					zap.String("collection", s.toolsCollectionName),
 					zap.String("toolName", toolName),
 					zap.String("toolId", metadata.ID),
 					zap.Error(err))
@@ -207,7 +327,7 @@ func (s *ToolsStorage) SearchTools(ctx context.Context, query string, limit int)
 
 	// Try Qdrant vector search first
 	if s.qdrantClient != nil {
-		results, err := s.qdrantClient.SearchSimilar("mcp-tools", query, limit)
+		results, err := s.qdrantClient.SearchSimilar(s.toolsCollectionName, query, limit)
 		if err == nil && len(results) > 0 {
 			// Convert QdrantQueryResult to ToolMatch
 			matches := make([]*ToolMatch, 0, len(results))
@@ -235,7 +355,7 @@ func (s *ToolsStorage) SearchTools(ctx context.Context, query string, limit int)
 		// Log error but continue to MongoDB fallback
 		if err != nil {
 			s.logger.Warn("Qdrant search failed, falling back to MongoDB",
-				zap.String("collection", "mcp-tools"),
+				zap.String("collection", s.toolsCollectionName),
 				zap.String("query", query),
 				zap.Int("limit", limit),
 				zap.Error(err))
@@ -303,14 +423,17 @@ func (s *ToolsStorage) GetToolSchema(ctx context.Context, toolName string) (*Too
 }
 
 // AddServer adds a new MCP server to the registry
-func (s *ToolsStorage) AddServer(ctx context.Context, serverName, serverURL, description string) error {
+func (s *ToolsStorage) AddServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error {
 	server := &ServerMetadata{
-		ServerName:  serverName,
-		ServerURL:   serverURL,
-		Description: description,
-		ToolCount:   0,
-		CreatedAt:   time.Now().UTC(),
-		UpdatedAt:   time.Now().UTC(),
+		ServerName:    serverName,
+		ServerURL:     serverURL,
+		Description:   description,
+		Headers:       headers,
+		ToolCount:     0,
+		ResourceCount: 0,
+		PromptCount:   0,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 
 	filter := bson.M{"serverName": serverName}
@@ -319,11 +442,14 @@ func (s *ToolsStorage) AddServer(ctx context.Context, serverName, serverURL, des
 			"serverName":  server.ServerName,
 			"serverUrl":   server.ServerURL,
 			"description": server.Description,
+			"headers":     server.Headers,
 			"updatedAt":   server.UpdatedAt,
 		},
 		"$setOnInsert": bson.M{
-			"toolCount": 0,
-			"createdAt": server.CreatedAt,
+			"toolCount":     0,
+			"resourceCount": 0,
+			"promptCount":   0,
+			"createdAt":     server.CreatedAt,
 		},
 	}
 
@@ -420,10 +546,10 @@ func (s *ToolsStorage) RemoveServerTools(ctx context.Context, serverName string)
 	// Delete from Qdrant
 	if s.qdrantClient != nil && len(toolIDs) > 0 {
 		for _, toolID := range toolIDs {
-			if err := s.qdrantClient.DeletePoint("mcp-tools", toolID); err != nil {
+			if err := s.qdrantClient.DeletePoint(s.toolsCollectionName, toolID); err != nil {
 				// Log error but don't fail
 				s.logger.Warn("Failed to delete tool from Qdrant",
-					zap.String("collection", "mcp-tools"),
+					zap.String("collection", s.toolsCollectionName),
 					zap.String("toolId", toolID),
 					zap.String("serverName", serverName),
 					zap.Error(err))
@@ -449,5 +575,257 @@ func (s *ToolsStorage) RemoveServerTools(ctx context.Context, serverName string)
 	s.logger.Info("Removed tools for server",
 		zap.String("serverName", serverName),
 		zap.Int64("toolCount", result.DeletedCount))
+	return nil
+}
+
+// UpdateServer updates an existing MCP server's metadata
+func (s *ToolsStorage) UpdateServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error {
+	// Check if server exists
+	_, err := s.GetServer(ctx, serverName)
+	if err != nil {
+		return fmt.Errorf("server not found: %s", serverName)
+	}
+
+	// Update server metadata
+	filter := bson.M{"serverName": serverName}
+	update := bson.M{
+		"$set": bson.M{
+			"serverUrl":   serverURL,
+			"description": description,
+			"headers":     headers,
+			"updatedAt":   time.Now().UTC(),
+		},
+	}
+
+	_, err = s.serversCollection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update server: %w", err)
+	}
+
+	s.logger.Info("Server updated successfully",
+		zap.String("serverName", serverName),
+		zap.String("serverUrl", serverURL))
+
+	return nil
+}
+
+// UpdateServerCounts updates the tool, resource, and prompt counts for an MCP server
+func (s *ToolsStorage) UpdateServerCounts(ctx context.Context, serverName string, toolCount, resourceCount, promptCount int) error {
+	// Check if server exists
+	_, err := s.GetServer(ctx, serverName)
+	if err != nil {
+		return fmt.Errorf("server not found: %s", serverName)
+	}
+
+	// Update server counts
+	filter := bson.M{"serverName": serverName}
+	update := bson.M{
+		"$set": bson.M{
+			"toolCount":     toolCount,
+			"resourceCount": resourceCount,
+			"promptCount":   promptCount,
+			"updatedAt":     time.Now().UTC(),
+		},
+	}
+
+	_, err = s.serversCollection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update server counts: %w", err)
+	}
+
+	s.logger.Info("Server counts updated successfully",
+		zap.String("serverName", serverName),
+		zap.Int("toolCount", toolCount),
+		zap.Int("resourceCount", resourceCount),
+		zap.Int("promptCount", promptCount))
+
+	return nil
+}
+
+// GetServerTools retrieves all tools for a specific server
+func (s *ToolsStorage) GetServerTools(ctx context.Context, serverName string) ([]*ToolMetadata, error) {
+	filter := bson.M{"serverName": serverName}
+	cursor, err := s.toolsCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find server tools: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	tools := make([]*ToolMetadata, 0)
+	for cursor.Next(ctx) {
+		var tool ToolMetadata
+		if err := cursor.Decode(&tool); err != nil {
+			s.logger.Warn("Failed to decode tool metadata",
+				zap.String("serverName", serverName),
+				zap.Error(err))
+			continue
+		}
+		tools = append(tools, &tool)
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("cursor error: %w", err)
+	}
+
+	return tools, nil
+}
+
+// StoreResourceMetadata stores resource metadata in MongoDB
+func (s *ToolsStorage) StoreResourceMetadata(ctx context.Context, uri, name, description, mimeType, serverName string) error {
+	metadata := &ResourceMetadata{
+		ID:          uuid.New().String(),
+		URI:         uri,
+		Name:        name,
+		Description: description,
+		MimeType:    mimeType,
+		ServerName:  serverName,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	// Store in MongoDB - upsert by URI to avoid duplicates
+	filter := bson.M{"uri": uri, "serverName": serverName}
+	update := bson.M{
+		"$set": bson.M{
+			"resourceId":  metadata.ID,
+			"uri":         metadata.URI,
+			"name":        metadata.Name,
+			"description": metadata.Description,
+			"mimeType":    metadata.MimeType,
+			"serverName":  metadata.ServerName,
+			"updatedAt":   metadata.UpdatedAt,
+		},
+		"$setOnInsert": bson.M{
+			"createdAt": metadata.CreatedAt,
+		},
+	}
+
+	opts := options.Update().SetUpsert(true)
+	_, err := s.resourcesCollection.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return fmt.Errorf("failed to store resource metadata in MongoDB: %w", err)
+	}
+
+	return nil
+}
+
+// GetServerResources retrieves all resources for a specific server
+func (s *ToolsStorage) GetServerResources(ctx context.Context, serverName string) ([]*ResourceMetadata, error) {
+	filter := bson.M{"serverName": serverName}
+	cursor, err := s.resourcesCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find server resources: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	resources := make([]*ResourceMetadata, 0)
+	for cursor.Next(ctx) {
+		var resource ResourceMetadata
+		if err := cursor.Decode(&resource); err != nil {
+			s.logger.Warn("Failed to decode resource metadata",
+				zap.String("serverName", serverName),
+				zap.Error(err))
+			continue
+		}
+		resources = append(resources, &resource)
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("cursor error: %w", err)
+	}
+
+	return resources, nil
+}
+
+// RemoveServerResources removes all resources associated with a server
+func (s *ToolsStorage) RemoveServerResources(ctx context.Context, serverName string) error {
+	filter := bson.M{"serverName": serverName}
+	result, err := s.resourcesCollection.DeleteMany(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("failed to remove server resources from MongoDB: %w", err)
+	}
+
+	s.logger.Info("Removed resources for server",
+		zap.String("serverName", serverName),
+		zap.Int64("resourceCount", result.DeletedCount))
+	return nil
+}
+
+// StorePromptMetadata stores prompt metadata in MongoDB
+func (s *ToolsStorage) StorePromptMetadata(ctx context.Context, name, description string, arguments []map[string]interface{}, serverName string) error {
+	metadata := &PromptMetadata{
+		ID:          uuid.New().String(),
+		Name:        name,
+		Description: description,
+		Arguments:   arguments,
+		ServerName:  serverName,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	// Store in MongoDB - upsert by name and serverName to avoid duplicates
+	filter := bson.M{"name": name, "serverName": serverName}
+	update := bson.M{
+		"$set": bson.M{
+			"promptId":    metadata.ID,
+			"name":        metadata.Name,
+			"description": metadata.Description,
+			"arguments":   metadata.Arguments,
+			"serverName":  metadata.ServerName,
+			"updatedAt":   metadata.UpdatedAt,
+		},
+		"$setOnInsert": bson.M{
+			"createdAt": metadata.CreatedAt,
+		},
+	}
+
+	opts := options.Update().SetUpsert(true)
+	_, err := s.promptsCollection.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return fmt.Errorf("failed to store prompt metadata in MongoDB: %w", err)
+	}
+
+	return nil
+}
+
+// GetServerPrompts retrieves all prompts for a specific server
+func (s *ToolsStorage) GetServerPrompts(ctx context.Context, serverName string) ([]*PromptMetadata, error) {
+	filter := bson.M{"serverName": serverName}
+	cursor, err := s.promptsCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find server prompts: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	prompts := make([]*PromptMetadata, 0)
+	for cursor.Next(ctx) {
+		var prompt PromptMetadata
+		if err := cursor.Decode(&prompt); err != nil {
+			s.logger.Warn("Failed to decode prompt metadata",
+				zap.String("serverName", serverName),
+				zap.Error(err))
+			continue
+		}
+		prompts = append(prompts, &prompt)
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("cursor error: %w", err)
+	}
+
+	return prompts, nil
+}
+
+// RemoveServerPrompts removes all prompts associated with a server
+func (s *ToolsStorage) RemoveServerPrompts(ctx context.Context, serverName string) error {
+	filter := bson.M{"serverName": serverName}
+	result, err := s.promptsCollection.DeleteMany(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("failed to remove server prompts from MongoDB: %w", err)
+	}
+
+	s.logger.Info("Removed prompts for server",
+		zap.String("serverName", serverName),
+		zap.Int64("promptCount", result.DeletedCount))
 	return nil
 }
