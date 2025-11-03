@@ -25,6 +25,7 @@ type QdrantClientInterface interface {
 	EnsureCollection(collectionName string, vectorSize int) error
 	StorePoint(collectionName string, id string, text string, metadata map[string]interface{}) error
 	SearchSimilar(collectionName string, query string, limit int, voteBoost ...float64) ([]*QdrantQueryResult, error)
+	SearchSimilarWithFilter(collectionName string, query string, limit int, filter map[string]interface{}, voteBoost ...float64) ([]*QdrantQueryResult, error)
 	SearchWithVoteFilter(collectionName string, query string, limit int, minVoteScore int, voteBoost ...float64) ([]*QdrantQueryResult, error)
 	DeletePoint(collectionName string, pointID string) error
 	DeleteCollection(collectionName string) error
@@ -288,6 +289,108 @@ func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit 
 		"vector": queryVector,
 		"limit":  limit,
 		"with_payload": true,
+	}
+
+	payloadBytes, err := json.Marshal(searchPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal search payload: %w", err)
+	}
+
+	searchURL := fmt.Sprintf("%s/collections/%s/points/search", c.baseURL, collectionName)
+	req, err := http.NewRequest("POST", searchURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("search failed: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var searchResponse struct {
+		Result []QdrantSearchResult `json:"result"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&searchResponse); err != nil {
+		return nil, fmt.Errorf("failed to decode search response: %w", err)
+	}
+
+	// Get vote boost factor (default 0.0 = no boosting)
+	boostFactor := 0.0
+	if len(voteBoost) > 0 {
+		boostFactor = voteBoost[0]
+	}
+
+	// Convert to QueryResult format
+	results := make([]*QdrantQueryResult, len(searchResponse.Result))
+	for i, result := range searchResponse.Result {
+		entry := &KnowledgeEntry{
+			ID:         result.ID,
+			Collection: collectionName,
+			Text:       getStringFromPayload(result.Payload, "text"),
+			Metadata:   result.Payload,
+			CreatedAt:  parseTimeFromPayload(result.Payload, "createdAt"),
+		}
+
+		finalScore := result.Score
+
+		// Apply vote boosting if enabled
+		if boostFactor > 0 {
+			voteScore := getIntFromPayload(result.Payload, "voteScore")
+			// Normalize vote score to [-1, 1] range using voteScore / (1 + abs(voteScore))
+			normalizedVote := 0.0
+			if voteScore != 0 {
+				normalizedVote = float64(voteScore) / (1.0 + float64(abs(voteScore)))
+			}
+			// Apply boost: finalScore = semanticScore * (1 + boostFactor * normalizedVote)
+			finalScore = result.Score * (1.0 + boostFactor*normalizedVote)
+		}
+
+		results[i] = &QdrantQueryResult{
+			Entry: entry,
+			Score: finalScore,
+		}
+	}
+
+	// Re-sort by final score if vote boosting was applied
+	if boostFactor > 0 {
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Score > results[j].Score
+		})
+	}
+
+	return results, nil
+}
+
+// SearchSimilarWithFilter searches for similar points with custom filter
+// Filter can be used for taskId filtering or other metadata filtering
+// Supports optional vote boosting like SearchSimilar
+func (c *QdrantClient) SearchSimilarWithFilter(collectionName string, query string, limit int, filter map[string]interface{}, voteBoost ...float64) ([]*QdrantQueryResult, error) {
+	// Generate query embedding using configured function
+	queryVector, err := c.embeddingFunc(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+	}
+
+	// Create search request with filter
+	searchPayload := map[string]interface{}{
+		"vector":       queryVector,
+		"limit":        limit,
+		"with_payload": true,
+	}
+
+	// Add filter if provided
+	if filter != nil {
+		searchPayload["filter"] = filter
 	}
 
 	payloadBytes, err := json.Marshal(searchPayload)
