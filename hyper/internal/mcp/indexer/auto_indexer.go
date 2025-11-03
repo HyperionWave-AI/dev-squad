@@ -148,21 +148,37 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 			pointID := uuid.New().String()
 			chunk.VectorID = pointID
 
+			payload := map[string]interface{}{
+				"fileId":       scannedFile.ID,
+				"folderId":     folder.ID,
+				"folderPath":   folder.Path,
+				"filePath":     scannedFile.Path,
+				"relativePath": scannedFile.RelativePath,
+				"language":     scannedFile.Language,
+				"chunkNum":     chunk.ChunkNum,
+				"startLine":    chunk.StartLine,
+				"endLine":      chunk.EndLine,
+				"content":      chunk.Content,
+			}
+
+			// Add AST metadata if present
+			if chunk.ChunkType != "" {
+				payload["chunkType"] = chunk.ChunkType
+			}
+			if chunk.NodeType != "" {
+				payload["nodeType"] = chunk.NodeType
+			}
+			if chunk.NodeName != "" {
+				payload["nodeName"] = chunk.NodeName
+			}
+			if chunk.Signature != "" {
+				payload["signature"] = chunk.Signature
+			}
+
 			point := storage.CodeIndexPoint{
-				ID:     pointID,
-				Vector: embedding,
-				Payload: map[string]interface{}{
-					"fileId":       scannedFile.ID,
-					"folderId":     folder.ID,
-					"folderPath":   folder.Path,
-					"filePath":     scannedFile.Path,
-					"relativePath": scannedFile.RelativePath,
-					"language":     scannedFile.Language,
-					"chunkNum":     chunk.ChunkNum,
-					"startLine":    chunk.StartLine,
-					"endLine":      chunk.EndLine,
-					"content":      chunk.Content,
-				},
+				ID:      pointID,
+				Vector:  embedding,
+				Payload: payload,
 			}
 			qdrantPoints = append(qdrantPoints, point)
 
