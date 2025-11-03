@@ -639,6 +639,7 @@ type ChatWebSocketHandler struct {
 	aiService         AIServiceInterface
 	aiSettingsService AISettingsServiceInterface
 	logger            *zap.Logger
+	writeMutex        sync.Mutex // Protects concurrent WebSocket writes (ping + message streaming)
 }
 
 // NewChatWebSocketHandler creates a new WebSocket handler with ai-service integration
@@ -649,6 +650,22 @@ func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServi
 		aiSettingsService: aiSettingsService,
 		logger:            logger,
 	}
+}
+
+// safeWriteJSON safely writes JSON to WebSocket with mutex protection
+// Prevents race condition between ping goroutine and message streaming goroutine
+func (h *ChatWebSocketHandler) safeWriteJSON(conn *websocket.Conn, msg interface{}) error {
+	h.writeMutex.Lock()
+	defer h.writeMutex.Unlock()
+	return conn.WriteJSON(msg)
+}
+
+// safeWriteControl safely writes control frame to WebSocket with mutex protection
+// Prevents race condition between ping goroutine and message streaming goroutine
+func (h *ChatWebSocketHandler) safeWriteControl(conn *websocket.Conn, messageType int, data []byte, deadline time.Time) error {
+	h.writeMutex.Lock()
+	defer h.writeMutex.Unlock()
+	return conn.WriteControl(messageType, data, deadline)
 }
 
 // extractAuthFromContext extracts authentication from Gin context (set by JWT middleware)
@@ -762,7 +779,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 		for {
 			select {
 			case <-ticker.C:
-				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+				if err := h.safeWriteControl(conn, websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
 					h.logger.Warn("Failed to send ping", zap.Error(err))
 					return
 				}
@@ -829,7 +846,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				Type:    "user_message",
 				Content: userMsg.Content,
 			}
-			if err := conn.WriteJSON(userMsgEvent); err != nil {
+			if err := h.safeWriteJSON(conn, userMsgEvent); err != nil {
 				h.logger.Warn("Failed to emit user message to WebSocket",
 					zap.String("sessionId", sessionID.Hex()),
 					zap.Error(err))
@@ -910,7 +927,7 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 				Type:    "token",
 				Content: "\n\n" + progress.Message + "\n\n",
 			}
-			if err := conn.WriteJSON(progressMsg); err != nil {
+			if err := h.safeWriteJSON(conn, progressMsg); err != nil {
 				h.logger.Debug("Failed to send progress notification (client may have disconnected)",
 					zap.String("sessionId", sessionID.Hex()),
 					zap.Error(err))
@@ -1087,7 +1104,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 					Type:    "token",
 					Content: "\n\n⏸️ _Interrupt detected - processing your message..._\n\n",
 				}
-				conn.WriteJSON(interruptNotice)
+				h.safeWriteJSON(conn, interruptNotice)
 			}
 			// Continue processing the event - don't return here
 			// The interrupt handler in the main loop will process the new message
@@ -1117,7 +1134,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 						Type:    "token",
 						Content: event.Content,
 					}
-					if err := conn.WriteJSON(streamMsg); err != nil {
+					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 						// Check if this is a normal disconnection (client closed browser/refreshed)
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during streaming - continuing processing in background",
@@ -1155,7 +1172,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 							ID:   event.ToolCall.ID,
 						},
 					}
-					if err := conn.WriteJSON(streamMsg); err != nil {
+					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 						// Check if this is a normal disconnection
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during tool call streaming - continuing processing",
@@ -1204,7 +1221,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 							DurationMs: int(event.ToolResult.DurationMs),
 						},
 					}
-					if err := conn.WriteJSON(streamMsg); err != nil {
+					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 						// Check if this is a normal disconnection
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during tool result streaming - continuing processing",
@@ -1235,7 +1252,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 			Type:    "done",
 			Content: "",
 		}
-		if err := conn.WriteJSON(doneMsg); err != nil {
+		if err := h.safeWriteJSON(conn, doneMsg); err != nil {
 			// Check if this is a normal disconnection
 			if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 				h.logger.Debug("Client disconnected before completion message",
@@ -1291,7 +1308,7 @@ func (h *ChatWebSocketHandler) streamToolResult(conn *websocket.Conn, result mod
 			Type:       "tool_result",
 			ToolResult: &result,
 		}
-		if err := conn.WriteJSON(streamMsg); err != nil {
+		if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 			return fmt.Errorf("failed to send tool result: %w", err)
 		}
 		return nil
@@ -1328,7 +1345,7 @@ func (h *ChatWebSocketHandler) streamToolResult(conn *websocket.Conn, result mod
 			},
 		}
 
-		if err := conn.WriteJSON(chunk); err != nil {
+		if err := h.safeWriteJSON(conn, chunk); err != nil {
 			return fmt.Errorf("failed to send chunk %d/%d: %w", i+1, totalChunks, err)
 		}
 
@@ -1347,7 +1364,7 @@ func (h *ChatWebSocketHandler) sendError(conn *websocket.Conn, errorMsg string) 
 		Type:  "error",
 		Error: errorMsg,
 	}
-	if err := conn.WriteJSON(errMsg); err != nil {
+	if err := h.safeWriteJSON(conn, errMsg); err != nil {
 		h.logger.Error("Failed to send error message", zap.Error(err))
 	}
 }
