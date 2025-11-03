@@ -62,3 +62,24 @@ export interface AddFolderConfig {
   excludePatterns?: string[];
   chunkSize?: 'xs' | 's' | 'm' | 'l' | 'xl';
 }
+
+export interface FileDetails {
+  id: string;
+  folderPath: string;
+  relativePath: string;
+  language: string;
+  size: number;
+  lineCount: number;
+  chunkCount: number;
+  indexedAt: string;
+}
+
+export interface FileChunkDetails {
+  chunkNum: number;
+  startLine: number;
+  endLine: number;
+  chunkType: string; // "ast" or "line-based"
+  nodeType?: string;
+  nodeName?: string;
+  signature?: string;
+}
