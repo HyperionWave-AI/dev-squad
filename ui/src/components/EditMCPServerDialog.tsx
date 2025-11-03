@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -10,23 +10,24 @@ import {
   Alert,
   CircularProgress,
 } from '@mui/material';
-import { mcpServerService, type AddMCPServerRequest } from '../services/mcpServerService';
+import { mcpServerService, type UpdateMCPServerRequest, type MCPServer } from '../services/mcpServerService';
 
-interface AddMCPServerDialogProps {
+interface EditMCPServerDialogProps {
   open: boolean;
+  server: MCPServer | null;
   onClose: () => void;
   onSuccess: () => void;
   onError: (message: string) => void;
 }
 
-export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
+export const EditMCPServerDialog: React.FC<EditMCPServerDialogProps> = ({
   open,
+  server,
   onClose,
   onSuccess,
   onError,
 }) => {
-  const [formData, setFormData] = useState<AddMCPServerRequest>({
-    serverName: '',
+  const [formData, setFormData] = useState<UpdateMCPServerRequest>({
     serverUrl: '',
     description: '',
   });
@@ -34,9 +35,20 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
   const [loading, setLoading] = useState(false);
   const [validationError, setValidationError] = useState<string>('');
 
+  // Populate form when server prop changes
+  useEffect(() => {
+    if (server) {
+      setFormData({
+        serverUrl: server.serverUrl,
+        description: server.description || '',
+      });
+      setHeadersJson(server.headers ? JSON.stringify(server.headers, null, 2) : '');
+    }
+  }, [server]);
+
   const handleClose = () => {
     if (!loading) {
-      setFormData({ serverName: '', serverUrl: '', description: '' });
+      setFormData({ serverUrl: '', description: '' });
       setHeadersJson('');
       setValidationError('');
       onClose();
@@ -44,17 +56,6 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
   };
 
   const validateForm = (): boolean => {
-    // Validate server name (alphanumeric, dash, underscore only)
-    const serverNameRegex = /^[a-zA-Z0-9_-]+$/;
-    if (!formData.serverName.trim()) {
-      setValidationError('Server name is required');
-      return false;
-    }
-    if (!serverNameRegex.test(formData.serverName)) {
-      setValidationError('Server name can only contain alphanumeric characters, dashes, and underscores');
-      return false;
-    }
-
     // Validate server URL
     if (!formData.serverUrl.trim()) {
       setValidationError('Server URL is required');
@@ -87,14 +88,13 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
   };
 
   const handleSubmit = async () => {
-    if (!validateForm()) {
+    if (!server || !validateForm()) {
       return;
     }
 
     setLoading(true);
     try {
-      const request: AddMCPServerRequest = {
-        serverName: formData.serverName.trim(),
+      const request: UpdateMCPServerRequest = {
         serverUrl: formData.serverUrl.trim(),
         description: formData.description?.trim() || '',
       };
@@ -104,18 +104,18 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
         request.headers = JSON.parse(headersJson);
       }
 
-      await mcpServerService.addMCPServer(request);
+      await mcpServerService.updateMCPServer(server.serverName, request);
       handleClose();
       onSuccess();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to add MCP server';
+      const errorMessage = error instanceof Error ? error.message : 'Failed to update MCP server';
       onError(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleFieldChange = (field: keyof AddMCPServerRequest) => (
+  const handleFieldChange = (field: keyof UpdateMCPServerRequest) => (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
     setFormData((prev) => ({
@@ -130,7 +130,7 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Add MCP Server</DialogTitle>
+      <DialogTitle>Edit MCP Server</DialogTitle>
       <DialogContent>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
           {validationError && (
@@ -141,13 +141,10 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
 
           <TextField
             label="Server Name"
-            value={formData.serverName}
-            onChange={handleFieldChange('serverName')}
-            required
+            value={server?.serverName || ''}
             fullWidth
-            disabled={loading}
-            helperText="Unique name for this MCP server (alphanumeric, dash, underscore only)"
-            placeholder="my-mcp-server"
+            disabled
+            helperText="Server name cannot be changed"
           />
 
           <TextField
@@ -198,10 +195,10 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={loading || !formData.serverName || !formData.serverUrl}
+          disabled={loading || !formData.serverUrl}
           startIcon={loading ? <CircularProgress size={16} /> : null}
         >
-          {loading ? 'Adding...' : 'Add Server'}
+          {loading ? 'Updating...' : 'Update Server'}
         </Button>
       </DialogActions>
     </Dialog>
