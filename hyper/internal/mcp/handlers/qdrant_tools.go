@@ -14,8 +14,9 @@ import (
 
 // QdrantToolHandler manages MCP Qdrant tool operations
 type QdrantToolHandler struct {
-	qdrantClient     storage.QdrantClientInterface
-	metadataRegistry *ToolMetadataRegistry
+	qdrantClient      storage.QdrantClientInterface
+	knowledgeStorage  storage.KnowledgeStorage
+	metadataRegistry  *ToolMetadataRegistry
 }
 
 // NewQdrantToolHandler creates a new Qdrant tool handler
@@ -23,6 +24,11 @@ func NewQdrantToolHandler(client storage.QdrantClientInterface) *QdrantToolHandl
 	return &QdrantToolHandler{
 		qdrantClient: client,
 	}
+}
+
+// SetKnowledgeStorage sets the knowledge storage for vote syncing operations
+func (h *QdrantToolHandler) SetKnowledgeStorage(storage storage.KnowledgeStorage) {
+	h.knowledgeStorage = storage
 }
 
 // SetMetadataRegistry sets the metadata registry for tool indexing
@@ -291,38 +297,31 @@ func (h *QdrantToolHandler) handleQdrantStore(args map[string]interface{}) (*mcp
 		metadata = m
 	}
 
-	// Ensure collection exists (with 768 dimensions for TEI embeddings)
-	if err := h.qdrantClient.EnsureCollection(collectionName, 768); err != nil {
-		// Provide helpful recovery guidance based on error type
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") {
-			return createErrorResult(fmt.Sprintf("Qdrant embedding service unavailable. Cannot store vector embeddings. Use coordinator_upsert_knowledge to store in MongoDB (metadata only, no semantic search). Original error: %s", errMsg)), nil, nil
-		}
-		return createErrorResult(fmt.Sprintf("Failed to ensure collection exists: %s. Try coordinator_upsert_knowledge as fallback.", errMsg)), nil, nil
+	// Check if knowledge storage is available
+	if h.knowledgeStorage == nil {
+		return createErrorResult("Knowledge storage not initialized. Cannot store knowledge."), nil, nil
 	}
 
-	// Generate ID
-	id := storage.GenerateID()
-
-	// Store point with embedding
-	if err := h.qdrantClient.StorePoint(collectionName, id, information, metadata); err != nil {
-		// Provide helpful recovery guidance based on error type
+	// Store in both MongoDB and Qdrant using the knowledge storage layer (no taskId for this tool)
+	entry, err := h.knowledgeStorage.Upsert(collectionName, information, metadata, nil)
+	if err != nil {
+		// Provide helpful error message
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") || strings.Contains(errMsg, "timeout") {
-			return createErrorResult(fmt.Sprintf("Qdrant storage unavailable. Use coordinator_upsert_knowledge to store in MongoDB instead. Original error: %s", errMsg)), nil, nil
+			return createErrorResult(fmt.Sprintf("Storage service unavailable. Original error: %s", errMsg)), nil, nil
 		}
-		return createErrorResult(fmt.Sprintf("Failed to store knowledge: %s. Try coordinator_upsert_knowledge as alternative.", errMsg)), nil, nil
+		return createErrorResult(fmt.Sprintf("Failed to store knowledge: %s", errMsg)), nil, nil
 	}
 
-	resultText := fmt.Sprintf("✓ Knowledge stored in Qdrant\n\nID: %s\nCollection: %s\nVector dimensions: 768 (TEI nomic-embed-text-v1.5)",
-		id, collectionName)
+	resultText := fmt.Sprintf("✓ Knowledge stored successfully\n\nID: %s\nCollection: %s\nStored in: MongoDB + Qdrant (vector embeddings)",
+		entry.ID, collectionName)
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: resultText},
 		},
 	}, map[string]interface{}{
-		"id":         id,
+		"id":         entry.ID,
 		"collection": collectionName,
 	}, nil
 }
