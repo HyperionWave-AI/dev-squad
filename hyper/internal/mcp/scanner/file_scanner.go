@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"hyper/internal/mcp/parser"
 	"hyper/internal/mcp/storage"
 )
 
@@ -310,7 +311,83 @@ func (fs *FileScanner) ReadFileChunks(filePath string) ([]string, error) {
 }
 
 // CreateFileChunks creates FileChunk objects for a file
+// Uses AST parsing if available, with fallback to line-based chunking
 func (fs *FileScanner) CreateFileChunks(fileID, filePath string) ([]*storage.FileChunk, error) {
+	// Check if AST parsing is enabled (default: true)
+	useAST := true
+	if envUseAST := os.Getenv("CODE_INDEX_USE_AST"); envUseAST == "false" {
+		useAST = false
+	}
+
+	// Check if AST fallback is enabled (default: true)
+	astFallback := true
+	if envFallback := os.Getenv("CODE_INDEX_AST_FALLBACK"); envFallback == "false" {
+		astFallback = false
+	}
+
+	// Try AST parsing first if enabled
+	if useAST {
+		registry := parser.GetRegistry()
+		if registry.HasParserForFile(filePath) {
+			astChunks, err := fs.createASTChunks(fileID, filePath)
+			if err == nil && len(astChunks) > 0 {
+				// AST parsing succeeded
+				return astChunks, nil
+			}
+			// AST parsing failed - fall through to line-based if fallback enabled
+			if !astFallback {
+				return nil, fmt.Errorf("AST parsing failed and fallback disabled: %w", err)
+			}
+		}
+	}
+
+	// Fallback to line-based chunking
+	return fs.createLineBasedChunks(fileID, filePath)
+}
+
+// createASTChunks creates chunks using AST parsing
+func (fs *FileScanner) createASTChunks(fileID, filePath string) ([]*storage.FileChunk, error) {
+	// Read file content
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Get parser for this file
+	registry := parser.GetRegistry()
+	astParser, err := registry.GetParserForFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("no parser available: %w", err)
+	}
+
+	// Parse the file
+	nodes, err := astParser.Parse(filePath, content)
+	if err != nil {
+		return nil, fmt.Errorf("AST parsing failed: %w", err)
+	}
+
+	// Convert AST nodes to file chunks
+	var fileChunks []*storage.FileChunk
+	for i, node := range nodes {
+		chunk := &storage.FileChunk{
+			FileID:    fileID,
+			ChunkNum:  i,
+			Content:   node.Content,
+			StartLine: node.StartLine,
+			EndLine:   node.EndLine,
+			ChunkType: "ast",
+			NodeType:  string(node.Type),
+			NodeName:  node.Name,
+			Signature: node.Signature,
+		}
+		fileChunks = append(fileChunks, chunk)
+	}
+
+	return fileChunks, nil
+}
+
+// createLineBasedChunks creates chunks using traditional line-based chunking
+func (fs *FileScanner) createLineBasedChunks(fileID, filePath string) ([]*storage.FileChunk, error) {
 	chunks, err := fs.ReadFileChunks(filePath)
 	if err != nil {
 		return nil, err
@@ -331,6 +408,7 @@ func (fs *FileScanner) CreateFileChunks(fileID, filePath string) ([]*storage.Fil
 			Content:   content,
 			StartLine: currentLine,
 			EndLine:   currentLine + lines - 1,
+			ChunkType: "line-based",
 		}
 
 		fileChunks = append(fileChunks, chunk)
