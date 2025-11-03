@@ -75,6 +75,9 @@ func (s *CodeIndexStorage) createIndexes() error {
 	_, err = s.chunksCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "fileId", Value: 1}, {Key: "chunkNum", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "vectorId", Value: 1}}},
+		{Keys: bson.D{{Key: "chunkType", Value: 1}}},
+		{Keys: bson.D{{Key: "nodeType", Value: 1}}},
+		{Keys: bson.D{{Key: "nodeName", Value: 1}}},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create chunk indexes: %w", err)
