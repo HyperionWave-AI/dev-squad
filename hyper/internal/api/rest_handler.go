@@ -715,8 +715,8 @@ func (h *RESTAPIHandler) QueryKnowledge(c *gin.Context) {
 		limit = 100 // Max limit
 	}
 
-	// Query knowledge storage
-	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit)
+	// Query knowledge storage (no taskId filtering in this handler)
+	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit, nil)
 	if err != nil {
 		h.logger.Error("Failed to query knowledge",
 			zap.String("collection", req.Collection),
