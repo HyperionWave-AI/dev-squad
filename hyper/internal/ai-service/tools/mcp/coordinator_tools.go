@@ -2382,10 +2382,12 @@ func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]
 			f.FilesWritten[path]++
 		}
 	case "apply_patch":
-		// For apply_patch, the file path is embedded in the patch content
-		// Format: "*** Update File: path/to/file.ext"
-		if patchContent, ok := args["patch"].(string); ok {
-			// Extract file path from patch
+		// FIRST: Check for explicit path parameter (apply_patch tool uses "path" parameter)
+		if path, ok := args["path"].(string); ok && path != "" {
+			f.FilesWritten[path]++
+		} else if patchContent, ok := args["patch"].(string); ok {
+			// FALLBACK: Try to extract file path from patch content
+			// Format: "*** Update File: path/to/file.ext"
 			if strings.Contains(patchContent, "*** Update File:") {
 				lines := strings.Split(patchContent, "\n")
 				for _, line := range lines {
@@ -2396,7 +2398,7 @@ func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]
 					}
 				}
 			} else {
-				// Fallback: mark as generic write if we can't extract path
+				// Last resort: mark as generic write if we can't extract path
 				f.FilesWritten["<patch-unknown-file>"]++
 			}
 		}
@@ -2903,6 +2905,198 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	fullSystemPrompt := systemPrompt // Store system prompt for message rebuilding on interrupt
 
 	for streamActive {
+		// ═══════════════════════════════════════════════════════════════════
+		// STAGE 1: PRIORITY CHECK FOR INTERRUPTS (NON-BLOCKING)
+		// ═══════════════════════════════════════════════════════════════════
+		// This ensures interrupts are ALWAYS checked before processing AI events,
+		// preventing starvation when AI is streaming rapidly.
+		var interruptReceived bool
+		select {
+		case <-notifyCh:
+			// USER MESSAGE INTERRUPT - PRIORITY HANDLING
+			t.logger.Info("💬 🔥 PRIORITY: User interrupt detected (pre-check)",
+				zap.String("sessionId", chatSession.ID.Hex()),
+				zap.String("subchatId", subchatID))
+			interruptReceived = true
+		default:
+			// No interrupt pending, proceed to normal event processing
+		}
+
+		// If interrupt was detected in priority check, handle it now
+		if interruptReceived {
+			// ═══════════════════════════════════════════════════════════════════
+			// INTERRUPT HANDLER
+			// ═══════════════════════════════════════════════════════════════════
+
+			// Drain current stream if active
+			if aiStream != nil {
+				go func() {
+					for range aiStream {
+						// discard remaining events
+					}
+				}()
+			}
+
+			// Fetch all messages including new user message
+			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
+			if err != nil {
+				t.logger.Error("Failed to fetch messages after interrupt", zap.Error(err))
+				continue
+			}
+
+			// Extract latest user message for categorization
+			var latestUserMessage string
+			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
+				if messagesResp.Messages[i].Role == "user" {
+					latestUserMessage = messagesResp.Messages[i].Content
+					break
+				}
+			}
+
+			// Categorize the interrupt to determine intent
+			category, guidance, err := t.categorizeInterrupt(ctx, latestUserMessage)
+			if err != nil {
+				t.logger.Warn("Failed to categorize interrupt, defaulting to CONTINUE",
+					zap.Error(err),
+					zap.String("userMessage", latestUserMessage))
+				category = "CONTINUE"
+				guidance = "Continue with your work but acknowledge the user's message if relevant"
+			}
+
+			t.logger.Info("🎯 Interrupt categorized",
+				zap.String("category", category),
+				zap.String("guidance", guidance),
+				zap.String("userMessage", latestUserMessage))
+
+			// Emit progress notification about interrupt
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID,
+				fmt.Sprintf("📨 User interrupt received: %s", category))
+
+			// Build interrupt-aware system prompt guidance based on category
+			var interruptGuidance string
+			switch category {
+			case "STOP":
+				interruptGuidance = fmt.Sprintf(`
+⚠️ CRITICAL: USER INTERRUPT - STOP CURRENT TASK
+The user has sent a message indicating they want to STOP the current task.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. IMMEDIATELY acknowledge the user's message in your FIRST response
+2. STOP all current work - do not make ANY tool calls until you respond
+3. Ask the user what they would like you to do instead
+4. DO NOT continue with the original task unless they explicitly say to continue
+
+Start your response with: "I've stopped the current task. [address their message directly]"
+`, latestUserMessage, guidance)
+
+			case "MODIFY":
+				interruptGuidance = fmt.Sprintf(`
+🔄 USER INTERRUPT - MODIFY APPROACH
+The user wants to modify or adjust the current approach.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, acknowledge the user's request in your response (use text, not just tool calls)
+2. Explain how you'll adjust your approach based on their guidance
+3. THEN proceed with the modified approach using tool calls
+
+Start your response with: "I'll adjust my approach. [explain the changes]"
+`, latestUserMessage, guidance)
+
+			case "CLARIFY":
+				interruptGuidance = fmt.Sprintf(`
+❓ USER INTERRUPT - NEEDS CLARIFICATION
+The user has a question or needs clarification about your work.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. Answer their question directly and clearly in your FIRST response
+2. Do NOT make any tool calls before responding to their question
+3. After answering, ask if they want you to continue or adjust
+4. Wait for their response before making more tool calls
+
+Start your response by directly addressing their question.
+`, latestUserMessage, guidance)
+
+			case "STATUS":
+				interruptGuidance = fmt.Sprintf(`
+📊 USER INTERRUPT - STATUS CHECK
+The user is checking progress or giving encouragement.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, give a brief status update (what you've completed, what's next)
+2. Acknowledge their message warmly
+3. THEN continue with your work
+
+Keep your status response brief (2-3 sentences) before continuing.
+`, latestUserMessage, guidance)
+
+			case "CONTINUE":
+				interruptGuidance = fmt.Sprintf(`
+✅ USER MESSAGE NOTED
+The user sent a message that doesn't require action changes.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+Briefly acknowledge their message if appropriate (1 sentence), then continue your work.
+`, latestUserMessage, guidance)
+
+			default:
+				interruptGuidance = fmt.Sprintf(`
+📨 USER MESSAGE RECEIVED
+User's message: "%s"
+
+Acknowledge the message and continue your work.
+`, latestUserMessage)
+			}
+
+			// Rebuild message context with interrupt-aware system prompt
+			messages = []aiservice.Message{
+				{Role: "system", Content: fullSystemPrompt + "\n\n" + interruptGuidance},
+			}
+			for _, msg := range messagesResp.Messages {
+				messages = append(messages, aiservice.Message{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+
+			t.logger.Info("🔄 Resuming subagent with interrupt-aware context",
+				zap.Int("messageCount", len(messages)),
+				zap.String("category", category),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Restart AI stream with updated, interrupt-aware context
+			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+			if err != nil {
+				t.logger.Error("Failed to restart AI stream after interrupt", zap.Error(err))
+				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Stream restart failed: %v", err))
+				return
+			}
+
+			// Continue to next loop iteration to check for interrupts again
+			continue
+		}
+
+		// ═══════════════════════════════════════════════════════════════════
+		// STAGE 2: NORMAL EVENT PROCESSING (TIMEOUT, INTERRUPT BACKUP, AI EVENTS)
+		// ═══════════════════════════════════════════════════════════════════
 		select {
 		case <-ctx.Done():
 			t.logger.Warn("⏱️ Subagent execution cancelled by timeout",
@@ -2912,8 +3106,8 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 			return
 
 		case <-notifyCh:
-			// USER MESSAGE INTERRUPT
-			t.logger.Info("💬 User message interrupt detected, fetching new messages",
+			// USER MESSAGE INTERRUPT - BACKUP HANDLER (caught in stage 2 when priority check missed it)
+			t.logger.Info("💬 User interrupt detected (backup - caught in stage 2)",
 				zap.String("sessionId", chatSession.ID.Hex()),
 				zap.String("subchatId", subchatID))
 
@@ -3079,7 +3273,7 @@ Acknowledge the message and continue your work.
 				return
 			}
 
-			// Continue to next select iteration
+			// Continue to next loop iteration
 			continue
 
 		case event, ok := <-aiStream:
@@ -3451,6 +3645,27 @@ Acknowledge the message and continue your work.
 				zap.String("subchatId", subchatID),
 				zap.String("agentTaskId", agentTask.ID),
 				zap.String("reason", "no files modified"))
+
+			// Send failure message to user
+			failureMessage := fmt.Sprintf("❌ **Task Blocked - File Validation Failed**\n\n**Reason:** %s\n\n**Tool Calls Made:** %d\n**TODOs Claimed:** %d/%d\n\nThe expected files were not modified. This might be because:\n- The file paths in the task don't match what was actually written\n- The tool used a different file path format\n- The changes were not actually applied\n\nPlease review the task and try again, or ask me for help!",
+				validationErr.Error(), toolCallCount, completedTodos, len(agentTask.Todos))
+
+			// Save failure message to database
+			_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", failureMessage, finalCompanyID)
+			if err != nil {
+				t.logger.Warn("Failed to save failure message to database",
+					zap.String("subchatId", subchatID),
+					zap.Error(err))
+			}
+
+			// Emit failure message to WebSocket
+			handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, failureMessage)
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("❌ Subchat blocked: %s - %s", agentTask.AgentName, validationErr.Error()))
+
+			// Keep subchat alive for user to investigate or provide guidance
+			t.logger.Info("💬 Task blocked - waiting for user messages",
+				zap.String("subchatId", subchatID),
+				zap.String("sessionId", chatSession.ID.Hex()))
 			return
 		}
 
@@ -3488,6 +3703,29 @@ Acknowledge the message and continue your work.
 				zap.Error(err))
 		}
 
+
+	// Send incomplete work message to user
+	incompleteMessage := fmt.Sprintf("⚠️ **Task Incomplete - More Work Needed**\n\n**Progress:** %d/%d TODOs completed\n**Tool Calls Made:** %d\n**Files Modified:** %v\n\nI've made progress but haven't completed all the TODOs yet. Would you like me to:\n1. Continue working on the remaining tasks\n2. Review what's been done so far\n3. Adjust the approach\n\nLet me know how you'd like to proceed!",
+		completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+	// Save incomplete message to database
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", incompleteMessage, finalCompanyID)
+	if err != nil {
+		t.logger.Warn("Failed to save incomplete message to database",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	// Emit incomplete message to WebSocket for real-time display
+	handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, incompleteMessage)
+	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat incomplete: %s - %d/%d TODOs done", agentTask.AgentName, completedTodos, len(agentTask.Todos)))
+
+	// Keep subchat alive for user to provide guidance
+	t.logger.Info("💬 Task incomplete - waiting for user messages",
+		zap.String("subchatId", subchatID),
+		zap.String("sessionId", chatSession.ID.Hex()),
+		zap.Int("completedTodos", completedTodos),
+		zap.Int("totalTodos", len(agentTask.Todos)))
 		return
 	}
 
