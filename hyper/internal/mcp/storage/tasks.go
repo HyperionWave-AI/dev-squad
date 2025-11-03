@@ -233,7 +233,9 @@ func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 			"status":    string(task.Status),
 			"createdAt": task.CreatedAt,
 		}
-		_, err := s.knowledgeStorage.Upsert(collection, task.Prompt, metadata)
+		// Pass taskId as a separate parameter
+		taskIdPtr := &task.ID
+		_, err := s.knowledgeStorage.Upsert(collection, task.Prompt, metadata, taskIdPtr)
 		if err != nil {
 			// Log error but don't fail task creation
 			s.logger.Warn("Failed to index human task in knowledge base",
@@ -834,7 +836,8 @@ func (s *MongoTaskStorage) SearchSimilarHumanTasks(prompt string, limit int, min
 		return nil, nil, fmt.Errorf("knowledge storage not configured")
 	}
 
-	results, err := s.knowledgeStorage.Query("human_tasks_search", prompt, limit)
+	// No taskId filtering for global search across all tasks
+	results, err := s.knowledgeStorage.Query("human_tasks_search", prompt, limit, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query similar tasks: %w", err)
 	}

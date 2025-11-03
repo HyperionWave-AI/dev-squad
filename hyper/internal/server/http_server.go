@@ -20,6 +20,7 @@ import (
 	"hyper/internal/handlers"
 	"hyper/internal/mcp/embeddings"
 	mcphandlers "hyper/internal/mcp/handlers"
+	"hyper/internal/mcp/review"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/middleware"
@@ -177,7 +178,7 @@ func StartHTTPServer(
 	// Create tools discovery handler for MCP management tools
 	// Use the toolsStorage passed from main.go (initialized once)
 	// Pass mcpServer instance for direct tool execution (no HTTP bridge needed)
-	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer)
+	toolsDiscoveryHandler := mcphandlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer, logger)
 	logger.Info("Tools discovery handler created with direct MCP server access")
 
 	// Register MCP tools with the chat service
@@ -199,7 +200,9 @@ func StartHTTPServer(
 		aiChatService,  // AI service for sub-agent streaming
 		chatService,    // Chat service for message storage
 		aiSettingsService, // AI settings service for subagent prompts
+		aiConfig,       // AI configuration for compaction engine
 		logger,         // Logger for debugging
+		mongoDatabase,  // MongoDB database for review tools
 	); err != nil {
 		logger.Error("Failed to register coordinator tools", zap.Error(err))
 		return err
@@ -351,8 +354,44 @@ func StartHTTPServer(
 		zap.String("systemPromptPath", "/api/v1/ai/system-prompt"),
 		zap.String("subagentsPath", "/api/v1/ai/subagents"))
 
+	// Initialize review system components
+	reviewStorage, err := review.NewMongoReviewStorage(mongoDatabase, logger)
+	if err != nil {
+		logger.Warn("Failed to initialize review storage, review features will be unavailable",
+			zap.Error(err))
+	}
+
+	var reviewOrchestrator *review.ReviewOrchestrator
+	if reviewStorage != nil {
+		// Initialize review engines
+		scoringEngine := review.NewScoringEngine(qdrantClient, logger)
+		actionEngine := review.NewActionEngine(knowledgeStorage, reviewStorage, logger)
+		compactionEngine, err := review.NewCompactionEngine(aiConfig)
+		if err != nil {
+			logger.Warn("Failed to initialize compaction engine, compaction features will be unavailable",
+				zap.Error(err))
+		}
+
+		// Create review orchestrator (compactionEngine can be nil)
+		reviewOrchestrator = review.NewReviewOrchestrator(
+			scoringEngine,
+			actionEngine,
+			compactionEngine,
+			knowledgeStorage,
+			reviewStorage,
+			logger,
+		)
+		if compactionEngine != nil {
+			logger.Info("Review system initialized successfully with compaction support",
+				zap.String("provider", aiConfig.Provider),
+				zap.String("model", aiConfig.Model))
+		} else {
+			logger.Info("Review system initialized successfully (compaction unavailable)")
+		}
+	}
+
 	// Register knowledge routes
-	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeStorage, logger)
+	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeStorage, reviewOrchestrator, chatService, logger)
 	knowledgeGroup := r.Group("/api/v1/knowledge")
 	{
 		knowledgeHandler.RegisterRoutes(knowledgeGroup)
