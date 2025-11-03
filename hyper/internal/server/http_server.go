@@ -391,7 +391,7 @@ func StartHTTPServer(
 	}
 
 	// Register knowledge routes
-	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeStorage, reviewOrchestrator, logger)
+	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeStorage, reviewOrchestrator, chatService, logger)
 	knowledgeGroup := r.Group("/api/v1/knowledge")
 	{
 		knowledgeHandler.RegisterRoutes(knowledgeGroup)

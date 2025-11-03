@@ -12,13 +12,18 @@ import {
   TextField,
   IconButton,
   InputAdornment,
+  CircularProgress,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import {
   Search as SearchIcon,
   Settings as SettingsIcon,
   Clear as ClearIcon,
   DeleteOutline as DeleteIcon,
+  VerifiedUser as VerifiedUserIcon,
 } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import type { CollectionInfo } from '../services/knowledgeService';
 import { knowledgeService } from '../services/knowledgeService';
 import { CollectionSettingsDialog } from './CollectionSettingsDialog';
@@ -37,10 +42,12 @@ export const CollectionSidebar: React.FC<CollectionSidebarProps> = ({
   onSelectCollection,
   onCollectionsChanged,
 }) => {
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [settingsCollection, setSettingsCollection] = useState<CollectionInfo | null>(null);
   const [deleteCollection, setDeleteCollection] = useState<CollectionInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [verifyingCollection, setVerifyingCollection] = useState<string | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   // Filter collections by search query
   const filteredCollections = collections.filter((col) =>
@@ -88,7 +95,6 @@ export const CollectionSidebar: React.FC<CollectionSidebarProps> = ({
 
   const handleCloseDelete = () => {
     setDeleteCollection(null);
-    setError(null);
   };
 
   const handleConfirmDelete = async () => {
@@ -97,11 +103,26 @@ export const CollectionSidebar: React.FC<CollectionSidebarProps> = ({
     try {
       await knowledgeService.deleteCollection(deleteCollection.id);
       setDeleteCollection(null);
-      setError(null);
       onCollectionsChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete collection');
-      throw err; // Re-throw so the dialog can handle it
+      // Dialog will handle the error display
+      throw err;
+    }
+  };
+
+  const handleVerify = async (collection: CollectionInfo, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setVerifyingCollection(collection.id);
+    setVerifyError(null);
+
+    try {
+      const { sessionId } = await knowledgeService.verifyKnowledgeArticle(collection.id);
+      navigate(`/chat/${sessionId}`);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to verify knowledge article';
+      setVerifyError(errorMessage);
+    } finally {
+      setVerifyingCollection(null);
     }
   };
 
@@ -176,6 +197,24 @@ export const CollectionSidebar: React.FC<CollectionSidebarProps> = ({
                     disablePadding
                     secondaryAction={
                       <Box sx={{ display: 'flex', gap: 0.5 }}>
+                        <IconButton
+                          edge="end"
+                          size="small"
+                          onClick={(e) => handleVerify(collection, e)}
+                          disabled={verifyingCollection === collection.id}
+                          aria-label="Verify knowledge article"
+                          sx={{
+                            '&:hover': {
+                              color: 'success.main',
+                            }
+                          }}
+                        >
+                          {verifyingCollection === collection.id ? (
+                            <CircularProgress size={16} />
+                          ) : (
+                            <VerifiedUserIcon fontSize="small" />
+                          )}
+                        </IconButton>
                         <IconButton
                           edge="end"
                           size="small"
@@ -300,6 +339,18 @@ export const CollectionSidebar: React.FC<CollectionSidebarProps> = ({
           onCancel={handleCloseDelete}
         />
       )}
+
+      {/* Error Snackbar */}
+      <Snackbar
+        open={verifyError !== null}
+        autoHideDuration={6000}
+        onClose={() => setVerifyError(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setVerifyError(null)} severity="error" sx={{ width: '100%' }}>
+          {verifyError}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
