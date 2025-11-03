@@ -292,11 +292,11 @@ func (h *KnowledgeResourceHandler) handleRecentLearningsResource(ctx context.Con
 
 	for _, collection := range collections {
 		// Query this collection with a broad search to get recent entries
-		// We'll filter by time after retrieval
-		results, err := h.knowledgeStorage.Query(collection, "recent", 50) // Get up to 50 per collection
+		// We'll filter by time after retrieval (no taskId filtering)
+		results, err := h.knowledgeStorage.Query(collection, "recent", 50, nil) // Get up to 50 per collection
 		if err != nil {
 			// If search fails, try empty query
-			results, err = h.knowledgeStorage.Query(collection, "", 50)
+			results, err = h.knowledgeStorage.Query(collection, "", 50, nil)
 			if err != nil {
 				continue // Skip collections with errors
 			}
