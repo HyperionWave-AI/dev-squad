@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"go.uber.org/zap"
 )
 
 // MockToolsStorage is a mock implementation of ToolsStorage for testing
@@ -165,12 +166,14 @@ func TestHandleDiscoverTools(t *testing.T) {
 			}
 
 			// Create handler
+			logger := zap.NewNop() // No-op logger for tests
 			handler := &ToolsDiscoveryHandler{
 				toolsStorage: mockStorage,
+				logger:       logger,
 			}
 
 			// Execute handler
-			result, data, err := handler.handleDiscoverTools(context.Background(), tt.args)
+			result, data, err := handler.HandleDiscoverTools(context.Background(), tt.args)
 
 			// Verify results
 			if tt.expectedError {
@@ -274,12 +277,14 @@ func TestHandleGetToolSchema(t *testing.T) {
 			}
 
 			// Create handler
+			logger := zap.NewNop() // No-op logger for tests
 			handler := &ToolsDiscoveryHandler{
 				toolsStorage: mockStorage,
+				logger:       logger,
 			}
 
 			// Execute handler
-			result, data, err := handler.handleGetToolSchema(context.Background(), tt.args)
+			result, data, err := handler.HandleGetToolSchema(context.Background(), tt.args)
 
 			// Verify results
 			if tt.expectedError {
@@ -346,12 +351,14 @@ func TestHandleExecuteTool(t *testing.T) {
 			mockStorage := new(MockToolsStorage)
 
 			// Create handler
+			logger := zap.NewNop() // No-op logger for tests
 			handler := &ToolsDiscoveryHandler{
 				toolsStorage: mockStorage,
+				logger:       logger,
 			}
 
 			// Execute handler
-			result, _, err := handler.handleExecuteTool(context.Background(), tt.args)
+			result, _, err := handler.HandleExecuteTool(context.Background(), tt.args)
 
 			// Verify results
 			assert.NotNil(t, result)
@@ -386,8 +393,10 @@ func TestCamelCaseParamExtraction(t *testing.T) {
 		}, nil)
 
 	// Create handler
+	logger := zap.NewNop() // No-op logger for tests
 	handler := &ToolsDiscoveryHandler{
 		toolsStorage: mockStorage,
+		logger:       logger,
 	}
 
 	// Test with camelCase parameters
@@ -396,7 +405,7 @@ func TestCamelCaseParamExtraction(t *testing.T) {
 		"limit": float64(5),    // camelCase
 	}
 
-	result, data, err := handler.handleDiscoverTools(context.Background(), args)
+	result, data, err := handler.HandleDiscoverTools(context.Background(), args)
 
 	// Verify
 	assert.NotNil(t, result)

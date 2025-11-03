@@ -2513,7 +2513,6 @@ var (
 		"coordinator_list_human_tasks",
 		"coordinator_list_agent_tasks",
 		"coordinator_get_agent_task",
-		"knowledge_find",
 		"coordinator_query_knowledge",
 	}
 
@@ -2539,6 +2538,7 @@ var (
 
 	// Phase 4 - Knowledge Management: Store and retrieve knowledge
 	workflowPhase4Tools = []string{
+		"knowledge_find",
 		"coordinator_upsert_knowledge",
 		"knowledge_store",
 		"coordinator_get_popular_collections",
