@@ -598,6 +598,7 @@ func main() {
 	// Register Qdrant tools (semantic search and storage)
 	logger.Info("Registering Qdrant tools to MCP server...")
 	qdrantHandler := handlers.NewQdrantToolHandler(qdrantClient)
+	qdrantHandler.SetKnowledgeStorage(knowledgeStorage) // Enable MongoDB storage for knowledge_store
 	if err := qdrantHandler.RegisterQdrantTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register Qdrant tools to MCP server", zap.Error(err))
 	}

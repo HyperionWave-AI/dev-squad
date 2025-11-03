@@ -34,6 +34,7 @@ type KnowledgeEntry struct {
 	ID           string                 `json:"id" bson:"entryId"`
 	CollectionID primitive.ObjectID     `json:"collectionId,omitempty" bson:"collectionId,omitempty"` // References Collection._id
 	Collection   string                 `json:"collection" bson:"collection"`                         // DEPRECATED: Keep for backward compatibility
+	TaskId       string                 `json:"taskId,omitempty" bson:"taskId,omitempty"`             // Optional task ID for task-scoped filtering
 	Text         string                 `json:"text" bson:"text"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty" bson:"metadata,omitempty"`
 	CreatedAt    time.Time              `json:"createdAt" bson:"createdAt"`
@@ -91,10 +92,11 @@ type CollectionMetadata struct {
 
 // KnowledgeStorage provides storage interface for knowledge entries
 type KnowledgeStorage interface {
-	Upsert(collection, text string, metadata map[string]interface{}) (*KnowledgeEntry, error)
+	Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*KnowledgeEntry, error)
 	UpdateEntry(id, text string, metadata map[string]interface{}) (*KnowledgeEntry, error)
 	DeleteEntry(id string) error
-	Query(collection, query string, limit int, voteBoost ...float64) ([]*QueryResult, error)
+	GetEntryByID(id string) (*KnowledgeEntry, error)
+	Query(collection, query string, limit int, taskId *string, voteBoost ...float64) ([]*QueryResult, error)
 	ListCollections() []string
 	CreateCollection(name, category, description string, tags []string) (*Collection, error)
 	DeleteCollection(id string) (string, int64, error)
@@ -157,6 +159,15 @@ func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInter
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create text index: %w", err)
+	}
+
+	// Sparse index on taskId for efficient task-scoped filtering
+	_, err = storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "taskId", Value: 1}},
+		Options: options.Index().SetSparse(true),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create taskId index: %w", err)
 	}
 
 	// Index on collection_metadata.collectionName (unique)
@@ -488,7 +499,7 @@ func (s *MongoKnowledgeStorage) MigrateToCollectionObjects() (map[string]interfa
 }
 
 // Upsert stores or updates a knowledge entry in both MongoDB and Qdrant
-func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}) (*KnowledgeEntry, error) {
+func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*KnowledgeEntry, error) {
 	ctx := context.Background()
 
 	// Lookup Collection object by name
@@ -506,6 +517,11 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 		CreatedAt:    time.Now().UTC(),
 	}
 
+	// Set taskId if provided
+	if taskId != nil && *taskId != "" {
+		entry.TaskId = *taskId
+	}
+
 	// Store in MongoDB for metadata and audit trail
 	_, err = s.knowledgeCollection.InsertOne(ctx, entry)
 	if err != nil {
@@ -521,8 +537,17 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 				zap.String("qdrantName", collectionObj.QdrantName),
 				zap.Error(err))
 		} else {
+			// Prepare Qdrant payload with taskId if provided
+			qdrantPayload := metadata
+			if qdrantPayload == nil {
+				qdrantPayload = make(map[string]interface{})
+			}
+			if taskId != nil && *taskId != "" {
+				qdrantPayload["taskId"] = *taskId
+			}
+
 			// Store vector point using QdrantName
-			if err := s.qdrantClient.StorePoint(collectionObj.QdrantName, entry.ID, text, metadata); err != nil {
+			if err := s.qdrantClient.StorePoint(collectionObj.QdrantName, entry.ID, text, qdrantPayload); err != nil {
 				// Log error but don't fail - MongoDB has the data
 				s.logger.Warn("Failed to store point in Qdrant",
 					zap.String("qdrantName", collectionObj.QdrantName),
@@ -624,9 +649,26 @@ func (s *MongoKnowledgeStorage) DeleteEntry(id string) error {
 	return nil
 }
 
+// GetEntryByID retrieves a knowledge entry by its ID
+func (s *MongoKnowledgeStorage) GetEntryByID(id string) (*KnowledgeEntry, error) {
+	ctx := context.Background()
+
+	var entry KnowledgeEntry
+	err := s.knowledgeCollection.FindOne(ctx, bson.M{"entryId": id}).Decode(&entry)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, fmt.Errorf("knowledge entry not found: %s", id)
+		}
+		return nil, fmt.Errorf("failed to find knowledge entry: %w", err)
+	}
+
+	return &entry, nil
+}
+
 // Query searches for knowledge entries using Qdrant vector search with optional vote boosting
+// taskId is an optional parameter for filtering by task
 // voteBoost is an optional parameter (default: 0.0 for no boosting)
-func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, voteBoost ...float64) ([]*QueryResult, error) {
+func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, taskId *string, voteBoost ...float64) ([]*QueryResult, error) {
 	ctx := context.Background()
 
 	// Lookup Collection object by name
@@ -637,7 +679,20 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, voteB
 
 	// Use Qdrant for semantic vector search if available (using immutable QdrantName)
 	if s.qdrantClient != nil {
-		results, err := s.qdrantClient.SearchSimilar(collectionObj.QdrantName, query, limit, voteBoost...)
+		// Build filter for Qdrant if taskId is provided
+		var qdrantFilter map[string]interface{}
+		if taskId != nil && *taskId != "" {
+			qdrantFilter = map[string]interface{}{
+				"must": []map[string]interface{}{
+					{
+						"key":   "taskId",
+						"match": map[string]interface{}{"value": *taskId},
+					},
+				},
+			}
+		}
+
+		results, err := s.qdrantClient.SearchSimilarWithFilter(collectionObj.QdrantName, query, limit, qdrantFilter, voteBoost...)
 		if err == nil && len(results) > 0 {
 			// Convert QdrantQueryResult to QueryResult
 			queryResults := make([]*QueryResult, len(results))
@@ -667,6 +722,11 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, voteB
 		"$text": bson.M{"$search": query},
 	}
 
+	// Add taskId filter if provided
+	if taskId != nil && *taskId != "" {
+		filter["taskId"] = *taskId
+	}
+
 	opts := options.Find().
 		SetProjection(bson.D{{Key: "score", Value: bson.D{{Key: "$meta", Value: "textScore"}}}}).
 		SetSort(bson.D{{Key: "score", Value: bson.D{{Key: "$meta", Value: "textScore"}}}})
@@ -688,7 +748,7 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, voteB
 
 	// If MongoDB text search returns no results, fallback to simple similarity
 	if len(entries) == 0 {
-		return s.fallbackQuery(ctx, collectionObj, query, limit)
+		return s.fallbackQuery(ctx, collectionObj, query, limit, taskId)
 	}
 
 	// Convert to QueryResult format
@@ -704,13 +764,18 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, voteB
 }
 
 // fallbackQuery performs simple similarity matching when text search fails
-func (s *MongoKnowledgeStorage) fallbackQuery(ctx context.Context, collectionObj *Collection, query string, limit int) ([]*QueryResult, error) {
+func (s *MongoKnowledgeStorage) fallbackQuery(ctx context.Context, collectionObj *Collection, query string, limit int, taskId *string) ([]*QueryResult, error) {
 	// Support both collectionId (new) and collection (old) for backward compatibility
 	filter := bson.M{
 		"$or": []bson.M{
 			{"collectionId": collectionObj.ID},
 			{"collection": collectionObj.Name},
 		},
+	}
+
+	// Add taskId filter if provided
+	if taskId != nil && *taskId != "" {
+		filter["taskId"] = *taskId
 	}
 	cursor, err := s.knowledgeCollection.Find(ctx, filter)
 	if err != nil {
