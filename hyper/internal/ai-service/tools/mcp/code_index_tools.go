@@ -375,6 +375,20 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 			result.EndLine = int(endLine)
 		}
 
+		// Extract AST metadata if present
+		if chunkType, ok := hit.Payload["chunkType"].(string); ok {
+			result.ChunkType = chunkType
+		}
+		if nodeType, ok := hit.Payload["nodeType"].(string); ok {
+			result.NodeType = nodeType
+		}
+		if nodeName, ok := hit.Payload["nodeName"].(string); ok {
+			result.NodeName = nodeName
+		}
+		if signature, ok := hit.Payload["signature"].(string); ok {
+			result.Signature = signature
+		}
+
 		// Handle content based on retrieve type
 		if retrieveType == "chunk" {
 			// Sized chunk retrieval: fetch N lines around the match
