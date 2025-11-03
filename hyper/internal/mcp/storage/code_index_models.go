@@ -45,6 +45,12 @@ type FileChunk struct {
 	EndLine   int       `bson:"endLine" json:"endLine"`               // Ending line number
 	VectorID  string    `bson:"vectorId,omitempty" json:"vectorId"`   // Qdrant point ID
 	IndexedAt time.Time `bson:"indexedAt" json:"indexedAt"`           // When chunk was indexed
+
+	// AST-based chunking metadata
+	ChunkType string `bson:"chunkType,omitempty" json:"chunkType,omitempty"` // "ast" or "line-based"
+	NodeType  string `bson:"nodeType,omitempty" json:"nodeType,omitempty"`   // function, class, method, interface, etc.
+	NodeName  string `bson:"nodeName,omitempty" json:"nodeName,omitempty"`   // Name of the function/class/method
+	Signature string `bson:"signature,omitempty" json:"signature,omitempty"` // Function/method signature or type declaration
 }
 
 // SearchResult represents a search result from the code index
@@ -62,6 +68,12 @@ type SearchResult struct {
 	FolderPath        string  `json:"folderPath"`
 	FullFileRetrieved bool    `json:"fullFileRetrieved"` // True when retrieve="full" mode
 	ChunkSize         string  `json:"chunkSize,omitempty"` // T-shirt size (s/m/l/xl) when using sized chunk modes
+
+	// AST-based chunking metadata
+	ChunkType string `json:"chunkType,omitempty"` // "ast" or "line-based"
+	NodeType  string `json:"nodeType,omitempty"`  // function, class, method, interface, etc.
+	NodeName  string `json:"nodeName,omitempty"`  // Name of the function/class/method
+	Signature string `json:"signature,omitempty"` // Function/method signature or type declaration
 }
 
 // IndexStatus represents the current status of the code index
