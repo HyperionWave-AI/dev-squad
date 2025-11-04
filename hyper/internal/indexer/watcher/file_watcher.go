@@ -540,9 +540,11 @@ func (fw *FileWatcher) indexFile(path string, folder *storage.IndexedFolder) {
 	}
 
 	// Index chunks
+	fileName := filepath.Base(path)
 	for i, chunkContent := range fileInfo.Chunks {
-		// Generate embedding
-		embedding, err := fw.embeddingClient.CreateEmbedding(chunkContent.Content)
+		// Generate embedding with file name context for better search relevance
+		contentWithContext := fmt.Sprintf("File: %s\n%s", fileName, chunkContent.Content)
+		embedding, err := fw.embeddingClient.CreateEmbedding(contentWithContext)
 		if err != nil {
 			fw.logger.Error("Failed to create embedding",
 				zap.String("path", path),

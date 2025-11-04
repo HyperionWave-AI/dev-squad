@@ -7,12 +7,14 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Alert, Snackbar, IconButton, Drawer, Divider, Typography } from '@mui/material';
-import { AccountTree as SubchatsIcon } from '@mui/icons-material';
+import { AccountTree as SubchatsIcon, ShowChart as MetricsIcon } from '@mui/icons-material';
 import { ChatSessionList } from '../components/ChatSessionList';
 import { ChatMessageView } from '../components/ChatMessageView';
 import { ChatInputBox } from '../components/ChatInputBox';
 import { AgentSelector } from '../components/AgentSelector';
 import { SubchatList } from '../components/SubchatList';
+import { ConversationModeToggle } from '../components/ConversationModeToggle';
+import { MetricsDashboard } from '../components/MetricsDashboard';
 import {
   createSession,
   getSessions,
@@ -20,6 +22,7 @@ import {
   deleteSession,
   updateSession,
   connectChatStream,
+  refetchMessages,
   type ChatSession,
   type ChatMessage,
   type ChatStreamConnection,
@@ -37,6 +40,7 @@ export function CodeChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [pendingToolCalls, setPendingToolCalls] = useState<Set<string>>(new Set());
   const [subchatsDrawerOpen, setSubchatsDrawerOpen] = useState(false);
+  const [metricsDrawerOpen, setMetricsDrawerOpen] = useState(false);
   // Real-time streaming tool calls/results (updated immediately, not just on stream end)
   const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCall[]>([]);
   const [streamingToolResults, setStreamingToolResults] = useState<Map<string, ToolResult>>(new Map());
@@ -48,14 +52,6 @@ export function CodeChatPage() {
     toolCalls: ToolCall[];
     toolResults: Map<string, ToolResult>;
   }>({ toolCalls: [], toolResults: new Map() });
-  // Ref to track current active session (prevents stale closure in auto-refresh interval)
-  const activeSessionIdRef = useRef<string | null>(null);
-
-  // Keep ref in sync with state
-  useEffect(() => {
-    activeSessionIdRef.current = activeSessionId;
-    console.log('[CodeChatPage] 📌 activeSessionIdRef updated to:', activeSessionId);
-  }, [activeSessionId]);
 
   // Load sessions on mount and set up auto-refresh polling
   useEffect(() => {
@@ -95,7 +91,6 @@ export function CodeChatPage() {
     console.log('[CodeChatPage] ============================================');
     console.log('[CodeChatPage] loadSessions called at', new Date().toISOString());
     console.log('[CodeChatPage] Current sessions count:', sessions.length);
-    console.log('[CodeChatPage] 🔍 Checking activeSessionIdRef.current:', activeSessionIdRef.current);
     try {
       const fetchedSessions = await getSessions();
       console.log('[CodeChatPage] ✅ Fetched sessions from API:', fetchedSessions.length, 'sessions');
@@ -111,17 +106,29 @@ export function CodeChatPage() {
         parentChatId: s.parentChatId
       })));
 
-      console.log('[CodeChatPage] Calling setSessions() with', fetchedSessions.length, 'sessions');
-      setSessions(fetchedSessions);
+      // Deduplicate sessions by ID (prevents race condition artifacts)
+      const sessionMap = new Map<string, typeof fetchedSessions[0]>();
+      fetchedSessions.forEach(session => {
+        sessionMap.set(session.id, session);
+      });
+      const deduplicatedSessions = Array.from(sessionMap.values());
+
+      if (deduplicatedSessions.length !== fetchedSessions.length) {
+        console.warn('[CodeChatPage] ⚠️ Removed duplicate sessions:',
+          fetchedSessions.length - deduplicatedSessions.length,
+          'duplicates found');
+      }
+
+      console.log('[CodeChatPage] Calling setSessions() with', deduplicatedSessions.length, 'sessions');
+      setSessions(deduplicatedSessions);
       console.log('[CodeChatPage] ✅ setSessions() completed');
 
-      // Select first session if none active (using ref to avoid stale closure)
-      if (!activeSessionIdRef.current && fetchedSessions.length > 0) {
-        console.log('[CodeChatPage] 🎯 No active session, auto-selecting first session:', fetchedSessions[0].id);
+      // Select first session if none active (ONLY on initial load, not during auto-refresh)
+      // Don't auto-select if user already has a session active or is navigating
+      if (!activeSessionId && fetchedSessions.length > 0 && sessions.length === 0) {
+        // Only auto-select on very first load when sessions array is empty
         setActiveSessionId(fetchedSessions[0].id);
         await loadMessages(fetchedSessions[0].id);
-      } else if (activeSessionIdRef.current) {
-        console.log('[CodeChatPage] ✅ Active session already set, skipping auto-select. Current:', activeSessionIdRef.current);
       }
     } catch (err) {
       console.error('[CodeChatPage] ❌ Error loading sessions:', err);
@@ -172,8 +179,18 @@ export function CodeChatPage() {
               toolCalls: tools.toolCalls.length > 0 ? tools.toolCalls : undefined,
               toolResults: tools.toolResults.size > 0 ? tools.toolResults : undefined,
             };
-            setMessages((prev) => [...prev, newMessage]);
-            console.log('[CodeChatPage] AI response completed with', tools.toolCalls.length, 'tool calls');
+            console.log('[CodeChatPage] ✅ Creating completed AI message:', {
+              id: newMessage.id,
+              hasContent: !!finalContent,
+              toolCallsCount: tools.toolCalls.length,
+              toolResultsCount: tools.toolResults.size,
+              toolCalls: tools.toolCalls.map(tc => tc.tool),
+            });
+            setMessages((prev) => {
+              const updated = [...prev, newMessage];
+              console.log('[CodeChatPage] ✅ Messages array updated. New length:', updated.length);
+              return updated;
+            });
           }
 
           // Refresh sessions list in case AI created subchats via tool calls
@@ -197,6 +214,24 @@ export function CodeChatPage() {
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
         console.log('[CodeChatPage] Tool call received:', tool, id);
+
+        // If we have accumulated content before the tool call, save it as a separate message
+        if (streamingContentRef.current.trim()) {
+          const messageBeforeToolCall: ChatMessage = {
+            id: `msg-${Date.now()}`,
+            sessionId,
+            role: 'assistant',
+            content: streamingContentRef.current,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, messageBeforeToolCall]);
+          console.log('[CodeChatPage] Saved message before tool call');
+
+          // Clear streaming content for next message
+          streamingContentRef.current = '';
+          setStreamingContent('');
+        }
+
         const toolCall: ToolCall = {
           id,
           tool,
@@ -262,19 +297,13 @@ export function CodeChatPage() {
   };
 
   const handleSessionSelect = async (sessionId: string) => {
-    console.log('[CodeChatPage] 👆 User clicked session:', sessionId);
-    console.log('[CodeChatPage] Previous activeSessionId:', activeSessionId);
-    console.log('[CodeChatPage] Previous activeSessionIdRef.current:', activeSessionIdRef.current);
     if (sessionId !== activeSessionId) {
-      console.log('[CodeChatPage] ✅ Setting new active session:', sessionId);
       setActiveSessionId(sessionId);
       await loadMessages(sessionId);
       setStreamingContent('');
       setIsStreaming(false);
       // Reset agent selection for new session
       setSelectedAgentId(null);
-    } else {
-      console.log('[CodeChatPage] ⏭️ Session already active, no change needed');
     }
   };
 
@@ -328,7 +357,8 @@ export function CodeChatPage() {
   };
 
   const handleSendMessage = (text: string) => {
-    if (!activeSessionId || isStreaming || !wsConnectionRef.current) return;
+    // Allow sending messages even while streaming (user interruption support)
+    if (!activeSessionId || !wsConnectionRef.current) return;
 
     // Optimistically add user message
     const userMessage: ChatMessage = {
@@ -349,6 +379,20 @@ export function CodeChatPage() {
     try {
       wsConnectionRef.current.sendMessage(text);
       console.log('[CodeChatPage] Message sent via WebSocket:', text);
+
+      // Refetch messages after 500ms to confirm persistence
+      setTimeout(async () => {
+        if (activeSessionId && wsConnectionRef.current) {
+          try {
+            const refreshedMessages = await refetchMessages(activeSessionId);
+            setMessages(refreshedMessages);
+            console.log('[CodeChatPage] Messages refetched after send');
+          } catch (err) {
+            console.error('[CodeChatPage] Failed to refetch messages:', err);
+            // Don't show error to user - optimistic update is still visible
+          }
+        }
+      }, 500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
       setIsStreaming(false);
@@ -358,23 +402,12 @@ export function CodeChatPage() {
   };
 
   const handleSubchatClick = async (subchatId: string) => {
-    // Refresh sessions list to include any newly created subchats
-    await loadSessions();
-    // Navigate to the subchat by setting it as active session
+    // Navigate to the subchat immediately (don't call loadSessions first - it causes race condition)
     setActiveSessionId(subchatId);
     await loadMessages(subchatId);
     setSubchatsDrawerOpen(false);
+    // Auto-refresh will pick up any new sessions in the next 3-second cycle
   };
-
-  // Helper to check if active session is a subchat (read-only)
-  const isActiveSessionSubchat = (): boolean => {
-    if (!activeSessionId) return false;
-    const activeSession = sessions.find((s) => s.id === activeSessionId);
-    if (!activeSession) return false;
-    // Detect subchat by title prefix or parentChatId field
-    return activeSession.title.startsWith('Subchat:') || !!activeSession.parentChatId;
-  };
-
   return (
     <Box className="chat-dashboard-container" sx={{ display: 'flex', height: 'calc(100vh - 80px)' }}>
       {/* Left Sidebar - Session List (20%) */}
@@ -400,15 +433,16 @@ export function CodeChatPage() {
           backgroundColor: 'background.default',
         }}
       >
-        {/* Top Bar with Agent Selector and Subchats Button */}
+        {/* Top Bar with Agent Selector, Conversation Mode Toggle, and Subchats Button */}
         <Box
           sx={{
             display: 'flex',
             alignItems: 'center',
             gap: 1,
-            py: 1,
             borderBottom: '1px solid',
             borderColor: 'divider',
+            p: 1,
+            flexShrink: 0,
           }}
         >
           <Box sx={{ flex: 1 }}>
@@ -419,18 +453,28 @@ export function CodeChatPage() {
               disabled={isStreaming}
             />
           </Box>
+          <ConversationModeToggle />
           <IconButton
             onClick={() => setSubchatsDrawerOpen(!subchatsDrawerOpen)}
             disabled={!activeSessionId}
             color={subchatsDrawerOpen ? 'primary' : 'default'}
             sx={{ mr: 1 }}
+            title="Parallel Workflows"
           >
             <SubchatsIcon />
+          </IconButton>
+          <IconButton
+            onClick={() => setMetricsDrawerOpen(!metricsDrawerOpen)}
+            color={metricsDrawerOpen ? 'primary' : 'default'}
+            sx={{ mr: 1 }}
+            title="Metrics Dashboard"
+          >
+            <MetricsIcon />
           </IconButton>
         </Box>
 
         {/* Messages View */}
-        <Box sx={{ flex: 1, overflow: 'hidden' }}>
+        <Box sx={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
           <ChatMessageView
             messages={messages}
             isStreaming={isStreaming}
@@ -442,17 +486,17 @@ export function CodeChatPage() {
         </Box>
 
         {/* Input Box */}
-        <ChatInputBox
-          onSendMessage={handleSendMessage}
-          disabled={!activeSessionId || isStreaming || isActiveSessionSubchat()}
-          placeholder={
-            !activeSessionId
-              ? 'Create a new chat to get started'
-              : isActiveSessionSubchat()
-              ? 'This subchat is read-only. Monitor the AI agent progress here.'
-              : 'Type your message...'
-          }
-        />
+        <Box sx={{ flexShrink: 0 }}>
+          <ChatInputBox
+            onSendMessage={handleSendMessage}
+            disabled={!activeSessionId}
+            placeholder={
+              !activeSessionId
+                ? 'Create a new chat to get started'
+                : 'Type your message...'
+            }
+          />
+        </Box>
       </Box>
 
       {/* Subchats Drawer */}
@@ -476,6 +520,27 @@ export function CodeChatPage() {
             onSubchatCreated={loadSessions}
           />
         )}
+      </Drawer>
+
+      {/* Metrics Drawer */}
+      <Drawer
+        anchor="right"
+        open={metricsDrawerOpen}
+        onClose={() => setMetricsDrawerOpen(false)}
+        PaperProps={{
+          sx: { width: 600, height: '100%' },
+        }}
+      >
+        <Box sx={{ mb: 2, p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <MetricsIcon color="primary" />
+            <Typography variant="h6">Metrics Dashboard</Typography>
+          </Box>
+          <IconButton onClick={() => setMetricsDrawerOpen(false)} size="small">
+            <MetricsIcon />
+          </IconButton>
+        </Box>
+        <MetricsDashboard />
       </Drawer>
 
       {/* Error Snackbar */}
