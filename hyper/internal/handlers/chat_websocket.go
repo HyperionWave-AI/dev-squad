@@ -11,6 +11,7 @@ import (
 
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
+	"hyper/internal/middleware"
 	"hyper/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -769,13 +770,22 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 
 	// Channel for handling graceful shutdown
 	done := make(chan struct{})
+	defer func() {
+		// Ensure done channel is closed on any exit path (including panics)
+		select {
+		case <-done:
+			// Already closed
+		default:
+			close(done)
+		}
+	}()
 
 	// Processing state to prevent concurrent messages during AI response
 	isProcessing := false
 	var processingMutex sync.Mutex
 
-	// Goroutine for sending pings
-	go func() {
+	// Goroutine for sending pings (with panic recovery)
+	middleware.SafeGo(h.logger, func() {
 		for {
 			select {
 			case <-ticker.C:
@@ -789,14 +799,14 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				return
 			}
 		}
-	}()
+	})
 
 	// Main message loop
 	for {
 		select {
 		case <-httpCtx.Done():
 			h.logger.Info("HTTP context cancelled, closing WebSocket")
-			close(done)
+			// done channel will be closed by defer
 			return
 		default:
 			// Read message from client
@@ -817,7 +827,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 						zap.String("sessionId", sessionID.Hex()),
 						zap.Error(err))
 				}
-				close(done)
+				// done channel will be closed by defer
 				return
 			}
 
@@ -920,8 +930,8 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 	progressCh := GetProgressNotifier(h.logger).RegisterSession(sessionID)
 	defer GetProgressNotifier(h.logger).UnregisterSession(sessionID)
 
-	// Launch goroutine to stream progress notifications to WebSocket
-	go func() {
+	// Launch goroutine to stream progress notifications to WebSocket (with panic recovery)
+	middleware.SafeGo(h.logger, func() {
 		for progress := range progressCh {
 			progressMsg := models.StreamMessage{
 				Type:    "token",
@@ -934,7 +944,7 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 				return
 			}
 		}
-	}()
+	})
 
 	// Step 2: Determine active agent and fetch system prompt
 	var systemPromptText string
