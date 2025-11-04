@@ -72,7 +72,7 @@ run: ## Run the native compiled binary (synchronous)
 		echo "Warning: .env.native not found. Please configure environment variables."; \
 		echo "Copy .env.native to your project root and update with your settings."; \
 	fi
-	./bin/hyper --mode=http
+	./bin/hyper --mode=http --config=.env.native
 
 run-dev: ## Run with Air hot-reload (unified hyper binary)
 	@echo "Starting development mode with hot-reload..."
