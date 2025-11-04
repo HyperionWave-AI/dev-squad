@@ -16,6 +16,7 @@ import (
 
 // ChatService manages chat sessions and messages with MongoDB storage
 type ChatService struct {
+	mongoClient        *mongo.Client
 	sessionsCollection *mongo.Collection
 	messagesCollection *mongo.Collection
 	logger             *zap.Logger
@@ -24,6 +25,7 @@ type ChatService struct {
 // NewChatService creates a new chat service instance
 func NewChatService(db *mongo.Database, logger *zap.Logger) (*ChatService, error) {
 	service := &ChatService{
+		mongoClient:        db.Client(),
 		sessionsCollection: db.Collection("chat_sessions"),
 		messagesCollection: db.Collection("chat_messages"),
 		logger:             logger,
@@ -64,6 +66,27 @@ func NewChatService(db *mongo.Database, logger *zap.Logger) (*ChatService, error
 
 	logger.Info("Chat service initialized with MongoDB indexes")
 	return service, nil
+}
+
+// executeInTransaction executes a function within a MongoDB transaction
+// Handles session management, transaction lifecycle, and error handling
+func (s *ChatService) executeInTransaction(ctx context.Context, fn func(sessCtx mongo.SessionContext) error) error {
+	session, err := s.mongoClient.StartSession()
+	if err != nil {
+		return fmt.Errorf("failed to start MongoDB session: %w", err)
+	}
+	defer session.EndSession(ctx)
+
+	// Execute the function within a transaction
+	_, err = session.WithTransaction(ctx, func(sessCtx mongo.SessionContext) (interface{}, error) {
+		return nil, fn(sessCtx)
+	})
+
+	if err != nil {
+		return fmt.Errorf("transaction failed: %w", err)
+	}
+
+	return nil
 }
 
 // CreateSession creates a new chat session for a user
@@ -148,8 +171,9 @@ func (s *ChatService) GetSession(ctx context.Context, sessionID primitive.Object
 }
 
 // DeleteSession deletes a chat session and all its messages
+// Uses transaction to ensure both operations succeed or fail together (prevents orphaned messages)
 func (s *ChatService) DeleteSession(ctx context.Context, sessionID primitive.ObjectID, userID, companyID string) error {
-	// Verify session belongs to user and company (authorization)
+	// Verify session belongs to user and company (authorization - outside transaction)
 	session, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
 		return err
@@ -159,20 +183,29 @@ func (s *ChatService) DeleteSession(ctx context.Context, sessionID primitive.Obj
 		return fmt.Errorf("unauthorized: session does not belong to user")
 	}
 
-	// Delete all messages first
-	_, err = s.messagesCollection.DeleteMany(ctx, bson.M{"sessionId": sessionID})
-	if err != nil {
-		return fmt.Errorf("failed to delete session messages: %w", err)
-	}
+	// Execute both delete operations in a transaction
+	err = s.executeInTransaction(ctx, func(sessCtx mongo.SessionContext) error {
+		// Delete all messages
+		_, err := s.messagesCollection.DeleteMany(sessCtx, bson.M{"sessionId": sessionID})
+		if err != nil {
+			return fmt.Errorf("failed to delete session messages: %w", err)
+		}
 
-	// Delete the session
-	result, err := s.sessionsCollection.DeleteOne(ctx, bson.M{"_id": sessionID})
-	if err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
-	}
+		// Delete the session
+		result, err := s.sessionsCollection.DeleteOne(sessCtx, bson.M{"_id": sessionID})
+		if err != nil {
+			return fmt.Errorf("failed to delete session: %w", err)
+		}
 
-	if result.DeletedCount == 0 {
-		return fmt.Errorf("session not found")
+		if result.DeletedCount == 0 {
+			return fmt.Errorf("session not found")
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
 	}
 
 	s.logger.Info("Chat session deleted",
@@ -227,13 +260,15 @@ func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.Objec
 }
 
 // SaveMessage saves a message to the database
+// Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content string, companyID string) (*models.ChatMessage, error) {
-	// Verify session exists and user has access
+	// Verify session exists and user has access (outside transaction)
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
 		return nil, err
 	}
 
+	// Prepare message
 	message := &models.ChatMessage{
 		ID:        primitive.NewObjectID(),
 		SessionID: sessionID,
@@ -242,19 +277,29 @@ func (s *ChatService) SaveMessage(ctx context.Context, sessionID primitive.Objec
 		Timestamp: time.Now().UTC(),
 	}
 
-	_, err = s.messagesCollection.InsertOne(ctx, message)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save message: %w", err)
-	}
+	// Execute both operations in a transaction
+	err = s.executeInTransaction(ctx, func(sessCtx mongo.SessionContext) error {
+		// Insert message
+		_, err := s.messagesCollection.InsertOne(sessCtx, message)
+		if err != nil {
+			return fmt.Errorf("failed to save message: %w", err)
+		}
 
-	// Update session's updatedAt timestamp
-	_, err = s.sessionsCollection.UpdateOne(
-		ctx,
-		bson.M{"_id": sessionID},
-		bson.M{"$set": bson.M{"updatedAt": time.Now().UTC()}},
-	)
+		// Update session's updatedAt timestamp (must succeed or transaction aborts)
+		_, err = s.sessionsCollection.UpdateOne(
+			sessCtx,
+			bson.M{"_id": sessionID},
+			bson.M{"$set": bson.M{"updatedAt": time.Now().UTC()}},
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update session timestamp: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		s.logger.Warn("Failed to update session timestamp", zap.Error(err))
+		return nil, err
 	}
 
 	return message, nil
@@ -280,13 +325,15 @@ func (s *ChatService) GetSessionMessages(ctx context.Context, sessionID primitiv
 }
 
 // SaveToolCall saves a tool call message to the database
+// Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, args map[string]interface{}, companyID string) (*models.ChatMessage, error) {
-	// Verify session exists and user has access
+	// Verify session exists and user has access (outside transaction)
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
 		return nil, err
 	}
 
+	// Prepare message
 	message := &models.ChatMessage{
 		ID:        primitive.NewObjectID(),
 		SessionID: sessionID,
@@ -300,37 +347,50 @@ func (s *ChatService) SaveToolCall(ctx context.Context, sessionID primitive.Obje
 		},
 	}
 
-	_, err = s.messagesCollection.InsertOne(ctx, message)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save tool call: %w", err)
-	}
+	// Execute both operations in a transaction
+	err = s.executeInTransaction(ctx, func(sessCtx mongo.SessionContext) error {
+		// Insert tool call message
+		_, err := s.messagesCollection.InsertOne(sessCtx, message)
+		if err != nil {
+			return fmt.Errorf("failed to save tool call: %w", err)
+		}
 
-	// Update session's updatedAt timestamp
-	_, err = s.sessionsCollection.UpdateOne(
-		ctx,
-		bson.M{"_id": sessionID},
-		bson.M{"$set": bson.M{"updatedAt": time.Now().UTC()}},
-	)
+		// Update session's updatedAt timestamp (must succeed or transaction aborts)
+		_, err = s.sessionsCollection.UpdateOne(
+			sessCtx,
+			bson.M{"_id": sessionID},
+			bson.M{"$set": bson.M{"updatedAt": time.Now().UTC()}},
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update session timestamp: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		s.logger.Warn("Failed to update session timestamp", zap.Error(err))
+		return nil, err
 	}
 
 	return message, nil
 }
 
 // SaveToolResult saves a tool result message to the database
+// Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error) {
-	// Verify session exists and user has access
+	// Verify session exists and user has access (outside transaction)
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
 		return nil, err
 	}
 
+	// Prepare message content
 	content := fmt.Sprintf("Tool result: %s", toolName)
 	if errorMsg != "" {
 		content = fmt.Sprintf("Tool error: %s - %s", toolName, errorMsg)
 	}
 
+	// Prepare message
 	message := &models.ChatMessage{
 		ID:        primitive.NewObjectID(),
 		SessionID: sessionID,
@@ -346,19 +406,29 @@ func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.Ob
 		},
 	}
 
-	_, err = s.messagesCollection.InsertOne(ctx, message)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save tool result: %w", err)
-	}
+	// Execute both operations in a transaction
+	err = s.executeInTransaction(ctx, func(sessCtx mongo.SessionContext) error {
+		// Insert tool result message
+		_, err := s.messagesCollection.InsertOne(sessCtx, message)
+		if err != nil {
+			return fmt.Errorf("failed to save tool result: %w", err)
+		}
 
-	// Update session's updatedAt timestamp
-	_, err = s.sessionsCollection.UpdateOne(
-		ctx,
-		bson.M{"_id": sessionID},
-		bson.M{"$set": bson.M{"updatedAt": time.Now().UTC()}},
-	)
+		// Update session's updatedAt timestamp (must succeed or transaction aborts)
+		_, err = s.sessionsCollection.UpdateOne(
+			sessCtx,
+			bson.M{"_id": sessionID},
+			bson.M{"$set": bson.M{"updatedAt": time.Now().UTC()}},
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update session timestamp: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		s.logger.Warn("Failed to update session timestamp", zap.Error(err))
+		return nil, err
 	}
 
 	return message, nil
