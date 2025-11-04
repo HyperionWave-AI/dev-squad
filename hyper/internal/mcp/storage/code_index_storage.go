@@ -75,6 +75,9 @@ func (s *CodeIndexStorage) createIndexes() error {
 	_, err = s.chunksCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "fileId", Value: 1}, {Key: "chunkNum", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "vectorId", Value: 1}}},
+		{Keys: bson.D{{Key: "chunkType", Value: 1}}},
+		{Keys: bson.D{{Key: "nodeType", Value: 1}}},
+		{Keys: bson.D{{Key: "nodeName", Value: 1}}},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create chunk indexes: %w", err)
@@ -91,6 +94,33 @@ func (s *CodeIndexStorage) AddFolder(path, description string) (*IndexedFolder, 
 		AddedAt:     time.Now(),
 		Status:      "active",
 		FileCount:   0,
+	}
+
+	result, err := s.foldersCol.InsertOne(context.Background(), folder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert folder: %w", err)
+	}
+
+	// Convert ObjectID to string
+	if oid, ok := result.InsertedID.(primitive.ObjectID); ok {
+		folder.ID = oid.Hex()
+	} else {
+		folder.ID = fmt.Sprintf("%v", result.InsertedID)
+	}
+	return folder, nil
+}
+
+// AddFolderWithConfig adds a new folder with custom configuration
+func (s *CodeIndexStorage) AddFolderWithConfig(path, description string, includePatterns, excludePatterns []string, chunkSize string) (*IndexedFolder, error) {
+	folder := &IndexedFolder{
+		Path:            path,
+		Description:     description,
+		AddedAt:         time.Now(),
+		Status:          "active",
+		FileCount:       0,
+		IncludePatterns: includePatterns,
+		ExcludePatterns: excludePatterns,
+		ChunkSize:       chunkSize,
 	}
 
 	result, err := s.foldersCol.InsertOne(context.Background(), folder)
