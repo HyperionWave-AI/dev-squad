@@ -294,21 +294,40 @@ func StartHTTPServer(
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
-	// Configure CORS for frontend
+	// Configure CORS for frontend from environment variable
 	corsConfig := cors.DefaultConfig()
-	corsConfig.AllowOrigins = []string{
-		"http://localhost:5173", // Vite dev server
-		"http://localhost:5177", // Alt Vite port
-		"http://localhost:5178", // Alt Vite port
-		"http://localhost:7777", // Main dev UI port
-		"http://localhost:7779", // Dev UI port
-		"http://localhost:7780", // Dev UI port (auto-assigned)
-		"http://localhost:9173", // Custom UI port
-		"http://localhost:3000", // React dev server
-		"http://localhost",      // Docker UI
-		"http://hyperion-ui",    // Docker internal network
-		"http://hyperion-ui:80", // Docker internal network with port
+
+	// Read CORS allowed origins from environment variable
+	corsOriginsEnv := os.Getenv("CORS_ALLOWED_ORIGINS")
+	var allowedOrigins []string
+
+	if corsOriginsEnv != "" {
+		// Split by comma and trim whitespace
+		origins := strings.Split(corsOriginsEnv, ",")
+		for _, origin := range origins {
+			trimmed := strings.TrimSpace(origin)
+			if trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+		logger.Info("🔒 CORS configured from environment variable",
+			zap.Int("allowedOriginsCount", len(allowedOrigins)),
+			zap.Strings("origins", allowedOrigins))
+	} else {
+		// Safe default for production: only allow same origin
+		port := os.Getenv("HTTP_PORT")
+		if port == "" {
+			port = "5555"
+		}
+		allowedOrigins = []string{
+			"http://localhost:" + port,
+			"https://localhost:" + port,
+		}
+		logger.Warn("⚠️  CORS_ALLOWED_ORIGINS not set - using safe defaults (localhost only)",
+			zap.Strings("defaultOrigins", allowedOrigins))
 	}
+
+	corsConfig.AllowOrigins = allowedOrigins
 	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "X-Request-ID", "Authorization"}
 	corsConfig.AllowCredentials = true
