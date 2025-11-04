@@ -588,3 +588,85 @@ func (s *CodeIndexStorage) ListPathMappings() ([]*CodeIndexMapping, error) {
 
 	return mappings, nil
 }
+
+// StructuralFilter represents structural search criteria for code chunks
+type StructuralFilter struct {
+	FunctionName string   // Function name pattern (supports regex)
+	ClassName    string   // Exact class name match
+	NodeType     string   // Node type: function, class, method, interface, import
+	Symbols      []string // Symbols that must be present
+	Imports      []string // Imports that must be present
+	HasDocstring *bool    // Filter by documentation presence (nil = no filter)
+}
+
+// FindChunksWithFilters performs MongoDB filtering to find chunks matching structural criteria
+// Returns chunk IDs (vectorId) that match the filter for use in Qdrant search
+func (s *CodeIndexStorage) FindChunksWithFilters(filter StructuralFilter) ([]string, error) {
+	ctx := context.Background()
+
+	// Build MongoDB filter
+	mongoFilter := bson.M{}
+
+	// NodeType filter (exact match)
+	if filter.NodeType != "" {
+		mongoFilter["nodeType"] = filter.NodeType
+	}
+
+	// ClassName filter (exact match)
+	if filter.ClassName != "" {
+		mongoFilter["nodeName"] = filter.ClassName
+		// Also ensure it's a class type
+		mongoFilter["nodeType"] = "class"
+	}
+
+	// FunctionName filter (regex pattern match on nodeName)
+	if filter.FunctionName != "" {
+		// Support both exact match and regex patterns
+		mongoFilter["nodeName"] = bson.M{"$regex": filter.FunctionName, "$options": "i"}
+		// Filter to function/method types
+		if filter.NodeType == "" {
+			mongoFilter["nodeType"] = bson.M{"$in": []string{"function", "method"}}
+		}
+	}
+
+	// Symbols filter (must contain all specified symbols)
+	if len(filter.Symbols) > 0 {
+		mongoFilter["symbols"] = bson.M{"$all": filter.Symbols}
+	}
+
+	// Imports filter (must contain all specified imports)
+	if len(filter.Imports) > 0 {
+		mongoFilter["imports"] = bson.M{"$all": filter.Imports}
+	}
+
+	// HasDocstring filter
+	if filter.HasDocstring != nil {
+		mongoFilter["hasDocstring"] = *filter.HasDocstring
+	}
+
+	// Query chunks collection
+	cursor, err := s.chunksCol.Find(ctx, mongoFilter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find chunks with filters: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	// Extract vectorIds from matching chunks
+	var chunkIDs []string
+	for cursor.Next(ctx) {
+		var chunk FileChunk
+		if err := cursor.Decode(&chunk); err != nil {
+			continue
+		}
+		// Only include chunks that have been indexed in Qdrant (have vectorId)
+		if chunk.VectorID != "" {
+			chunkIDs = append(chunkIDs, chunk.VectorID)
+		}
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("cursor error: %w", err)
+	}
+
+	return chunkIDs, nil
+}

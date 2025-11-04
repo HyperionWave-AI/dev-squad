@@ -1099,7 +1099,8 @@ func (c *QdrantClient) SearchCodeIndex(collectionName string, vector []float32, 
 }
 
 // SearchCodeIndexWithFilter performs a vector similarity search with optional filtering
-func (c *QdrantClient) SearchCodeIndexWithFilter(collectionName string, vector []float32, limit int, filter map[string]interface{}) (*CodeIndexSearchResponse, error) {
+// Supports both general filters and chunk ID filtering for structural search
+func (c *QdrantClient) SearchCodeIndexWithFilter(collectionName string, vector []float32, limit int, filter map[string]interface{}, chunkIDs ...[]string) (*CodeIndexSearchResponse, error) {
 	searchReq := map[string]interface{}{
 		"vector":       vector,
 		"limit":        limit,
@@ -1107,9 +1108,41 @@ func (c *QdrantClient) SearchCodeIndexWithFilter(collectionName string, vector [
 		"with_vector":  false,
 	}
 
-	// Add filter if provided
-	if filter != nil {
-		searchReq["filter"] = filter
+	// Build composite filter if needed
+	var compositeFilter map[string]interface{}
+
+	// Handle chunk ID filtering (structural pre-filter from MongoDB)
+	if len(chunkIDs) > 0 && len(chunkIDs[0]) > 0 {
+		// Build Qdrant filter for chunk IDs: { "should": [{ "key": "id", "match": { "value": "id1" }}, ...] }
+		shouldConditions := make([]map[string]interface{}, 0, len(chunkIDs[0]))
+		for _, chunkID := range chunkIDs[0] {
+			shouldConditions = append(shouldConditions, map[string]interface{}{
+				"has_id": []string{chunkID},
+			})
+		}
+
+		// If we have chunk IDs, use them as the primary filter
+		compositeFilter = map[string]interface{}{
+			"should": shouldConditions,
+		}
+
+		// If additional filters provided, combine with chunk ID filter using "must"
+		if filter != nil {
+			compositeFilter = map[string]interface{}{
+				"must": []map[string]interface{}{
+					{"should": shouldConditions},
+					filter,
+				},
+			}
+		}
+	} else if filter != nil {
+		// No chunk IDs, just use the provided filter
+		compositeFilter = filter
+	}
+
+	// Add filter if we built one
+	if compositeFilter != nil {
+		searchReq["filter"] = compositeFilter
 	}
 
 	jsonBody, err := json.Marshal(searchReq)
