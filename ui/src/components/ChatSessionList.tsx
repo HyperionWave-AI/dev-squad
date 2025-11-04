@@ -1,711 +1,311 @@
-/**
- * ChatSessionList Component
- *
- * Displays list of chat sessions in left sidebar with Git-graph-style visualization.
- * Features: session selection, new chat creation, delete with confirmation, delete all functionality.
- * Git-graph visualization: parent chats and subchats shown with visual branching lines,
- * similar to VS Code's Git commit graph.
- */
-
-import { useState, useMemo, useRef, useEffect } from 'react';
+import React, { Fragment, useState } from 'react';
 import {
-  Box,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemText,
-  IconButton,
-  Button,
-  Typography,
+  TrashIcon,
+  PencilIcon,
+  EllipsisVerticalIcon,
+} from '@heroicons/react/24/outline';
+import {
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuItems,
+  Transition,
   Dialog,
+  DialogPanel,
   DialogTitle,
-  DialogContent,
-  DialogActions,
-  DialogContentText,
-  TextField,
-  useTheme,
-} from '@mui/material';
-import {
-  Add,
-  Delete,
-  Chat,
-  DeleteSweep,
-  SmartToy,
-  ExpandMore
-} from '@mui/icons-material';
-import type { ChatSession } from '../services/chatService';
+} from '@headlessui/react';
 
-// Helper function to detect if a session is a subchat
-const isSubchat = (session: ChatSession): boolean => {
-  return session.title.startsWith('Subchat:') || !!session.parentChatId;
-};
-
-// Tree node structure for hierarchical rendering
-interface ChatTreeNode {
-  session: ChatSession;
-  children: ChatTreeNode[];
-  yPosition?: number; // Y position for graph rendering
-  depth: number; // Depth in tree (0 for root)
-}
-
-// Graph node for SVG rendering
-interface GraphNode {
+interface ChatSession {
   id: string;
-  x: number;
-  y: number;
-  depth: number;
-  isSubchat: boolean;
-  isActive: boolean;
-  hasChildren: boolean;
-  parentId?: string;
+  title: string;
+  lastMessage: string;
+  timestamp: string;
+  messageCount: number;
 }
-
-// Build hierarchical tree structure from flat sessions array
-const buildChatTree = (sessions: ChatSession[]): ChatTreeNode[] => {
-  const sessionMap = new Map<string, ChatTreeNode>();
-  const rootNodes: ChatTreeNode[] = [];
-
-  console.log('🔍 buildChatTree called with sessions:', sessions.map(s => ({
-    id: s.id,
-    title: s.title,
-    parentChatId: s.parentChatId,
-    createdAt: s.createdAt,
-    isSubchat: isSubchat(s)
-  })));
-
-  // First pass: create all nodes
-  sessions.forEach(session => {
-    sessionMap.set(session.id, { session, children: [], depth: 0 });
-  });
-
-  // Second pass: build parent-child relationships and set depths
-  const setDepth = (node: ChatTreeNode, depth: number) => {
-    node.depth = depth;
-    node.children.forEach(child => setDepth(child, depth + 1));
-  };
-
-  sessions.forEach(session => {
-    const node = sessionMap.get(session.id)!;
-
-    if (session.parentChatId && sessionMap.has(session.parentChatId)) {
-      // This is a subchat with a valid parent
-      console.log(`✅ Found parent-child link: ${session.title} → parent: ${session.parentChatId}`);
-      const parentNode = sessionMap.get(session.parentChatId)!;
-      parentNode.children.push(node);
-    } else if (isSubchat(session) && !session.parentChatId) {
-      // Legacy subchat detection by title - try to find parent by parsing title
-      console.log(`⚠️ Subchat without parentChatId: ${session.title}`);
-      const parentIdMatch = session.title.match(/Subchat:\s*(.+?)\s*-/);
-      if (parentIdMatch) {
-        const parentTitle = parentIdMatch[1].trim();
-        const parentSession = sessions.find(s => s.title === parentTitle);
-        if (parentSession) {
-          console.log(`✅ Found parent by title match: ${session.title} → ${parentTitle}`);
-          const parentNode = sessionMap.get(parentSession.id)!;
-          parentNode.children.push(node);
-        } else {
-          console.log(`❌ No parent found for subchat: ${session.title} (looking for: ${parentTitle})`);
-          rootNodes.push(node);
-        }
-      } else {
-        console.log(`❌ Could not parse parent from title: ${session.title}`);
-        rootNodes.push(node);
-      }
-    } else {
-      // This is a root chat
-      console.log(`📁 Root chat: ${session.title}`);
-      rootNodes.push(node);
-    }
-  });
-
-  // Sort root nodes by createdAt (oldest first, chronological order)
-  rootNodes.sort((a, b) =>
-    new Date(a.session.createdAt).getTime() - new Date(b.session.createdAt).getTime()
-  );
-
-  // Sort children by createdAt (oldest first, chronological order)
-  sessionMap.forEach(node => {
-    node.children.sort((a, b) =>
-      new Date(a.session.createdAt).getTime() - new Date(b.session.createdAt).getTime()
-    );
-  });
-
-  // Set depths for all nodes
-  rootNodes.forEach(node => setDepth(node, 0));
-
-  console.log('📊 Final tree structure (root nodes):', rootNodes.map(node => ({
-    id: node.session.id,
-    title: node.session.title,
-    depth: node.depth,
-    childrenCount: node.children.length,
-    children: node.children.map(child => ({
-      id: child.session.id,
-      title: child.session.title,
-      parentId: child.session.parentChatId
-    }))
-  })));
-
-  return rootNodes;
-};
-
-// Constants for Git graph visualization
-const GRAPH_CONFIG = {
-  nodeRadius: 5,
-  lineWidth: 2,
-  branchLineWidth: 1.5,
-  graphLeftMargin: 16,
-  nodeXPosition: 24,
-  itemHeight: 56, // Increased for better breathing room
-  branchOffsetX: 12, // Horizontal offset for branch lines
-};
-
-// Calculate positions for all visible nodes in the tree
-const calculateNodePositions = (
-  tree: ChatTreeNode[],
-  expandedNodes: Set<string>,
-  activeSessionId: string | null
-): GraphNode[] => {
-  const positions: GraphNode[] = [];
-  let currentY = GRAPH_CONFIG.itemHeight / 2;
-
-  const traverse = (node: ChatTreeNode, depth: number) => {
-    const isExpanded = expandedNodes.has(node.session.id);
-    const hasChildren = node.children.length > 0;
-    const xPos = GRAPH_CONFIG.nodeXPosition + (depth * GRAPH_CONFIG.branchOffsetX);
-
-    positions.push({
-      id: node.session.id,
-      x: xPos,
-      y: currentY,
-      depth,
-      isSubchat: isSubchat(node.session),
-      isActive: node.session.id === activeSessionId,
-      hasChildren,
-      parentId: node.session.parentChatId,
-    });
-
-    node.yPosition = currentY;
-    currentY += GRAPH_CONFIG.itemHeight;
-
-    // Only traverse children if node is expanded
-    if (isExpanded && hasChildren) {
-      node.children.forEach(child => traverse(child, depth + 1));
-    }
-  };
-
-  tree.forEach(node => traverse(node, 0));
-  return positions;
-};
-
-// Generate SVG path data for connections between nodes
-const generateGraphPaths = (
-  nodes: GraphNode[]
-): { path: string; color: string; width: number; isActive: boolean }[] => {
-  const paths: { path: string; color: string; width: number; isActive: boolean }[] = [];
-  const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
-  nodes.forEach(node => {
-    if (node.parentId) {
-      const parentNode = nodeMap.get(node.parentId);
-      if (parentNode) {
-        // Draw curved line from parent to child
-        const startX = parentNode.x;
-        const startY = parentNode.y;
-        const endX = node.x;
-        const endY = node.y;
-
-        // Create smooth curve using quadratic bezier
-        const controlX = startX + (endX - startX) / 2;
-        const controlY = startY;
-
-        const pathData = `M ${startX} ${startY} Q ${controlX} ${controlY}, ${endX} ${endY}`;
-
-        paths.push({
-          path: pathData,
-          color: node.isActive ? '#ff9800' : '#4caf50',
-          width: GRAPH_CONFIG.branchLineWidth,
-          isActive: node.isActive || parentNode.isActive,
-        });
-      }
-    }
-  });
-
-  return paths;
-};
-
-// Git Graph Visualization Component
-interface GitGraphProps {
-  nodes: GraphNode[];
-  paths: { path: string; color: string; width: number; isActive: boolean }[];
-  height: number;
-  theme: any;
-}
-
-const GitGraph: React.FC<GitGraphProps> = ({ nodes, paths, height, theme }) => {
-  return (
-    <svg
-      style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: 60,
-        height: `${height}px`,
-        pointerEvents: 'none',
-        zIndex: 1,
-      }}
-    >
-      {/* Draw connection paths */}
-      {paths.map((pathData, idx) => (
-        <path
-          key={`path-${idx}`}
-          d={pathData.path}
-          stroke={pathData.color}
-          strokeWidth={pathData.width}
-          fill="none"
-          opacity={pathData.isActive ? 1 : 0.7}
-          strokeLinecap="round"
-        />
-      ))}
-
-      {/* Draw vertical timeline for root nodes */}
-      {nodes
-        .filter(n => n.depth === 0)
-        .map((node, idx, arr) => {
-          if (idx < arr.length - 1) {
-            const nextNode = arr[idx + 1];
-            return (
-              <line
-                key={`timeline-${node.id}`}
-                x1={node.x}
-                y1={node.y}
-                x2={nextNode.x}
-                y2={nextNode.y}
-                stroke={theme.palette.divider}
-                strokeWidth={GRAPH_CONFIG.lineWidth}
-                opacity={0.3}
-              />
-            );
-          }
-          return null;
-        })}
-
-      {/* Draw nodes (circles) */}
-      {nodes.map(node => (
-        <circle
-          key={`node-${node.id}`}
-          cx={node.x}
-          cy={node.y}
-          r={node.isActive ? GRAPH_CONFIG.nodeRadius + 1 : GRAPH_CONFIG.nodeRadius}
-          fill={
-            node.isActive
-              ? theme.palette.primary.main
-              : node.isSubchat
-              ? theme.palette.secondary.main
-              : theme.palette.success.main
-          }
-          stroke={theme.palette.background.paper}
-          strokeWidth={2}
-        />
-      ))}
-    </svg>
-  );
-};
 
 interface ChatSessionListProps {
   sessions: ChatSession[];
-  activeSessionId: string | null;
+  activeSessionId?: string;
   onSessionSelect: (sessionId: string) => void;
-  onNewChat: () => void;
-  onDeleteSession: (sessionId: string) => void;
-  onDeleteAllSessions: () => void;
-  onRenameSession?: (sessionId: string, newTitle: string) => void;
+  onSessionDelete: (sessionId: string) => void;
+  onSessionRename: (sessionId: string, newTitle: string) => void;
 }
 
-export const ChatSessionList: React.FC<ChatSessionListProps> = ({
+const ChatSessionList: React.FC<ChatSessionListProps> = ({
   sessions,
   activeSessionId,
   onSessionSelect,
-  onNewChat,
-  onDeleteSession,
-  onDeleteAllSessions,
-  onRenameSession,
+  onSessionDelete,
+  onSessionRename,
 }) => {
-  const theme = useTheme();
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
-  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
   const [sessionToRename, setSessionToRename] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const listRef = useRef<HTMLDivElement>(null);
 
-  // Build tree structure from sessions
-  const chatTree = useMemo(() => buildChatTree(sessions), [sessions]);
-
-  // Calculate node positions for Git graph
-  const graphNodes = useMemo(
-    () => calculateNodePositions(chatTree, expandedNodes, activeSessionId),
-    [chatTree, expandedNodes, activeSessionId]
-  );
-
-  // Generate connection paths
-  const graphPaths = useMemo(() => generateGraphPaths(graphNodes), [graphNodes]);
-
-  // Calculate total height for SVG
-  const totalHeight = useMemo(() => {
-    const visibleNodeCount = graphNodes.length;
-    return Math.max(visibleNodeCount * GRAPH_CONFIG.itemHeight, 200);
-  }, [graphNodes.length]);
-
-  // Auto-expand nodes that have active children
-  useEffect(() => {
-    if (activeSessionId) {
-      const activeSession = sessions.find(s => s.id === activeSessionId);
-      if (activeSession?.parentChatId) {
-        setExpandedNodes(prev => new Set([...prev, activeSession.parentChatId!]));
-      }
-    }
-  }, [activeSessionId, sessions]);
-
-  const handleDeleteClick = (sessionId: string, event: React.MouseEvent) => {
-    event.stopPropagation();
+  const handleDeleteClick = (sessionId: string) => {
     setSessionToDelete(sessionId);
-    setDeleteConfirmOpen(true);
+    setIsDeleteDialogOpen(true);
   };
 
-  const handleDeleteConfirm = () => {
-    if (sessionToDelete) {
-      onDeleteSession(sessionToDelete);
-      setSessionToDelete(null);
-    }
-    setDeleteConfirmOpen(false);
-  };
-
-  const handleDeleteAllClick = () => {
-    setDeleteAllConfirmOpen(true);
-  };
-
-  const handleDeleteAllConfirm = () => {
-    onDeleteAllSessions();
-    setDeleteAllConfirmOpen(false);
-  };
-
-  const handleRenameClick = (sessionId: string, currentTitle: string, event: React.MouseEvent) => {
-    event.stopPropagation();
+  const handleRenameClick = (sessionId: string, currentTitle: string) => {
     setSessionToRename(sessionId);
     setNewTitle(currentTitle);
-    setRenameDialogOpen(true);
+    setIsRenameDialogOpen(true);
   };
 
-  const handleRenameConfirm = () => {
-    if (sessionToRename && onRenameSession && newTitle.trim()) {
-      onRenameSession(sessionToRename, newTitle.trim());
+  const confirmDelete = () => {
+    if (sessionToDelete) {
+      onSessionDelete(sessionToDelete);
+      setIsDeleteDialogOpen(false);
+      setSessionToDelete(null);
+    }
+  };
+
+  const confirmRename = () => {
+    if (sessionToRename && newTitle.trim()) {
+      onSessionRename(sessionToRename, newTitle.trim());
+      setIsRenameDialogOpen(false);
       setSessionToRename(null);
       setNewTitle('');
     }
-    setRenameDialogOpen(false);
   };
-
-  const handleToggleExpand = (sessionId: string, event: React.MouseEvent) => {
-    event.stopPropagation();
-    setExpandedNodes(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(sessionId)) {
-        newSet.delete(sessionId);
-      } else {
-        newSet.add(sessionId);
-      }
-      return newSet;
-    });
-  };
-
-  // Flatten tree for rendering while preserving hierarchy
-  const flattenTreeForRendering = (nodes: ChatTreeNode[]): ChatTreeNode[] => {
-    const result: ChatTreeNode[] = [];
-
-    const traverse = (node: ChatTreeNode) => {
-      result.push(node);
-      if (expandedNodes.has(node.session.id) && node.children.length > 0) {
-        node.children.forEach(traverse);
-      }
-    };
-
-    nodes.forEach(traverse);
-    return result;
-  };
-
-  const flattenedSessions = flattenTreeForRendering(chatTree);
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header with New Chat and Delete All buttons */}
-      <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-        <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-          <Button
-            variant="contained"
-            startIcon={<Add />}
-            onClick={onNewChat}
-            fullWidth
-            sx={{ textTransform: 'none' }}
-          >
-            New Chat
-          </Button>
-          <IconButton
-            onClick={handleDeleteAllClick}
-            disabled={sessions.length === 0}
-            color="error"
-            sx={{ 
-              minWidth: 48,
-              '& .MuiSvgIcon-root': {
-                fontSize: '2rem', // Increased from default 1.5rem to 2rem (33% larger)
-              }
-            }}
-            title="Delete All Chats"
-          >
-            <DeleteSweep />
-          </IconButton>
-        </Box>
-        <Typography variant="body2" color="text.secondary">
-          {sessions.length} {sessions.length === 1 ? 'chat' : 'chats'}
-        </Typography>
-      </Box>
-
-      {/* Sessions List with Git Graph */}
-      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        {/* Git Graph SVG Overlay */}
-        <GitGraph
-          nodes={graphNodes}
-          paths={graphPaths}
-          height={totalHeight}
-          theme={theme}
-        />
-
-        {/* Sessions List */}
-        <Box
-          ref={listRef}
-          sx={{
-            height: '100%',
-            overflowY: 'auto',
-            pl: 4, // Reduced from 7 to 4 for tighter spacing with graph
+    <div className="flex flex-col h-full">
+      <div className="flex-shrink-0 p-4 border-b border-gray-200 dark:border-gray-700">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Chat Sessions</h2>
+        <button
+          type="button"
+          className="mt-3 w-full flex items-center justify-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-800 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+          aria-label="Create new chat session"
+          onClick={() => {
+            // Placeholder functionality - to be implemented
+            console.log('New session button clicked');
           }}
         >
-          {sessions.length === 0 ? (
-            <Box sx={{ p: 3, textAlign: 'center' }}>
-              <Typography variant="body2" color="text.secondary">
-                No chat sessions yet. Create your first chat to get started!
-              </Typography>
-            </Box>
-          ) : (
-            <List sx={{ py: 0 }}>
-              {flattenedSessions.map((treeNode) => {
-                const { session } = treeNode;
-                const isActive = session.id === activeSessionId;
-                const hasChildren = treeNode.children.length > 0;
-                const isExpanded = expandedNodes.has(session.id);
-                const isSubchatNode = isSubchat(session);
-
-                return (
-                  <ListItem
-                    key={session.id}
-                    disablePadding
-                    sx={{
-                      pl: treeNode.depth * 2, // Indent based on depth
-                      borderLeft: isActive ? '4px solid' : 0,
-                      borderColor: 'primary.main',
-                      backgroundColor: isActive ? 'rgba(25, 118, 210, 0.08)' : 'transparent',
-                      borderRadius: isActive ? '0 8px 8px 0' : 0,
-                      mb: 1, // Increased spacing between items
-                      transition: 'all 0.2s ease-in-out',
-                      '&:hover': {
-                        backgroundColor: isActive ? 'rgba(25, 118, 210, 0.12)' : 'action.hover',
-                        '& .action-buttons': {
-                          opacity: 1,
-                        },
-                      },
-                    }}
-                  >
-                    <ListItemButton
-                      onClick={() => onSessionSelect(session.id)}
-                      sx={{
-                        py: 1.5, // Increased vertical padding
-                        px: 2, // Increased horizontal padding
-                        minHeight: GRAPH_CONFIG.itemHeight,
-                        alignItems: 'center', // Center align for better visual balance
-                      }}
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
+          New Session
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {sessions.length === 0 ? (
+          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+            No chat sessions yet
+          </div>
+        ) : (
+          <div className="p-2">
+            {sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`group relative p-3 mb-2 rounded-lg cursor-pointer transition-colors ${
+                  activeSessionId === session.id
+                    ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-800 border border-transparent'
+                }`}
+                onClick={() => onSessionSelect(session.id)}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                      {session.title}
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-1">
+                      {session.lastMessage}
+                    </p>
+                    <div className="flex items-center mt-2 text-xs text-gray-400 dark:text-gray-500">
+                      <span>{session.timestamp}</span>
+                      <span className="mx-1">•</span>
+                      <span>{session.messageCount} messages</span>
+                    </div>
+                  </div>
+                  <Menu as="div" className="relative ml-2">
+                    <MenuButton className="opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-opacity">
+                      <EllipsisVerticalIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+                    </MenuButton>
+                    <Transition
+                      as={Fragment}
+                      enter="transition ease-out duration-100"
+                      enterFrom="transform opacity-0 scale-95"
+                      enterTo="transform opacity-100 scale-100"
+                      leave="transition ease-in duration-75"
+                      leaveFrom="transform opacity-100 scale-100"
+                      leaveTo="transform opacity-0 scale-95"
                     >
-                      {/* Expand/Collapse button for parent chats */}
-                      {hasChildren && (
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleToggleExpand(session.id, e)}
-                          sx={{
-                            mr: 1.5,
-                            transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
-                            transition: 'transform 0.2s',
-                          }}
-                        >
-                          <ExpandMore fontSize="small" />
-                        </IconButton>
-                      )}
-
-                      {/* Chat icon */}
-                      <Box sx={{ mr: 2, flexShrink: 0 }}>
-                        {isSubchatNode ? (
-                          <SmartToy
-                            fontSize="small"
-                            sx={{ color: theme.palette.secondary.main }}
-                          />
-                        ) : (
-                          <Chat
-                            fontSize="small"
-                            sx={{ color: theme.palette.primary.main }}
-                          />
-                        )}
-                      </Box>
-
-                      {/* Session title and metadata */}
-                      <ListItemText
-                        primary={
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontWeight: isActive ? 600 : 400,
-                              color: isActive ? 'primary.main' : 'text.primary',
-                              lineHeight: 1.3,
-                            }}
-                          >
-                            {session.title}
-                          </Typography>
-                        }
-                        secondary={
-                          <Typography
-                            variant="caption"
-                            sx={{
-                              color: 'text.secondary',
-                              display: 'block',
-                              mt: 0.75, // More space above date
-                              fontSize: '0.75rem',
-                            }}
-                          >
-                            {new Date(session.createdAt).toLocaleDateString()}
-                            {hasChildren && (
-                              <span style={{ marginLeft: 12 }}>
-                                • {treeNode.children.length} subchat{treeNode.children.length !== 1 ? 's' : ''}
-                              </span>
-                            )}
-                          </Typography>
-                        }
-                      />
-
-                      {/* Action buttons - show on hover */}
-                      <Box
-                        className="action-buttons"
-                        sx={{
-                          display: 'flex',
-                          gap: 1, // Increased gap between buttons
-                          ml: 'auto', // Push to the right
-                          opacity: isActive ? 1 : 0, // Show when active, hide otherwise
-                          transition: 'opacity 0.2s ease-in-out',
-                        }}
-                      >
-                        {onRenameSession && (
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleRenameClick(session.id, session.title, e)}
-                            sx={{
-                              padding: '6px',
-                              '&:hover': {
-                                backgroundColor: 'action.hover',
-                                color: 'primary.main',
-                              },
-                            }}
-                          >
-                            <Typography variant="caption" sx={{ fontSize: '1.1rem' }}>✏️</Typography>
-                          </IconButton>
-                        )}
-                        <IconButton
-                          size="small"
-                          onClick={(e) => handleDeleteClick(session.id, e)}
-                          sx={{
-                            padding: '6px',
-                            '&:hover': {
-                              backgroundColor: 'error.lighter',
-                              color: 'error.main',
-                            },
-                          }}
-                        >
-                          <Delete fontSize="small" />
-                        </IconButton>
-                      </Box>
-                    </ListItemButton>
-                  </ListItem>
-                );
-              })}
-            </List>
-          )}
-        </Box>
-      </Box>
+                      <MenuItems className="absolute right-0 mt-1 w-32 bg-white dark:bg-gray-800 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none z-10">
+                        <MenuItem>
+                          {({ active }) => (
+                            <button
+                              className={`${
+                                active ? 'bg-gray-100 dark:bg-gray-700' : ''
+                              } group flex items-center w-full px-3 py-2 text-sm text-gray-700 dark:text-gray-300`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRenameClick(session.id, session.title);
+                              }}
+                            >
+                              <PencilIcon className="h-4 w-4 mr-2" />
+                              Rename
+                            </button>
+                          )}
+                        </MenuItem>
+                        <MenuItem>
+                          {({ active }) => (
+                            <button
+                              className={`${
+                                active ? 'bg-gray-100 dark:bg-gray-700' : ''
+                              } group flex items-center w-full px-3 py-2 text-sm text-red-600 dark:text-red-400`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteClick(session.id);
+                              }}
+                            >
+                              <TrashIcon className="h-4 w-4 mr-2" />
+                              Delete
+                            </button>
+                          )}
+                        </MenuItem>
+                      </MenuItems>
+                    </Transition>
+                  </Menu>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)}>
-        <DialogTitle>Delete Chat Session</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Are you sure you want to delete this chat session? This action cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
-          <Button onClick={handleDeleteConfirm} color="error" variant="contained">
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <Transition appear show={isDeleteDialogOpen} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={() => setIsDeleteDialogOpen(false)}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-black bg-opacity-25" />
+          </Transition.Child>
 
-      {/* Delete All Confirmation Dialog */}
-      <Dialog open={deleteAllConfirmOpen} onClose={() => setDeleteAllConfirmOpen(false)}>
-        <DialogTitle>Delete All Chat Sessions</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Are you sure you want to delete all chat sessions? This will permanently remove all your conversations and cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteAllConfirmOpen(false)}>Cancel</Button>
-          <Button onClick={handleDeleteAllConfirm} color="error" variant="contained">
-            Delete All
-          </Button>
-        </DialogActions>
-      </Dialog>
+          <div className="fixed inset-0 overflow-y-auto">
+            <div className="flex min-h-full items-center justify-center p-4 text-center">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 scale-95"
+                enterTo="opacity-100 scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 scale-100"
+                leaveTo="opacity-0 scale-95"
+              >
+                <DialogPanel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white dark:bg-gray-800 p-6 text-left align-middle shadow-xl transition-all">
+                  <DialogTitle
+                    as="h3"
+                    className="text-lg font-medium leading-6 text-gray-900 dark:text-white"
+                  >
+                    Delete Chat Session
+                  </DialogTitle>
+                  <div className="mt-2">
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Are you sure you want to delete this chat session? This action cannot be undone.
+                    </p>
+                  </div>
+
+                  <div className="mt-4 flex space-x-3">
+                    <button
+                      type="button"
+                      className="inline-flex justify-center rounded-md border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                      onClick={confirmDelete}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                      onClick={() => setIsDeleteDialogOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </DialogPanel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition>
 
       {/* Rename Dialog */}
-      <Dialog open={renameDialogOpen} onClose={() => setRenameDialogOpen(false)}>
-        <DialogTitle>Rename Chat Session</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus
-            margin="dense"
-            label="New Title"
-            fullWidth
-            variant="outlined"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter') {
-                handleRenameConfirm();
-              }
-            }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRenameDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleRenameConfirm} variant="contained">
-            Rename
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
+      <Transition appear show={isRenameDialogOpen} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={() => setIsRenameDialogOpen(false)}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-black bg-opacity-25" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 overflow-y-auto">
+            <div className="flex min-h-full items-center justify-center p-4 text-center">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 scale-95"
+                enterTo="opacity-100 scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 scale-100"
+                leaveTo="opacity-0 scale-95"
+              >
+                <DialogPanel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white dark:bg-gray-800 p-6 text-left align-middle shadow-xl transition-all">
+                  <DialogTitle
+                    as="h3"
+                    className="text-lg font-medium leading-6 text-gray-900 dark:text-white"
+                  >
+                    Rename Chat Session
+                  </DialogTitle>
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      value={newTitle}
+                      onChange={(e) => setNewTitle(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                      placeholder="Enter new title"
+                    />
+                  </div>
+
+                  <div className="mt-4 flex space-x-3">
+                    <button
+                      type="button"
+                      className="inline-flex justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                      onClick={confirmRename}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex justify-center rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                      onClick={() => setIsRenameDialogOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </DialogPanel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition>
+    </div>
   );
 };
 
