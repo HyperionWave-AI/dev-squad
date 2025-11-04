@@ -419,3 +419,186 @@ func TestCamelCaseParamExtraction(t *testing.T) {
 	// Verify mock expectations
 	mockStorage.AssertExpectations(t)
 }
+
+// TestExtractResultData tests the extractResultData function with multiple Content blocks
+func TestExtractResultData(t *testing.T) {
+	tests := []struct {
+		name           string
+		result         *mcp.CallToolResult
+		expectedData   interface{}
+		expectedType   string
+		description    string
+	}{
+		{
+			name:         "nil result",
+			result:       nil,
+			expectedData: nil,
+			expectedType: "nil",
+			description:  "Should return nil for nil result",
+		},
+		{
+			name: "non-empty StructuredContent",
+			result: &mcp.CallToolResult{
+				StructuredContent: map[string]interface{}{
+					"key": "value",
+				},
+				Content: []mcp.Content{},
+			},
+			expectedData: map[string]interface{}{
+				"key": "value",
+			},
+			expectedType: "map",
+			description:  "Should return StructuredContent when non-empty",
+		},
+		{
+			name: "JSON in first Content block",
+			result: &mcp.CallToolResult{
+				StructuredContent: nil,
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Type: "text",
+						Text: `{"status": "success", "data": "result"}`,
+					},
+				},
+			},
+			expectedData: map[string]interface{}{
+				"status": "success",
+				"data":   "result",
+			},
+			expectedType: "map",
+			description:  "Should parse JSON from first Content block",
+		},
+		{
+			name: "JSON in second Content block (bug fix test)",
+			result: &mcp.CallToolResult{
+				StructuredContent: nil,
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Type: "text",
+						Text: "This is plain text in first block",
+					},
+					&mcp.TextContent{
+						Type: "text",
+						Text: `{"status": "success", "data": "found in second block"}`,
+					},
+				},
+			},
+			expectedData: map[string]interface{}{
+				"status": "success",
+				"data":   "found in second block",
+			},
+			expectedType: "map",
+			description:  "Should find and parse JSON in second Content block",
+		},
+		{
+			name: "JSON in third Content block",
+			result: &mcp.CallToolResult{
+				StructuredContent: nil,
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Type: "text",
+						Text: "Plain text block 1",
+					},
+					&mcp.TextContent{
+						Type: "text",
+						Text: "Plain text block 2",
+					},
+					&mcp.TextContent{
+						Type: "text",
+						Text: `{"result": "found in third block", "count": 42}`,
+					},
+				},
+			},
+			expectedData: map[string]interface{}{
+				"result": "found in third block",
+				"count":  float64(42),
+			},
+			expectedType: "map",
+			description:  "Should find and parse JSON in third Content block",
+		},
+		{
+			name: "no valid JSON - return first text",
+			result: &mcp.CallToolResult{
+				StructuredContent: nil,
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Type: "text",
+						Text: "First text content",
+					},
+					&mcp.TextContent{
+						Type: "text",
+						Text: "Second text content",
+					},
+				},
+			},
+			expectedData: "First text content",
+			expectedType: "string",
+			description:  "Should return first text content when no JSON found",
+		},
+		{
+			name: "empty Content blocks - fallback to StructuredContent",
+			result: &mcp.CallToolResult{
+				StructuredContent: map[string]interface{}{},
+				Content:           []mcp.Content{},
+			},
+			expectedData: map[string]interface{}{},
+			expectedType: "map",
+			description:  "Should fallback to StructuredContent when Content is empty",
+		},
+		{
+			name: "mixed content types - skip non-TextContent",
+			result: &mcp.CallToolResult{
+				StructuredContent: nil,
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Type: "text",
+						Text: "not json",
+					},
+					// Simulate other content type by using empty text
+					&mcp.TextContent{
+						Type: "text",
+						Text: "",
+					},
+					&mcp.TextContent{
+						Type: "text",
+						Text: `{"valid": "json", "block": 3}`,
+					},
+				},
+			},
+			expectedData: map[string]interface{}{
+				"valid": "json",
+				"block": float64(3),
+			},
+			expectedType: "map",
+			description:  "Should skip empty blocks and find JSON in third block",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create handler
+			logger := zap.NewNop()
+			handler := &ToolsDiscoveryHandler{
+				logger: logger,
+			}
+
+			// Execute
+			result := extractResultData(handler, tt.result)
+
+			// Verify
+			if tt.expectedType == "nil" {
+				assert.Nil(t, result, tt.description)
+			} else if tt.expectedType == "string" {
+				assert.Equal(t, tt.expectedData, result, tt.description)
+			} else if tt.expectedType == "map" {
+				expectedMap := tt.expectedData.(map[string]interface{})
+				resultMap, ok := result.(map[string]interface{})
+				assert.True(t, ok, "Result should be a map")
+				assert.Equal(t, len(expectedMap), len(resultMap), "Map sizes should match")
+				for key, expectedValue := range expectedMap {
+					assert.Equal(t, expectedValue, resultMap[key], "Map key '%s' should match", key)
+				}
+			}
+		})
+	}
+}
