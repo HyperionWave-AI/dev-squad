@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"hyper/internal/mcp/parser"
 	"hyper/internal/mcp/storage"
 )
 
@@ -18,6 +19,8 @@ type FileScanner struct {
 	supportedExtensions map[string]string // extension -> language
 	maxFileSize         int64             // max file size in bytes
 	chunkSize           int               // lines per chunk
+	includePatterns     []string          // custom include patterns (e.g., ["*.go", "*.ts"])
+	excludePatterns     []string          // custom exclude patterns (e.g., ["node_modules", "dist"])
 }
 
 // NewFileScanner creates a new file scanner
@@ -71,6 +74,106 @@ func NewFileScanner() *FileScanner {
 	}
 }
 
+// NewFileScannerWithConfig creates a file scanner with custom configuration
+func NewFileScannerWithConfig(includePatterns, excludePatterns []string, chunkSize string) *FileScanner {
+	// Convert t-shirt size to line count
+	chunkLines := storage.ChunkSizeToLines(chunkSize)
+
+	fs := &FileScanner{
+		supportedExtensions: map[string]string{
+			".go":   "go",
+			".js":   "javascript",
+			".ts":   "typescript",
+			".jsx":  "javascript",
+			".tsx":  "typescript",
+			".py":   "python",
+			".java": "java",
+			".c":    "c",
+			".cpp":  "cpp",
+			".h":    "c",
+			".hpp":  "cpp",
+			".cs":   "csharp",
+			".rb":   "ruby",
+			".php":  "php",
+			".rs":   "rust",
+			".swift": "swift",
+			".kt":   "kotlin",
+			".m":    "objective-c",
+			".scala": "scala",
+			".r":    "r",
+			".sql":  "sql",
+			".sh":   "shell",
+			".bash": "shell",
+			".yaml": "yaml",
+			".yml":  "yaml",
+			".json": "json",
+			".xml":  "xml",
+			".html": "html",
+			".css":  "css",
+			".scss": "scss",
+			".less": "less",
+			".vue":  "vue",
+			".md":   "markdown",
+		},
+		maxFileSize:     10 * 1024 * 1024, // 10 MB
+		chunkSize:       chunkLines,
+		includePatterns: includePatterns,
+		excludePatterns: excludePatterns,
+	}
+
+	return fs
+}
+
+// shouldExcludePath checks if a path should be excluded based on patterns
+func (fs *FileScanner) shouldExcludePath(path string, basePath string) bool {
+	// If no custom exclude patterns, use defaults
+	excludePatterns := fs.excludePatterns
+	if len(excludePatterns) == 0 {
+		excludePatterns = []string{"node_modules", "dist", "build", ".git", "vendor", ".next", "coverage", "__pycache__", ".vscode", ".idea", "test-results", "out"}
+	}
+
+	// Get relative path for pattern matching
+	relativePath, err := filepath.Rel(basePath, path)
+	if err != nil {
+		relativePath = path
+	}
+
+	// Check each exclude pattern
+	for _, pattern := range excludePatterns {
+		// Check if path contains the pattern (simple substring match for directories)
+		if strings.Contains(relativePath, pattern) {
+			return true
+		}
+		// Also try glob match
+		matched, _ := filepath.Match(pattern, filepath.Base(path))
+		if matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldIncludeFile checks if a file should be included based on patterns
+func (fs *FileScanner) shouldIncludeFile(filePath string) bool {
+	// If custom patterns are set, use them
+	if len(fs.includePatterns) > 0 {
+		fileName := filepath.Base(filePath)
+		for _, pattern := range fs.includePatterns {
+			matched, _ := filepath.Match(pattern, fileName)
+			if matched {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Otherwise, use extension-based matching
+	ext := filepath.Ext(filePath)
+	_, supported := fs.supportedExtensions[ext]
+	return supported
+}
+
 // ScanDirectory scans a directory and returns file information
 func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile, error) {
 	var files []*storage.IndexedFile
@@ -80,24 +183,33 @@ func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile,
 			return err
 		}
 
-		// Skip directories
+		// Skip directories that match exclude patterns
 		if info.IsDir() {
-			// Skip common directories to ignore
-			dirName := filepath.Base(path)
-			if dirName == ".git" || dirName == "node_modules" || dirName == "vendor" ||
-				dirName == "dist" || dirName == "build" || dirName == ".vscode" ||
-				dirName == ".idea" || dirName == "__pycache__" || dirName == "test-results" ||
-				dirName == "coverage" || dirName == ".next" || dirName == "out" {
+			if fs.shouldExcludePath(path, folderPath) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// Check if file extension is supported
+		// Check if file should be excluded
+		if fs.shouldExcludePath(path, folderPath) {
+			return nil
+		}
+
+		// Check if file should be included based on patterns
+		if !fs.shouldIncludeFile(path) {
+			return nil
+		}
+
+		// Determine language from extension
 		ext := filepath.Ext(path)
 		language, supported := fs.supportedExtensions[ext]
 		if !supported {
-			return nil
+			// For custom patterns, default to file extension without dot
+			language = strings.TrimPrefix(ext, ".")
+			if language == "" {
+				language = "unknown"
+			}
 		}
 
 		// Check file size
@@ -199,7 +311,83 @@ func (fs *FileScanner) ReadFileChunks(filePath string) ([]string, error) {
 }
 
 // CreateFileChunks creates FileChunk objects for a file
+// Uses AST parsing if available, with fallback to line-based chunking
 func (fs *FileScanner) CreateFileChunks(fileID, filePath string) ([]*storage.FileChunk, error) {
+	// Check if AST parsing is enabled (default: true)
+	useAST := true
+	if envUseAST := os.Getenv("CODE_INDEX_USE_AST"); envUseAST == "false" {
+		useAST = false
+	}
+
+	// Check if AST fallback is enabled (default: true)
+	astFallback := true
+	if envFallback := os.Getenv("CODE_INDEX_AST_FALLBACK"); envFallback == "false" {
+		astFallback = false
+	}
+
+	// Try AST parsing first if enabled
+	if useAST {
+		registry := parser.GetRegistry()
+		if registry.HasParserForFile(filePath) {
+			astChunks, err := fs.createASTChunks(fileID, filePath)
+			if err == nil && len(astChunks) > 0 {
+				// AST parsing succeeded
+				return astChunks, nil
+			}
+			// AST parsing failed - fall through to line-based if fallback enabled
+			if !astFallback {
+				return nil, fmt.Errorf("AST parsing failed and fallback disabled: %w", err)
+			}
+		}
+	}
+
+	// Fallback to line-based chunking
+	return fs.createLineBasedChunks(fileID, filePath)
+}
+
+// createASTChunks creates chunks using AST parsing
+func (fs *FileScanner) createASTChunks(fileID, filePath string) ([]*storage.FileChunk, error) {
+	// Read file content
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Get parser for this file
+	registry := parser.GetRegistry()
+	astParser, err := registry.GetParserForFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("no parser available: %w", err)
+	}
+
+	// Parse the file
+	nodes, err := astParser.Parse(filePath, content)
+	if err != nil {
+		return nil, fmt.Errorf("AST parsing failed: %w", err)
+	}
+
+	// Convert AST nodes to file chunks
+	var fileChunks []*storage.FileChunk
+	for i, node := range nodes {
+		chunk := &storage.FileChunk{
+			FileID:    fileID,
+			ChunkNum:  i,
+			Content:   node.Content,
+			StartLine: node.StartLine,
+			EndLine:   node.EndLine,
+			ChunkType: "ast",
+			NodeType:  string(node.Type),
+			NodeName:  node.Name,
+			Signature: node.Signature,
+		}
+		fileChunks = append(fileChunks, chunk)
+	}
+
+	return fileChunks, nil
+}
+
+// createLineBasedChunks creates chunks using traditional line-based chunking
+func (fs *FileScanner) createLineBasedChunks(fileID, filePath string) ([]*storage.FileChunk, error) {
 	chunks, err := fs.ReadFileChunks(filePath)
 	if err != nil {
 		return nil, err
@@ -220,6 +408,7 @@ func (fs *FileScanner) CreateFileChunks(fileID, filePath string) ([]*storage.Fil
 			Content:   content,
 			StartLine: currentLine,
 			EndLine:   currentLine + lines - 1,
+			ChunkType: "line-based",
 		}
 
 		fileChunks = append(fileChunks, chunk)
