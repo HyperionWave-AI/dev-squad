@@ -11,9 +11,13 @@ import {
   Skeleton,
   Alert,
   Stack,
+  Button,
+  Tooltip,
 } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
 import { useKnowledge } from './KnowledgeLayout';
 import { knowledgeApi } from '../../services/knowledgeApi';
+import { CreateCollectionModal } from './CreateCollectionModal';
 
 const categoryIcons: Record<string, string> = {
   Tech: '🔧',
@@ -28,6 +32,7 @@ export const CollectionBrowser: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [modalOpen, setModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     const fetchCollections = async () => {
@@ -62,6 +67,19 @@ export const CollectionBrowser: React.FC = () => {
     setSelectedCategory(newValue);
   };
 
+  const handleCreateSuccess = () => {
+    // Refresh collections after successful creation
+    const fetchCollections = async () => {
+      try {
+        const response = await knowledgeApi.listCollections();
+        setCollections(response.collections);
+      } catch (err) {
+        console.error('Failed to refresh collections:', err);
+      }
+    };
+    fetchCollections();
+  };
+
   if (loading) {
     return (
       <Box>
@@ -87,9 +105,20 @@ export const CollectionBrowser: React.FC = () => {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
-        Knowledge Collections
-      </Typography>
+      {/* Header with Create Button */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+          Knowledge Collections
+        </Typography>
+        <Button
+          variant="contained"
+          color="primary"
+          startIcon={<AddIcon />}
+          onClick={() => setModalOpen(true)}
+        >
+          Create Collection
+        </Button>
+      </Box>
 
       {/* Category Tabs */}
       <Tabs
@@ -142,13 +171,43 @@ export const CollectionBrowser: React.FC = () => {
                       />
                     </Box>
 
-                    {/* Collection Category */}
-                    <Chip
-                      label={collection.category}
-                      size="small"
-                      variant="outlined"
-                      sx={{ fontSize: '0.75rem' }}
-                    />
+                    {/* Collection Description */}
+                    {collection.description && (
+                      <Tooltip title={collection.description} arrow placement="top">
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{
+                            mb: 1,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {collection.description}
+                        </Typography>
+                      </Tooltip>
+                    )}
+
+                    {/* Collection Category and Tags */}
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+                      <Chip
+                        label={collection.category}
+                        size="small"
+                        variant="outlined"
+                        sx={{ fontSize: '0.75rem' }}
+                      />
+                      {collection.tags && collection.tags.map((tag) => (
+                        <Chip
+                          key={tag}
+                          label={tag}
+                          size="small"
+                          variant="filled"
+                          color="default"
+                          sx={{ fontSize: '0.7rem' }}
+                        />
+                      ))}
+                    </Box>
                   </CardContent>
                 </CardActionArea>
             </Card>
@@ -178,6 +237,13 @@ export const CollectionBrowser: React.FC = () => {
           </Typography>
         </Box>
       )}
+
+      {/* Create Collection Modal */}
+      <CreateCollectionModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSuccess={handleCreateSuccess}
+      />
     </Box>
   );
 };
