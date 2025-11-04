@@ -314,6 +314,10 @@ func StartHTTPServer(
 	corsConfig.AllowCredentials = true
 	r.Use(cors.New(corsConfig))
 
+	// Register panic recovery middleware (MUST be first to catch all panics)
+	r.Use(middleware.PanicRecoveryMiddleware(logger))
+	logger.Info("🛡️  Panic recovery middleware registered - server will not crash on panics")
+
 	// Register optional JWT authentication middleware
 	// Disabled by default (injects dev mock values)
 	// Enable with ENABLE_JWT=true environment variable
@@ -327,6 +331,11 @@ func StartHTTPServer(
 			"version": "2.0.0",
 		})
 	})
+
+	// Register panic test endpoints (for testing panic recovery in dev)
+	panicTestHandler := handlers.NewPanicTestHandler(logger)
+	panicTestHandler.RegisterTestRoutes(r)
+	panicTestHandler.LogTestInstructions()
 
 	// Register REST API routes
 	restHandler.RegisterRESTRoutes(r)
