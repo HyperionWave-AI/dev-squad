@@ -72,7 +72,7 @@ func TestVoteWeightedRetrieval(t *testing.T) {
 	for i, e := range entries {
 		entry, err := storage.Upsert(testCollection, e.text, map[string]interface{}{
 			"topic": fmt.Sprintf("topic_%d", i),
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("Failed to create entry %d: %v", i, err)
 		}
@@ -119,7 +119,7 @@ func TestVoteWeightedRetrieval(t *testing.T) {
 
 	// Step 3: Test query without vote boosting (baseline)
 	t.Run("Query_NoVoteBoost", func(t *testing.T) {
-		results, err := storage.Query(testCollection, "machine learning", 3)
+		results, err := storage.Query(testCollection, "machine learning", 3, nil)
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
 		}
@@ -137,7 +137,7 @@ func TestVoteWeightedRetrieval(t *testing.T) {
 	// Step 4: Test query with vote boosting
 	t.Run("Query_WithVoteBoost", func(t *testing.T) {
 		// Use voteBoost=0.5 to significantly affect ranking
-		results, err := storage.Query(testCollection, "machine learning", 3, 0.5)
+		results, err := storage.Query(testCollection, "machine learning", 3, nil, 0.5)
 		if err != nil {
 			t.Fatalf("Query with vote boost failed: %v", err)
 		}
@@ -219,7 +219,7 @@ func TestVoteWeightedRetrieval(t *testing.T) {
 	// Step 8: Verify vote score normalization
 	t.Run("VoteScoreNormalization", func(t *testing.T) {
 		// Query with high vote boost
-		results, err := storage.Query(testCollection, "programming", 3, 1.0)
+		results, err := storage.Query(testCollection, "programming", 3, nil, 1.0)
 		if err != nil {
 			t.Fatalf("Query failed: %v", err)
 		}

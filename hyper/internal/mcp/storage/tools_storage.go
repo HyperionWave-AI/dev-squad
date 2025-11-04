@@ -117,10 +117,7 @@ func NewToolsStorage(db *mongo.Database, qdrantClient QdrantClientInterface, log
 
 	// Get vector dimensions from qdrant client to create dimension-specific collection name
 	// This prevents dimension mismatch errors when switching embedding providers
-	vectorDim := 768 // Default fallback (Ollama nomic-embed-text)
-	if qdrantClientTyped, ok := qdrantClient.(*QdrantClient); ok {
-		vectorDim = qdrantClientTyped.vectorDimension
-	}
+	vectorDim := qdrantClient.GetDimensions() // Get from shared embedding client
 
 	// Append dimension to collection name (e.g., "mcp-tools_1024")
 	collectionName := fmt.Sprintf("%s_%d", baseCollectionName, vectorDim)
@@ -279,10 +276,7 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 	if s.qdrantClient != nil {
 		// Get vector dimensions from qdrant client (uses configured embedding client dimensions)
 		// This ensures we use the correct dimensions (Ollama:768, OpenAI:1536, Voyage:1024, etc.)
-		vectorDim := 768 // Default fallback
-		if qdrantClientTyped, ok := s.qdrantClient.(*QdrantClient); ok {
-			vectorDim = qdrantClientTyped.vectorDimension
-		}
+		vectorDim := s.qdrantClient.GetDimensions() // Get from shared embedding client
 
 		// Ensure collection exists with correct dimensions
 		if err := s.qdrantClient.EnsureCollection(s.toolsCollectionName, vectorDim); err != nil {
