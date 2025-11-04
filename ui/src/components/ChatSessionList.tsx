@@ -511,10 +511,11 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                     disablePadding
                     sx={{
                       pl: treeNode.depth * 2, // Indent based on depth
+                      width: '100%', // Ensure full width
+                      maxWidth: '100%', // Prevent overflow
                       borderLeft: isActive ? '4px solid' : 0,
                       borderColor: 'primary.main',
                       backgroundColor: isActive ? 'rgba(25, 118, 210, 0.08)' : 'transparent',
-                      borderRadius: isActive ? '0 8px 8px 0' : 0,
                       mb: 1, // Increased spacing between items
                       transition: 'all 0.2s ease-in-out',
                       '&:hover': {
@@ -530,6 +531,8 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                       sx={{
                         py: 1.5, // Increased vertical padding
                         px: 2, // Increased horizontal padding
+                        width: '100%', // Ensure full width
+                        maxWidth: '100%', // Prevent overflow
                         minHeight: GRAPH_CONFIG.itemHeight,
                         alignItems: 'center', // Center align for better visual balance
                       }}
@@ -566,6 +569,12 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
 
                       {/* Session title and metadata */}
                       <ListItemText
+                        sx={{
+                          minWidth: 0, // Allow flex item to shrink below content size
+                          flex: 1, // Take up available space
+                          overflow: 'hidden', // Ensure container doesn't overflow
+                          pr: 1, // Add some padding to prevent text from touching action buttons
+                        }}
                         primary={
                           <Typography
                             variant="body2"
