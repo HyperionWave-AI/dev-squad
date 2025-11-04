@@ -587,6 +587,9 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                             sx={{
                               color: 'text.secondary',
                               display: 'block',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
                               mt: 0.75, // More space above date
                               fontSize: '0.75rem',
                             }}
