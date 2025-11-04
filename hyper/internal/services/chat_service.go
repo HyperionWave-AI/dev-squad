@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"hyper/internal/config"
 	"hyper/internal/models"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -262,6 +263,11 @@ func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.Objec
 // SaveMessage saves a message to the database
 // Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content string, companyID string) (*models.ChatMessage, error) {
+	// Layer 3: Validate content size (defense in depth)
+	if len(content) > config.MaxContentBytes {
+		return nil, fmt.Errorf("message content exceeds maximum size of %d bytes (got %d bytes)", config.MaxContentBytes, len(content))
+	}
+
 	// Verify session exists and user has access (outside transaction)
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
@@ -327,8 +333,18 @@ func (s *ChatService) GetSessionMessages(ctx context.Context, sessionID primitiv
 // SaveToolCall saves a tool call message to the database
 // Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, args map[string]interface{}, companyID string) (*models.ChatMessage, error) {
+	// Layer 3: Validate tool call args size (defense in depth)
+	// Tool results can be larger, but tool calls (user input) should be limited
+	argsBytes, err := bson.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate tool call args: %w", err)
+	}
+	if len(argsBytes) > config.MaxContentBytes {
+		return nil, fmt.Errorf("tool call args exceed maximum size of %d bytes (got %d bytes)", config.MaxContentBytes, len(argsBytes))
+	}
+
 	// Verify session exists and user has access (outside transaction)
-	_, err := s.GetSession(ctx, sessionID, companyID)
+	_, err = s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
 		return nil, err
 	}
@@ -378,6 +394,18 @@ func (s *ChatService) SaveToolCall(ctx context.Context, sessionID primitive.Obje
 // SaveToolResult saves a tool result message to the database
 // Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error) {
+	// Layer 3: Validate tool result output size (defense in depth)
+	// Tool results can be larger than user messages (10MB limit vs 1MB)
+	if output != nil {
+		outputBytes, err := bson.Marshal(output)
+		if err != nil {
+			return nil, fmt.Errorf("failed to validate tool result output: %w", err)
+		}
+		if len(outputBytes) > config.MaxToolResultBytes {
+			return nil, fmt.Errorf("tool result output exceeds maximum size of %d bytes (got %d bytes)", config.MaxToolResultBytes, len(outputBytes))
+		}
+	}
+
 	// Verify session exists and user has access (outside transaction)
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
