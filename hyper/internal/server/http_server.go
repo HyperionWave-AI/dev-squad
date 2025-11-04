@@ -123,6 +123,7 @@ func StartHTTPServer(
 	port string,
 	taskStorage storage.TaskStorage,
 	knowledgeStorage storage.KnowledgeStorage,
+	reflectionStorage *storage.ReflectionStorage,
 	codeIndexStorage *storage.CodeIndexStorage,
 	qdrantClient *storage.QdrantClient,
 	embeddingClient embeddings.EmbeddingClient,
@@ -457,6 +458,26 @@ func StartHTTPServer(
 	logger.Info("User Settings API routes registered",
 		zap.String("getPath", "/api/v1/user/settings"),
 		zap.String("patchPath", "/api/v1/user/settings"))
+
+	// Register reflection routes (metacognitive self-awareness layer)
+	reflectionHandler := handlers.NewReflectionHandler(reflectionStorage, logger)
+	reflectionGroup := r.Group("/api/v1/reflection")
+	{
+		reflectionGroup.GET("/decisions", reflectionHandler.GetDecisions)
+		reflectionGroup.GET("/outcomes", reflectionHandler.GetOutcomes)
+		reflectionGroup.GET("/lessons", reflectionHandler.GetLessons)
+		reflectionGroup.GET("/search", reflectionHandler.SearchLessons)
+		reflectionGroup.POST("/decision", reflectionHandler.PostDecision)
+		reflectionGroup.POST("/outcome", reflectionHandler.PostOutcome)
+		reflectionGroup.POST("/lesson", reflectionHandler.PostLesson)
+		reflectionGroup.POST("/test-error", reflectionHandler.PostTestError) // Test endpoint for error tracking
+	}
+
+	logger.Info("Reflection API routes registered",
+		zap.String("decisionsPath", "/api/v1/reflection/decisions"),
+		zap.String("outcomesPath", "/api/v1/reflection/outcomes"),
+		zap.String("lessonsPath", "/api/v1/reflection/lessons"),
+		zap.String("searchPath", "/api/v1/reflection/search"))
 
 	// Subchat storage already initialized earlier for execute_subagent tool
 	// Use it to seed system subagents and create handlers

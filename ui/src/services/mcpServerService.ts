@@ -6,7 +6,9 @@
  * into the Hyperion platform.
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:9999';
+// Use relative URL to leverage Vite's proxy configuration
+// Proxy forwards /api/v1 to http://localhost:7095 (see vite.config.ts)
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 export interface MCPServer {
   serverName: string;

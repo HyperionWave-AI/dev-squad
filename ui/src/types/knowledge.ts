@@ -13,6 +13,31 @@ export interface KnowledgeCollection {
   name: string;
   count: number;
   category: string;
+  description?: string;
+  tags?: string[];
+}
+
+// Full Collection interface with metadata (matches backend schema)
+export interface Collection {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  tags: string[];
+  count: number;
+  createdAt: string;
+}
+
+// Request/Response types for collection creation
+export interface CreateCollectionRequest {
+  name: string;
+  category: string;
+  description: string;
+  tags: string[];
+}
+
+export interface CreateCollectionResponse {
+  collection: Collection;
 }
 
 export interface SearchRequest {
@@ -22,8 +47,8 @@ export interface SearchRequest {
 }
 
 export interface SearchResponse {
-  results: KnowledgeEntry[];
-  total: number;
+  entries: KnowledgeEntry[];
+  total?: number;
 }
 
 export interface CreateRequest {
