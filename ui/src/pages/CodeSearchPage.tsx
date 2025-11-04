@@ -6,6 +6,7 @@ import {
   CodeResults,
   IndexStatus,
 } from '../components/code';
+import { FileInspector } from '../components/code/FileInspector';
 import type { SearchResult } from '../types/codeIndex';
 import type { SearchOptions } from '../components/code/CodeSearch';
 import { restCodeClient } from '../services/restCodeClient';
@@ -13,6 +14,7 @@ import { restCodeClient } from '../services/restCodeClient';
 export const CodeSearchPage: React.FC = () => {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [inspectFileId, setInspectFileId] = useState<string | null>(null);
 
   const handleSearch = async (query: string, options: SearchOptions) => {
     try {
@@ -64,7 +66,11 @@ export const CodeSearchPage: React.FC = () => {
             <CodeSearch onSearch={handleSearch} loading={loading} />
 
             {/* Search Results */}
-            <CodeResults results={results} loading={loading} />
+            <CodeResults
+              results={results}
+              loading={loading}
+              onInspect={(fileId) => setInspectFileId(fileId)}
+            />
           </Stack>
 
           {/* Configuration and Status Sidebar */}
@@ -114,6 +120,13 @@ export const CodeSearchPage: React.FC = () => {
           </Box>
         </Box>
       </Container>
+
+      {/* File Inspector Drawer */}
+      <FileInspector
+        open={!!inspectFileId}
+        onClose={() => setInspectFileId(null)}
+        fileId={inspectFileId}
+      />
     </Box>
   );
 };
