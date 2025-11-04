@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"hyper/internal/config"
+	"hyper/internal/metrics"
 	"hyper/internal/models"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -112,6 +113,9 @@ func (s *ChatService) CreateSessionWithParent(ctx context.Context, userID, compa
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat session: %w", err)
 	}
+
+	// Record session creation metric
+	metrics.ChatSessionsCreated.Inc()
 
 	logFields := []zap.Field{
 		zap.String("sessionId", session.ID.Hex()),
@@ -263,6 +267,13 @@ func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.Objec
 // SaveMessage saves a message to the database
 // Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content string, companyID string) (*models.ChatMessage, error) {
+	// Track operation timing for metrics
+	startTime := time.Now()
+	defer func() {
+		// Record metrics using helper function
+		metrics.RecordChatMessage(role, time.Since(startTime).Seconds())
+	}()
+
 	// Layer 3: Validate content size (defense in depth)
 	if len(content) > config.MaxContentBytes {
 		return nil, fmt.Errorf("message content exceeds maximum size of %d bytes (got %d bytes)", config.MaxContentBytes, len(content))

@@ -7,13 +7,14 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Alert, Snackbar, IconButton, Drawer, Divider, Typography } from '@mui/material';
-import { AccountTree as SubchatsIcon } from '@mui/icons-material';
+import { AccountTree as SubchatsIcon, ShowChart as MetricsIcon } from '@mui/icons-material';
 import { ChatSessionList } from '../components/ChatSessionList';
 import { ChatMessageView } from '../components/ChatMessageView';
 import { ChatInputBox } from '../components/ChatInputBox';
 import { AgentSelector } from '../components/AgentSelector';
 import { SubchatList } from '../components/SubchatList';
 import { ConversationModeToggle } from '../components/ConversationModeToggle';
+import { MetricsDashboard } from '../components/MetricsDashboard';
 import {
   createSession,
   getSessions,
@@ -39,6 +40,7 @@ export function CodeChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [pendingToolCalls, setPendingToolCalls] = useState<Set<string>>(new Set());
   const [subchatsDrawerOpen, setSubchatsDrawerOpen] = useState(false);
+  const [metricsDrawerOpen, setMetricsDrawerOpen] = useState(false);
   // Real-time streaming tool calls/results (updated immediately, not just on stream end)
   const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCall[]>([]);
   const [streamingToolResults, setStreamingToolResults] = useState<Map<string, ToolResult>>(new Map());
@@ -457,8 +459,17 @@ export function CodeChatPage() {
             disabled={!activeSessionId}
             color={subchatsDrawerOpen ? 'primary' : 'default'}
             sx={{ mr: 1 }}
+            title="Parallel Workflows"
           >
             <SubchatsIcon />
+          </IconButton>
+          <IconButton
+            onClick={() => setMetricsDrawerOpen(!metricsDrawerOpen)}
+            color={metricsDrawerOpen ? 'primary' : 'default'}
+            sx={{ mr: 1 }}
+            title="Metrics Dashboard"
+          >
+            <MetricsIcon />
           </IconButton>
         </Box>
 
@@ -509,6 +520,27 @@ export function CodeChatPage() {
             onSubchatCreated={loadSessions}
           />
         )}
+      </Drawer>
+
+      {/* Metrics Drawer */}
+      <Drawer
+        anchor="right"
+        open={metricsDrawerOpen}
+        onClose={() => setMetricsDrawerOpen(false)}
+        PaperProps={{
+          sx: { width: 600, height: '100%' },
+        }}
+      >
+        <Box sx={{ mb: 2, p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <MetricsIcon color="primary" />
+            <Typography variant="h6">Metrics Dashboard</Typography>
+          </Box>
+          <IconButton onClick={() => setMetricsDrawerOpen(false)} size="small">
+            <MetricsIcon />
+          </IconButton>
+        </Box>
+        <MetricsDashboard />
       </Drawer>
 
       {/* Error Snackbar */}
