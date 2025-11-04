@@ -755,6 +755,24 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 	h.handleMessages(aiCtx, httpCtx, conn, sessionID, userID, companyID)
 }
 
+// StreamCleanup manages channel lifecycle and goroutine coordination
+type StreamCleanup struct {
+	doneOnce   sync.Once
+	done       chan struct{}
+	wg         sync.WaitGroup
+	streamCtx  context.Context
+	cancelFunc context.CancelFunc
+}
+
+// Close safely closes the done channel and waits for all goroutines
+func (sc *StreamCleanup) Close() {
+	sc.doneOnce.Do(func() {
+		close(sc.done)
+		sc.cancelFunc()
+		sc.wg.Wait() // Block until all goroutines exit
+	})
+}
+
 // handleMessages manages the WebSocket message loop with processing state
 func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string) {
 	// Set read deadline for ping/pong
@@ -766,17 +784,30 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 
 	// Start ping ticker to keep connection alive
 	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
 
-	// Channel for handling graceful shutdown
-	done := make(chan struct{})
+	// Create stream cleanup manager for channel lifecycle
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	cleanup := &StreamCleanup{
+		done:       make(chan struct{}),
+		streamCtx:  streamCtx,
+		cancelFunc: streamCancel,
+	}
+
+	// Ordered defer chain (LIFO execution):
+	// 1. Close WebSocket (last resource cleanup)
+	defer conn.Close()
+	// 2. Stop ticker (after goroutines exit)
+	defer ticker.Stop()
+	// 3. Wait for goroutines and close done channel
+	defer cleanup.Close()
+	// 4. Signal all goroutines to exit
 	defer func() {
-		// Ensure done channel is closed on any exit path (including panics)
-		select {
-		case <-done:
-			// Already closed
-		default:
-			close(done)
+		// Ensure cleanup on panic
+		if r := recover(); r != nil {
+			h.logger.Error("Panic in handleMessages",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Any("panic", r))
+			panic(r) // Re-panic after cleanup
 		}
 	}()
 
@@ -784,8 +815,10 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 	isProcessing := false
 	var processingMutex sync.Mutex
 
-	// Goroutine for sending pings (with panic recovery)
+	// Goroutine for sending pings (tracked with WaitGroup)
+	cleanup.wg.Add(1)
 	middleware.SafeGo(h.logger, func() {
+		defer cleanup.wg.Done()
 		for {
 			select {
 			case <-ticker.C:
@@ -795,7 +828,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				}
 			case <-httpCtx.Done():
 				return
-			case <-done:
+			case <-cleanup.done:
 				return
 			}
 		}
@@ -902,7 +935,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			}
 
 			// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
-			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID)
+			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
 
 			// Reset processing state after response complete
 			processingMutex.Lock()
@@ -913,7 +946,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 }
 
 // streamAIResponse streams AI response with tool execution events back to client using ai-service
-func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userMessage, companyID string) {
+func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userMessage, companyID string, cleanup *StreamCleanup) {
 	h.logger.Info("Streaming AI response via ai-service",
 		zap.String("sessionId", sessionID.Hex()),
 		zap.String("userMessage", userMessage))
@@ -930,8 +963,10 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 	progressCh := GetProgressNotifier(h.logger).RegisterSession(sessionID)
 	defer GetProgressNotifier(h.logger).UnregisterSession(sessionID)
 
-	// Launch goroutine to stream progress notifications to WebSocket (with panic recovery)
+	// Launch goroutine to stream progress notifications to WebSocket (tracked with WaitGroup)
+	cleanup.wg.Add(1)
 	middleware.SafeGo(h.logger, func() {
+		defer cleanup.wg.Done()
 		for progress := range progressCh {
 			progressMsg := models.StreamMessage{
 				Type:    "token",
@@ -1100,6 +1135,29 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	tokenCount := 0
 	toolCallCount := 0
 	clientDisconnected := false // Track client disconnect state
+
+	// Panic recovery for stream processing
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Error("Panic during AI stream processing",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Any("panic", r),
+				zap.Int("tokensStreamed", tokenCount),
+				zap.Int("toolCalls", toolCallCount))
+
+			// Try to save whatever response we have so far
+			if fullResponse != "" {
+				if _, err := h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID); err != nil {
+					h.logger.Error("Failed to save partial response after panic", zap.Error(err))
+				}
+			}
+
+			// Try to notify client if still connected
+			if !clientDisconnected {
+				h.sendError(conn, "Internal error during AI processing")
+			}
+		}
+	}()
 
 	for event := range aiStream {
 		// PRIORITY SELECT: Non-blocking interrupt check (runs before every AI event)
