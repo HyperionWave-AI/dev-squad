@@ -951,13 +951,13 @@ func (h *KnowledgeHandler) VerifyKnowledgeArticle(c *gin.Context) {
 	knowledgeID := c.Param("id")
 
 	// Extract user context from JWT (assuming middleware provides this)
-	userID, exists := c.Get("userID")
+	userID, exists := c.Get("userId")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
 
-	companyID, exists := c.Get("companyID")
+	companyID, exists := c.Get("companyId")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found"})
 		return
