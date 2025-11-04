@@ -11,6 +11,7 @@ import (
 
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
+	"hyper/internal/config"
 	"hyper/internal/middleware"
 	"hyper/internal/models"
 
@@ -864,10 +865,30 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				return
 			}
 
+			// Layer 1: Validate raw message size (fail fast before JSON parsing)
+			if len(messageData) > config.MaxMessageBytes {
+				h.logger.Warn("Message rejected - size exceeds limit",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Int("messageSize", len(messageData)),
+					zap.Int("maxSize", config.MaxMessageBytes))
+				h.sendError(conn, fmt.Sprintf("Message too large: %d bytes (max %d bytes / 1MB)", len(messageData), config.MaxMessageBytes))
+				continue
+			}
+
 			// Parse user message
 			var userMsg models.SendMessageRequest
 			if err := json.Unmarshal(messageData, &userMsg); err != nil {
 				h.sendError(conn, "Invalid message format")
+				continue
+			}
+
+			// Layer 2: Validate actual content size (after JSON overhead)
+			if len(userMsg.Content) > config.MaxContentBytes {
+				h.logger.Warn("Message content rejected - size exceeds limit",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Int("contentSize", len(userMsg.Content)),
+					zap.Int("maxSize", config.MaxContentBytes))
+				h.sendError(conn, fmt.Sprintf("Message content too large: %d bytes (max %d bytes / 1MB)", len(userMsg.Content), config.MaxContentBytes))
 				continue
 			}
 
@@ -1195,6 +1216,27 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 				// Accumulate response even if client disconnected
 				fullResponse += event.Content
 				tokenCount++
+
+				// Buffer size protection: Check accumulated response size
+				if len(fullResponse) > config.MaxStreamBufferBytes {
+					h.logger.Warn("AI response exceeded buffer limit, truncating stream",
+						zap.String("sessionId", sessionID.Hex()),
+						zap.Int("responseSize", len(fullResponse)),
+						zap.Int("maxSize", config.MaxStreamBufferBytes),
+						zap.Int("tokensStreamed", tokenCount))
+
+					// Send truncation notice to client if still connected
+					if !clientDisconnected {
+						truncationMsg := models.StreamMessage{
+							Type:    "token",
+							Content: "\n\n_[Response truncated - exceeded maximum size limit]_",
+						}
+						h.safeWriteJSON(conn, truncationMsg)
+					}
+
+					// Break out of event loop to save what we have
+					break
+				}
 
 				// Try to send to WebSocket if client still connected
 				if !clientDisconnected {
