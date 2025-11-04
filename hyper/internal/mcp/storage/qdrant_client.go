@@ -1095,11 +1095,21 @@ func (c *QdrantClient) UpsertCodeIndexPoints(collectionName string, points []Cod
 
 // SearchCodeIndex performs a vector similarity search for code in the specified collection
 func (c *QdrantClient) SearchCodeIndex(collectionName string, vector []float32, limit int) (*CodeIndexSearchResponse, error) {
+	return c.SearchCodeIndexWithFilter(collectionName, vector, limit, nil)
+}
+
+// SearchCodeIndexWithFilter performs a vector similarity search with optional filtering
+func (c *QdrantClient) SearchCodeIndexWithFilter(collectionName string, vector []float32, limit int, filter map[string]interface{}) (*CodeIndexSearchResponse, error) {
 	searchReq := map[string]interface{}{
 		"vector":       vector,
 		"limit":        limit,
 		"with_payload": true,
 		"with_vector":  false,
+	}
+
+	// Add filter if provided
+	if filter != nil {
+		searchReq["filter"] = filter
 	}
 
 	jsonBody, err := json.Marshal(searchReq)

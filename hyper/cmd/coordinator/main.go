@@ -17,6 +17,7 @@ import (
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/indexer"
+	"hyper/internal/mcp/parser"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/server"
@@ -175,6 +176,10 @@ func main() {
 		logger.Fatal("Failed to detect project root", zap.Error(err))
 	}
 	logger.Info("Project root detected", zap.String("path", tools.GetProjectRoot()))
+
+	// Initialize AST parsers for code indexing
+	parser.InitializeParsers()
+	logger.Info("AST parsers initialized for Go, JavaScript/TypeScript, and Python")
 
 	// Parse command-line flags
 	mode := flag.String("mode", "both", "Server mode: http, mcp, or both")
