@@ -16,7 +16,6 @@ import {
   ChevronRight,
 } from '@mui/icons-material';
 import type { FileChunkDetails } from '../../types/codeIndex';
-import { restCodeClient } from '../../services/restCodeClient';
 
 // Lazy load syntax highlighter
 const SyntaxHighlighter = lazy(() =>
@@ -33,7 +32,7 @@ interface ChunkListProps {
   language: string;
 }
 
-export const ChunkList: React.FC<ChunkListProps> = ({ chunks, fileId, language }) => {
+export const ChunkList: React.FC<ChunkListProps> = ({ chunks, language }) => {
   const [expandedChunks, setExpandedChunks] = useState<Set<number>>(new Set());
   const [chunkContents, setChunkContents] = useState<Map<number, string>>(new Map());
   const [loadingChunks, setLoadingChunks] = useState<Set<number>>(new Set());
@@ -72,7 +71,7 @@ export const ChunkList: React.FC<ChunkListProps> = ({ chunks, fileId, language }
   };
 
   const getNodeIcon = (nodeType?: string) => {
-    if (!nodeType) return null;
+    if (!nodeType) return undefined;
     const type = nodeType.toLowerCase();
     if (type.includes('function') || type.includes('method')) {
       return <CodeIcon fontSize="small" />;
