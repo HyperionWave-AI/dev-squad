@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,122 @@ var (
 	codeSearchCacheMutex    sync.RWMutex
 	codeSearchCacheTTL      = 5 * time.Minute
 )
+
+// parseQueryForFilenameBoost extracts tokens, file extensions, and potential exact filenames from the search query
+// Returns:
+// - tokens: lowercase tokens from the query (split on spaces and punctuation)
+// - extensions: file extensions found in the query (e.g., ".tsx", ".go")
+// - exactFilename: potential exact filename if detected (e.g., "App.tsx")
+func parseQueryForFilenameBoost(query string) (tokens []string, extensions []string, exactFilename string) {
+	queryLower := strings.ToLower(query)
+
+	// Extract file extensions using regex (e.g., .tsx, .go, .js, .ts)
+	extPattern := regexp.MustCompile(`\.\w+`)
+	extMatches := extPattern.FindAllString(queryLower, -1)
+	extensions = extMatches
+
+	// Split query into tokens (split on whitespace and common punctuation)
+	tokenPattern := regexp.MustCompile(`[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9]+)?`)
+	tokenMatches := tokenPattern.FindAllString(queryLower, -1)
+
+	// Filter out common stopwords
+	stopwords := map[string]bool{
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
+		"with": true, "by": true, "from": true, "as": true, "is": true, "are": true,
+		"was": true, "were": true, "be": true, "been": true, "have": true, "has": true,
+		"main": true, "component": true, "function": true, "class": true, "interface": true,
+		"code": true, "file": true, "script": true, "module": true,
+	}
+
+	for _, token := range tokenMatches {
+		if !stopwords[token] && len(token) > 1 {
+			tokens = append(tokens, token)
+		}
+	}
+
+	// Detect exact filename pattern (word with extension, e.g., "App.tsx", "main.go")
+	filenamePattern := regexp.MustCompile(`\b([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)\b`)
+	if match := filenamePattern.FindString(queryLower); match != "" {
+		exactFilename = match
+	}
+
+	return tokens, extensions, exactFilename
+}
+
+// calculateFilenameBoost calculates a score boost multiplier based on filename matching
+// Returns a multiplier where:
+// - 1.0 = no boost
+// - 1.3 = 30% boost for filename token match
+// - 1.4 = 40% boost for extension match
+// - 1.5 = 50% boost for exact filename match
+func calculateFilenameBoost(filePath string, queryTokens []string, queryExtensions []string, exactFilename string) float64 {
+	if filePath == "" {
+		return 1.0
+	}
+
+	// Extract filename from path and lowercase it
+	filename := strings.ToLower(path.Base(filePath))
+	filenameWithoutExt := filename
+	fileExt := path.Ext(filename)
+	if fileExt != "" {
+		filenameWithoutExt = filename[:len(filename)-len(fileExt)]
+	}
+
+	boost := 1.0
+
+	// HIGHEST PRIORITY: Exact filename match (50% boost)
+	if exactFilename != "" && filename == exactFilename {
+		return 1.5
+	}
+
+	// HIGH PRIORITY: Extension match (40% boost)
+	extensionMatched := false
+	for _, ext := range queryExtensions {
+		if fileExt == ext {
+			boost = 1.4
+			extensionMatched = true
+			break
+		}
+	}
+
+	// MEDIUM PRIORITY: Filename token match (30% boost)
+	// Only apply if we don't already have an extension match
+	if !extensionMatched {
+		for _, token := range queryTokens {
+			// Check if token appears in filename (without extension)
+			if strings.Contains(filenameWithoutExt, token) || strings.Contains(filename, token) {
+				boost = 1.3
+				break
+			}
+		}
+	}
+
+	return boost
+}
+
+// parseRetrieveMode parses the retrieve mode parameter and returns the retrieve type, chunk size in lines, and t-shirt size
+// Maps: chunk-s→50/s, chunk-m→100/m, chunk-l→200/l, chunk-xl→400/xl, chunk→200/l (backward compat), full→0/empty
+func parseRetrieveMode(mode string) (retrieveType string, chunkLines int, tshirtSize string) {
+	switch mode {
+	case "chunk-s":
+		return "chunk", 50, "s"
+	case "chunk-m":
+		return "chunk", 100, "m"
+	case "chunk-l":
+		return "chunk", 200, "l"
+	case "chunk-xl":
+		return "chunk", 400, "xl"
+	case "chunk":
+		// Backward compatibility: chunk defaults to chunk-l (200 lines)
+		return "chunk", 200, "l"
+	case "full":
+		return "full", 0, ""
+	default:
+		// Default to chunk-l for unknown values
+		return "chunk", 200, "l"
+	}
+}
 
 // GetLastCodeSearchPaths returns the cached file paths from the most recent code_index_search
 // Returns nil if cache is expired (older than 5 minutes) or empty
@@ -52,22 +170,12 @@ type CodeIndexSearchTool struct {
 	logger           *zap.Logger
 }
 
-// NewCodeIndexSearchTool creates a new code search tool instance
-func NewCodeIndexSearchTool(codeIndexStorage *storage.CodeIndexStorage, embeddingClient embeddings.EmbeddingClient, qdrantClient *storage.QdrantClient, logger *zap.Logger) *CodeIndexSearchTool {
-	return &CodeIndexSearchTool{
-		codeIndexStorage: codeIndexStorage,
-		embeddingClient:  embeddingClient,
-		qdrantClient:     qdrantClient,
-		logger:           logger,
-	}
-}
-
 func (t *CodeIndexSearchTool) Name() string {
 	return "code_index_search"
 }
 
 func (t *CodeIndexSearchTool) Description() string {
-	return "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Default limit: 10 results (max: 50). Use to find examples, patterns, or specific implementations. NOTE: Requires code index to be populated via MCP endpoint first."
+	return "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Default limit: 10 results (max: 50). IMPORTANT: retrieve='full' returns only the single best match to conserve tokens - use chunk modes (chunk-s/m/l/xl) for exploring multiple results. NOTE: Requires code index to be populated via MCP endpoint first."
 }
 
 func (t *CodeIndexSearchTool) InputSchema() map[string]interface{} {
@@ -85,6 +193,11 @@ func (t *CodeIndexSearchTool) InputSchema() map[string]interface{} {
 			"folderPath": map[string]interface{}{
 				"type":        "string",
 				"description": "Optional: filter results to a specific folder path",
+			},
+			"retrieve": map[string]interface{}{
+				"type":        "string",
+				"description": "Content retrieval mode: 'chunk' (default - 200 lines), 'chunk-s' (50 lines), 'chunk-m' (100 lines), 'chunk-l' (200 lines), 'chunk-xl' (400 lines), or 'full' (entire file)",
+				"enum":        []string{"chunk", "chunk-s", "chunk-m", "chunk-l", "chunk-xl", "full"},
 			},
 		},
 		"required": []string{"query"},
@@ -107,12 +220,18 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
-	// Get retrieve mode (default: "chunk")
-	retrieveMode := "chunk"
+	// Parse retrieve mode (default: "chunk")
+	retrieveModeParam := "chunk"
 	if mode, ok := input["retrieve"].(string); ok {
-		if mode == "full" || mode == "chunk" {
-			retrieveMode = mode
-		}
+		retrieveModeParam = mode
+	}
+	retrieveType, chunkLines, tshirtSize := parseRetrieveMode(retrieveModeParam)
+
+	// MCP Best Practice: Limit full file retrieval to top 1 result to conserve context
+	// Full mode returns entire file content which can be very large
+	// For exploring multiple results, users should use chunk modes (chunk-s/m/l/xl)
+	if retrieveType == "full" {
+		limit = 1
 	}
 
 	// Get current project root
@@ -150,6 +269,64 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 	t.logger.Info("Code search: Qdrant search response",
 		zap.Int("resultCount", len(searchResp.Result)),
 		zap.String("collection", collectionName))
+
+	// FILENAME-AWARE SCORE BOOSTING
+	// Parse query once to extract filename matching criteria
+	queryTokens, queryExtensions, exactFilename := parseQueryForFilenameBoost(query)
+	t.logger.Debug("Query parsed for filename boosting",
+		zap.Strings("tokens", queryTokens),
+		zap.Strings("extensions", queryExtensions),
+		zap.String("exactFilename", exactFilename))
+
+	// Apply score boosting to each hit based on filename matching
+	boostedCount := 0
+	for i := range searchResp.Result {
+		hit := &searchResp.Result[i]
+
+		// Extract file path from payload
+		var filePath string
+		if fp, ok := hit.Payload["filePath"].(string); ok {
+			filePath = fp
+		}
+
+		// Calculate boost multiplier
+		boostMultiplier := calculateFilenameBoost(filePath, queryTokens, queryExtensions, exactFilename)
+
+		// Apply boost to score (multiplicative)
+		originalScore := hit.Score
+		hit.Score = float32(float64(originalScore) * boostMultiplier)
+
+		// Clamp score to maximum of 1.0
+		if hit.Score > 1.0 {
+			hit.Score = 1.0
+		}
+
+		// Log boosted scores for debugging
+		if boostMultiplier > 1.0 {
+			boostedCount++
+			t.logger.Debug("Score boosted for filename match",
+				zap.String("filePath", filePath),
+				zap.Float64("originalScore", float64(originalScore)),
+				zap.Float64("boostMultiplier", boostMultiplier),
+				zap.Float64("boostedScore", float64(hit.Score)))
+		}
+	}
+
+	// Re-sort results by boosted scores (descending order)
+	// This ensures files with filename matches rank higher
+	if boostedCount > 0 {
+		// Simple bubble sort for small result sets (max 50 items)
+		for i := 0; i < len(searchResp.Result)-1; i++ {
+			for j := i + 1; j < len(searchResp.Result); j++ {
+				if searchResp.Result[j].Score > searchResp.Result[i].Score {
+					searchResp.Result[i], searchResp.Result[j] = searchResp.Result[j], searchResp.Result[i]
+				}
+			}
+		}
+		t.logger.Info("Results re-sorted after filename boosting",
+			zap.Int("boostedCount", boostedCount),
+			zap.Int("totalResults", len(searchResp.Result)))
+	}
 
 	// Build results (filter out archived paths)
 	var results []storage.SearchResult
@@ -198,13 +375,68 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 			result.EndLine = int(endLine)
 		}
 
-		// Handle content based on retrieve mode
-		if retrieveMode == "chunk" {
-			// Default: return just the matching chunk content from Qdrant
-			if content, ok := hit.Payload["content"].(string); ok {
-				result.Content = content
+		// Handle content based on retrieve type
+		if retrieveType == "chunk" {
+			// Sized chunk retrieval: fetch N lines around the match
+			if result.FileID != "" && chunkLines > 0 {
+				// Calculate target line range centered around the match
+				matchMidpoint := (result.StartLine + result.EndLine) / 2
+				targetStart := matchMidpoint - (chunkLines / 2)
+				targetEnd := targetStart + chunkLines - 1
+				if targetStart < 1 {
+					targetStart = 1
+					targetEnd = targetStart + chunkLines - 1
+				}
+
+				// Fetch overlapping chunks from storage
+				overlappingChunks, err := t.codeIndexStorage.GetChunksByFileIDAndLineRange(result.FileID, targetStart, targetEnd)
+				if err != nil {
+					t.logger.Warn("Failed to fetch sized chunk",
+						zap.String("fileID", result.FileID),
+						zap.Int("targetStart", targetStart),
+						zap.Int("targetEnd", targetEnd),
+						zap.Error(err))
+					// Fallback to Qdrant chunk content
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				} else if len(overlappingChunks) > 0 {
+					// Concatenate overlapping chunks and extract exact line range
+					var fullContent strings.Builder
+					minLine := overlappingChunks[0].StartLine
+					for _, chunk := range overlappingChunks {
+						fullContent.WriteString(chunk.Content)
+					}
+
+					// Extract exactly chunkLines from the concatenated content
+					allLines := strings.Split(fullContent.String(), "\n")
+					startIdx := targetStart - minLine
+					endIdx := targetEnd - minLine + 1
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if endIdx > len(allLines) {
+						endIdx = len(allLines)
+					}
+
+					extractedLines := allLines[startIdx:endIdx]
+					result.Content = strings.Join(extractedLines, "\n")
+					result.StartLine = targetStart
+					result.EndLine = targetStart + len(extractedLines) - 1
+					result.ChunkSize = tshirtSize
+				} else {
+					// Fallback to Qdrant chunk if no chunks found
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				}
+			} else {
+				// No sizing requested or invalid chunkLines, use Qdrant chunk
+				if content, ok := hit.Payload["content"].(string); ok {
+					result.Content = content
+				}
 			}
-		} else if retrieveMode == "full" {
+		} else if retrieveType == "full" {
 			// Fetch entire file content from MongoDB
 			if result.FileID != "" {
 				allChunks, err := t.codeIndexStorage.GetChunksByFileID(result.FileID)
@@ -233,7 +465,9 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 
 	t.logger.Info("Code search completed",
 		zap.String("query", query),
-		zap.String("retrieveMode", retrieveMode),
+		zap.String("retrieveMode", retrieveModeParam),
+		zap.String("retrieveType", retrieveType),
+		zap.Int("chunkLines", chunkLines),
 		zap.Int("results", len(results)))
 
 	// CRITICAL: Extract file paths into a prominent list so AI can't miss them
@@ -253,14 +487,21 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Int("cachedPaths", len(filePaths)),
 		zap.Time("cachedAt", lastCodeSearchTimestamp))
 
-	return map[string]interface{}{
+	response := map[string]interface{}{
 		"success":     true,
 		"query":       query,
 		"FILE_PATHS_TO_USE": filePaths, // PROMINENT - AI must use these exact paths
 		"results":     results,
 		"resultCount": len(results),
 		"INSTRUCTIONS": "USE THE EXACT FILE PATHS FROM 'FILE_PATHS_TO_USE' ARRAY - DO NOT GUESS OR MODIFY THEM",
-	}, nil
+	}
+
+	// Add guidance message when full mode is used
+	if retrieveType == "full" {
+		response["guidance"] = "Returning top 1 result with full file content to conserve tokens. For multi-result exploration, use chunk-based retrieval modes: chunk-s (50 lines), chunk-m (100 lines), chunk-l (200 lines), or chunk-xl (400 lines)."
+	}
+
+	return response, nil
 }
 
 // CodeIndexAddFolderTool implements the ToolExecutor interface for adding folders

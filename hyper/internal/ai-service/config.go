@@ -18,7 +18,7 @@ type AIConfig struct {
 	MaxOutputTokens int     // Maximum output tokens
 	Temperature     float64 // Temperature for generation (default: 0.7)
 	ReasoningMode   string  // Reasoning mode (e.g., "o1", "o3" for OpenAI)
-	Model           string  // Model name (e.g., "gpt-4", "claude-3-sonnet")
+	Model           string  // Model name as configured in environment
 	FallbackModel   string  // Fallback model when rate limited (e.g., "qwen2.5-coder:7b")
 }
 
@@ -84,15 +84,7 @@ func LoadAIConfig(envFilePath string) (*AIConfig, error) {
 		model = os.Getenv("MODEL") // fallback
 	}
 	if model == "" {
-		// Set defaults based on provider
-		switch provider {
-		case "openai":
-			model = "gpt-4-turbo-preview"
-		case "anthropic":
-			model = "claude-3-sonnet-20240229"
-		default:
-			return nil, fmt.Errorf("AI_MODEL or MODEL environment variable is required")
-		}
+		return nil, fmt.Errorf("AI_MODEL or MODEL environment variable is required")
 	}
 
 	// Parse max iterations with default (try MAX_ITERATIONS first, fall back to MAX_ITERATION)

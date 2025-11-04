@@ -715,8 +715,8 @@ func (h *RESTAPIHandler) QueryKnowledge(c *gin.Context) {
 		limit = 100 // Max limit
 	}
 
-	// Query knowledge storage
-	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit)
+	// Query knowledge storage (no taskId filtering in this handler)
+	results, err := h.knowledgeStorage.Query(req.Collection, req.Query, limit, nil)
 	if err != nil {
 		h.logger.Error("Failed to query knowledge",
 			zap.String("collection", req.Collection),
@@ -1143,6 +1143,17 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		results = append(results, result)
 	}
 
+	// Filter results by minimum score if specified
+	if req.MinScore > 0 {
+		filteredResults := make([]SearchResultDTO, 0, len(results))
+		for _, result := range results {
+			if result.Score >= req.MinScore {
+				filteredResults = append(filteredResults, result)
+			}
+		}
+		results = filteredResults
+	}
+
 	h.logger.Info("Code search completed",
 		zap.String("query", req.Query),
 		zap.String("retrieveMode", retrieveMode),
@@ -1209,6 +1220,265 @@ func (h *RESTAPIHandler) GetIndexStatus(c *gin.Context) {
 	})
 }
 
+// EnableWatcher enables the file watcher for all indexed folders
+// POST /api/v1/code-index/enable-watcher
+func (h *RESTAPIHandler) EnableWatcher(c *gin.Context) {
+	if h.fileWatcher == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "File watcher is not available",
+		})
+		return
+	}
+
+	// Get all folders
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to list folders: " + err.Error(),
+		})
+		return
+	}
+
+	// Start watching all folders
+	addedCount := 0
+	for _, folder := range folders {
+		if err := h.fileWatcher.AddFolder(folder); err != nil {
+			h.logger.Warn("Failed to add folder to watcher",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+		} else {
+			addedCount++
+		}
+	}
+
+	h.logger.Info("Enabled file watcher", zap.Int("foldersAdded", addedCount))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("File watcher enabled for %d folders", addedCount),
+		"foldersWatched": addedCount,
+	})
+}
+
+// DisableWatcher disables the file watcher
+// POST /api/v1/code-index/disable-watcher
+func (h *RESTAPIHandler) DisableWatcher(c *gin.Context) {
+	if h.fileWatcher == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "File watcher is not available",
+		})
+		return
+	}
+
+	// Get all folders
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to list folders: " + err.Error(),
+		})
+		return
+	}
+
+	// Stop watching all folders
+	removedCount := 0
+	for _, folder := range folders {
+		if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
+			h.logger.Warn("Failed to remove folder from watcher",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+		} else {
+			removedCount++
+		}
+	}
+
+	h.logger.Info("Disabled file watcher", zap.Int("foldersRemoved", removedCount))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("File watcher disabled, stopped watching %d folders", removedCount),
+		"foldersStopped": removedCount,
+	})
+}
+
+// ReindexAll reindexes all files in all indexed folders
+// POST /api/v1/code-index/reindex-all
+func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
+	// Get all folders
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to list folders: " + err.Error(),
+		})
+		return
+	}
+
+	if len(folders) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "No folders to reindex",
+			"foldersReindexed": 0,
+			"totalFilesIndexed": 0,
+		})
+		return
+	}
+
+	// Reindex each folder
+	totalFilesIndexed := 0
+	totalFilesUpdated := 0
+	totalFilesSkipped := 0
+	foldersReindexed := 0
+
+	for _, folder := range folders {
+		h.logger.Info("Reindexing folder", zap.String("path", folder.Path))
+
+		// Get collection name
+		mapping, err := h.codeIndexStorage.GetPathMapping(folder.Path)
+		if err != nil {
+			h.logger.Warn("Failed to get collection mapping for folder",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+			continue
+		}
+
+		// Update folder status to scanning
+		if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "scanning", ""); err != nil {
+			h.logger.Error("Failed to update folder status",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+			continue
+		}
+
+		// Scan directory for files
+		scannedFiles, err := h.fileScanner.ScanDirectory(folder.Path)
+		if err != nil {
+			h.codeIndexStorage.UpdateFolderStatus(folder.ID, "error", err.Error())
+			h.logger.Error("Failed to scan directory",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+			continue
+		}
+
+		filesIndexed := 0
+		filesUpdated := 0
+		filesSkipped := 0
+
+		// Process each file
+		for _, scannedFile := range scannedFiles {
+			scannedFile.FolderID = folder.ID
+
+			// Check if file already exists
+			existingFile, _ := h.codeIndexStorage.GetFileByPath(scannedFile.Path)
+
+			if existingFile != nil {
+				// Check if file has changed
+				if existingFile.SHA256 == scannedFile.SHA256 {
+					filesSkipped++
+					continue
+				}
+				filesUpdated++
+				scannedFile.ID = existingFile.ID
+			} else {
+				filesIndexed++
+				scannedFile.ID = uuid.New().String()
+			}
+
+			// Create chunks
+			chunks, err := h.fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
+			if err != nil {
+				h.logger.Warn("Failed to create chunks", zap.String("file", scannedFile.Path), zap.Error(err))
+				continue
+			}
+
+			// Generate embeddings for chunks
+			var qdrantPoints []storage.CodeIndexPoint
+			for _, chunk := range chunks {
+				// Generate embedding
+				embedding, err := h.embeddingClient.CreateEmbedding(chunk.Content)
+				if err != nil {
+					h.logger.Warn("Failed to create embedding",
+						zap.String("file", scannedFile.Path),
+						zap.Int("chunk", chunk.ChunkNum),
+						zap.Error(err))
+					continue
+				}
+
+				// Create Qdrant point with deterministic UUID
+				pointID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%s_chunk_%d", scannedFile.ID, chunk.ChunkNum))).String()
+				chunk.VectorID = pointID
+
+				point := storage.CodeIndexPoint{
+					ID:     pointID,
+					Vector: embedding,
+					Payload: map[string]interface{}{
+						"fileId":       scannedFile.ID,
+						"folderId":     folder.ID,
+						"folderPath":   folder.Path,
+						"filePath":     scannedFile.Path,
+						"relativePath": scannedFile.RelativePath,
+						"language":     scannedFile.Language,
+						"chunkNum":     chunk.ChunkNum,
+						"startLine":    chunk.StartLine,
+						"endLine":      chunk.EndLine,
+						"content":      chunk.Content,
+					},
+				}
+				qdrantPoints = append(qdrantPoints, point)
+
+				// Save chunk to MongoDB
+				if err := h.codeIndexStorage.UpsertChunk(chunk); err != nil {
+					h.logger.Warn("Failed to save chunk", zap.Error(err))
+				}
+			}
+
+			// Upload vectors to Qdrant
+			if len(qdrantPoints) > 0 {
+				collectionName := mapping.QdrantCollection
+				if err := h.qdrantClient.UpsertCodeIndexPoints(collectionName, qdrantPoints); err != nil {
+					h.logger.Warn("Failed to upsert vectors", zap.String("file", scannedFile.Path), zap.Error(err))
+				}
+			}
+
+			// Save file metadata to MongoDB
+			if err := h.codeIndexStorage.UpsertFile(scannedFile); err != nil {
+				h.logger.Warn("Failed to save file", zap.Error(err))
+			}
+		}
+
+		// Update folder status and scan time
+		if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "active", ""); err != nil {
+			h.logger.Warn("Failed to update folder status", zap.Error(err))
+		}
+
+		if err := h.codeIndexStorage.UpdateFolderScanTime(folder.ID, len(scannedFiles)); err != nil {
+			h.logger.Warn("Failed to update scan time", zap.Error(err))
+		}
+
+		totalFilesIndexed += filesIndexed
+		totalFilesUpdated += filesUpdated
+		totalFilesSkipped += filesSkipped
+		foldersReindexed++
+
+		h.logger.Info("Folder reindexed",
+			zap.String("path", folder.Path),
+			zap.Int("filesIndexed", filesIndexed),
+			zap.Int("filesUpdated", filesUpdated),
+			zap.Int("filesSkipped", filesSkipped))
+	}
+
+	h.logger.Info("Reindex all completed",
+		zap.Int("foldersReindexed", foldersReindexed),
+		zap.Int("totalFilesIndexed", totalFilesIndexed))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("Reindexed %d folders", foldersReindexed),
+		"foldersReindexed": foldersReindexed,
+		"totalFilesIndexed": totalFilesIndexed,
+		"totalFilesUpdated": totalFilesUpdated,
+		"totalFilesSkipped": totalFilesSkipped,
+	})
+}
+
 // RegisterRESTRoutes registers all REST API routes under /api/v1
 func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	// Human Tasks
@@ -1240,5 +1510,8 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		codeIndex.POST("/scan", h.ScanFolder)
 		codeIndex.POST("/search", h.SearchCode)
 		codeIndex.GET("/status", h.GetIndexStatus)
+		codeIndex.POST("/enable-watcher", h.EnableWatcher)
+		codeIndex.POST("/disable-watcher", h.DisableWatcher)
+		codeIndex.POST("/reindex-all", h.ReindexAll)
 	}
 }

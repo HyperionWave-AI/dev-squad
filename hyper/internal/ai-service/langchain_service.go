@@ -340,6 +340,28 @@ func (c *ToolResultCache) Set(signature string, result *ToolResult) {
 	c.cache[signature] = cachedResult
 }
 
+// Delete removes a cached tool result by signature
+func (c *ToolResultCache) Delete(signature string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.cache, signature)
+}
+
+// DeletePrefix removes all cached tool results with signatures starting with the given prefix
+// Returns the count of entries deleted
+func (c *ToolResultCache) DeletePrefix(prefix string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for signature := range c.cache {
+		if len(signature) >= len(prefix) && signature[:len(prefix)] == prefix {
+			delete(c.cache, signature)
+			count++
+		}
+	}
+	return count
+}
+
 // NewChatService creates a new ChatService with the given configuration
 // Creates an empty tool registry - use RegisterTool() or GetToolRegistry() to add tools
 func NewChatService(config *AIConfig) (*ChatService, error) {
@@ -1193,6 +1215,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 								if tasks, ok := outputMap["tasks"].([]interface{}); ok {
 									for _, task := range tasks {
 										if taskMap, ok := task.(map[string]interface{}); ok {
+											// Check taskId field (matching HumanTask JSON schema with json:"taskId" tag)
 											if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
 												taskExists = true
 												break
@@ -1267,6 +1290,45 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
+
+				// CACHE INVALIDATION: Clear related caches after successful write operations
+				// This prevents stale cache data from causing validation failures and incorrect state
+				if result.Error == "" {
+					switch toolCall.Name {
+					case "coordinator_create_human_task":
+						// Clear all list_human_tasks cache entries (any filter parameters)
+						count := resultCache.DeletePrefix("coordinator_list_human_tasks:")
+						log.Printf("[Cache Invalidation] coordinator_create_human_task: cleared %d coordinator_list_human_tasks cache entries", count)
+
+					case "coordinator_create_agent_task":
+						// Clear all list_agent_tasks cache entries (any filter parameters)
+						count := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						log.Printf("[Cache Invalidation] coordinator_create_agent_task: cleared %d coordinator_list_agent_tasks cache entries", count)
+
+					case "coordinator_update_task_status":
+						// Clear human tasks, agent tasks, and specific task get caches
+						count1 := resultCache.DeletePrefix("coordinator_list_human_tasks:")
+						count2 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						count3 := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] coordinator_update_task_status: cleared %d human_tasks + %d agent_tasks + %d get_task cache entries", count1, count2, count3)
+
+					case "coordinator_update_todo_status":
+						// Clear agent tasks and specific task get caches
+						count1 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						count2 := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] coordinator_update_todo_status: cleared %d agent_tasks + %d get_task cache entries", count1, count2)
+
+					case "coordinator_add_task_prompt_notes", "coordinator_update_task_prompt_notes", "coordinator_clear_task_prompt_notes":
+						// Clear specific task get cache
+						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
+
+					case "coordinator_add_todo_prompt_notes", "coordinator_update_todo_prompt_notes", "coordinator_clear_todo_prompt_notes":
+						// Clear specific task get cache
+						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
+					}
+				}
 
 				// Track tool execution in history for smart filtering (keep last 20)
 				toolCallHistory = append(toolCallHistory, result)
@@ -1437,9 +1499,31 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						result.Name, originalSize, len(toolResultMsg))
 				}
 
+				// CRITICAL FIX: Add tool_call message BEFORE tool_result (required by Anthropic API)
+				// This ensures proper conversation history tracking
 				currentMessages = append(currentMessages, Message{
-					Role:    "system",
-					Content: toolResultMsg,
+					Role:    "tool_call",
+					Content: responseText,
+					ToolCall: &ToolCall{
+						ID:   toolCall.ID,
+						Name: toolCall.Name,
+						Args: toolCall.Args,
+					},
+				})
+
+				// CRITICAL FIX: Add tool_result message with proper structure (not system role)
+				// This ensures the AI provider actually receives and processes the tool results
+				// The toolResultMsg is used for Output to preserve truncation and loop warning logic
+				currentMessages = append(currentMessages, Message{
+					Role:    "tool_result",
+					Content: "",
+					ToolResult: &ToolResult{
+						ID:         toolCall.ID,
+						Name:       toolCall.Name,
+						Output:     toolResultMsg, // Preserve processed result with truncation/warnings
+						Error:      result.Error,
+						DurationMs: result.DurationMs,
+					},
 				})
 
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution
@@ -1559,29 +1643,10 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 	// Create output channel for events
 	eventChan := make(chan StreamEvent, 100)
 
-	// SECURITY: Validate that no blocked coordinator tools are in the allowed list
-	// This prevents subchats from creating subchats or calling coordinator functions
-	blockedToolsForSubchats := []string{
-		"execute_subagent",              // CRITICAL: Prevent subchats from creating subchats
-		"coordinator_create_human_task", // Subchats cannot create human tasks
-		"coordinator_create_agent_task", // Subchats cannot create agent tasks (use create_agent_task wrapper)
-		"coordinator_list_human_tasks",  // Subchats should not list human tasks
-		"coordinator_list_agent_tasks",  // Subchats should not list agent tasks
-		"create_agent_task",             // Subchats use predefined tasks only
-	}
-
-	for _, blocked := range blockedToolsForSubchats {
-		for _, allowed := range allowedToolNames {
-			if allowed == blocked {
-				return nil, fmt.Errorf("SECURITY VIOLATION: Tool '%s' is blocked in subchat context. Subchats cannot create subchats or call coordinator functions", blocked)
-			}
-		}
-	}
-
 	// Get FILTERED tools for LangChain (only allowed tools)
 	tools := s.toolRegistry.GetFilteredToolsForLangChain(allowedToolNames)
 
-	log.Printf("[ChatService] Filtered %d tools for subagent (from allowlist of %d tools) - Security validated", len(tools), len(allowedToolNames))
+	log.Printf("[ChatService] Filtered %d tools for subagent (from allowlist of %d tools)", len(tools), len(allowedToolNames))
 
 	// Check if provider supports tools
 	supportsTools := false
@@ -1867,34 +1932,14 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						result.Output = newOutput
 					}
 				} else {
-					// RUNTIME SECURITY CHECK: Block coordinator tools even if AI tries to call them
-					// This is a defense-in-depth measure (should be caught earlier by filtering)
-					isBlocked := false
-					for _, blocked := range blockedToolsForSubchats {
-						if toolCall.Name == blocked {
-							isBlocked = true
-							result = ToolResult{
-								ID:         toolCall.ID,
-								Name:       toolCall.Name,
-								Output:     nil,
-								Error:      fmt.Sprintf("🚫 SECURITY BLOCK: Tool '%s' is not allowed in subchat context. Subchats cannot create subchats or call coordinator functions. Use only allowed tools: read_file, write_file, apply_patch, bash, coordinator_update_todo_status, coordinator_upsert_knowledge", toolCall.Name),
-								DurationMs: 0,
-							}
-							log.Printf("[SECURITY] Blocked attempt to call '%s' in filtered context - Tool not in allowlist", toolCall.Name)
-							break
-						}
+					// Execute tool (no cached result available)
+					// Inject humanTaskId from workflowState into context for auto-population
+					toolCtx := ctx
+					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
 					}
-
-					if !isBlocked {
-						// Execute tool (no cached result available)
-						// Inject humanTaskId from workflowState into context for auto-population
-						toolCtx := ctx
-						if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
-							toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
-						}
-						result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
-						log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
-					}
+					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
+					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
 
 					// Store in cache for future duplicate calls
 					resultCache.Set(signature, &result)
@@ -2468,7 +2513,6 @@ var (
 		"coordinator_list_human_tasks",
 		"coordinator_list_agent_tasks",
 		"coordinator_get_agent_task",
-		"knowledge_find",
 		"coordinator_query_knowledge",
 	}
 
@@ -2494,6 +2538,7 @@ var (
 
 	// Phase 4 - Knowledge Management: Store and retrieve knowledge
 	workflowPhase4Tools = []string{
+		"knowledge_find",
 		"coordinator_upsert_knowledge",
 		"knowledge_store",
 		"coordinator_get_popular_collections",

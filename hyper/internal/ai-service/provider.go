@@ -364,16 +364,10 @@ func (p *anthropicProvider) messagesToContent(messages []Message) string {
 	return content
 }
 
-// SupportsTools returns true for Anthropic models that support tool use
+// SupportsTools returns true for Anthropic provider
+// All modern Claude models support tool use - no need for hardcoded model checks
 func (p *anthropicProvider) SupportsTools() bool {
-	// Claude 3+ models (Sonnet, Opus, Haiku) support tool use
-	// Includes: claude-3, claude-3.5, claude-sonnet-4, etc.
-	model := strings.ToLower(p.config.Model)
-	return strings.Contains(model, "claude-3") ||
-		strings.Contains(model, "claude-3.5") ||
-		strings.Contains(model, "claude-sonnet-4") ||
-		strings.Contains(model, "claude-opus-4") ||
-		strings.Contains(model, "claude-4")
+	return true
 }
 
 // StreamChatWithTools implements tool calling for Anthropic using direct API calls
@@ -415,6 +409,10 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		}
 	}
 
+	// Track which tool_use IDs are actually included in apiMessages
+	// This ensures we only include tool_results that have corresponding tool_use blocks
+	includedToolUseIDs := make(map[string]bool)
+
 	for i, msg := range messages {
 		if msg.Role == "system" {
 			systemPrompt = msg.Content
@@ -445,9 +443,10 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 				}
 
 				// Add tool_use block
+				toolUseID := sanitizeToolID(msg.ToolCall.ID)
 				contentBlocks = append(contentBlocks, map[string]interface{}{
 					"type":  "tool_use",
-					"id":    sanitizeToolID(msg.ToolCall.ID),
+					"id":    toolUseID,
 					"name":  msg.ToolCall.Name,
 					"input": msg.ToolCall.Args,
 				})
@@ -456,6 +455,10 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 					"role":    "assistant",
 					"content": contentBlocks,
 				})
+
+				// Track this tool_use ID as included
+				includedToolUseIDs[toolUseID] = true
+				fmt.Printf("[DEBUG] Tracked tool_use ID: %s (name=%s)\n", toolUseID, msg.ToolCall.Name)
 			}
 			continue
 		}
@@ -465,6 +468,19 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 				// Skip tool messages from before the last user message
 				continue
 			}
+
+			// Only include tool_results that have a corresponding tool_use in apiMessages
+			// This prevents "unexpected tool_use_id" errors from Anthropic
+			if msg.ToolResult != nil {
+				toolResultID := sanitizeToolID(msg.ToolResult.ID)
+				if !includedToolUseIDs[toolResultID] {
+					// Skip this tool_result because its tool_call was filtered out
+					fmt.Printf("[DEBUG] Skipped tool_result ID: %s (no matching tool_use)\n", toolResultID)
+					continue
+				}
+				fmt.Printf("[DEBUG] Including tool_result ID: %s (has matching tool_use)\n", toolResultID)
+			}
+
 			// Format tool_result (user message with tool result) for Anthropic
 			if msg.ToolResult != nil {
 				resultContent := msg.ToolResult.Output
@@ -507,6 +523,10 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 			"content": content,
 		})
 	}
+
+	// Debug: Show summary of tool_use/tool_result filtering
+	fmt.Printf("[DEBUG] Message filtering complete: %d total messages, %d included tool_use IDs\n",
+		len(apiMessages), len(includedToolUseIDs))
 
 	// Convert tools to Anthropic format
 	apiTools := make([]map[string]interface{}, 0, len(tools))

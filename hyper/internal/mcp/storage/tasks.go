@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap"
 )
 
 // TaskType represents the type of task
@@ -67,6 +68,7 @@ type TodoItemInput struct {
 type HumanTask struct {
 	ID        string     `json:"taskId" bson:"taskId"`
 	Prompt    string     `json:"prompt" bson:"prompt"`
+	Summary   string     `json:"summary,omitempty" bson:"summary,omitempty"` // AI-generated summary (max 100 tokens)
 	CreatedAt time.Time  `json:"createdAt" bson:"createdAt"`
 	UpdatedAt time.Time  `json:"updatedAt" bson:"updatedAt"`
 	Status    TaskStatus `json:"status" bson:"status"`
@@ -85,6 +87,7 @@ type AgentTask struct {
 	Status            TaskStatus `json:"status" bson:"status"`
 	Notes             string     `json:"notes,omitempty" bson:"notes,omitempty"`
 	ContextSummary    string     `json:"contextSummary,omitempty" bson:"contextSummary,omitempty"`
+	Summary           string     `json:"summary,omitempty" bson:"summary,omitempty"` // AI-generated summary (max 100 tokens)
 	FilesModified             []string   `json:"filesModified,omitempty" bson:"filesModified,omitempty"`
 	QdrantCollections         []string   `json:"qdrantCollections,omitempty" bson:"qdrantCollections,omitempty"`
 	PriorWorkSummary          string     `json:"priorWorkSummary,omitempty" bson:"priorWorkSummary,omitempty"`
@@ -107,8 +110,10 @@ type TaskStorage interface {
 	GetHumanTask(taskID string) (*HumanTask, error)
 	GetAgentTask(taskID string) (*AgentTask, error)
 	GetAgentTasksByName(agentName string) ([]*AgentTask, error)
-	ListAllHumanTasks() []*HumanTask
-	ListAllAgentTasks() []*AgentTask
+	ListAllHumanTasks() []*HumanTask // Deprecated: Use ListHumanTasks with filter
+	ListAllAgentTasks() []*AgentTask // Deprecated: Use ListAgentTasks with filter
+	ListHumanTasks(filter bson.M) ([]*HumanTask, error)
+	ListAgentTasks(filter bson.M, offset, limit int) ([]*AgentTask, int, error)
 	UpdateTaskStatus(taskID string, status TaskStatus, notes string) error
 	UpdateTodoStatus(agentTaskID, todoID string, status TodoStatus, notes string) error
 	AddTaskPromptNotes(agentTaskID string, notes string) error
@@ -126,14 +131,24 @@ type MongoTaskStorage struct {
 	humanTasksCollection *mongo.Collection
 	agentTasksCollection *mongo.Collection
 	knowledgeStorage     KnowledgeStorage
+	logger               *zap.Logger
+	summarizer           TaskSummarizer // AI summarization service
+}
+
+// TaskSummarizer interface for AI-powered task summarization
+type TaskSummarizer interface {
+	SummarizeTaskWithFallback(ctx context.Context, content string, maxFallbackLength int) string
 }
 
 // NewMongoTaskStorage creates a new MongoDB-backed task storage
-func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage) (*MongoTaskStorage, error) {
+// summarizer can be nil for backward compatibility (will skip AI summarization)
+func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage, summarizer TaskSummarizer, logger *zap.Logger) (*MongoTaskStorage, error) {
 	storage := &MongoTaskStorage{
 		humanTasksCollection: db.Collection("human_tasks"),
 		agentTasksCollection: db.Collection("agent_tasks"),
 		knowledgeStorage:     knowledgeStorage,
+		logger:               logger,
+		summarizer:           summarizer,
 	}
 
 	// Create indexes
@@ -189,6 +204,22 @@ func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 		Status:    TaskStatusPending,
 	}
 
+	// Generate AI summary if summarizer is available
+	if s.summarizer != nil {
+		summary := s.summarizer.SummarizeTaskWithFallback(ctx, prompt, 200)
+		task.Summary = summary
+		s.logger.Debug("Generated task summary",
+			zap.String("taskId", task.ID),
+			zap.Int("summaryLength", len(summary)))
+	} else {
+		// Fallback: use first 200 chars if no summarizer
+		if len(prompt) > 200 {
+			task.Summary = prompt[:200] + "..."
+		} else {
+			task.Summary = prompt
+		}
+	}
+
 	_, err := s.humanTasksCollection.InsertOne(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert human task: %w", err)
@@ -202,10 +233,15 @@ func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 			"status":    string(task.Status),
 			"createdAt": task.CreatedAt,
 		}
-		_, err := s.knowledgeStorage.Upsert(collection, task.Prompt, metadata)
+		// Pass taskId as a separate parameter
+		taskIdPtr := &task.ID
+		_, err := s.knowledgeStorage.Upsert(collection, task.Prompt, metadata, taskIdPtr)
 		if err != nil {
 			// Log error but don't fail task creation
-			fmt.Printf("Warning: failed to index human task in knowledge base: %v\n", err)
+			s.logger.Warn("Failed to index human task in knowledge base",
+				zap.String("taskId", task.ID),
+				zap.String("collection", collection),
+				zap.Error(err))
 		}
 	}
 
@@ -256,6 +292,26 @@ func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, 
 		FilesModified:     filesModified,
 		QdrantCollections: qdrantCollections,
 		PriorWorkSummary:  priorWorkSummary,
+	}
+
+	// Generate AI summary from context if summarizer is available
+	if s.summarizer != nil && contextSummary != "" {
+		summary := s.summarizer.SummarizeTaskWithFallback(ctx, contextSummary, 200)
+		task.Summary = summary
+		s.logger.Debug("Generated agent task summary",
+			zap.String("taskId", task.ID),
+			zap.String("agentName", agentName),
+			zap.Int("summaryLength", len(summary)))
+	} else if contextSummary != "" {
+		// Fallback: use first 200 chars of context summary
+		if len(contextSummary) > 200 {
+			task.Summary = contextSummary[:200] + "..."
+		} else {
+			task.Summary = contextSummary
+		}
+	} else if role != "" {
+		// If no context, use role as summary
+		task.Summary = role
 	}
 
 	_, err = s.agentTasksCollection.InsertOne(ctx, task)
@@ -317,6 +373,7 @@ func (s *MongoTaskStorage) GetAgentTasksByName(agentName string) ([]*AgentTask, 
 }
 
 // ListAllHumanTasks returns all human tasks
+// Deprecated: Use ListHumanTasks with filter for better performance
 func (s *MongoTaskStorage) ListAllHumanTasks() []*HumanTask {
 	ctx := context.Background()
 
@@ -334,7 +391,31 @@ func (s *MongoTaskStorage) ListAllHumanTasks() []*HumanTask {
 	return tasks
 }
 
+// ListHumanTasks returns human tasks matching the given filter
+func (s *MongoTaskStorage) ListHumanTasks(filter bson.M) ([]*HumanTask, error) {
+	ctx := context.Background()
+
+	// If filter is nil, use empty filter to get all
+	if filter == nil {
+		filter = bson.M{}
+	}
+
+	cursor, err := s.humanTasksCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query human tasks: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []*HumanTask
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return nil, fmt.Errorf("failed to decode human tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
 // ListAllAgentTasks returns all agent tasks
+// Deprecated: Use ListAgentTasks with filter for better performance
 func (s *MongoTaskStorage) ListAllAgentTasks() []*AgentTask {
 	ctx := context.Background()
 
@@ -350,6 +431,41 @@ func (s *MongoTaskStorage) ListAllAgentTasks() []*AgentTask {
 	}
 
 	return tasks
+}
+
+// ListAgentTasks returns agent tasks matching the given filter with pagination
+// Returns tasks, total count, and error
+func (s *MongoTaskStorage) ListAgentTasks(filter bson.M, offset, limit int) ([]*AgentTask, int, error) {
+	ctx := context.Background()
+
+	// If filter is nil, use empty filter to get all
+	if filter == nil {
+		filter = bson.M{}
+	}
+
+	// Count total matching documents
+	totalCount, err := s.agentTasksCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count agent tasks: %w", err)
+	}
+
+	// Apply pagination options
+	findOptions := options.Find()
+	findOptions.SetSkip(int64(offset))
+	findOptions.SetLimit(int64(limit))
+
+	cursor, err := s.agentTasksCollection.Find(ctx, filter, findOptions)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query agent tasks: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []*AgentTask
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return nil, 0, fmt.Errorf("failed to decode agent tasks: %w", err)
+	}
+
+	return tasks, int(totalCount), nil
 }
 
 // UpdateTaskStatus updates the status and notes of any task (human or agent)
@@ -720,7 +836,8 @@ func (s *MongoTaskStorage) SearchSimilarHumanTasks(prompt string, limit int, min
 		return nil, nil, fmt.Errorf("knowledge storage not configured")
 	}
 
-	results, err := s.knowledgeStorage.Query("human_tasks_search", prompt, limit)
+	// No taskId filtering for global search across all tasks
+	results, err := s.knowledgeStorage.Query("human_tasks_search", prompt, limit, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query similar tasks: %w", err)
 	}

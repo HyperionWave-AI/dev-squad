@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap"
 )
 
 // Test MongoDB connection helper
@@ -29,8 +30,11 @@ func setupTestMongoDB(t *testing.T) (*MongoTaskStorage, func()) {
 	dbName := "test_coordinator_" + uuid.New().String()
 	db := client.Database(dbName)
 
-	// Create a mock knowledge storage (nil is acceptable for tests not using similarity)
-	storage, err := NewMongoTaskStorage(db, nil)
+	// Create a test logger
+	logger, _ := zap.NewDevelopment()
+
+	// Create a mock knowledge storage and summarizer (nil is acceptable for tests)
+	storage, err := NewMongoTaskStorage(db, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create MongoTaskStorage: %v", err)
 	}
