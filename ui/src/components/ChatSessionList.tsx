@@ -13,6 +13,7 @@ import {
   List,
   ListItem,
   ListItemButton,
+  ListItemText,
   IconButton,
   Button,
   Typography,
@@ -27,7 +28,9 @@ import {
 import {
   Add,
   Delete,
+  Chat,
   DeleteSweep,
+  SmartToy,
   ExpandMore
 } from '@mui/icons-material';
 import type { ChatSession } from '../services/chatService';
@@ -152,7 +155,7 @@ const GRAPH_CONFIG = {
   branchLineWidth: 1.5,
   graphLeftMargin: 16,
   nodeXPosition: 24,
-  itemHeight: 60, // Approximate height per list item
+  itemHeight: 56, // Increased for better breathing room
   branchOffsetX: 12, // Horizontal offset for branch lines
 };
 
@@ -452,7 +455,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
             onClick={handleDeleteAllClick}
             disabled={sessions.length === 0}
             color="error"
-            sx={{ 
+            sx={{
               minWidth: 48,
               '& .MuiSvgIcon-root': {
                 fontSize: '2rem', // Increased from default 1.5rem to 2rem (33% larger)
@@ -484,7 +487,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
           sx={{
             height: '100%',
             overflowY: 'auto',
-            pl: 7, // Leave space for Git graph
+            pl: 4, // Reduced from 7 to 4 for tighter spacing with graph
           }}
         >
           {sessions.length === 0 ? (
@@ -500,6 +503,7 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                 const isActive = session.id === activeSessionId;
                 const hasChildren = treeNode.children.length > 0;
                 const isExpanded = expandedNodes.has(session.id);
+                const isSubchatNode = isSubchat(session);
 
                 return (
                   <ListItem
@@ -507,96 +511,147 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                     disablePadding
                     sx={{
                       pl: treeNode.depth * 2, // Indent based on depth
-                      borderLeft: isActive ? 2 : 0,
+                      width: '100%', // Ensure full width
+                      maxWidth: '100%', // Prevent overflow
+                      borderLeft: isActive ? '4px solid' : 0,
                       borderColor: 'primary.main',
-                      backgroundColor: isActive ? 'action.selected' : 'transparent',
+                      backgroundColor: isActive ? 'rgba(25, 118, 210, 0.08)' : 'transparent',
+                      mb: 1, // Increased spacing between items
+                      transition: 'all 0.2s ease-in-out',
                       '&:hover': {
-                        backgroundColor: isActive ? 'action.selected' : 'action.hover',
+                        backgroundColor: isActive ? 'rgba(25, 118, 210, 0.12)' : 'action.hover',
+                        '& .action-buttons': {
+                          opacity: 1,
+                        },
                       },
                     }}
                   >
                     <ListItemButton
                       onClick={() => onSessionSelect(session.id)}
                       sx={{
-                        py: 1.5,
+                        py: 1.5, // Increased vertical padding
+                        px: 2, // Increased horizontal padding
+                        width: '100%', // Ensure full width
+                        maxWidth: '100%', // Prevent overflow
                         minHeight: GRAPH_CONFIG.itemHeight,
-                        alignItems: 'flex-start',
-                        display: 'flex',
-                        flexDirection: 'column',
+                        alignItems: 'center', // Center align for better visual balance
                       }}
                     >
-                      <Box sx={{ display: 'flex', width: '100%', alignItems: 'center' }}>
-                        {/* Expand/Collapse button for parent chats */}
-                        {hasChildren && (
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleToggleExpand(session.id, e)}
-                            sx={{
-                              mr: 1,
-                              transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
-                              transition: 'transform 0.2s',
-                            }}
-                          >
-                            <ExpandMore fontSize="small" />
-                          </IconButton>
-                        )}
-
-                        {/* Session title - Line 1 */}
-                        <Typography
-                          variant="body2"
+                      {/* Expand/Collapse button for parent chats */}
+                      {hasChildren && (
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleToggleExpand(session.id, e)}
                           sx={{
-                            fontWeight: isActive ? 600 : 400,
-                            color: isActive ? 'primary.main' : 'text.primary',
-                            lineHeight: 1.3,
-                            flex: 1,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
+                            mr: 1.5,
+                            transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                            transition: 'transform 0.2s',
                           }}
                         >
-                          {session.title}
-                        </Typography>
+                          <ExpandMore fontSize="small" />
+                        </IconButton>
+                      )}
+
+                      {/* Chat icon */}
+                      <Box sx={{ mr: 2, flexShrink: 0 }}>
+                        {isSubchatNode ? (
+                          <SmartToy
+                            fontSize="small"
+                            sx={{ color: theme.palette.secondary.main }}
+                          />
+                        ) : (
+                          <Chat
+                            fontSize="small"
+                            sx={{ color: theme.palette.primary.main }}
+                          />
+                        )}
                       </Box>
 
-                      {/* Date and action buttons - Line 2 */}
-                      <Box sx={{ display: 'flex', width: '100%', alignItems: 'center', mt: 0.5, pl: hasChildren ? 5 : 0 }}>
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            color: 'text.secondary',
-                            flex: 1,
-                          }}
-                        >
-                          {new Date(session.createdAt).toLocaleDateString()}
-                          {hasChildren && (
-                            <span style={{ marginLeft: 8 }}>
-                              • {treeNode.children.length} subchat{treeNode.children.length !== 1 ? 's' : ''}
-                            </span>
-                          )}
-                        </Typography>
-
-                        {/* Action buttons */}
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          {onRenameSession && (
-                            <IconButton
-                              size="small"
-                              onClick={(e) => handleRenameClick(session.id, session.title, e)}
-                              sx={{ opacity: 0.7, '&:hover': { opacity: 1 } }}
-                            >
-                              <Typography variant="caption">✏️</Typography>
-                            </IconButton>
-                          )}
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleDeleteClick(session.id, e)}
+                      {/* Session title and metadata */}
+                      <ListItemText
+                        sx={{
+                          minWidth: 0, // Allow flex item to shrink below content size
+                          flex: 1, // Take up available space
+                          overflow: 'hidden', // Ensure container doesn't overflow
+                          pr: 1, // Add some padding to prevent text from touching action buttons
+                        }}
+                        primary={
+                          <Typography
+                            variant="body2"
                             sx={{
-                              opacity: 0.7,
-                              '&:hover': { opacity: 1, color: 'error.main' },
+                              fontWeight: isActive ? 600 : 400,
+                              color: isActive ? 'primary.main' : 'text.primary',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              lineHeight: 1.3,
                             }}
                           >
-                            <Delete fontSize="small" />
+                            {session.title}
+                          </Typography>
+                        }
+                        secondary={
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                              display: 'block',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              mt: 0.75, // More space above date
+                              fontSize: '0.75rem',
+                            }}
+                          >
+                            {new Date(session.createdAt).toLocaleDateString()}
+                            {hasChildren && (
+                              <span style={{ marginLeft: 12 }}>
+                                • {treeNode.children.length} subchat{treeNode.children.length !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </Typography>
+                        }
+                      />
+
+                      {/* Action buttons - show on hover */}
+                      <Box
+                        className="action-buttons"
+                        sx={{
+                          display: 'flex',
+                          gap: 1, // Increased gap between buttons
+                          ml: 'auto', // Push to the right
+                          opacity: isActive ? 1 : 0, // Show when active, hide otherwise
+                          transition: 'opacity 0.2s ease-in-out',
+                        }}
+                      >
+                        {onRenameSession && (
+                          <IconButton
+                            size="small"
+                            onClick={(e) => handleRenameClick(session.id, session.title, e)}
+                            sx={{
+                              padding: '6px',
+                              '&:hover': {
+                                backgroundColor: 'action.hover',
+                                color: 'primary.main',
+                              },
+                            }}
+                          >
+                            <Typography variant="caption" sx={{ fontSize: '1.1rem' }}>✏️</Typography>
                           </IconButton>
-                        </Box>
+                        )}
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleDeleteClick(session.id, e)}
+                          sx={{
+                            padding: '6px',
+                            '&:hover': {
+                              backgroundColor: 'error.lighter',
+                              color: 'error.main',
+                            },
+                          }}
+                        >
+                          <Delete fontSize="small" />
+                        </IconButton>
                       </Box>
                     </ListItemButton>
                   </ListItem>
