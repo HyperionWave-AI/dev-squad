@@ -13,9 +13,13 @@ import {
   Paper,
   Alert,
   CircularProgress,
+  ToggleButtonGroup,
+  ToggleButton,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
+import ListIcon from '@mui/icons-material/List';
 import { useKnowledge } from './KnowledgeLayout';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { knowledgeApi } from '../../services/knowledgeApi';
@@ -50,6 +54,7 @@ export const KnowledgeSearch: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [recentSearches, setRecentSearches] = useState<string[]>(loadRecentSearches());
+  const [searchMode, setSearchMode] = useState<'semantic' | 'browse'>('semantic');
   const queryInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-fill collection when selected from CollectionBrowser
@@ -86,13 +91,32 @@ export const KnowledgeSearch: React.FC = () => {
     setError(null);
 
     try {
-      const response = await knowledgeApi.searchKnowledge({
-        collection: selectedCollection,
-        query: query.trim(),
-        limit: filters.limit,
-      });
+      if (searchMode === 'semantic') {
+        // Use semantic search endpoint
+        const response = await knowledgeApi.queryKnowledge({
+          collection: selectedCollection,
+          query: query.trim(),
+          limit: filters.limit,
+        });
 
-      setResults(response.results);
+        // Transform entries to match results format
+        setResults(response.entries.map(entry => ({
+          id: entry.id,
+          text: entry.text,
+          score: entry.score,
+          metadata: entry.metadata,
+          createdAt: entry.createdAt,
+        })));
+      } else {
+        // Use browse/search endpoint
+        const response = await knowledgeApi.searchKnowledge({
+          collection: selectedCollection,
+          query: query.trim(),
+          limit: filters.limit,
+        });
+
+        setResults(response.entries);
+      }
 
       // Save to recent searches
       saveRecentSearch(query.trim());
@@ -118,9 +142,33 @@ export const KnowledgeSearch: React.FC = () => {
   return (
     <Paper elevation={2} sx={{ p: 3 }}>
       <Box component="form" onSubmit={handleSearch}>
-        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-          Search Knowledge
-        </Typography>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>
+            Search Knowledge
+          </Typography>
+
+          {/* Search Mode Toggle */}
+          <ToggleButtonGroup
+            value={searchMode}
+            exclusive
+            onChange={(_e, newMode) => {
+              if (newMode !== null) {
+                setSearchMode(newMode);
+                setResults([]);
+              }
+            }}
+            size="small"
+          >
+            <ToggleButton value="semantic" aria-label="semantic search">
+              <TravelExploreIcon sx={{ mr: 0.5, fontSize: '1rem' }} />
+              Semantic
+            </ToggleButton>
+            <ToggleButton value="browse" aria-label="browse search">
+              <ListIcon sx={{ mr: 0.5, fontSize: '1rem' }} />
+              Browse
+            </ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
 
         {/* Collection Select */}
         <FormControl fullWidth sx={{ mb: 2 }}>
@@ -217,6 +265,9 @@ export const KnowledgeSearch: React.FC = () => {
         <Box sx={{ mt: 2, p: 1.5, bgcolor: 'background.default', borderRadius: 1 }}>
           <Typography variant="caption" color="text.secondary">
             <strong>Keyboard shortcuts:</strong> Cmd+K to focus search, Esc to clear
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+            <strong>Search mode:</strong> {searchMode === 'semantic' ? 'Semantic (AI-powered relevance)' : 'Browse (keyword matching)'}
           </Typography>
         </Box>
       </Box>

@@ -343,22 +343,47 @@ class KnowledgeService {
   }
 
   /**
-   * Verify a knowledge article by creating a chat session
+   * Universal search across all collections
+   * Returns entries from all collections that match the query, limited to top 100 results
    */
-  async verifyKnowledgeArticle(id: string): Promise<{ sessionId: string }> {
-    const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(id)}/verify`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+  async universalSearch(query: string, limit: number = 100): Promise<{entries: KnowledgeEntry[], collectionsWithData: string[]}> {
+    // Get all collections first
+    const collectionsResponse = await this.getCollections();
+    const allCollections = collectionsResponse.collections
+      .filter(c => !c.name.startsWith('task:')) // Exclude task-specific collections
+      .map(c => c.name);
+
+    // Search each collection
+    const searchPromises = allCollections.map(async (collection) => {
+      try {
+        const response = await this.queryKnowledge(collection, query, 20);
+        return response.entries || [];
+      } catch (err) {
+        console.warn(`Failed to search collection ${collection}:`, err);
+        return [];
+      }
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to verify knowledge article');
-    }
+    const results = await Promise.all(searchPromises);
+    let allEntries = results.flat();
 
-    return response.json();
+    // Sort by score if available (highest first)
+    allEntries.sort((a, b) => {
+      const scoreA = (a.metadata?.score || 0) as number;
+      const scoreB = (b.metadata?.score || 0) as number;
+      return scoreB - scoreA;
+    });
+
+    // Limit to top 100
+    allEntries = allEntries.slice(0, limit);
+
+    // Get unique collections that have data
+    const collectionsWithData = [...new Set(allEntries.map(e => e.collection))];
+
+    return {
+      entries: allEntries,
+      collectionsWithData
+    };
   }
 }
 

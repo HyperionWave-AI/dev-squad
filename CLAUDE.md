@@ -42,6 +42,53 @@ Files & Shell (gated)
 Sub-agent Management
 - list_subagents · set_current_subagent  (launch actual work via your Task tool with `subagent_type`)
 
+Metacognitive Reflection — Autonomous Learning
+- reflection_query_relevant_lessons · reflection_extract_lesson · reflection_suggest_lesson_from_error
+- reflection_record_decision · reflection_record_outcome
+
+METACOGNITIVE REFLECTION SYSTEM (mandatory)
+The system learns from experience. All agents MUST use reflection tools proactively.
+
+WHEN TO USE (enforce strictly):
+1) **Before risky actions** → reflection_query_relevant_lessons
+   - Database schema changes, migrations, index modifications
+   - API authentication/authorization implementations
+   - Production deployments or infrastructure changes
+   - Architectural decisions (caching, state management, data flow)
+   - New technology integration (libraries, frameworks, protocols)
+   Query: "about to [describe action]" → Review lessons → Apply patterns
+
+2) **For important decisions** → reflection_record_decision
+   - Architectural choices (microservices, monolith, event-driven)
+   - Technology selection (database, framework, library)
+   - Performance optimizations with trade-offs
+   - Security implementations
+   - Must include: context, reasoning, alternatives, confidence, predictions
+
+3) **After outcomes known** → reflection_record_outcome
+   - Link to original decision ID
+   - Compare predictions vs reality
+   - Analyze confidence calibration (overconfident/underconfident/well-calibrated)
+   - Identify missed signals
+
+4) **When errors repeat (2+)** → reflection_suggest_lesson_from_error → reflection_extract_lesson
+   - System detects patterns automatically (via error tracking)
+   - Use suggest tool to get auto-populated fields
+   - Refine and extract lesson with solution/antipattern
+   - Confidence: 0.7-0.8 (moderate), 0.85-0.95 (high), 0.95+ (critical pattern)
+
+MANDATORY WORKFLOW:
+- Start risky task → Query lessons first (not optional)
+- Make decision → Record it with predictions
+- Complete work → Record outcome with calibration
+- Error repeats → Extract lesson for future prevention
+
+KNOWLEDGE GROWTH:
+- Every lesson compounds future intelligence
+- Lessons persist across sessions and agents
+- Search covers: patternName, problem, solution, context, antipattern
+- Tag lessons with: technology, domain, risk-level
+
 GOLDEN PATH (mandatory)
 1) Human task
    coordinator_create_human_task({ prompt: "<verbatim user ask>" })
@@ -57,7 +104,7 @@ GOLDEN PATH (mandatory)
 3) Launch specialist (your Task tool)
    Task({ subagent_type: "<go-dev|ui-dev|ui-tester|sre|…>",
           description: "<brief>",
-          prompt: "Get task via coordinator_list_agent_tasks; read contextSummary & todos[].contextHint; start coding ≤2 min; update status/TODOs; upsert knowledge." })
+          prompt: "Get task via coordinator_list_agent_tasks; read contextSummary & todos[].contextHint; **query lessons if risky**; start coding ≤2 min; **record decisions**; update status/TODOs; **track outcomes**; upsert knowledge." })
    (Optionally set_current_subagent for session tracking.)
 4) Monitor & steer
    - coordinator_list_agent_tasks → progress
@@ -95,12 +142,16 @@ PRE-FLIGHT CHECK (for every request)
 - Agent task created with role/contextSummary/filesModified/todos/contextHints ✓
 - Sub-agent launched ✓
 - No direct implementation ✓
+- **If risky action: reflection_query_relevant_lessons called ✓**
+- **If architectural decision: reflection_record_decision called ✓**
 
 POST-FLIGHT
 - coordinator_update_todo_status per TODO (notes with line refs & decisions)
 - coordinator_upsert_knowledge (task collection; include contracts, gotchas, handoff)
 - If reusable, knowledge_store with precise tags
 - coordinator_update_task_status({ status:"completed", notes })
+- **If decision recorded: reflection_record_outcome with calibration ✓**
+- **If error pattern (2+): reflection_extract_lesson from suggestion ✓**
 
 DECISION QUICK RULE
 - Changes files/builds/tests/deploys → full MCP workflow + sub-agent.

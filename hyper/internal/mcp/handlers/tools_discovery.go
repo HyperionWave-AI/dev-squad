@@ -719,6 +719,30 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 	return result, extractedData, nil
 }
 
+// stripMarkdownCodeFence removes markdown code fence wrappers from text
+// Handles patterns: ```json\n...\n```, ```\n...\n```, or plain text
+func stripMarkdownCodeFence(text string) string {
+	text = strings.TrimSpace(text)
+
+	// Check if text starts with ``` and ends with ```
+	if !strings.HasPrefix(text, "```") || !strings.HasSuffix(text, "```") {
+		return text // No markdown fence, return as-is
+	}
+
+	// Remove leading ```
+	text = strings.TrimPrefix(text, "```")
+
+	// Check for language identifier (json, yaml, etc.) and remove it
+	if idx := strings.Index(text, "\n"); idx != -1 {
+		text = text[idx+1:] // Skip first line (language identifier)
+	}
+
+	// Remove trailing ```
+	text = strings.TrimSuffix(text, "```")
+
+	return strings.TrimSpace(text)
+}
+
 // extractResultData extracts meaningful data from CallToolResult for AI consumption
 // Priority: StructuredContent (if non-empty) > parsed Content[0].Text JSON > raw text
 func extractResultData(h *ToolsDiscoveryHandler, result *mcp.CallToolResult) interface{} {
@@ -753,29 +777,88 @@ func extractResultData(h *ToolsDiscoveryHandler, result *mcp.CallToolResult) int
 		}
 	}
 
-	// Try to extract and parse Content[0].Text as JSON
+	// Try to extract and parse Content blocks as JSON
+	// Iterate through ALL Content blocks to find valid JSON data
+	// PRIORITY: JSON objects (maps/arrays) > JSON primitives (strings/numbers) > raw text
 	if len(result.Content) > 0 {
-		h.logger.Debug("extractResultData: checking Content array", zap.Int("len", len(result.Content)))
-		if textContent, ok := result.Content[0].(*mcp.TextContent); ok && textContent.Text != "" {
-			text := textContent.Text
-			h.logger.Debug("extractResultData: found TextContent", zap.String("textPreview", truncateJSON(text, 100)))
+		h.logger.Debug("extractResultData: checking Content array",
+			zap.Int("totalBlocks", len(result.Content)))
 
-			// Try to parse as JSON
-			var jsonData interface{}
-			if err := json.Unmarshal([]byte(text), &jsonData); err == nil {
-				h.logger.Info("extractResultData: successfully parsed JSON from Content", zap.String("dataPreview", truncateJSON(jsonData, 100)))
-				// Successfully parsed JSON - return the parsed object
-				return jsonData
+		var firstTextContent string
+		var firstJSONPrimitive interface{}
+
+		// Iterate through ALL Content blocks to prioritize objects over primitives
+		for i, content := range result.Content {
+			if textContent, ok := content.(*mcp.TextContent); ok && textContent.Text != "" {
+				text := textContent.Text
+				h.logger.Debug("extractResultData: found TextContent block",
+					zap.Int("blockIndex", i),
+					zap.Int("textLength", len(text)),
+					zap.String("textPreview", truncateJSON(text, 100)))
+
+				// Store first non-empty text as fallback
+				if firstTextContent == "" {
+					firstTextContent = text
+				}
+
+				// Strip markdown code fences if present (```json...``` or ```...```)
+				cleanedText := stripMarkdownCodeFence(text)
+
+				// Try to parse as JSON
+				var jsonData interface{}
+				if err := json.Unmarshal([]byte(cleanedText), &jsonData); err == nil {
+					// Check if it's a JSON object (map) or array - these have priority
+					switch v := jsonData.(type) {
+					case map[string]interface{}:
+						h.logger.Info("extractResultData: found JSON object in Content block - returning immediately",
+							zap.Int("blockIndex", i),
+							zap.Int("objectKeys", len(v)),
+							zap.String("dataPreview", truncateJSON(jsonData, 150)))
+						// JSON object found - return immediately (highest priority)
+						return jsonData
+					case []interface{}:
+						h.logger.Info("extractResultData: found JSON array in Content block - returning immediately",
+							zap.Int("blockIndex", i),
+							zap.Int("arrayLength", len(v)),
+							zap.String("dataPreview", truncateJSON(jsonData, 150)))
+						// JSON array found - return immediately (highest priority)
+						return jsonData
+					default:
+						// JSON primitive (string, number, bool, null) - store but keep searching
+						h.logger.Debug("extractResultData: found JSON primitive in Content block - storing as fallback",
+							zap.Int("blockIndex", i),
+							zap.String("primitiveType", fmt.Sprintf("%T", v)),
+							zap.String("primitiveValue", truncateJSON(jsonData, 100)))
+						if firstJSONPrimitive == nil {
+							firstJSONPrimitive = jsonData
+						}
+					}
+				} else {
+					h.logger.Debug("extractResultData: Content block is not valid JSON",
+						zap.Int("blockIndex", i),
+						zap.Error(err))
+				}
 			} else {
-				h.logger.Warn("extractResultData: failed to parse JSON from Content", zap.Error(err))
+				h.logger.Debug("extractResultData: Content block is not TextContent or is empty",
+					zap.Int("blockIndex", i),
+					zap.String("contentType", fmt.Sprintf("%T", content)))
 			}
-
-			// Not valid JSON, return raw text
-			h.logger.Info("extractResultData: returning raw text from Content")
-			return text
-		} else {
-			h.logger.Debug("extractResultData: Content[0] is not TextContent or is empty")
 		}
+
+		// No JSON object/array found - return JSON primitive if we found one
+		if firstJSONPrimitive != nil {
+			h.logger.Info("extractResultData: no JSON object/array found, returning first JSON primitive",
+				zap.String("primitiveType", fmt.Sprintf("%T", firstJSONPrimitive)))
+			return firstJSONPrimitive
+		}
+
+		// No JSON found in any block - return first text content as fallback
+		if firstTextContent != "" {
+			h.logger.Info("extractResultData: no JSON found, returning first text content as raw string")
+			return firstTextContent
+		}
+
+		h.logger.Debug("extractResultData: no TextContent found in any Content block")
 	}
 
 	// Fallback to StructuredContent even if empty (maintain backward compatibility)

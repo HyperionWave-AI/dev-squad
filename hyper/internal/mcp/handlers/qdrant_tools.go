@@ -164,6 +164,11 @@ func (h *QdrantToolHandler) registerKnowledgeStore(server *mcp.Server) error {
 
 // handleQdrantFind handles the qdrant_find tool call
 func (h *QdrantToolHandler) handleQdrantFind(args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	// Check if knowledge storage is available
+	if h.knowledgeStorage == nil {
+		return createErrorResult("Knowledge storage not initialized. Cannot search knowledge."), nil, nil
+	}
+
 	// Extract collectionName (required)
 	collectionName, ok := args["collectionName"].(string)
 	if !ok || collectionName == "" {
@@ -208,23 +213,17 @@ func (h *QdrantToolHandler) handleQdrantFind(args map[string]interface{}) (*mcp.
 		}
 	}
 
-	// Ensure collection exists (with 768 dimensions for TEI embeddings)
-	if err := h.qdrantClient.EnsureCollection(collectionName, 768); err != nil {
-		// Provide helpful recovery guidance based on error type
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") {
-			return createErrorResult(fmt.Sprintf("Qdrant embedding service unavailable. For task-specific knowledge, use coordinator_query_knowledge with task URI (e.g., collection='task:hyperion://task/human/{taskId}'). Original error: %s", errMsg)), nil, nil
-		}
-		return createErrorResult(fmt.Sprintf("Failed to ensure collection exists: %s. Try coordinator_query_knowledge as fallback.", errMsg)), nil, nil
-	}
-
-	// Search for similar entries
-	results, err := h.qdrantClient.SearchSimilar(collectionName, query, limit)
+	// Use knowledgeStorage.Query() which properly resolves collection name to QdrantName
+	// This ensures knowledge_find uses the SAME Qdrant collection as knowledge_store
+	results, err := h.knowledgeStorage.Query(collectionName, query, limit, nil)
 	if err != nil {
 		// Provide helpful recovery guidance based on error type
 		errMsg := err.Error()
+		if strings.Contains(errMsg, "collection not found") {
+			return createErrorResult(fmt.Sprintf("Collection '%s' not found. Use knowledge_store to create it first, or try coordinator_query_knowledge as fallback.", collectionName)), nil, nil
+		}
 		if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") || strings.Contains(errMsg, "lookup") || strings.Contains(errMsg, "timeout") {
-			return createErrorResult(fmt.Sprintf("Qdrant search unavailable. Use coordinator_query_knowledge as fallback for task-specific knowledge. Original error: %s", errMsg)), nil, nil
+			return createErrorResult(fmt.Sprintf("Search service unavailable. Use coordinator_query_knowledge as fallback for task-specific knowledge. Original error: %s", errMsg)), nil, nil
 		}
 		return createErrorResult(fmt.Sprintf("Search failed: %s. Try coordinator_query_knowledge as alternative.", errMsg)), nil, nil
 	}
