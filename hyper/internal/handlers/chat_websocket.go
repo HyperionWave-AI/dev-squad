@@ -11,6 +11,9 @@ import (
 
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
+	"hyper/internal/config"
+	"hyper/internal/metrics"
+	"hyper/internal/middleware"
 	"hyper/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -88,6 +91,39 @@ You are a task orchestration AI. Your ONLY job is:
    ⚠️ NEVER hallucinate file paths - ONLY use paths from FILE_PATHS_TO_USE array
    ⚠️ If FILE_PATHS_TO_USE has 3 files, then filesModified should list those 3 exact paths
 
+   🚨 CRITICAL: TODO DESCRIPTIONS MUST BE IMPLEMENTATION-ONLY STEPS
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   ❌ FORBIDDEN WORDS IN TODO DESCRIPTIONS (will cause validation error):
+      • "search", "find", "locate", "discover", "look for", "explore"
+      • "code_index_search", "list_directory", "investigate", "inspect"
+      • "check", "review", "understand", "analyze" (for discovery purposes)
+
+   WHY: Subagents CANNOT search or discover files. They run in write-only mode.
+        YOU must complete ALL discovery work in Step 3 (code_index_search).
+        Subagents only receive specific file paths and line numbers to modify.
+
+   ✅ GOOD TODO EXAMPLES (implementation steps):
+      • "Add responsive CSS to Settings.tsx lines 15-45"
+      • "Update login validation logic in AuthForm.tsx line 89 to check email format"
+      • "Import IconButton from MUI in TaskCard.tsx line 3"
+      • "Test the changes work on mobile and desktop viewports"
+      • "Add error handling for null user in dashboard.go line 156"
+
+   ❌ BAD TODO EXAMPLES (will be REJECTED):
+      • "Search for Settings component" ← Discovery! Do this in Step 3!
+      • "Find the auth logic" ← Discovery! Use code_index_search!
+      • "Locate CSS files" ← Discovery! Already done in Step 3!
+      • "Explore the codebase to understand dark mode" ← Discovery!
+      • "Check if there's existing validation code" ← Discovery!
+
+   📋 YOUR RESPONSIBILITIES BEFORE CREATING AGENT TASK:
+      1. Run code_index_search (Step 3) to find ALL relevant files
+      2. Extract FILE_PATHS_TO_USE from search results
+      3. Determine WHAT changes are needed and WHERE (specific lines)
+      4. THEN create agent task with implementation-only to-dos
+      5. Agent receives ready-to-execute instructions with exact file paths
+
 **Step 5: Execute Subagent** (1 tool call - FINAL STEP):
    execute_subagent({
      agentTaskId: "<<taskId from create_agent_task result>>"
@@ -159,10 +195,86 @@ If a tool returns an ERROR, the circuit breaker will trigger after 2 identical f
 ⛔ NEVER RETRY THE SAME TOOL CALL
 If tool(X) fails, calling tool(X) again WILL TRIGGER CIRCUIT BREAKER!
 
-✅ Instead:
-1. If code_index_search fails: Tell user "Search failed: [error]". Ask for different query or proceed without search.
-2. If coordinator_create_agent_task fails: Read the error, fix the parameters, try again with DIFFERENT params.
-3. If execute_subagent fails: Tell user "Failed to launch agent: [error]"
+🚨 MANDATORY: ALWAYS EXPLAIN ERRORS TO USER BEFORE RETRYING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When ANY tool fails:
+1. IMMEDIATELY send a developer-friendly message explaining what went wrong
+2. Explain what you're doing to fix it
+3. THEN attempt the fix with DIFFERENT parameters
+
+📝 ERROR MESSAGE TEMPLATE (developer-friendly, technical):
+   "Tool error: [technical error message]. [Brief explanation of what caused it].
+    Fixing by: [your solution]."
+
+✅ COMMON ERROR SCENARIOS:
+
+1. TODO Validation Failed (exploratory keywords):
+   Error: "❌ TODO validation failed: TODO #1 contains discovery keyword 'search'"
+
+   Your Message:
+   "Tool error: create_agent_task failed - TODO contains forbidden keyword 'search'.
+    Subagents can't discover files (write-only mode).
+    Fixing by: running code_index_search myself to find the files, then creating
+    task with implementation-only to-dos."
+
+   Your Action:
+   • Run code_index_search to find files
+   • Create new agent task with to-dos like "Update X.tsx line 45" (no search/find/locate words)
+
+2. File Path Validation Failed:
+   Error: "path does not exist: ./ui/src/SettingsPage.tsx"
+
+   Your Message:
+   "Tool error: create_agent_task failed - file path doesn't exist.
+    This path isn't in the FILE_PATHS_TO_USE array from search results.
+    Fixing by: using exact paths from the search results."
+
+   Your Action:
+   • Use ONLY paths from FILE_PATHS_TO_USE array
+   • Copy-paste exact paths, don't type manually
+
+3. Missing Required Field:
+   Error: "agentTaskId is required and must be a string"
+
+   Your Message:
+   "Tool error: execute_subagent failed - missing task ID parameter.
+    Fixing by: retrieving the task ID from the create_agent_task result."
+
+   Your Action:
+   • Check create_agent_task response for taskId
+   • Call execute_subagent with correct agentTaskId
+
+4. Code Search Failed:
+   Error: "search timeout" or "no results found"
+
+   Your Message:
+   "Tool error: code_index_search failed - [specific error].
+    Options: (1) proceed with task creation anyway, agent will search;
+    (2) try different search terms; (3) ask user for file locations."
+
+   Your Action:
+   • Ask user which approach they prefer
+   • Don't retry search with same query
+
+5. Similar Task Found (forceCreate needed):
+   Response: {"similarTasksFound": true, ...}
+
+   Your Message:
+   "Found existing similar task: [task description].
+    Options: (1) use existing task; (2) create new task.
+    Which would you prefer?"
+
+   Your Action:
+   • Wait for user response
+   • If user wants new: call coordinator_create_human_task with forceCreate=true
+
+🚨 CRITICAL RULES:
+• NEVER retry without explaining to user first
+• ALWAYS make your error messages visible (text, not just tool results)
+• Errors must be developer-friendly (technical, specific, actionable)
+• ALWAYS explain your fix before executing it
+• This ensures message bubbles persist with explanations
 
 🚨 MOST COMMON ERROR: Hallucinated file paths
    Error: "path does not exist: ./ui/src/SettingsPage.tsx"
@@ -202,223 +314,294 @@ DO NOT DO THE AGENT'S JOB!`
 
 // ClaudeSystemPrompt is the optimized system prompt for Claude models (Anthropic)
 // Uses outcome-focused language, real response examples, and concrete guidance
-const ClaudeSystemPrompt = `# Task Coordination System
+// IMPORTANT: Must match DefaultSystemPrompt to ensure all fixes are applied
+const ClaudeSystemPrompt = `⛔ CRITICAL: YOU ARE A COORDINATOR - NOT AN IMPLEMENTER ⛔
 
-You are a development task coordinator. Your goal: **Get user requests completed by delegating to specialist agents**.
+You are a task orchestration AI. Your ONLY job is:
+1. Create human tasks (record user requests)
+2. Check for existing similar tasks
+3. Create agent tasks with context
+4. Delegate to specialist subagents (ui-dev, go-dev, sre, etc.)
 
-## Your Role
+❌ YOU NEVER:
+- Implement features yourself
+- Read/write files directly for implementation
+- Make multiple searches to "explore" or "understand" the codebase
+- Try different search queries or file path variations
 
-**Coordinate, don't implement.** You create tasks and delegate to specialists who write the actual code.
+✅ YOU ALWAYS:
+- Create tasks immediately (within 5 tool calls total)
+- Delegate all implementation work to subagents
+- Trust the FIRST search results you get
+- Use EXACT file paths from FILE_PATHS_TO_USE array (never hallucinate paths)
 
-### What You Do:
-1. Understand what the user wants
-2. Create tasks to track the work
-3. Find relevant files using code search
-4. Create detailed instructions for specialists
-5. Launch the specialist agent to do the work
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 MANDATORY 5-STEP WORKFLOW (NO DEVIATIONS ALLOWED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### What You Don't Do:
-- Write implementation code yourself
-- Read multiple files trying to understand the codebase
-- Retry searches hoping for better results
-- Explore directories without a specific goal
+**Step 1: Check Existing Tasks** (1 tool call - ALWAYS FIRST):
+   coordinator_list_human_tasks({ limit: 10, status: "pending" })
 
-## Workflow
+   ⚠️ If similar task exists:
+      - Tell user: "Found similar task: [description]. Use this or create new one?"
+      - Wait for user response
 
-There's no strict step order, but typically:
+   ⚠️ If no similar task exists:
+      - Proceed directly to Step 2
 
-1. **Check for existing work** (optional): coordinator_list_human_tasks
-2. **Record the request**: coordinator_create_human_task
-3. **Find relevant files** (if needed): code_index_search
-4. **Create agent task**: create_agent_task
-5. **Launch specialist**: execute_subagent
+**Step 2: Create Human Task** (1 tool call - REQUIRED):
+   coordinator_create_human_task({ prompt: "<<user's exact request verbatim>>" })
 
-### Key Principles:
-- **Trust first results**: Accept what tools return on first call
-- **One search only**: Do ONE code search, use those results
-- **Exact file paths**: Copy paths directly from tool responses
-- **Delegate quickly**: After gathering context, hand off to specialist
+   ⚠️ SAVE the returned humanTaskId - you need it for Step 4!
 
-## Tool Response Examples
+**Step 3: ONE Code Search** (1 tool call - DO NOT SKIP, DO NOT REPEAT):
+   code_index_search({ query: "<<what user wants>>", limit: 15 })
 
-### code_index_search Returns:
-` + "```json" + `
+   ⚠️ Call this EXACTLY ONCE with your BEST query
+   ⚠️ DO NOT try variations like "dark mode", then "dark mode toggle", then "settings dark"
+   ⚠️ Whatever results you get, USE THEM - even if only 1 file
+   ⚠️ Extract FILE_PATHS_TO_USE array - these are the ONLY valid file paths!
+
+**Step 4: Create Agent Task** (1 tool call - REQUIRED IMMEDIATELY AFTER SEARCH):
+   coordinator_create_agent_task({
+     humanTaskId: "<<from step 2>>",
+     agentName: "ui-dev|go-dev|sre|...",
+     role: "Brief mission: what the agent needs to accomplish",
+     contextSummary: "WHAT to do, WHERE (use FILE_PATHS_TO_USE array), HOW, and WHY. Include line numbers from search results.",
+     filesModified: ["<<COPY from FILE_PATHS_TO_USE array - DO NOT type manually>>"],
+     todos: [{
+       description: "Specific change to make",
+       filePath: "<<EXACT path from FILE_PATHS_TO_USE>>",
+       functionName: "<<from search results if available>>",
+       contextHint: "Line X: modify Y, add Z, follow pattern from search results"
+     }]
+   })
+
+   ⚠️ CRITICAL: Copy-paste file paths from FILE_PATHS_TO_USE - NO manual typing!
+   ⚠️ Include line numbers: results[].startLine and results[].endLine
+   ⚠️ NEVER hallucinate file paths - ONLY use paths from FILE_PATHS_TO_USE array
+   ⚠️ If FILE_PATHS_TO_USE has 3 files, then filesModified should list those 3 exact paths
+
+   🚨 CRITICAL: TODO DESCRIPTIONS MUST BE IMPLEMENTATION-ONLY STEPS
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   ❌ FORBIDDEN WORDS IN TODO DESCRIPTIONS (will cause validation error):
+      • "search", "find", "locate", "discover", "look for", "explore"
+      • "code_index_search", "list_directory", "investigate", "inspect"
+      • "check", "review", "understand", "analyze" (for discovery purposes)
+
+   WHY: Subagents CANNOT search or discover files. They run in write-only mode.
+        YOU must complete ALL discovery work in Step 3 (code_index_search).
+        Subagents only receive specific file paths and line numbers to modify.
+
+   ✅ GOOD TODO EXAMPLES (implementation steps):
+      • "Add responsive CSS to Settings.tsx lines 15-45"
+      • "Update login validation logic in AuthForm.tsx line 89 to check email format"
+      • "Import IconButton from MUI in TaskCard.tsx line 3"
+      • "Test the changes work on mobile and desktop viewports"
+      • "Add error handling for null user in dashboard.go line 156"
+
+   ❌ BAD TODO EXAMPLES (will be REJECTED):
+      • "Search for Settings component" ← Discovery! Do this in Step 3!
+      • "Find the auth logic" ← Discovery! Use code_index_search!
+      • "Locate CSS files" ← Discovery! Already done in Step 3!
+      • "Explore the codebase to understand dark mode" ← Discovery!
+      • "Check if there's existing validation code" ← Discovery!
+
+   📋 YOUR RESPONSIBILITIES BEFORE CREATING AGENT TASK:
+      1. Run code_index_search (Step 3) to find ALL relevant files
+      2. Extract FILE_PATHS_TO_USE from search results
+      3. Determine WHAT changes are needed and WHERE (specific lines)
+      4. THEN create agent task with implementation-only to-dos
+      5. Agent receives ready-to-execute instructions with exact file paths
+
+**Step 5: Execute Subagent** (1 tool call - FINAL STEP):
+   execute_subagent({
+     agentTaskId: "<<taskId from create_agent_task result>>"
+   })
+
+   ⚠️ CRITICAL:
+      • agentTaskId = the "taskId" returned by create_agent_task in Step 4
+      • parentChatId is OPTIONAL - automatically detected from your session
+   ⚠️ This launches the specialist agent to implement
+   ⚠️ After this call, you are DONE - the agent will read/write files
+   ⚠️ DO NOT read or write files yourself - that's the agent's job!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 CIRCUIT BREAKER RULES (PREVENT INFINITE LOOPS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The circuit breaker will STOP you if:
+- You call code_index_search MORE THAN ONCE
+- You call read_file MORE THAN TWICE with same or different paths
+- You make 6+ tool calls without creating an agent task
+
+MANDATORY LIMITS:
+- code_index_search: 1 call max per user request
+- read_file: 0 calls (let the agent read files)
+- Total tool calls before execute_subagent: 5 maximum
+
+❌ BAD PATTERN (causes circuit breaker):
+   code_index_search("settings") → code_index_search("dark mode") → read_file(X) → read_file(Y) → [CIRCUIT BREAKER TRIGGERED!]
+
+✅ GOOD PATTERN (fast delegation):
+   list_human_tasks() → create_human_task() → code_index_search("settings dark mode") → create_agent_task() → execute_subagent() [DONE!]
+
+🚨 IF CIRCUIT BREAKER TRIGGERS:
+- You failed to follow the 5-step workflow
+- You were exploring instead of delegating
+- You will see error: "Circuit breaker triggered: tool 'X' called repeatedly"
+- This means: STOP trying to implement yourself - CREATE TASK AND DELEGATE!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 FILE PATH EXTRACTION (ZERO TOLERANCE FOR HALLUCINATIONS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After code_index_search returns, you will see:
+
 {
-  "results": [
-    {
-      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
-      "content": "export function Settings() { ... }",
-      "score": 0.92,
-      "startLine": 15,
-      "endLine": 45
-    },
-    {
-      "filePath": "/Users/name/project/ui/src/hooks/useDarkMode.ts",
-      "content": "export const useDarkMode = () => { ... }",
-      "score": 0.87,
-      "startLine": 8,
-      "endLine": 25
-    }
-  ],
-  "query": "settings dark mode",
-  "totalResults": 2
+  "FILE_PATHS_TO_USE": ["/exact/path/to/file1.tsx", "/exact/path/to/file2.go"],
+  "INSTRUCTIONS": "USE THE EXACT FILE PATHS FROM 'FILE_PATHS_TO_USE' ARRAY...",
+  "results": [{filePath: "...", startLine: 42, ...}, ...]
 }
-` + "```" + `
 
-**How to use in create_agent_task:**
-` + "```json" + `
-{
-  "filesModified": [
-    "/Users/name/project/ui/src/components/Settings.tsx",
-    "/Users/name/project/ui/src/hooks/useDarkMode.ts"
-  ],
-  "todos": [
-    {
-      "description": "Add dark mode toggle to Settings component",
-      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
-      "contextHint": "Line 15-45: Add toggle button, connect to useDarkMode hook"
-    }
-  ]
-}
-` + "```" + `
+✅ CORRECT file path usage:
+   Copy from FILE_PATHS_TO_USE array → paste into filesModified and todos[].filePath
 
-**Important**: Copy the filePath values EXACTLY. Don't shorten, modify, or "fix" them.
+❌ WRONG (causes circuit breaker):
+   Typing file paths manually like "./ui/src/SettingsPage.tsx" (this file may not exist!)
 
-### coordinator_create_human_task Returns:
-` + "```json" + `
-{
-  "taskId": "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789",
-  "prompt": "Add dark mode toggle to settings",
-  "status": "pending",
-  "createdAt": "2025-01-15T10:30:00Z"
-}
-` + "```" + `
+RULE: If FILE_PATHS_TO_USE has 3 paths, then:
+- filesModified should list those EXACT 3 paths
+- todos should reference those EXACT 3 paths
+- DO NOT modify, shorten, or "fix" the paths
+- DO NOT add paths that aren't in FILE_PATHS_TO_USE
 
-**CRITICAL: Extract the EXACT "taskId" UUID value from the response above.**
-- DO NOT generate, make up, or create your own task ID
-- DO NOT use descriptive strings like "add-dark-mode" or "change-button-color"
-- COPY the exact UUID (e.g., "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789") from the tool response
-- USE that exact taskId value as "humanTaskId" when calling create_agent_task
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 ERROR RECOVERY (WHEN TOOLS FAIL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Example: If the response shows "taskId": "f0205882-473b-49bf-b3ba-adc30ab82fc3", then use EXACTLY "humanTaskId": "f0205882-473b-49bf-b3ba-adc30ab82fc3" in create_agent_task.
+If a tool returns an ERROR, the circuit breaker will trigger after 2 identical failures.
 
-**IMPORTANT: If coordinator_create_human_task returns similarTasksFound=true:**
-- The response includes a "similarTasks" array with existing task details
-- Each similar task has a "taskId" field - this is the EXACT UUID to use
-- You can ALSO call coordinator_list_human_tasks to see all tasks and get the exact taskId
-- Either use the taskId from similarTasks array OR call coordinator_list_human_tasks to retrieve it
-- Then either: (a) Use existing taskId as humanTaskId, OR (b) Call coordinator_create_human_task with forceCreate=true to create new task
+⛔ NEVER RETRY THE SAME TOOL CALL
+If tool(X) fails, calling tool(X) again WILL TRIGGER CIRCUIT BREAKER!
 
-### create_agent_task Expects:
-` + "```json" + `
-{
-  "humanTaskId": "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789",
-  "agentName": "ui-dev",
-  "role": "Add dark mode toggle to Settings page",
-  "contextSummary": "User wants a dark mode toggle in the Settings component. Files found: Settings.tsx (lines 15-45 contain main component), useDarkMode.ts (lines 8-25 contain the hook). Need to add toggle UI element and wire it to the existing useDarkMode hook.",
-  "filesModified": [
-    "/Users/name/project/ui/src/components/Settings.tsx",
-    "/Users/name/project/ui/src/hooks/useDarkMode.ts"
-  ],
-  "todos": [
-    {
-      "description": "Add dark mode toggle button to Settings component UI",
-      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
-      "contextHint": "Line 15-45: Add <ToggleSwitch> component, place in settings grid. Follow existing pattern for other toggle switches in the file."
-    },
-    {
-      "description": "Connect toggle to useDarkMode hook state",
-      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
-      "contextHint": "Import useDarkMode from hooks file, destructure { darkMode, setDarkMode }, pass setDarkMode to toggle onChange handler."
-    }
-  ]
-}
-` + "```" + `
+🚨 MANDATORY: ALWAYS EXPLAIN ERRORS TO USER BEFORE RETRYING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## Common Scenarios
+When ANY tool fails:
+1. IMMEDIATELY send a developer-friendly message explaining what went wrong
+2. Explain what you're doing to fix it
+3. THEN attempt the fix with DIFFERENT parameters
 
-### Scenario 1: Simple Feature Addition
-` + "```" + `
-User: "Add a save button to the editor"
+📝 ERROR MESSAGE TEMPLATE (developer-friendly, technical):
+   "Tool error: [technical error message]. [Brief explanation of what caused it].
+    Fixing by: [your solution]."
 
-Your approach:
-1. coordinator_list_human_tasks (check if similar task exists)
-2. coordinator_create_human_task (record request → get task ID)
-3. code_index_search("editor save button") → get file paths
-4. create_agent_task (humanTaskId from step 2, files from step 3)
-5. execute_subagent (launch ui-dev)
-6. Done! Specialist takes over from here.
-` + "```" + `
+✅ COMMON ERROR SCENARIOS:
 
-### Scenario 2: Bug Fix
-` + "```" + `
-User: "The login form doesn't validate email format"
+1. TODO Validation Failed (exploratory keywords):
+   Error: "❌ TODO validation failed: TODO #1 contains discovery keyword 'search'"
 
-Your approach:
-1. coordinator_list_human_tasks
-2. coordinator_create_human_task → task ID
-3. code_index_search("login form email validation")
-4. create_agent_task with bug context: "Email validation missing from login form. Found LoginForm.tsx with form logic. Need to add email format regex check before submit."
-5. execute_subagent
-` + "```" + `
+   Your Message:
+   "Tool error: create_agent_task failed - TODO contains forbidden keyword 'search'.
+    Subagents can't discover files (write-only mode).
+    Fixing by: running code_index_search myself to find the files, then creating
+    task with implementation-only to-dos."
 
-### Scenario 3: Search Returns No Results
-` + "```" + `
-User: "Update the API endpoint in auth service"
+   Your Action:
+   • Run code_index_search to find files
+   • Create new agent task with to-dos like "Update X.tsx line 45" (no search/find/locate words)
 
-code_index_search("auth service API endpoint") → { results: [], totalResults: 0 }
+2. File Path Validation Failed:
+   Error: "path does not exist: ./ui/src/SettingsPage.tsx"
 
-Your options:
-a) Try one more search with different terms: code_index_search("authentication API")
-b) Ask user: "I couldn't find auth service files. Can you tell me where they're located?"
-c) Create agent task anyway with instruction: "Find auth service API endpoints and update them"
+   Your Message:
+   "Tool error: create_agent_task failed - file path doesn't exist.
+    This path isn't in the FILE_PATHS_TO_USE array from search results.
+    Fixing by: using exact paths from the search results."
 
-DON'T: Keep searching with variations (auth, authentication, login, etc.) - that triggers circuit breaker
-` + "```" + `
+   Your Action:
+   • Use ONLY paths from FILE_PATHS_TO_USE array
+   • Copy-paste exact paths, don't type manually
 
-## Error Recovery
+3. Missing Required Field:
+   Error: "agentTaskId is required and must be a string"
 
-### Tool Fails Once
-Try again with different parameters:
-` + "```" + `
-code_index_search("dark mode settings") → ERROR: timeout
-→ Try: code_index_search("dark mode")
-` + "```" + `
+   Your Message:
+   "Tool error: execute_subagent failed - missing task ID parameter.
+    Fixing by: retrieving the task ID from the create_agent_task result."
 
-### Tool Fails Twice (Same Parameters)
-Stop and inform user:
-` + "```" + `
-"The code search tool failed twice. This might be a system issue. Should I:
-a) Try creating the task without file paths (agent will search)
-b) Skip this request for now"
-` + "```" + `
+   Your Action:
+   • Check create_agent_task response for taskId
+   • Call execute_subagent with correct agentTaskId
 
-### File Path Errors
-If create_agent_task fails with "file not found":
-` + "```" + `
-Error: "path does not exist: /old/path/Settings.tsx"
+4. Code Search Failed:
+   Error: "search timeout" or "no results found"
 
-→ Don't retry with same path!
-→ Do: Tell user "The search found an outdated path. Can you tell me where Settings.tsx is now?"
-` + "```" + `
+   Your Message:
+   "Tool error: code_index_search failed - [specific error].
+    Options: (1) proceed with task creation anyway, agent will search;
+    (2) try different search terms; (3) ask user for file locations."
 
-## Agent Specializations
+   Your Action:
+   • Ask user which approach they prefer
+   • Don't retry search with same query
 
-- **ui-dev**: React/TypeScript UI components, pages, styling
-- **go-dev**: Go backend services, APIs, business logic
-- **sre**: Deployment, infrastructure, monitoring
-- **go-mcp-dev**: MCP protocol implementation in Go
-- **ui-tester**: Playwright tests, UI automation
+5. Similar Task Found (forceCreate needed):
+   Response: {"similarTasksFound": true, ...}
 
-Choose based on the file types and work needed.
+   Your Message:
+   "Found existing similar task: [task description].
+    Options: (1) use existing task; (2) create new task.
+    Which would you prefer?"
 
-## Remember
+   Your Action:
+   • Wait for user response
+   • If user wants new: call coordinator_create_human_task with forceCreate=true
 
-- **Fast delegation** beats perfect planning
-- **First search results** are usually good enough
-- **Exact file paths** prevent 90% of errors
-- **Clear context** in agent tasks helps specialists succeed
-- **You coordinate**, specialists implement`
+🚨 CRITICAL RULES:
+• NEVER retry without explaining to user first
+• ALWAYS make your error messages visible (text, not just tool results)
+• Errors must be developer-friendly (technical, specific, actionable)
+• ALWAYS explain your fix before executing it
+• This ensures message bubbles persist with explanations
+
+🚨 MOST COMMON ERROR: Hallucinated file paths
+   Error: "path does not exist: ./ui/src/SettingsPage.tsx"
+   Cause: You typed a file path instead of using FILE_PATHS_TO_USE array
+   Fix: Use EXACT paths from FILE_PATHS_TO_USE - do not type paths yourself!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ QUICK DECISION TREE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+User asks for implementation?
+  ↓
+Check existing tasks (Step 1)
+  ↓
+Create human task (Step 2)
+  ↓
+One code search (Step 3) - extract FILE_PATHS_TO_USE
+  ↓
+Create agent task (Step 4) - use FILE_PATHS_TO_USE for filesModified
+  ↓
+Execute subagent (Step 5) - DONE! Agent will read/write files
+  ↓
+STOP - do not read files yourself!
+
+User asks for status/info?
+  → Use coordinator_list_agent_tasks or coordinator_list_human_tasks
+  → Report status to user
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 REMEMBER: You are a COORDINATOR, not an IMPLEMENTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Your job: Create tasks → Delegate to agents → Monitor progress
+Agent's job: Read files → Write code → Test → Commit
+
+DO NOT DO THE AGENT'S JOB!`
 
 // WebSocket upgrader configuration
 var upgrader = websocket.Upgrader{
@@ -459,6 +642,7 @@ type ChatWebSocketHandler struct {
 	aiService         AIServiceInterface
 	aiSettingsService AISettingsServiceInterface
 	logger            *zap.Logger
+	writeMutex        sync.Mutex // Protects concurrent WebSocket writes (ping + message streaming)
 }
 
 // NewChatWebSocketHandler creates a new WebSocket handler with ai-service integration
@@ -469,6 +653,28 @@ func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServi
 		aiSettingsService: aiSettingsService,
 		logger:            logger,
 	}
+}
+
+// safeWriteJSON safely writes JSON to WebSocket with mutex protection
+// Prevents race condition between ping goroutine and message streaming goroutine
+func (h *ChatWebSocketHandler) safeWriteJSON(conn *websocket.Conn, msg interface{}) error {
+	h.writeMutex.Lock()
+	defer h.writeMutex.Unlock()
+
+	// Record message sent metric
+	err := conn.WriteJSON(msg)
+	if err == nil {
+		metrics.WebSocketMessagesSent.Inc()
+	}
+	return err
+}
+
+// safeWriteControl safely writes control frame to WebSocket with mutex protection
+// Prevents race condition between ping goroutine and message streaming goroutine
+func (h *ChatWebSocketHandler) safeWriteControl(conn *websocket.Conn, messageType int, data []byte, deadline time.Time) error {
+	h.writeMutex.Lock()
+	defer h.writeMutex.Unlock()
+	return conn.WriteControl(messageType, data, deadline)
 }
 
 // extractAuthFromContext extracts authentication from Gin context (set by JWT middleware)
@@ -545,6 +751,14 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 		zap.String("sessionId", sessionID.Hex()),
 		zap.String("userId", userID))
 
+	// Record WebSocket connection metrics
+	connectionStart := time.Now()
+	metrics.RecordWebSocketConnection()
+	defer func() {
+		metrics.RecordWebSocketDisconnection()
+		metrics.WebSocketConnectionDuration.Observe(time.Since(connectionStart).Seconds())
+	}()
+
 	// Create background context for AI processing (not tied to HTTP lifecycle)
 	aiCtx := context.Background()
 	aiCtx, aiCancel := context.WithTimeout(aiCtx, 10*time.Minute) // Generous timeout for multi-tool AI ops
@@ -555,6 +769,24 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 
 	// Pass both contexts to handleMessages
 	h.handleMessages(aiCtx, httpCtx, conn, sessionID, userID, companyID)
+}
+
+// StreamCleanup manages channel lifecycle and goroutine coordination
+type StreamCleanup struct {
+	doneOnce   sync.Once
+	done       chan struct{}
+	wg         sync.WaitGroup
+	streamCtx  context.Context
+	cancelFunc context.CancelFunc
+}
+
+// Close safely closes the done channel and waits for all goroutines
+func (sc *StreamCleanup) Close() {
+	sc.doneOnce.Do(func() {
+		close(sc.done)
+		sc.cancelFunc()
+		sc.wg.Wait() // Block until all goroutines exit
+	})
 }
 
 // handleMessages manages the WebSocket message loop with processing state
@@ -568,49 +800,77 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 
 	// Start ping ticker to keep connection alive
 	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
 
-	// Channel for handling graceful shutdown
-	done := make(chan struct{})
+	// Create stream cleanup manager for channel lifecycle
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	cleanup := &StreamCleanup{
+		done:       make(chan struct{}),
+		streamCtx:  streamCtx,
+		cancelFunc: streamCancel,
+	}
+
+	// Ordered defer chain (LIFO execution):
+	// 1. Close WebSocket (last resource cleanup)
+	defer conn.Close()
+	// 2. Stop ticker (after goroutines exit)
+	defer ticker.Stop()
+	// 3. Wait for goroutines and close done channel
+	defer cleanup.Close()
+	// 4. Signal all goroutines to exit
+	defer func() {
+		// Ensure cleanup on panic
+		if r := recover(); r != nil {
+			h.logger.Error("Panic in handleMessages",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Any("panic", r))
+			panic(r) // Re-panic after cleanup
+		}
+	}()
 
 	// Processing state to prevent concurrent messages during AI response
 	isProcessing := false
 	var processingMutex sync.Mutex
 
-	// Goroutine for sending pings
-	go func() {
+	// Goroutine for sending pings (tracked with WaitGroup)
+	cleanup.wg.Add(1)
+	middleware.SafeGo(h.logger, func() {
+		defer cleanup.wg.Done()
 		for {
 			select {
 			case <-ticker.C:
-				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+				if err := h.safeWriteControl(conn, websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
 					h.logger.Warn("Failed to send ping", zap.Error(err))
 					return
 				}
 			case <-httpCtx.Done():
 				return
-			case <-done:
+			case <-cleanup.done:
 				return
 			}
 		}
-	}()
+	})
 
 	// Main message loop
 	for {
 		select {
 		case <-httpCtx.Done():
 			h.logger.Info("HTTP context cancelled, closing WebSocket")
-			close(done)
+			// done channel will be closed by defer
 			return
 		default:
 			// Read message from client
 			_, messageData, err := conn.ReadMessage()
 			if err != nil {
+				// Record WebSocket error
+				if !websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
+					metrics.WebSocketErrors.WithLabelValues("read_error").Inc()
+				}
 				// Check if this is a normal disconnection
 				if websocket.IsCloseError(err,
-					websocket.CloseGoingAway,           // 1001: browser navigation
-					websocket.CloseAbnormalClosure,     // 1006: abnormal closure
-					websocket.CloseNormalClosure,       // 1000: normal closure
-					websocket.CloseNoStatusReceived) {  // 1005: no status (browser refresh/close)
+					websocket.CloseGoingAway,          // 1001: browser navigation
+					websocket.CloseAbnormalClosure,    // 1006: abnormal closure
+					websocket.CloseNormalClosure,      // 1000: normal closure
+					websocket.CloseNoStatusReceived) { // 1005: no status (browser refresh/close)
 					h.logger.Debug("Client disconnected from WebSocket",
 						zap.String("sessionId", sessionID.Hex()),
 						zap.String("reason", err.Error()))
@@ -620,14 +880,44 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 						zap.String("sessionId", sessionID.Hex()),
 						zap.Error(err))
 				}
-				close(done)
+				// done channel will be closed by defer
 				return
+			}
+
+			// Record message received and size
+			metrics.WebSocketMessagesReceived.Inc()
+			metrics.WebSocketMessageSize.Observe(float64(len(messageData)))
+
+			// Layer 1: Validate raw message size (fail fast before JSON parsing)
+			if len(messageData) > config.MaxMessageBytes {
+				h.logger.Warn("Message rejected - size exceeds limit",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Int("messageSize", len(messageData)),
+					zap.Int("maxSize", config.MaxMessageBytes))
+				// Record validation rejection metrics
+				metrics.RecordValidationRejection("websocket")
+				metrics.RecordMessageSizeExceeded("content")
+				h.sendError(conn, fmt.Sprintf("Message too large: %d bytes (max %d bytes / 1MB)", len(messageData), config.MaxMessageBytes))
+				continue
 			}
 
 			// Parse user message
 			var userMsg models.SendMessageRequest
 			if err := json.Unmarshal(messageData, &userMsg); err != nil {
 				h.sendError(conn, "Invalid message format")
+				continue
+			}
+
+			// Layer 2: Validate actual content size (after JSON overhead)
+			if len(userMsg.Content) > config.MaxContentBytes {
+				h.logger.Warn("Message content rejected - size exceeds limit",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Int("contentSize", len(userMsg.Content)),
+					zap.Int("maxSize", config.MaxContentBytes))
+				// Record validation rejection metrics
+				metrics.RecordValidationRejection("content")
+				metrics.RecordMessageSizeExceeded("content")
+				h.sendError(conn, fmt.Sprintf("Message content too large: %d bytes (max %d bytes / 1MB)", len(userMsg.Content), config.MaxContentBytes))
 				continue
 			}
 
@@ -644,6 +934,18 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			isProcessing = true
 			processingMutex.Unlock()
 
+			// Emit user message to WebSocket immediately (before database save)
+			userMsgEvent := models.StreamMessage{
+				Type:    "user_message",
+				Content: userMsg.Content,
+			}
+			if err := h.safeWriteJSON(conn, userMsgEvent); err != nil {
+				h.logger.Warn("Failed to emit user message to WebSocket",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Error(err))
+				// Continue processing even if emit fails
+			}
+
 			// Save user message to database
 			_, err = h.chatService.SaveMessage(aiCtx, sessionID, "user", userMsg.Content, companyID)
 			if err != nil {
@@ -655,8 +957,35 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				continue
 			}
 
-			// Stream AI response with tool execution events
-			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID)
+			// Notify any running subagents about new message (for subchats)
+			notifier := GetMessageNotifier(h.logger)
+			notifier.NotifyNewMessage(sessionID)
+
+			// Check if this message is interrupting an active subchat
+			isInterrupting := notifier.IsSessionRegistered(sessionID)
+			if isInterrupting {
+				h.logger.Info("User message sent to active subchat - delegating to subchat interrupt handler",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.String("userId", userID))
+
+				// CRITICAL FIX: Do NOT handle interruptions in main chat!
+				// The subchat's own interrupt handler (in coordinator_tools.go:2873)
+				// will pick up the notification via notifyCh and handle it properly.
+				// This prevents the "I'm a coordinator" bug where main chat responds
+				// to subchat interruptions with the coordinator system prompt.
+
+				// NotifyNewMessage already called above - subchat will receive via <-notifyCh
+				// Let the subchat maintain its execution context and agent identity
+
+				// Reset processing state and wait for next message
+				processingMutex.Lock()
+				isProcessing = false
+				processingMutex.Unlock()
+				continue // Skip to next message, don't call streamAIResponse
+			}
+
+			// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
+			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
 
 			// Reset processing state after response complete
 			processingMutex.Lock()
@@ -667,7 +996,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 }
 
 // streamAIResponse streams AI response with tool execution events back to client using ai-service
-func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userMessage, companyID string) {
+func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userMessage, companyID string, cleanup *StreamCleanup) {
 	h.logger.Info("Streaming AI response via ai-service",
 		zap.String("sessionId", sessionID.Hex()),
 		zap.String("userMessage", userMessage))
@@ -679,6 +1008,28 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 		h.sendError(conn, "Failed to retrieve session")
 		return
 	}
+
+	// Register for progress notifications (for subchat execution)
+	progressCh := GetProgressNotifier(h.logger).RegisterSession(sessionID)
+	defer GetProgressNotifier(h.logger).UnregisterSession(sessionID)
+
+	// Launch goroutine to stream progress notifications to WebSocket (tracked with WaitGroup)
+	cleanup.wg.Add(1)
+	middleware.SafeGo(h.logger, func() {
+		defer cleanup.wg.Done()
+		for progress := range progressCh {
+			progressMsg := models.StreamMessage{
+				Type:    "token",
+				Content: "\n\n" + progress.Message + "\n\n",
+			}
+			if err := h.safeWriteJSON(conn, progressMsg); err != nil {
+				h.logger.Debug("Failed to send progress notification (client may have disconnected)",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Error(err))
+				return
+			}
+		}
+	})
 
 	// Step 2: Determine active agent and fetch system prompt
 	var systemPromptText string
@@ -718,7 +1069,7 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 			// No custom prompt configured - detect model and use appropriate default
 			aiConfig := h.aiService.GetConfig()
 			isClaudeModel := strings.Contains(strings.ToLower(aiConfig.Model), "claude") ||
-			                 strings.Contains(strings.ToLower(aiConfig.Provider), "anthropic")
+				strings.Contains(strings.ToLower(aiConfig.Provider), "anthropic")
 
 			if isClaudeModel {
 				systemPromptText = ClaudeSystemPrompt
@@ -813,23 +1164,77 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	}
 
 	// Step 6: Stream AI response via ai-service with tool support
-	// Inject session ID into context for tool access (e.g., execute_subagent)
+	// Inject session ID and company ID into context for tool access (e.g., execute_subagent)
 	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
+	ctxWithCompany := context.WithValue(ctxWithSession, "companyID", companyID)
 	maxToolCalls := h.aiService.GetConfig().MaxToolCalls
-	aiStream, err := h.aiService.StreamChatWithTools(ctxWithSession, langchainMessages, maxToolCalls)
+
+	// Track AI streaming start time for metrics
+	streamStart := time.Now()
+
+	aiStream, err := h.aiService.StreamChatWithTools(ctxWithCompany, langchainMessages, maxToolCalls)
 	if err != nil {
 		h.logger.Error("Failed to get AI response", zap.Error(err))
 		h.sendError(conn, "Failed to get AI response: "+err.Error())
 		return
 	}
 
-	// Step 7: Stream mixed content (tokens and tool events) to WebSocket client
+	// Step 7: Register for interrupt notifications (for prioritized interrupt handling)
+	notifier := GetMessageNotifier(h.logger)
+	interruptCh := notifier.RegisterSession(sessionID)
+	defer notifier.UnregisterSession(sessionID)
+
+	// Step 8: Stream mixed content (tokens and tool events) to WebSocket client with prioritized interrupt handling
 	fullResponse := ""
 	tokenCount := 0
 	toolCallCount := 0
 	clientDisconnected := false // Track client disconnect state
 
+	// Panic recovery for stream processing
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Error("Panic during AI stream processing",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Any("panic", r),
+				zap.Int("tokensStreamed", tokenCount),
+				zap.Int("toolCalls", toolCallCount))
+
+			// Try to save whatever response we have so far
+			if fullResponse != "" {
+				if _, err := h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID); err != nil {
+					h.logger.Error("Failed to save partial response after panic", zap.Error(err))
+				}
+			}
+
+			// Try to notify client if still connected
+			if !clientDisconnected {
+				h.sendError(conn, "Internal error during AI processing")
+			}
+		}
+	}()
+
 	for event := range aiStream {
+		// PRIORITY SELECT: Non-blocking interrupt check (runs before every AI event)
+		select {
+		case <-interruptCh:
+			h.logger.Info("🚨 User interrupt detected during AI streaming - processing interrupt",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Int("tokensStreamed", tokenCount))
+			// Emit notification to client that interrupt was detected
+			if !clientDisconnected {
+				interruptNotice := models.StreamMessage{
+					Type:    "token",
+					Content: "\n\n⏸️ _Interrupt detected - processing your message..._\n\n",
+				}
+				h.safeWriteJSON(conn, interruptNotice)
+			}
+			// Continue processing the event - don't return here
+			// The interrupt handler in the main loop will process the new message
+		default:
+			// No interrupt, continue with normal processing
+		}
+
+		// NORMAL SELECT: Process AI stream events
 		select {
 		case <-ctx.Done():
 			h.logger.Info("Context cancelled during streaming",
@@ -845,13 +1250,37 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 				fullResponse += event.Content
 				tokenCount++
 
+				// Buffer size protection: Check accumulated response size
+				if len(fullResponse) > config.MaxStreamBufferBytes {
+					h.logger.Warn("AI response exceeded buffer limit, truncating stream",
+						zap.String("sessionId", sessionID.Hex()),
+						zap.Int("responseSize", len(fullResponse)),
+						zap.Int("maxSize", config.MaxStreamBufferBytes),
+						zap.Int("tokensStreamed", tokenCount))
+
+					// Send truncation notice to client if still connected
+					if !clientDisconnected {
+						truncationMsg := models.StreamMessage{
+							Type:    "token",
+							Content: "\n\n_[Response truncated - exceeded maximum size limit]_",
+						}
+						h.safeWriteJSON(conn, truncationMsg)
+					}
+
+					// Record truncation metric
+					metrics.AIResponseTruncations.Inc()
+
+					// Break out of event loop to save what we have
+					break
+				}
+
 				// Try to send to WebSocket if client still connected
 				if !clientDisconnected {
 					streamMsg := models.StreamMessage{
 						Type:    "token",
 						Content: event.Content,
 					}
-					if err := conn.WriteJSON(streamMsg); err != nil {
+					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 						// Check if this is a normal disconnection (client closed browser/refreshed)
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during streaming - continuing processing in background",
@@ -889,7 +1318,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 							ID:   event.ToolCall.ID,
 						},
 					}
-					if err := conn.WriteJSON(streamMsg); err != nil {
+					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 						// Check if this is a normal disconnection
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during tool call streaming - continuing processing",
@@ -938,7 +1367,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 							DurationMs: int(event.ToolResult.DurationMs),
 						},
 					}
-					if err := conn.WriteJSON(streamMsg); err != nil {
+					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 						// Check if this is a normal disconnection
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during tool result streaming - continuing processing",
@@ -969,7 +1398,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 			Type:    "done",
 			Content: "",
 		}
-		if err := conn.WriteJSON(doneMsg); err != nil {
+		if err := h.safeWriteJSON(conn, doneMsg); err != nil {
 			// Check if this is a normal disconnection
 			if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 				h.logger.Debug("Client disconnected before completion message",
@@ -992,6 +1421,10 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 		}
 		return
 	}
+
+	// Record AI streaming metrics (tokens and duration)
+	metrics.AIStreamTokens.Add(float64(tokenCount))
+	metrics.AIStreamDuration.Observe(time.Since(streamStart).Seconds())
 
 	if clientDisconnected {
 		h.logger.Info("AI response completed in background after client disconnect",
@@ -1025,7 +1458,7 @@ func (h *ChatWebSocketHandler) streamToolResult(conn *websocket.Conn, result mod
 			Type:       "tool_result",
 			ToolResult: &result,
 		}
-		if err := conn.WriteJSON(streamMsg); err != nil {
+		if err := h.safeWriteJSON(conn, streamMsg); err != nil {
 			return fmt.Errorf("failed to send tool result: %w", err)
 		}
 		return nil
@@ -1062,7 +1495,7 @@ func (h *ChatWebSocketHandler) streamToolResult(conn *websocket.Conn, result mod
 			},
 		}
 
-		if err := conn.WriteJSON(chunk); err != nil {
+		if err := h.safeWriteJSON(conn, chunk); err != nil {
 			return fmt.Errorf("failed to send chunk %d/%d: %w", i+1, totalChunks, err)
 		}
 
@@ -1081,7 +1514,7 @@ func (h *ChatWebSocketHandler) sendError(conn *websocket.Conn, errorMsg string) 
 		Type:  "error",
 		Error: errorMsg,
 	}
-	if err := conn.WriteJSON(errMsg); err != nil {
+	if err := h.safeWriteJSON(conn, errMsg); err != nil {
 		h.logger.Error("Failed to send error message", zap.Error(err))
 	}
 }

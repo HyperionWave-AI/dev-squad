@@ -30,14 +30,12 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
     serverUrl: '',
     description: '',
   });
-  const [headersJson, setHeadersJson] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [validationError, setValidationError] = useState<string>('');
 
   const handleClose = () => {
     if (!loading) {
       setFormData({ serverName: '', serverUrl: '', description: '' });
-      setHeadersJson('');
       setValidationError('');
       onClose();
     }
@@ -68,20 +66,6 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
       return false;
     }
 
-    // Validate headers JSON (optional)
-    if (headersJson.trim()) {
-      try {
-        const parsed = JSON.parse(headersJson);
-        if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-          setValidationError('Headers must be a valid JSON object');
-          return false;
-        }
-      } catch {
-        setValidationError('Invalid JSON format for headers');
-        return false;
-      }
-    }
-
     setValidationError('');
     return true;
   };
@@ -98,11 +82,6 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
         serverUrl: formData.serverUrl.trim(),
         description: formData.description?.trim() || '',
       };
-
-      // Parse and include headers if provided
-      if (headersJson.trim()) {
-        request.headers = JSON.parse(headersJson);
-      }
 
       await mcpServerService.addMCPServer(request);
       handleClose();
@@ -171,23 +150,6 @@ export const AddMCPServerDialog: React.FC<AddMCPServerDialogProps> = ({
             rows={3}
             helperText="Optional description of what this server provides"
             placeholder="Describe the tools and capabilities this server provides..."
-          />
-
-          <TextField
-            label="Headers (JSON)"
-            value={headersJson}
-            onChange={(e) => {
-              setHeadersJson(e.target.value);
-              if (validationError) {
-                setValidationError('');
-              }
-            }}
-            fullWidth
-            disabled={loading}
-            multiline
-            rows={4}
-            helperText='Optional HTTP headers as JSON object. Example: {"Authorization": "Bearer token"}'
-            placeholder='{"Authorization": "Bearer token", "X-Custom-Header": "value"}'
           />
         </Box>
       </DialogContent>
