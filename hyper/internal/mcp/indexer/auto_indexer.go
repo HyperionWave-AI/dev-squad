@@ -67,12 +67,22 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 		a.logger.Warn("Failed to update folder status", zap.Error(err))
 	}
 
+	// Create scanner with folder-specific configuration
+	includePatterns := folder.GetIncludePatterns()
+	excludePatterns := folder.GetExcludePatterns()
+	chunkSize := folder.GetChunkSize()
+
+	fileScanner := scanner.NewFileScannerWithConfig(includePatterns, excludePatterns, chunkSize)
+
 	// Scan directory for files
 	a.logger.Info("Scanning directory for code files...",
 		zap.String("path", projectRoot),
-		zap.String("collection", collectionName))
+		zap.String("collection", collectionName),
+		zap.Strings("includePatterns", includePatterns),
+		zap.Strings("excludePatterns", excludePatterns),
+		zap.String("chunkSize", chunkSize))
 
-	scannedFiles, err := a.fileScanner.ScanDirectory(projectRoot)
+	scannedFiles, err := fileScanner.ScanDirectory(projectRoot)
 	if err != nil {
 		a.codeIndexStorage.UpdateFolderStatus(folder.ID, "error", err.Error())
 		result.Error = fmt.Errorf("failed to scan directory: %w", err)
@@ -112,8 +122,8 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 			scannedFile.ID = uuid.New().String()
 		}
 
-		// Create chunks
-		chunks, err := a.fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
+		// Create chunks using the configured scanner
+		chunks, err := fileScanner.CreateFileChunks(scannedFile.ID, scannedFile.Path)
 		if err != nil {
 			a.logger.Warn("Failed to create chunks",
 				zap.String("file", scannedFile.Path),
@@ -138,21 +148,37 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 			pointID := uuid.New().String()
 			chunk.VectorID = pointID
 
+			payload := map[string]interface{}{
+				"fileId":       scannedFile.ID,
+				"folderId":     folder.ID,
+				"folderPath":   folder.Path,
+				"filePath":     scannedFile.Path,
+				"relativePath": scannedFile.RelativePath,
+				"language":     scannedFile.Language,
+				"chunkNum":     chunk.ChunkNum,
+				"startLine":    chunk.StartLine,
+				"endLine":      chunk.EndLine,
+				"content":      chunk.Content,
+			}
+
+			// Add AST metadata if present
+			if chunk.ChunkType != "" {
+				payload["chunkType"] = chunk.ChunkType
+			}
+			if chunk.NodeType != "" {
+				payload["nodeType"] = chunk.NodeType
+			}
+			if chunk.NodeName != "" {
+				payload["nodeName"] = chunk.NodeName
+			}
+			if chunk.Signature != "" {
+				payload["signature"] = chunk.Signature
+			}
+
 			point := storage.CodeIndexPoint{
-				ID:     pointID,
-				Vector: embedding,
-				Payload: map[string]interface{}{
-					"fileId":       scannedFile.ID,
-					"folderId":     folder.ID,
-					"folderPath":   folder.Path,
-					"filePath":     scannedFile.Path,
-					"relativePath": scannedFile.RelativePath,
-					"language":     scannedFile.Language,
-					"chunkNum":     chunk.ChunkNum,
-					"startLine":    chunk.StartLine,
-					"endLine":      chunk.EndLine,
-					"content":      chunk.Content,
-				},
+				ID:      pointID,
+				Vector:  embedding,
+				Payload: payload,
 			}
 			qdrantPoints = append(qdrantPoints, point)
 
