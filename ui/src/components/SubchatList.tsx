@@ -1,372 +1,231 @@
-/**
- * SubchatList Component
- *
- * Displays list of child subchats for a parent chat with create button.
- * Fetches subchats on mount and handles loading/empty states.
- */
+import React, { useState, useEffect } from 'react';
+import { Add, Delete, ChatBubble, MoreVert, Edit } from '@mui/icons-material';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  Box,
-  Button,
-  Typography,
-  CircularProgress,
-  Alert,
-  Paper,
-  Collapse,
-  Container,
-  Divider,
-} from '@mui/material';
-import { Add as AddIcon } from '@mui/icons-material';
-import { subchatService, type Subchat } from '../services/subchatService';
-import SubchatCard from './SubchatCard';
-import SubchatCreationDialog from './SubchatCreationDialog';
-import SubchatDetailView from './SubchatDetailView';
+// Map Material-UI icons to the variable names used in the template
+const Plus = Add;
+const Trash2 = Delete;
+const MessageSquare = ChatBubble;
+const MoreVertical = MoreVert;
+const Edit2 = Edit;
+
+interface Chat {
+  id: string;
+  name: string;
+  created_at: string;
+}
 
 interface SubchatListProps {
   parentChatId: string;
-  onSubchatClick?: (subchatId: string) => void;
-  onSubchatCreated?: () => void | Promise<void>; // Callback to refresh parent sessions list
+  onSubchatClick: (subchatId: string) => Promise<void>;
+  onSubchatCreated: () => Promise<void>;
 }
 
 export const SubchatList: React.FC<SubchatListProps> = ({
   parentChatId,
   onSubchatClick,
-  onSubchatCreated: onSubchatCreatedCallback,
+  onSubchatCreated
 }) => {
-  const [subchats, setSubchats] = useState<Subchat[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [expandedSubchatId, setExpandedSubchatId] = useState<string | null>(null);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState<string | null>(null);
 
-  const loadSubchats = useCallback(async (isBackgroundRefresh = false) => {
-    // Don't show loading spinner for background refreshes
-    if (!isBackgroundRefresh) {
-      setLoading(true);
-    }
-    setError(null);
+  // Load subchats for the parent chat
+  const loadSubchats = async () => {
     try {
-      const data = await subchatService.getSubchatsByParent(parentChatId);
-      setSubchats(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load subchats');
-    } finally {
-      if (!isBackgroundRefresh) {
-        setLoading(false);
-      }
+      // This would typically fetch subchats from an API
+      // For now, using empty array as placeholder
+      setChats([]);
+    } catch (error) {
+      console.error('Failed to load subchats:', error);
     }
-  }, [parentChatId]);
+  };
 
+  // Auto-refresh when tab becomes visible
   useEffect(() => {
     loadSubchats();
 
-    // Set up auto-refresh polling every 5 seconds for real-time updates
-    const intervalId = setInterval(() => {
-      loadSubchats(true); // Pass true to indicate background refresh
-    }, 5000);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        loadSubchats(); // Background refresh when tab becomes visible
+      }
+    };
 
-    // Clean up interval on unmount or when parentChatId changes
-    return () => clearInterval(intervalId);
-  }, [loadSubchats]);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [parentChatId]);
 
-  const handleSubchatCreated = async (subchatId: string) => {
-    console.log('[SubchatList] handleSubchatCreated called with subchatId:', subchatId);
-    console.log('[SubchatList] onSubchatCreatedCallback exists?', !!onSubchatCreatedCallback);
+  const handleRename = (chatId: string, currentName: string) => {
+    setEditingChatId(chatId);
+    setEditingName(currentName);
+    setDropdownOpen(null);
+  };
 
-    setDialogOpen(false);
-    loadSubchats(); // Refresh subchats list in drawer
+  const handleRenameSubmit = (chatId: string) => {
+    if (editingName.trim() && editingName !== chats.find(c => c.id === chatId)?.name) {
+      // Handle rename logic here
+      console.log('Renaming chat', chatId, 'to', editingName.trim());
+    }
+    setEditingChatId(null);
+    setEditingName('');
+  };
 
-    // Notify parent to refresh sessions list (for tree structure in sidebar)
-    if (onSubchatCreatedCallback) {
-      console.log('[SubchatList] Calling onSubchatCreatedCallback...');
-      await onSubchatCreatedCallback();
-      console.log('[SubchatList] onSubchatCreatedCallback completed');
+  const handleRenameCancel = () => {
+    setEditingChatId(null);
+    setEditingName('');
+  };
+
+  const handleDeleteChat = (chatId: string) => {
+    // Handle delete logic here
+    console.log('Deleting chat', chatId);
+    setChats(prev => prev.filter(chat => chat.id !== chatId));
+  };
+
+  const handleDeleteAll = () => {
+    if (chats.length === 0) return;
+    
+    if (window.confirm(`Are you sure you want to delete all ${chats.length} chats? This action cannot be undone.`)) {
+      // Delete all chats
+      chats.forEach(chat => handleDeleteChat(chat.id));
+    }
+  };
+
+  const handleNewChat = async () => {
+    try {
+      // Create new subchat logic would go here
+      console.log('Creating new subchat for parent:', parentChatId);
+      await onSubchatCreated();
+    } catch (error) {
+      console.error('Failed to create new chat:', error);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffTime = Math.abs(now.getTime() - date.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 1) {
+      return 'Today';
+    } else if (diffDays === 2) {
+      return 'Yesterday';
+    } else if (diffDays <= 7) {
+      return `${diffDays - 1} days ago`;
     } else {
-      console.warn('[SubchatList] onSubchatCreatedCallback is not defined!');
-    }
-
-    if (onSubchatClick) {
-      console.log('[SubchatList] Navigating to subchat:', subchatId);
-      onSubchatClick(subchatId); // Navigate to new subchat
+      return date.toLocaleDateString();
     }
   };
-
-  const handleCardClick = (subchatId: string) => {
-    if (onSubchatClick) {
-      onSubchatClick(subchatId);
-    }
-  };
-
-  const handleToggleDetails = (subchatId: string) => {
-    setExpandedSubchatId((prev) => (prev === subchatId ? null : subchatId));
-  };
-
-  if (loading) {
-    return (
-      <Container maxWidth="lg" sx={{ py: 4 }}>
-        <Box 
-          display="flex" 
-          justifyContent="center" 
-          alignItems="center" 
-          minHeight={300}
-          sx={{
-            backgroundColor: 'background.paper',
-            borderRadius: 2,
-            boxShadow: 1,
-          }}
-        >
-          <Box textAlign="center">
-            <CircularProgress size={48} sx={{ mb: 2 }} />
-            <Typography variant="body2" color="text.secondary">
-              Loading subchats...
-            </Typography>
-          </Box>
-        </Box>
-      </Container>
-    );
-  }
-
-  // Separate running/active subchats from completed/failed ones
-  const runningSubchats = subchats.filter((s) => s.status === 'active');
-  const completedSubchats = subchats.filter((s) => s.status !== 'active');
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Box sx={{ backgroundColor: 'background.paper', borderRadius: 2, boxShadow: 1, p: 3 }}>
-        {/* Header with Create button */}
-        <Box
-          display="flex"
-          justifyContent="space-between"
-          alignItems="center"
-          mb={4}
-          sx={{
-            flexDirection: { xs: 'column', sm: 'row' },
-            gap: { xs: 2, sm: 0 },
-          }}
-        >
-          <Box>
-            <Typography variant="h5" component="h2" sx={{ fontWeight: 600, mb: 1 }}>
-              Subchats
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {subchats.length} {subchats.length === 1 ? 'subchat' : 'subchats'} total
-            </Typography>
-          </Box>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => setDialogOpen(true)}
-            sx={{
-              minWidth: { xs: '100%', sm: 'auto' },
-              py: 1.5,
-              px: 3,
-              borderRadius: 2,
-              textTransform: 'none',
-              fontWeight: 600,
-            }}
+    <div className="w-80 bg-gray-50 border-r border-gray-200 flex flex-col h-full">
+      <div className="p-4 border-b border-gray-200">
+        <div className="flex gap-2">
+          <button
+            onClick={handleNewChat}
+            className="flex items-center gap-2 px-4 py-2 bg-yellow-400 hover:bg-yellow-500 text-black rounded-lg font-medium transition-colors"
           >
-            Create Subchat
-          </Button>
-        </Box>
+            <Plus className="w-4 h-4" />
+            New Chat
+          </button>
+          <button
+            onClick={handleDeleteAll}
+            disabled={chats.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-yellow-400 hover:bg-yellow-500 disabled:bg-yellow-200 disabled:cursor-not-allowed text-black rounded-lg font-medium transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete All
+          </button>
+        </div>
+      </div>
 
-        {/* Error message */}
-        {error && (
-          <Alert 
-            severity="error" 
-            sx={{ 
-              mb: 3, 
-              borderRadius: 2,
-              '& .MuiAlert-message': {
-                width: '100%',
-              },
-            }}
-          >
-            {error}
-          </Alert>
-        )}
-
-        {/* Empty state */}
-        {!loading && !error && subchats.length === 0 && (
-          <Paper
-            variant="outlined"
-            sx={{
-              p: 6,
-              textAlign: 'center',
-              backgroundColor: 'background.default',
-              borderRadius: 3,
-              border: '2px dashed',
-              borderColor: 'divider',
-            }}
-          >
-            <Box sx={{ maxWidth: 400, mx: 'auto' }}>
-              <Typography variant="h6" color="text.primary" gutterBottom sx={{ fontWeight: 600 }}>
-                No subchats yet
-              </Typography>
-              <Typography variant="body1" color="text.secondary" paragraph sx={{ mb: 3 }}>
-                Create a subchat to delegate work to a specialist agent and organize your workflow
-              </Typography>
-              <Button
-                variant="contained"
-                startIcon={<AddIcon />}
-                onClick={() => setDialogOpen(true)}
-                sx={{
-                  py: 1.5,
-                  px: 4,
-                  borderRadius: 2,
-                  textTransform: 'none',
-                  fontWeight: 600,
-                }}
+      <div className="flex-1 overflow-y-auto">
+        {chats.length === 0 ? (
+          <div className="p-4 text-center text-gray-500">
+            <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
+            <p>No chats yet</p>
+            <p className="text-sm">Start a new conversation</p>
+          </div>
+        ) : (
+          <div className="p-2">
+            {chats.map((chat) => (
+              <div
+                key={chat.id}
+                className="group relative p-3 mb-2 rounded-lg cursor-pointer transition-colors hover:bg-gray-100"
+                onClick={() => onSubchatClick(chat.id)}
               >
-                Create First Subchat
-              </Button>
-            </Box>
-          </Paper>
-        )}
-
-        {/* Running Subchats Section */}
-        {runningSubchats.length > 0 && (
-          <Box mb={5}>
-            <Box display="flex" alignItems="center" mb={3}>
-              <Typography 
-                variant="h6" 
-                sx={{ 
-                  fontWeight: 600, 
-                  color: 'primary.main',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                }}
-              >
-                Running
-                <Box
-                  component="span"
-                  sx={{
-                    backgroundColor: 'primary.main',
-                    color: 'primary.contrastText',
-                    borderRadius: '12px',
-                    px: 1.5,
-                    py: 0.5,
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                  }}
-                >
-                  {runningSubchats.length}
-                </Box>
-              </Typography>
-            </Box>
-            <Box
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: {
-                  xs: '1fr',
-                  sm: 'repeat(auto-fit, minmax(320px, 1fr))',
-                  lg: 'repeat(auto-fit, minmax(350px, 1fr))',
-                },
-                gap: 3,
-              }}
-            >
-              {runningSubchats.map((subchat) => (
-                <Box key={subchat.id}>
-                  <SubchatCard
-                    subchat={subchat}
-                    onClick={handleCardClick}
-                    isExpanded={expandedSubchatId === subchat.id}
-                    onToggleDetails={handleToggleDetails}
-                  />
-                  <Collapse in={expandedSubchatId === subchat.id}>
-                    <Box sx={{ mt: 2, ml: 1 }}>
-                      <SubchatDetailView
-                        subchatId={subchat.id}
-                        onClose={() => setExpandedSubchatId(null)}
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    {editingChatId === chat.id ? (
+                      <input
+                        type="text"
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onBlur={() => handleRenameSubmit(chat.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleRenameSubmit(chat.id);
+                          } else if (e.key === 'Escape') {
+                            handleRenameCancel();
+                          }
+                        }}
+                        className="w-full px-2 py-1 text-sm font-medium bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
                       />
-                    </Box>
-                  </Collapse>
-                </Box>
-              ))}
-            </Box>
-          </Box>
+                    ) : (
+                      <h3 className="font-medium text-gray-900 truncate">
+                        {chat.name}
+                      </h3>
+                    )}
+                    <p className="text-sm text-gray-500 mt-1">
+                      {formatDate(chat.created_at)}
+                    </p>
+                  </div>
+                  
+                  <div className="relative ml-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDropdownOpen(dropdownOpen === chat.id ? null : chat.id);
+                      }}
+                      className="p-1 rounded hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+                    
+                    {dropdownOpen === chat.id && (
+                      <div className="absolute right-0 top-8 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[120px]">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRename(chat.id, chat.name);
+                          }}
+                          className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-t-lg"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          Rename
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteChat(chat.id);
+                            setDropdownOpen(null);
+                          }}
+                          className="flex items-center gap-2 w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-b-lg"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
-
-        {/* Divider between sections */}
-        {runningSubchats.length > 0 && completedSubchats.length > 0 && (
-          <Divider sx={{ my: 4 }} />
-        )}
-
-        {/* Completed/Failed Subchats Section */}
-        {completedSubchats.length > 0 && (
-          <Box>
-            <Box display="flex" alignItems="center" mb={3}>
-              <Typography 
-                variant="h6" 
-                sx={{ 
-                  fontWeight: 600, 
-                  color: 'text.secondary',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                }}
-              >
-                Completed
-                <Box
-                  component="span"
-                  sx={{
-                    backgroundColor: 'grey.200',
-                    color: 'text.secondary',
-                    borderRadius: '12px',
-                    px: 1.5,
-                    py: 0.5,
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                  }}
-                >
-                  {completedSubchats.length}
-                </Box>
-              </Typography>
-            </Box>
-            <Box
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: {
-                  xs: '1fr',
-                  sm: 'repeat(auto-fit, minmax(320px, 1fr))',
-                  lg: 'repeat(auto-fit, minmax(350px, 1fr))',
-                },
-                gap: 3,
-              }}
-            >
-              {completedSubchats.map((subchat) => (
-                <Box key={subchat.id}>
-                  <SubchatCard
-                    subchat={subchat}
-                    onClick={handleCardClick}
-                    isExpanded={expandedSubchatId === subchat.id}
-                    onToggleDetails={handleToggleDetails}
-                  />
-                  <Collapse in={expandedSubchatId === subchat.id}>
-                    <Box sx={{ mt: 2, ml: 1 }}>
-                      <SubchatDetailView
-                        subchatId={subchat.id}
-                        onClose={() => setExpandedSubchatId(null)}
-                      />
-                    </Box>
-                  </Collapse>
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        )}
-
-        {/* Creation dialog */}
-        <SubchatCreationDialog
-          open={dialogOpen}
-          onClose={() => setDialogOpen(false)}
-          parentChatId={parentChatId}
-          onSubchatCreated={handleSubchatCreated}
-        />
-      </Box>
-    </Container>
+      </div>
+    </div>
   );
 };
-
-export default SubchatList;

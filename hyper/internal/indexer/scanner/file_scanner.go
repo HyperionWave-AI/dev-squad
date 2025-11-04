@@ -17,6 +17,9 @@ type FileScanner struct {
 	supportedExtensions map[string]string // extension -> language
 	maxFileSize         int64             // max file size in bytes
 	chunkSize           int               // lines per chunk
+	// TODO: Implement semantic chunking for logical code blocks
+	// semanticChunker     *SemanticChunker  // For function/class-based chunking
+	// useSemanticChunking bool              // Enable/disable semantic chunking
 }
 
 // NewFileScanner creates a new file scanner
@@ -55,10 +58,9 @@ func NewFileScanner() *FileScanner {
 			".scss": "scss",
 			".less": "less",
 			".vue":  "vue",
-			".md":   "markdown",
 		},
 		maxFileSize: 10 * 1024 * 1024, // 10 MB
-		chunkSize:   200,               // 200 lines per chunk
+		chunkSize:   100,               // 100 lines per chunk (smaller = more precise search)
 	}
 }
 
@@ -80,6 +82,17 @@ func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile,
 				dirName == ".idea" || dirName == "__pycache__" {
 				return filepath.SkipDir
 			}
+
+			// Skip archived directories (CRITICAL FIX)
+			if dirName == ".archived" || dirName == ".archive" || dirName == "archived" {
+				return filepath.SkipDir
+			}
+
+			// Skip paths containing archived directories
+			if strings.Contains(path, "/.archived/") || strings.Contains(path, "/.archive/") {
+				return filepath.SkipDir
+			}
+
 			return nil
 		}
 
@@ -141,7 +154,21 @@ func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile,
 }
 
 // ReadFileChunks reads a file and returns it in chunks
+// Currently uses line-based chunking (100 lines per chunk)
+// TODO: Implement semantic chunking to split by functions/classes instead of lines
+// This will require:
+//   1. Create SemanticChunker type with ChunkFile(filePath) method
+//   2. Add language-specific parsers (go/parser for Go, babel for JS/TS, etc.)
+//   3. Split by logical boundaries (functions, classes, methods)
+//   4. Merge small chunks (<50 lines), split large chunks (>200 lines)
+//   5. Add fallback to line-based chunking if parsing fails
 func (fs *FileScanner) ReadFileChunks(filePath string) ([]string, error) {
+	// TODO: Uncomment when SemanticChunker is implemented
+	// if fs.useSemanticChunking && fs.semanticChunker != nil {
+	//     return fs.semanticChunker.ChunkFile(filePath)
+	// }
+
+	// Line-based chunking (current implementation)
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
