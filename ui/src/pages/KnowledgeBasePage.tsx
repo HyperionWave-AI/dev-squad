@@ -6,7 +6,11 @@ import {
   Snackbar,
   CircularProgress,
   Typography,
+  TextField,
+  InputAdornment,
+  IconButton,
 } from '@mui/material';
+import { Search as SearchIcon, Clear as ClearIcon } from '@mui/icons-material';
 import { CollectionSidebar } from '../components/CollectionSidebar';
 import { ArticleList } from '../components/ArticleList';
 import { ArticleViewer } from '../components/ArticleViewer';
@@ -26,6 +30,11 @@ export const KnowledgeBasePage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Universal search state
+  const [universalSearchQuery, setUniversalSearchQuery] = useState<string>('');
+  const [isUniversalSearchMode, setIsUniversalSearchMode] = useState<boolean>(false);
+  const [searchCollections, setSearchCollections] = useState<string[]>([]);
 
   // Load collections on mount
   useEffect(() => {
@@ -144,10 +153,95 @@ export const KnowledgeBasePage: React.FC = () => {
     setSuccessMessage(null);
   };
 
+  // Universal search handler
+  const handleUniversalSearch = async () => {
+    if (!universalSearchQuery.trim()) {
+      // Clear search mode
+      setIsUniversalSearchMode(false);
+      setEntries([]);
+      setSearchCollections([]);
+      setSelectedEntry(null);
+      setSelectedCollection(null);
+      return;
+    }
+
+    setLoading(true);
+    setIsUniversalSearchMode(true);
+    setSelectedCollection(null); // Clear collection selection in universal search mode
+
+    try {
+      const { entries: searchResults, collectionsWithData } = await knowledgeService.universalSearch(
+        universalSearchQuery,
+        100
+      );
+      setEntries(searchResults);
+      setSearchCollections(collectionsWithData);
+      setSelectedEntry(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Universal search failed');
+      setEntries([]);
+      setSearchCollections([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle Enter key in search box
+  const handleSearchKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleUniversalSearch();
+    }
+  };
+
+  // Clear universal search
+  const handleClearUniversalSearch = () => {
+    setUniversalSearchQuery('');
+    setIsUniversalSearchMode(false);
+    setEntries([]);
+    setSearchCollections([]);
+    setSelectedEntry(null);
+  };
+
   return (
     <Box sx={{ height: 'calc(100vh - 64px)', overflow: 'hidden', p: 2 }}>
+      {/* Universal Search Bar */}
+      <Box sx={{ mb: 2 }}>
+        <Paper elevation={2} sx={{ p: 2 }}>
+          <TextField
+            fullWidth
+            placeholder="Search across all collections... (press Enter)"
+            value={universalSearchQuery}
+            onChange={(e) => setUniversalSearchQuery(e.target.value)}
+            onKeyPress={handleSearchKeyPress}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              ),
+              endAdornment: universalSearchQuery && (
+                <InputAdornment position="end">
+                  <IconButton size="small" onClick={handleClearUniversalSearch}>
+                    <ClearIcon />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+          />
+          {isUniversalSearchMode && (
+            <Box sx={{ mt: 1, display: 'flex', gap: 1, alignItems: 'center' }}>
+              <Typography variant="body2" color="text.secondary">
+                Found {entries.length} results across {searchCollections.length} collections
+                {entries.length >= 100 && ' (limited to top 100)'}
+              </Typography>
+            </Box>
+          )}
+        </Paper>
+      </Box>
+
       {/* Main layout with 3 columns */}
-      <Box sx={{ display: 'flex', gap: 2, height: '100%' }}>
+      <Box sx={{ display: 'flex', gap: 2, height: 'calc(100% - 100px)' }}>
         {/* Left sidebar: Collections */}
         <Box sx={{ width: '25%', minWidth: 200, height: '100%' }}>
           <Paper elevation={1} sx={{ height: '100%', overflow: 'hidden' }}>
@@ -176,7 +270,7 @@ export const KnowledgeBasePage: React.FC = () => {
         {/* Middle: Article List */}
         <Box sx={{ width: '25%', minWidth: 200, height: '100%' }}>
           <Paper elevation={1} sx={{ height: '100%', overflow: 'hidden' }}>
-            {!selectedCollection ? (
+            {!selectedCollection && !isUniversalSearchMode ? (
               <Box
                 sx={{
                   display: 'flex',
@@ -187,7 +281,7 @@ export const KnowledgeBasePage: React.FC = () => {
                 }}
               >
                 <Typography variant="body1" color="text.secondary">
-                  Select a collection to view entries
+                  Select a collection or use universal search
                 </Typography>
               </Box>
             ) : loading ? (

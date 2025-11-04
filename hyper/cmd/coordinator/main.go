@@ -30,6 +30,12 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// Build information set via ldflags at build time
+var (
+	BuildTime = "unknown"
+	GitCommit = "unknown"
+)
+
 // ensureCodeIndexCollectionWithDimensions ensures the code index collection exists with the correct dimensions
 // If a dimension mismatch is detected, prompts the user to recreate the collection
 func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient, expectedDimensions int, logger *zap.Logger) error {
@@ -198,35 +204,58 @@ func main() {
 		}
 		logger.Info("Configuration loaded from custom path", zap.String("path", *configPath))
 	} else {
-		// Default behavior: try executable dir, then current dir
+		// Default behavior: try .env.hyper.hot first (hot-reload dev), then .env.hyper (standard)
+		// Priority: exec dir .env.hyper.hot → exec dir .env.hyper → current dir .env.hyper.hot → current dir .env.hyper
 		executable, err := os.Executable()
 		if err == nil {
 			execDir := filepath.Dir(executable)
+			hotEnvFile := filepath.Join(execDir, ".env.hyper.hot")
 			envFile := filepath.Join(execDir, ".env.hyper")
 
-			// Try to load .env.hyper from executable directory
-			if err := godotenv.Overload(envFile); err == nil {
-				logger.Info("Configuration loaded", zap.String("path", envFile))
+			// Try to load .env.hyper.hot from executable directory first
+			if err := godotenv.Overload(hotEnvFile); err == nil {
+				logger.Info("Configuration loaded", zap.String("path", hotEnvFile))
 			} else {
 				logger.Debug("Failed to load config from executable directory",
-					zap.String("path", envFile),
+					zap.String("path", hotEnvFile),
 					zap.Error(err))
-				// Also try current working directory
-				if err := godotenv.Overload(".env.hyper"); err == nil {
-					logger.Info("Configuration loaded", zap.String("path", "./.env.hyper"))
+
+				// Fallback to .env.hyper from executable directory
+				if err := godotenv.Overload(envFile); err == nil {
+					logger.Info("Configuration loaded", zap.String("path", envFile))
 				} else {
-					logger.Debug("Failed to load config from current directory",
-						zap.String("path", "./.env.hyper"),
+					logger.Debug("Failed to load config from executable directory",
+						zap.String("path", envFile),
 						zap.Error(err))
-					logger.Warn("No .env.hyper found",
-						zap.Strings("checkedPaths", []string{envFile, "./.env.hyper"}))
+
+					// Also try current working directory - hot first, then standard
+					if err := godotenv.Overload(".env.hyper.hot"); err == nil {
+						logger.Info("Configuration loaded", zap.String("path", "./.env.hyper.hot"))
+					} else {
+						logger.Debug("Failed to load config from current directory",
+							zap.String("path", "./.env.hyper.hot"),
+							zap.Error(err))
+
+						// Final fallback to .env.hyper in current directory
+						if err := godotenv.Overload(".env.hyper"); err == nil {
+							logger.Info("Configuration loaded", zap.String("path", "./.env.hyper"))
+						} else {
+							logger.Debug("Failed to load config from current directory",
+								zap.String("path", "./.env.hyper"),
+								zap.Error(err))
+							logger.Warn("No .env.hyper or .env.hyper.hot found",
+								zap.Strings("checkedPaths", []string{hotEnvFile, envFile, "./.env.hyper.hot", "./.env.hyper"}))
+						}
+					}
 				}
 			}
 		}
 	}
 
 	logger.Info("Starting Unified Hyperion Coordinator",
-		zap.String("mode", *mode))
+		zap.String("mode", *mode),
+		zap.String("buildTime", BuildTime),
+		zap.String("gitCommit", GitCommit))
 
 	// Get MongoDB configuration from environment
 	mongoURI := os.Getenv("MONGODB_URI")
@@ -420,23 +449,49 @@ func main() {
 	needsIndexing := false
 
 	if existingMapping == nil {
-		// No mapping exists - create collection and mapping
-		collectionName, err = qdrantClient.EnsureCollectionForPath(projectRoot, codeIndexStorage)
+		// No mapping exists - use the configured QDRANT_CODE_COLLECTION
+		collectionName = storage.CodeIndexCollection
+
+		// Save mapping to MongoDB
+		err = codeIndexStorage.AddPathMapping(projectRoot, collectionName)
 		if err != nil {
-			logger.Warn("Failed to create code index collection",
+			logger.Warn("Failed to save path mapping",
 				zap.String("path", projectRoot),
 				zap.Error(err))
-		} else {
-			logger.Info("Created code index collection for project root",
-				zap.String("path", projectRoot),
-				zap.String("collection", collectionName))
-			needsIndexing = true
 		}
-	} else {
-		collectionName = existingMapping.QdrantCollection
-		logger.Info("Project root mapping found",
+
+		logger.Info("Created code index mapping for project root",
 			zap.String("path", projectRoot),
 			zap.String("collection", collectionName))
+		needsIndexing = true
+	} else {
+		collectionName = existingMapping.QdrantCollection
+
+		// Check if mapping uses the correct collection (from env var)
+		if collectionName != storage.CodeIndexCollection {
+			logger.Warn("Existing mapping uses wrong collection - updating",
+				zap.String("path", projectRoot),
+				zap.String("oldCollection", collectionName),
+				zap.String("newCollection", storage.CodeIndexCollection))
+
+			// Update mapping to use the configured collection
+			collectionName = storage.CodeIndexCollection
+			err = codeIndexStorage.AddPathMapping(projectRoot, collectionName)
+			if err != nil {
+				logger.Error("Failed to update path mapping",
+					zap.String("path", projectRoot),
+					zap.Error(err))
+			} else {
+				logger.Info("Updated mapping to correct collection",
+					zap.String("path", projectRoot),
+					zap.String("collection", collectionName))
+				needsIndexing = true
+			}
+		} else {
+			logger.Info("Project root mapping found",
+				zap.String("path", projectRoot),
+				zap.String("collection", collectionName))
+		}
 
 		// Check if collection is empty (mapping exists but no vectors)
 		isEmpty, err := autoIndexer.CheckCollectionEmpty(context.Background(), collectionName)
@@ -479,8 +534,16 @@ func main() {
 				zap.String("collection", collectionName))
 			needsIndexing = true
 		} else {
-			logger.Info("Collection already has vectors - skipping indexing",
-				zap.String("collection", collectionName))
+			// Check for FORCE_REINDEX env var
+			forceReindex := os.Getenv("FORCE_REINDEX") == "true"
+			if forceReindex {
+				logger.Warn("FORCE_REINDEX=true - will re-index despite existing vectors",
+					zap.String("collection", collectionName))
+				needsIndexing = true
+			} else {
+				logger.Info("Collection already has vectors - skipping indexing",
+					zap.String("collection", collectionName))
+			}
 		}
 	}
 
@@ -532,6 +595,12 @@ func main() {
 	knowledgeStorage, err := storage.NewMongoKnowledgeStorage(db, qdrantClient, logger)
 	if err != nil {
 		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
+	}
+
+	// Initialize reflection storage (metacognitive layer)
+	reflectionStorage, err := storage.NewReflectionStorage(db, logger)
+	if err != nil {
+		logger.Fatal("Failed to initialize reflection storage", zap.Error(err))
 	}
 
 	// Initialize AI summarizer for task summarization (optional - if fails, task storage will use fallback)
@@ -609,6 +678,14 @@ func main() {
 	}
 	logger.Info("Qdrant tools registered to MCP server", zap.Int("count", 2))
 
+	// Register reflection tools (metacognitive self-awareness layer)
+	logger.Info("Registering reflection tools to MCP server...")
+	reflectionToolHandler := handlers.NewReflectionToolHandler(reflectionStorage)
+	if err := reflectionToolHandler.RegisterReflectionTools(mcpServer); err != nil {
+		logger.Fatal("Failed to register reflection tools to MCP server", zap.Error(err))
+	}
+	logger.Info("Reflection tools registered to MCP server", zap.Int("count", 3))
+
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools to MCP server...")
 	filesystemHandler := handlers.NewFilesystemToolHandler(logger)
@@ -645,6 +722,7 @@ func main() {
 				httpPort,
 				taskStorage,
 				knowledgeStorage,
+				reflectionStorage,
 				codeIndexStorage,
 				qdrantClient,
 				embeddingClient,

@@ -23,12 +23,15 @@ import (
 	"hyper/internal/mcp/review"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
+	"hyper/internal/metrics"
 	"hyper/internal/middleware"
 	"hyper/internal/services"
+	userstorage "hyper/internal/storage"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 	"golang.org/x/term"
@@ -120,6 +123,7 @@ func StartHTTPServer(
 	port string,
 	taskStorage storage.TaskStorage,
 	knowledgeStorage storage.KnowledgeStorage,
+	reflectionStorage *storage.ReflectionStorage,
 	codeIndexStorage *storage.CodeIndexStorage,
 	qdrantClient *storage.QdrantClient,
 	embeddingClient embeddings.EmbeddingClient,
@@ -293,25 +297,48 @@ func StartHTTPServer(
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
-	// Configure CORS for frontend
+	// Configure CORS for frontend from environment variable
 	corsConfig := cors.DefaultConfig()
-	corsConfig.AllowOrigins = []string{
-		"http://localhost:5173", // Vite dev server
-		"http://localhost:5177", // Alt Vite port
-		"http://localhost:5178", // Alt Vite port
-		"http://localhost:7777", // Main dev UI port
-		"http://localhost:7779", // Dev UI port
-		"http://localhost:7780", // Dev UI port (auto-assigned)
-		"http://localhost:9173", // Custom UI port
-		"http://localhost:3000", // React dev server
-		"http://localhost",      // Docker UI
-		"http://hyperion-ui",    // Docker internal network
-		"http://hyperion-ui:80", // Docker internal network with port
+
+	// Read CORS allowed origins from environment variable
+	corsOriginsEnv := os.Getenv("CORS_ALLOWED_ORIGINS")
+	var allowedOrigins []string
+
+	if corsOriginsEnv != "" {
+		// Split by comma and trim whitespace
+		origins := strings.Split(corsOriginsEnv, ",")
+		for _, origin := range origins {
+			trimmed := strings.TrimSpace(origin)
+			if trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+		logger.Info("🔒 CORS configured from environment variable",
+			zap.Int("allowedOriginsCount", len(allowedOrigins)),
+			zap.Strings("origins", allowedOrigins))
+	} else {
+		// Safe default for production: only allow same origin
+		port := os.Getenv("HTTP_PORT")
+		if port == "" {
+			port = "5555"
+		}
+		allowedOrigins = []string{
+			"http://localhost:" + port,
+			"https://localhost:" + port,
+		}
+		logger.Warn("⚠️  CORS_ALLOWED_ORIGINS not set - using safe defaults (localhost only)",
+			zap.Strings("defaultOrigins", allowedOrigins))
 	}
+
+	corsConfig.AllowOrigins = allowedOrigins
 	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "X-Request-ID", "Authorization"}
 	corsConfig.AllowCredentials = true
 	r.Use(cors.New(corsConfig))
+
+	// Register panic recovery middleware (MUST be first to catch all panics)
+	r.Use(middleware.PanicRecoveryMiddleware(logger))
+	logger.Info("🛡️  Panic recovery middleware registered - server will not crash on panics")
 
 	// Register optional JWT authentication middleware
 	// Disabled by default (injects dev mock values)
@@ -326,6 +353,19 @@ func StartHTTPServer(
 			"version": "2.0.0",
 		})
 	})
+
+	// Prometheus metrics endpoint
+	r.GET("/metrics", gin.WrapH(promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{
+		EnableOpenMetrics: true,
+	})))
+
+	logger.Info("Prometheus metrics endpoint registered",
+		zap.String("path", "/metrics"))
+
+	// Register panic test endpoints (for testing panic recovery in dev)
+	panicTestHandler := handlers.NewPanicTestHandler(logger)
+	panicTestHandler.RegisterTestRoutes(r)
+	panicTestHandler.LogTestInstructions()
 
 	// Register REST API routes
 	restHandler.RegisterRESTRoutes(r)
@@ -400,6 +440,45 @@ func StartHTTPServer(
 	logger.Info("Knowledge API routes registered",
 		zap.String("popularCollectionsPath", "/api/v1/knowledge/popular-collections"))
 
+	// Initialize user settings storage and handler
+	userSettingsStorage, err := userstorage.NewUserSettingsStorage(mongoDatabase, logger)
+	if err != nil {
+		logger.Error("Failed to initialize user settings storage", zap.Error(err))
+		return err
+	}
+	userSettingsHandler := handlers.NewUserSettingsHandler(userSettingsStorage, logger)
+
+	// Register user settings routes
+	userGroup := r.Group("/api/v1/user")
+	{
+		userGroup.GET("/settings", userSettingsHandler.GetUserSettings)
+		userGroup.PATCH("/settings", userSettingsHandler.UpdateUserSettings)
+	}
+
+	logger.Info("User Settings API routes registered",
+		zap.String("getPath", "/api/v1/user/settings"),
+		zap.String("patchPath", "/api/v1/user/settings"))
+
+	// Register reflection routes (metacognitive self-awareness layer)
+	reflectionHandler := handlers.NewReflectionHandler(reflectionStorage, logger)
+	reflectionGroup := r.Group("/api/v1/reflection")
+	{
+		reflectionGroup.GET("/decisions", reflectionHandler.GetDecisions)
+		reflectionGroup.GET("/outcomes", reflectionHandler.GetOutcomes)
+		reflectionGroup.GET("/lessons", reflectionHandler.GetLessons)
+		reflectionGroup.GET("/search", reflectionHandler.SearchLessons)
+		reflectionGroup.POST("/decision", reflectionHandler.PostDecision)
+		reflectionGroup.POST("/outcome", reflectionHandler.PostOutcome)
+		reflectionGroup.POST("/lesson", reflectionHandler.PostLesson)
+		reflectionGroup.POST("/test-error", reflectionHandler.PostTestError) // Test endpoint for error tracking
+	}
+
+	logger.Info("Reflection API routes registered",
+		zap.String("decisionsPath", "/api/v1/reflection/decisions"),
+		zap.String("outcomesPath", "/api/v1/reflection/outcomes"),
+		zap.String("lessonsPath", "/api/v1/reflection/lessons"),
+		zap.String("searchPath", "/api/v1/reflection/search"))
+
 	// Subchat storage already initialized earlier for execute_subagent tool
 	// Use it to seed system subagents and create handlers
 
@@ -414,12 +493,18 @@ func StartHTTPServer(
 	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, chatService, logger)
 	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
 
-	// Register subchat routes
+	// Initialize rate limiter for subchat creation (10 requests per minute per user)
+	subchatRateLimiter := middleware.NewRateLimiter(10, time.Minute, logger)
+	logger.Info("🚦 Rate limiter initialized", zap.Int("maxRequests", 10), zap.Duration("per", time.Minute))
+
+	// Register subchat routes with rate limiting on POST
 	subchatGroup := r.Group("/api/v1/subchats")
 	{
-		subchatGroup.POST("", subchatHandler.CreateSubchat)
+		// Apply rate limiting only to POST (creation) endpoint
+		subchatGroup.POST("", subchatRateLimiter.Middleware(), subchatHandler.CreateSubchat)
 		subchatGroup.GET("/:id", subchatHandler.GetSubchat)
 		subchatGroup.PUT("/:id/status", subchatHandler.UpdateSubchatStatus)
+		subchatGroup.DELETE("/:id", subchatHandler.DeleteSubchat)
 	}
 
 	// Register chat-subchats routes

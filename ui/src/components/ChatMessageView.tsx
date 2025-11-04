@@ -6,12 +6,14 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { Box, Typography, Paper, CircularProgress } from '@mui/material';
+import { Box, Typography, Paper } from '@mui/material';
 import { Person, SmartToy } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import type { ChatMessage, ToolCall, ToolResult } from '../services/chatService';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolResultCard } from './ToolResultCard';
+import { useConversationMode } from '../contexts/ConversationModeContext';
+import { TaskProgressIndicator } from './TaskProgressIndicator';
 
 interface ChatMessageViewProps {
   messages: ChatMessage[];
@@ -32,6 +34,10 @@ export function ChatMessageView({
 }: ChatMessageViewProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { mode } = useConversationMode();
+
+  // Only show tool calls/results in debug mode
+  const showToolDetails = mode === 'debug';
 
   // Auto-scroll to bottom when new messages arrive or tool calls update
   useEffect(() => {
@@ -55,6 +61,28 @@ export function ChatMessageView({
 
     // Handle system messages
     if (isSystem) {
+      // Filter out scaffold enforcement messages
+      const scaffoldPatterns = [
+        'FORCED WRITE SCAFFOLD',
+        'WRITE-ONLY MODE ENFORCEMENT',
+        'CURRENT EXECUTION SCORE',
+        'IMPLEMENT NOW - DO NOT READ',
+        'Your NEXT tool call MUST be',
+        'You are BLOCKED from calling',
+        'SCORING:',
+        '🚨',
+        '╔══════════════════════════════════════════════════════════════╗',
+      ];
+
+      const isScaffoldMessage = scaffoldPatterns.some(pattern =>
+        message.content.includes(pattern)
+      );
+
+      // Don't render scaffold messages
+      if (isScaffoldMessage) {
+        return null;
+      }
+
       return (
         <Box
           key={message.id}
@@ -72,6 +100,8 @@ export function ChatMessageView({
               backgroundColor: 'grey.100',
               borderRadius: 2,
               maxWidth: '80%',
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
             }}
           >
             <Typography variant="caption" color="text.secondary">
@@ -82,8 +112,8 @@ export function ChatMessageView({
       );
     }
 
-    // Handle tool_call messages
-    if (isToolCall && message.toolCall) {
+    // Handle tool_call messages - only in debug mode
+    if (isToolCall && message.toolCall && showToolDetails) {
       return (
         <Box
           key={message.id}
@@ -94,7 +124,7 @@ export function ChatMessageView({
             px: 2,
           }}
         >
-          <Box sx={{ maxWidth: '75%' }}>
+          <Box sx={{ maxWidth: '75%', minWidth: 0 }}>
             <ToolCallCard
               tool={message.toolCall.name}
               args={message.toolCall.args}
@@ -107,8 +137,8 @@ export function ChatMessageView({
       );
     }
 
-    // Handle tool_result messages
-    if (isToolResult && message.toolResult) {
+    // Handle tool_result messages - only in debug mode
+    if (isToolResult && message.toolResult && showToolDetails) {
       return (
         <Box
           key={message.id}
@@ -119,7 +149,7 @@ export function ChatMessageView({
             px: 2,
           }}
         >
-          <Box sx={{ maxWidth: '75%' }}>
+          <Box sx={{ maxWidth: '75%', minWidth: 0 }}>
             <ToolResultCard
               tool={message.toolResult.name}
               result={message.toolResult.output}
@@ -129,6 +159,11 @@ export function ChatMessageView({
           </Box>
         </Box>
       );
+    }
+
+    // Skip tool_call and tool_result messages in default mode (return null to not render them)
+    if ((isToolCall || isToolResult) && !showToolDetails) {
+      return null;
     }
 
     return (
@@ -147,6 +182,7 @@ export function ChatMessageView({
             flexDirection: isUser ? 'row-reverse' : 'row',
             gap: 1.5,
             maxWidth: '75%',
+            minWidth: 0,
             alignItems: 'flex-start',
           }}
         >
@@ -172,7 +208,7 @@ export function ChatMessageView({
           </Box>
 
           {/* Message Content */}
-          <Box sx={{ flex: 1 }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
             <Paper
               elevation={1}
               sx={{
@@ -183,53 +219,74 @@ export function ChatMessageView({
                 borderRadius: 2,
                 borderTopLeftRadius: isUser ? 2 : 0.5,
                 borderTopRightRadius: isUser ? 0.5 : 2,
+                maxWidth: '100%',
+                minWidth: 0,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
               }}
             >
               {isUser ? (
                 <Typography
-                  variant="body1"
-                  sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  variant="body2"
+                  sx={{ 
+                    whiteSpace: 'pre-wrap', 
+                    wordBreak: 'break-word',
+                    overflowWrap: 'anywhere',
+                    fontSize: '0.9rem',
+                    maxWidth: '100%',
+                  }}
                 >
                   {message.content}
                 </Typography>
               ) : (
-                <Box>
-                  <Box
-                    sx={{
-                      '& p': { mb: 1, mt: 0 },
-                      '& p:last-child': { mb: 0 },
-                      '& code': {
-                        backgroundColor: 'grey.200',
-                        px: 0.5,
-                        py: 0.25,
-                        borderRadius: 0.5,
-                        fontFamily: 'monospace',
-                        fontSize: '0.875em',
-                      },
-                      '& pre': {
-                        backgroundColor: 'grey.800',
-                        color: 'white',
-                        p: 1.5,
-                        borderRadius: 1,
-                        overflowX: 'auto',
-                        mb: 1,
-                      },
-                      '& pre code': {
-                        backgroundColor: 'transparent',
-                        color: 'inherit',
-                      },
-                      '& ul, & ol': { pl: 2.5, mb: 1 },
-                      '& li': { mb: 0.5 },
-                    }}
-                  >
-                    <ReactMarkdown>{message.content}</ReactMarkdown>
-                  </Box>
+                <Box
+                  sx={{
+                    '& p': { mb: 1, mt: 0 },
+                    '& p:last-child': { mb: 0 },
+                    '& code': {
+                      backgroundColor: 'grey.200',
+                      px: 0.5,
+                      py: 0.25,
+                      borderRadius: 0.5,
+                      fontFamily: 'monospace',
+                      fontSize: '0.875em',
+                      overflowWrap: 'break-word',
+                      wordBreak: 'break-all',
+                    },
+                    '& pre': {
+                      backgroundColor: 'grey.800',
+                      color: 'white',
+                      p: 1.5,
+                      borderRadius: 1,
+                      overflowX: 'auto',
+                      overflowY: 'hidden',
+                      mb: 1,
+                      maxWidth: '100%',
+                    },
+                    '& pre code': {
+                      backgroundColor: 'transparent',
+                      color: 'inherit',
+                      overflowWrap: 'normal',
+                      wordBreak: 'normal',
+                    },
+                    '& ul, & ol': { pl: 2.5, mb: 1 },
+                    '& li': { mb: 0.5 },
+                    '& a': {
+                      overflowWrap: 'break-word',
+                      wordBreak: 'break-all',
+                    },
+                    maxWidth: '100%',
+                    overflowWrap: 'break-word',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  <ReactMarkdown>{message.content}</ReactMarkdown>
                 </Box>
               )}
             </Paper>
 
-            {/* Tool execution cards */}
-            {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+            {/* Tool execution cards - debug mode shows technical details */}
+            {!isUser && showToolDetails && message.toolCalls && message.toolCalls.length > 0 && (
               <Box sx={{ mt: 1 }}>
                 {message.toolCalls.map((toolCall) => {
                   const isPending = pendingToolCalls.has(toolCall.id);
@@ -241,16 +298,18 @@ export function ChatMessageView({
                         tool={toolCall.tool}
                         args={toolCall.args}
                         id={toolCall.id}
-                        timestamp={toolCall.timestamp}
+                        timestamp={new Date(message.timestamp)}
                         isPending={isPending}
                       />
                       {toolResult && (
-                        <ToolResultCard
-                          tool={toolResult.tool}
-                          result={toolResult.result}
-                          error={toolResult.error}
-                          durationMs={toolResult.durationMs}
-                        />
+                        <Box sx={{ mt: 1 }}>
+                          <ToolResultCard
+                            tool={toolResult.tool}
+                            result={toolResult.result}
+                            error={toolResult.error}
+                            durationMs={toolResult.durationMs}
+                          />
+                        </Box>
                       )}
                     </Box>
                   );
@@ -264,9 +323,9 @@ export function ChatMessageView({
               color="text.secondary"
               sx={{
                 display: 'block',
-                mt: 0.5,
-                px: 1,
                 textAlign: isUser ? 'right' : 'left',
+                mt: 0.5,
+                fontSize: '0.75rem',
               }}
             >
               {formatTimestamp(message.timestamp)}
@@ -281,195 +340,229 @@ export function ChatMessageView({
     <Box
       ref={containerRef}
       sx={{
-        height: '100%',
+        flex: 1,
         overflowY: 'auto',
         overflowX: 'hidden',
-        backgroundColor: 'background.default',
-        display: 'flex',
-        flexDirection: 'column',
+        p: 1,
+        maxWidth: '100%',
+        minWidth: 0,
       }}
     >
+      {/* Task Progress Indicator - only in debug mode */}
+      {showToolDetails && <TaskProgressIndicator mode="working" />}
+
       {/* Messages */}
-      <Box sx={{ flexGrow: 1, py: 2 }}>
-        {messages.length === 0 && !isStreaming ? (
+      {messages.map(renderMessage)}
+
+      {/* Streaming tool calls - debug mode only */}
+      {showToolDetails && streamingToolCalls.map((toolCall) => (
+        <Box
+          key={toolCall.id}
+          sx={{
+            display: 'flex',
+            justifyContent: 'flex-start',
+            mb: 2,
+            px: 2,
+          }}
+        >
+          <Box sx={{ maxWidth: '75%', minWidth: 0 }}>
+            <ToolCallCard
+              tool={toolCall.tool}
+              args={toolCall.args}
+              id={toolCall.id}
+              timestamp={new Date()}
+              isPending={true}
+            />
+            {streamingToolResults.has(toolCall.id) && (
+              <Box sx={{ mt: 1 }}>
+                <ToolResultCard
+                  tool={streamingToolResults.get(toolCall.id)!.tool}
+                  result={streamingToolResults.get(toolCall.id)!.result}
+                  error={streamingToolResults.get(toolCall.id)!.error}
+                  durationMs={streamingToolResults.get(toolCall.id)!.durationMs}
+                />
+              </Box>
+            )}
+          </Box>
+        </Box>
+      ))}
+
+      {/* Streaming message */}
+      {isStreaming && (
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'flex-start',
+            mb: 2,
+            px: 2,
+          }}
+        >
           <Box
             sx={{
               display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '100%',
-              px: 3,
-              textAlign: 'center',
+              flexDirection: 'row',
+              gap: 1.5,
+              maxWidth: '75%',
+              minWidth: 0,
+              alignItems: 'flex-start',
             }}
           >
-            <SmartToy sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
-            <Typography variant="h6" color="text.secondary" gutterBottom>
-              Start a conversation
-            </Typography>
-            <Typography variant="body2" color="text.disabled">
-              Type your message below to begin chatting with the AI assistant
-            </Typography>
-          </Box>
-        ) : (
-          <>
-            {messages.map((message) => renderMessage(message))}
+            {/* Avatar Icon */}
+            <Box
+              sx={{
+                width: 32,
+                height: 32,
+                borderRadius: '50%',
+                backgroundColor: 'grey.300',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                mt: 0.5,
+              }}
+            >
+              <SmartToy sx={{ fontSize: 20, color: 'grey.700' }} />
+            </Box>
 
-            {/* Streaming Message */}
-            {isStreaming && streamingContent && (
-              <Box
+            {/* Streaming Content */}
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Paper
+                elevation={1}
                 sx={{
-                  display: 'flex',
-                  justifyContent: 'flex-start',
-                  mb: 2,
                   px: 2,
+                  py: 1.5,
+                  backgroundColor: 'grey.100',
+                  color: 'text.primary',
+                  borderRadius: 2,
+                  borderTopLeftRadius: 0.5,
+                  borderTopRightRadius: 2,
+                  maxWidth: '100%',
+                  minWidth: 0,
+                  overflowWrap: 'break-word',
+                  wordBreak: 'break-word',
                 }}
               >
                 <Box
                   sx={{
-                    display: 'flex',
-                    gap: 1.5,
-                    maxWidth: '75%',
-                    alignItems: 'flex-start',
+                    '& p': { mb: 1, mt: 0 },
+                    '& p:last-child': { mb: 0 },
+                    '& code': {
+                      backgroundColor: 'grey.200',
+                      px: 0.5,
+                      py: 0.25,
+                      borderRadius: 0.5,
+                      fontFamily: 'monospace',
+                      fontSize: '0.875em',
+                      overflowWrap: 'break-word',
+                      wordBreak: 'break-all',
+                    },
+                    '& pre': {
+                      backgroundColor: 'grey.800',
+                      color: 'white',
+                      p: 1.5,
+                      borderRadius: 1,
+                      overflowX: 'auto',
+                      overflowY: 'hidden',
+                      mb: 1,
+                      maxWidth: '100%',
+                    },
+                    '& pre code': {
+                      backgroundColor: 'transparent',
+                      color: 'inherit',
+                      overflowWrap: 'normal',
+                      wordBreak: 'normal',
+                    },
+                    '& ul, & ol': { pl: 2.5, mb: 1 },
+                    '& li': { mb: 0.5 },
+                    '& a': {
+                      overflowWrap: 'break-word',
+                      wordBreak: 'break-all',
+                    },
+                    maxWidth: '100%',
+                    overflowWrap: 'break-word',
+                    wordBreak: 'break-word',
                   }}
                 >
-                  {/* AI Avatar */}
+                  <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                </Box>
+                {/* Typing indicator */}
+                <Box
+                  sx={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    mt: streamingContent ? 1 : 0,
+                  }}
+                >
                   <Box
                     sx={{
-                      width: 32,
-                      height: 32,
+                      width: 4,
+                      height: 4,
                       borderRadius: '50%',
-                      backgroundColor: 'grey.300',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                      mt: 0.5,
-                    }}
-                  >
-                    <SmartToy sx={{ fontSize: 20, color: 'grey.700' }} />
-                  </Box>
-
-                  {/* Streaming Content */}
-                  <Paper
-                    elevation={1}
-                    sx={{
-                      px: 2,
-                      py: 1.5,
-                      backgroundColor: 'grey.100',
-                      borderRadius: 2,
-                      borderTopLeftRadius: 0.5,
-                      flex: 1,
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        '& p': { mb: 1, mt: 0 },
-                        '& p:last-child': { mb: 0 },
-                        '& code': {
-                          backgroundColor: 'grey.200',
-                          px: 0.5,
-                          py: 0.25,
-                          borderRadius: 0.5,
-                          fontFamily: 'monospace',
-                          fontSize: '0.875em',
+                      backgroundColor: 'grey.500',
+                      animation: 'pulse 1.5s ease-in-out infinite',
+                      animationDelay: '0s',
+                      '@keyframes pulse': {
+                        '0%, 70%, 100%': {
+                          opacity: 0.4,
+                          transform: 'scale(1)',
                         },
-                        '& pre': {
-                          backgroundColor: 'grey.800',
-                          color: 'white',
-                          p: 1.5,
-                          borderRadius: 1,
-                          overflowX: 'auto',
+                        '35%': {
+                          opacity: 1,
+                          transform: 'scale(1.2)',
                         },
-                      }}
-                    >
-                      <ReactMarkdown>{streamingContent}</ReactMarkdown>
-                    </Box>
-                  </Paper>
-                </Box>
-              </Box>
-            )}
-
-            {/* Streaming Tool Calls (Real-time) */}
-            {isStreaming && streamingToolCalls.length > 0 && (
-              <Box sx={{ px: 2, mb: 2 }}>
-                {streamingToolCalls.map((toolCall) => {
-                  const isPending = pendingToolCalls.has(toolCall.id);
-                  const toolResult = streamingToolResults.get(toolCall.id);
-
-                  return (
-                    <Box key={toolCall.id} sx={{ mb: 1 }}>
-                      <ToolCallCard
-                        tool={toolCall.tool}
-                        args={toolCall.args}
-                        id={toolCall.id}
-                        timestamp={toolCall.timestamp}
-                        isPending={isPending}
-                      />
-                      {toolResult && (
-                        <ToolResultCard
-                          tool={toolResult.tool}
-                          result={toolResult.result}
-                          error={toolResult.error}
-                          durationMs={toolResult.durationMs}
-                        />
-                      )}
-                    </Box>
-                  );
-                })}
-              </Box>
-            )}
-
-            {/* Typing Indicator */}
-            {isStreaming && !streamingContent && streamingToolCalls.length === 0 && (
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'flex-start',
-                  mb: 2,
-                  px: 2,
-                }}
-              >
-                <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+                      },
+                    }}
+                  />
                   <Box
                     sx={{
-                      width: 32,
-                      height: 32,
+                      width: 4,
+                      height: 4,
                       borderRadius: '50%',
-                      backgroundColor: 'grey.300',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
+                      backgroundColor: 'grey.500',
+                      animation: 'pulse 1.5s ease-in-out infinite',
+                      animationDelay: '0.2s',
+                      '@keyframes pulse': {
+                        '0%, 70%, 100%': {
+                          opacity: 0.4,
+                          transform: 'scale(1)',
+                        },
+                        '35%': {
+                          opacity: 1,
+                          transform: 'scale(1.2)',
+                        },
+                      },
                     }}
-                  >
-                    <SmartToy sx={{ fontSize: 20, color: 'grey.700' }} />
-                  </Box>
-                  <Paper
-                    elevation={1}
+                  />
+                  <Box
                     sx={{
-                      px: 2,
-                      py: 1.5,
-                      backgroundColor: 'grey.100',
-                      borderRadius: 2,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1,
+                      width: 4,
+                      height: 4,
+                      borderRadius: '50%',
+                      backgroundColor: 'grey.500',
+                      animation: 'pulse 1.5s ease-in-out infinite',
+                      animationDelay: '0.4s',
+                      '@keyframes pulse': {
+                        '0%, 70%, 100%': {
+                          opacity: 0.4,
+                          transform: 'scale(1)',
+                        },
+                        '35%': {
+                          opacity: 1,
+                          transform: 'scale(1.2)',
+                        },
+                      },
                     }}
-                  >
-                    <CircularProgress size={16} />
-                    <Typography variant="body2" color="text.secondary">
-                      Thinking...
-                    </Typography>
-                  </Paper>
+                  />
                 </Box>
-              </Box>
-            )}
-          </>
-        )}
+              </Paper>
+            </Box>
+          </Box>
+        </Box>
+      )}
 
-        {/* Scroll anchor */}
-        <div ref={messagesEndRef} />
-      </Box>
+      {/* Scroll anchor */}
+      <div ref={messagesEndRef} />
     </Box>
   );
 }

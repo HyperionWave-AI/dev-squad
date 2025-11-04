@@ -33,9 +33,11 @@ import {
   LightMode,
   DarkMode,
   Hub,
-  LibraryBooks
+  LibraryBooks,
+  Psychology
 } from '@mui/icons-material';
 import { getTheme, getPreferredTheme, setThemePreference } from './theme';
+import { ConversationModeProvider } from './contexts/ConversationModeContext';
 import { KanbanBoard } from './components/KanbanBoard';
 import { KnowledgeBasePage } from './pages/KnowledgeBasePage';
 import { CodeSearchPage } from './pages/CodeSearchPage';
@@ -44,6 +46,7 @@ import { HTTPToolsPage } from './pages/HTTPToolsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SubagentsPage } from './pages/SubagentsPage';
 import { MCPServersPage } from './pages/MCPServersPage';
+import ReflectionPage from './pages/ReflectionPage';
 
 function App() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -88,6 +91,7 @@ function App() {
     { path: '/chat', label: 'Chat', icon: <Chat />, priority: 'high' },
     { path: '/tasks', label: 'Tasks', icon: <Dashboard />, priority: 'high' },
     { path: '/knowledge', label: 'Knowledge', icon: <LibraryBooks />, priority: 'medium' },
+    { path: '/reflection', label: 'Reflection', icon: <Psychology />, priority: 'medium' },
     { path: '/code', label: 'Code', icon: <Code />, priority: 'medium' },
     { path: '/mcp-servers', label: 'MCP Servers', icon: <Hub />, priority: 'medium' },
     { path: '/tools', label: 'Tools', icon: <Build />, priority: 'low' },
@@ -261,15 +265,16 @@ function App() {
 
   return (
     <ThemeProvider theme={getTheme(themeMode)}>
-      <CssBaseline />
-      <Box sx={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        minHeight: '100vh', 
-        width: '100vw', 
-        overflow: 'hidden',
-        backgroundColor: 'background.default',
-      }}>
+      <ConversationModeProvider>
+        <CssBaseline />
+        <Box sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: '100vh',
+          width: '100vw',
+          overflow: 'hidden',
+          backgroundColor: 'background.default',
+        }}>
         {/* Enhanced AppBar Header - Mobile-First Responsive Design */}
         <AppBar
           position="sticky"
@@ -539,6 +544,7 @@ function App() {
             <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
             <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
             <Route path="/knowledge" element={<KnowledgeBasePage key={refreshKey} />} />
+            <Route path="/reflection" element={<ReflectionPage key={refreshKey} />} />
             <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
             <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
             <Route path="/mcp-servers" element={<MCPServersPage key={refreshKey} />} />
@@ -547,6 +553,7 @@ function App() {
           </Routes>
         </Box>
       </Box>
+      </ConversationModeProvider>
     </ThemeProvider>
   );
 }
