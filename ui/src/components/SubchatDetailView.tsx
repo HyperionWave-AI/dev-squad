@@ -26,6 +26,7 @@ import {
   type ToolResult,
 } from '../services/chatService';
 import { ChatMessageView } from './ChatMessageView';
+import { ChatInputBox } from './ChatInputBox';
 
 interface SubchatDetailViewProps {
   subchatId: string;
@@ -164,6 +165,25 @@ export function SubchatDetailView({ subchatId, onClose }: SubchatDetailViewProps
         }
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
+        console.log('[SubchatDetailView] Tool call received:', tool, id);
+
+        // If we have accumulated content before the tool call, save it as a separate message
+        if (streamingContentRef.current.trim()) {
+          const messageBeforeToolCall: ChatMessage = {
+            id: `msg-${Date.now()}`,
+            sessionId,
+            role: 'assistant',
+            content: streamingContentRef.current,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, messageBeforeToolCall]);
+          console.log('[SubchatDetailView] Saved message before tool call');
+
+          // Clear streaming content for next message
+          streamingContentRef.current = '';
+          setStreamingContent('');
+        }
+
         const toolCall: ToolCall = {
           id,
           tool,
@@ -243,6 +263,33 @@ export function SubchatDetailView({ subchatId, onClose }: SubchatDetailViewProps
         return 'Disconnected';
     }
   };
+
+  // Handle sending messages
+  const handleSendMessage = useCallback((content: string) => {
+    if (!wsConnectionRef.current || !subchat?.sessionId) {
+      console.error('[SubchatDetailView] Cannot send message - no WebSocket connection or session');
+      return;
+    }
+
+    try {
+      // Add user message to UI immediately
+      const userMessage: ChatMessage = {
+        id: `msg-user-${Date.now()}`,
+        sessionId: subchat.sessionId,
+        role: 'user',
+        content,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+
+      // Send message via WebSocket
+      wsConnectionRef.current.sendMessage(content);
+      console.log('[SubchatDetailView] Message sent to subchat');
+    } catch (error) {
+      console.error('[SubchatDetailView] Failed to send message:', error);
+      setError('Failed to send message. Please try again.');
+    }
+  }, [subchat?.sessionId]);
 
   return (
     <Paper
@@ -347,6 +394,19 @@ export function SubchatDetailView({ subchatId, onClose }: SubchatDetailViewProps
           </Box>
         )}
       </Box>
+
+      {/* Message Input */}
+      <ChatInputBox
+        onSendMessage={handleSendMessage}
+        disabled={connectionStatus !== 'connected' || isStreaming}
+        placeholder={
+          connectionStatus !== 'connected'
+            ? 'Connect to send messages...'
+            : isStreaming
+            ? 'Waiting for response...'
+            : 'Type your message...'
+        }
+      />
     </Paper>
   );
 }
