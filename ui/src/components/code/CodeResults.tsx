@@ -9,7 +9,7 @@ import {
   IconButton,
   Tooltip,
 } from '@mui/material';
-import { ContentCopy, Description } from '@mui/icons-material';
+import { ContentCopy, Description, OpenInNew } from '@mui/icons-material';
 import type { SearchResult } from '../../types/codeIndex';
 
 // Lazy load syntax highlighter to reduce bundle size
@@ -25,9 +25,10 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 interface CodeResultsProps {
   results: SearchResult[];
   loading?: boolean;
+  onInspect?: (fileId: string) => void;
 }
 
-export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) => {
+export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading, onInspect }) => {
   const handleCopyPath = (filePath: string) => {
     navigator.clipboard.writeText(filePath);
   };
@@ -157,6 +158,17 @@ export const CodeResults: React.FC<CodeResultsProps> = ({ results, loading }) =>
                 >
                   {result.filePath}
                 </Typography>
+                {onInspect && result.fileId && (
+                  <Tooltip title="Inspect file">
+                    <IconButton
+                      size="small"
+                      onClick={() => onInspect(result.fileId)}
+                      color="primary"
+                    >
+                      <OpenInNew fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Tooltip title="Copy path">
                   <IconButton
                     size="small"
