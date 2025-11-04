@@ -30,6 +30,8 @@ type QdrantClientInterface interface {
 	DeletePoint(collectionName string, pointID string) error
 	DeleteCollection(collectionName string) error
 	UpdatePointPayload(collectionName string, pointID string, payload map[string]interface{}) error
+	RecreateCollectionWithReindex(collectionName string, entries []*KnowledgeEntry, dimensions int) (int, error)
+	GetDimensions() int
 	Ping(ctx context.Context) error
 }
 
@@ -148,6 +150,11 @@ func NewQdrantClientWithEmbeddingClient(baseURL string, knowledgeCollectionName 
 	}
 
 	return client
+}
+
+// GetDimensions returns the vector dimension configured for this client
+func (c *QdrantClient) GetDimensions() int {
+	return c.vectorDimension
 }
 
 // addAuthHeader adds the Qdrant API key header if available
@@ -312,7 +319,14 @@ func (c *QdrantClient) SearchSimilar(collectionName string, query string, limit 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("search failed: status %d, body: %s", resp.StatusCode, string(body))
+		bodyStr := string(body)
+
+		// Check for dimension mismatch error - return special error type for auto-recovery
+		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, collectionName); dimErr != nil {
+			return nil, dimErr
+		}
+
+		return nil, fmt.Errorf("search failed: status %d, body: %s", resp.StatusCode, bodyStr)
 	}
 
 	// Parse response
@@ -414,7 +428,14 @@ func (c *QdrantClient) SearchSimilarWithFilter(collectionName string, query stri
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("search failed: status %d, body: %s", resp.StatusCode, string(body))
+		bodyStr := string(body)
+
+		// Check for dimension mismatch error - return special error type for auto-recovery
+		if dimErr := parseDimensionMismatchError(resp.StatusCode, bodyStr, collectionName); dimErr != nil {
+			return nil, dimErr
+		}
+
+		return nil, fmt.Errorf("search failed: status %d, body: %s", resp.StatusCode, bodyStr)
 	}
 
 	// Parse response
@@ -882,6 +903,35 @@ func (c *QdrantClient) DeleteCollection(collectionName string) error {
 	}
 
 	return nil
+}
+
+// RecreateCollectionWithReindex deletes and recreates a Qdrant collection with new dimensions, then re-embeds all entries
+// This is used for auto-recovery when dimension mismatch is detected (e.g., embedding provider changed)
+// Returns the count of successfully reindexed entries
+func (c *QdrantClient) RecreateCollectionWithReindex(collectionName string, entries []*KnowledgeEntry, dimensions int) (int, error) {
+	// Step 1: Delete old collection
+	if err := c.DeleteCollection(collectionName); err != nil {
+		return 0, fmt.Errorf("failed to delete old collection: %w", err)
+	}
+
+	// Step 2: Recreate collection with new dimensions
+	if err := c.EnsureCollection(collectionName, dimensions); err != nil {
+		return 0, fmt.Errorf("failed to recreate collection with dimensions %d: %w", dimensions, err)
+	}
+
+	// Step 3: Re-embed and store each entry
+	reindexedCount := 0
+	for _, entry := range entries {
+		// Re-embed the text with current embedding function
+		if err := c.StorePoint(collectionName, entry.ID, entry.Text, entry.Metadata); err != nil {
+			// Log error but continue with other entries
+			fmt.Printf("Warning: failed to reindex entry %s: %v\n", entry.ID, err)
+			continue
+		}
+		reindexedCount++
+	}
+
+	return reindexedCount, nil
 }
 
 // RecreateCodeIndexCollection deletes and recreates the code index collection with new dimensions
