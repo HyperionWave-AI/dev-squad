@@ -30,12 +30,14 @@ import {
   Error as ErrorIcon,
   ExpandMore as ExpandMoreIcon,
   Launch as LaunchIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 import type { Subchat } from '../services/subchatService';
 
 interface SubchatCardProps {
   subchat: Subchat;
   onClick?: (subchatId: string) => void;
+  onDelete?: (subchatId: string) => void;
   isExpanded?: boolean;
   onToggleDetails?: (subchatId: string) => void;
 }
@@ -65,6 +67,7 @@ const STATUS_ICONS: Record<string, React.ElementType> = {
 export const SubchatCard: React.FC<SubchatCardProps> = ({
   subchat,
   onClick,
+  onDelete,
   isExpanded = false,
   onToggleDetails
 }) => {
@@ -79,6 +82,13 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({
     e.stopPropagation(); // Prevent card click
     if (onToggleDetails) {
       onToggleDetails(subchat.id);
+    }
+  };
+
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click
+    if (onDelete) {
+      onDelete(subchat.id);
     }
   };
 
@@ -335,7 +345,7 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({
               )}
             </Stack>
 
-            {/* Footer with timestamp and expand button */}
+            {/* Footer with timestamp, delete button, and expand button */}
             <Box display="flex" alignItems="center" justifyContent="space-between" pt={1}>
               <Box display="flex" alignItems="center" gap={1}>
                 <TimeIcon fontSize="small" color="action" />
@@ -343,26 +353,47 @@ export const SubchatCard: React.FC<SubchatCardProps> = ({
                   {formatDate(subchat.createdAt)}
                 </Typography>
               </Box>
-              {onToggleDetails && (
-                <Tooltip title={isExpanded ? 'Hide details' : 'Show details'}>
-                  <IconButton
-                    onClick={handleToggleDetails}
-                    size="small"
-                    sx={{
-                      transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                      backgroundColor: 'action.hover',
-                      '&:hover': {
-                        backgroundColor: 'primary.50',
-                        color: 'primary.main',
-                      },
-                    }}
-                    aria-label={isExpanded ? 'Hide details' : 'Show details'}
-                  >
-                    <ExpandMoreIcon />
-                  </IconButton>
-                </Tooltip>
-              )}
+              <Box display="flex" gap={1}>
+                {onDelete && (
+                  <Tooltip title="Delete subchat">
+                    <IconButton
+                      onClick={handleDelete}
+                      size="small"
+                      sx={{
+                        backgroundColor: 'error.50',
+                        color: 'error.main',
+                        '&:hover': {
+                          backgroundColor: 'error.100',
+                          color: 'error.dark',
+                        },
+                      }}
+                      aria-label="Delete subchat"
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
+                {onToggleDetails && (
+                  <Tooltip title={isExpanded ? 'Hide details' : 'Show details'}>
+                    <IconButton
+                      onClick={handleToggleDetails}
+                      size="small"
+                      sx={{
+                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                        backgroundColor: 'action.hover',
+                        '&:hover': {
+                          backgroundColor: 'primary.50',
+                          color: 'primary.main',
+                        },
+                      }}
+                      aria-label={isExpanded ? 'Hide details' : 'Show details'}
+                    >
+                      <ExpandMoreIcon />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
             </Box>
           </Stack>
         </CardContent>

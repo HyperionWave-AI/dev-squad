@@ -420,23 +420,49 @@ func main() {
 	needsIndexing := false
 
 	if existingMapping == nil {
-		// No mapping exists - create collection and mapping
-		collectionName, err = qdrantClient.EnsureCollectionForPath(projectRoot, codeIndexStorage)
+		// No mapping exists - use the configured QDRANT_CODE_COLLECTION
+		collectionName = storage.CodeIndexCollection
+
+		// Save mapping to MongoDB
+		err = codeIndexStorage.AddPathMapping(projectRoot, collectionName)
 		if err != nil {
-			logger.Warn("Failed to create code index collection",
+			logger.Warn("Failed to save path mapping",
 				zap.String("path", projectRoot),
 				zap.Error(err))
-		} else {
-			logger.Info("Created code index collection for project root",
-				zap.String("path", projectRoot),
-				zap.String("collection", collectionName))
-			needsIndexing = true
 		}
-	} else {
-		collectionName = existingMapping.QdrantCollection
-		logger.Info("Project root mapping found",
+
+		logger.Info("Created code index mapping for project root",
 			zap.String("path", projectRoot),
 			zap.String("collection", collectionName))
+		needsIndexing = true
+	} else {
+		collectionName = existingMapping.QdrantCollection
+
+		// Check if mapping uses the correct collection (from env var)
+		if collectionName != storage.CodeIndexCollection {
+			logger.Warn("Existing mapping uses wrong collection - updating",
+				zap.String("path", projectRoot),
+				zap.String("oldCollection", collectionName),
+				zap.String("newCollection", storage.CodeIndexCollection))
+
+			// Update mapping to use the configured collection
+			collectionName = storage.CodeIndexCollection
+			err = codeIndexStorage.AddPathMapping(projectRoot, collectionName)
+			if err != nil {
+				logger.Error("Failed to update path mapping",
+					zap.String("path", projectRoot),
+					zap.Error(err))
+			} else {
+				logger.Info("Updated mapping to correct collection",
+					zap.String("path", projectRoot),
+					zap.String("collection", collectionName))
+				needsIndexing = true
+			}
+		} else {
+			logger.Info("Project root mapping found",
+				zap.String("path", projectRoot),
+				zap.String("collection", collectionName))
+		}
 
 		// Check if collection is empty (mapping exists but no vectors)
 		isEmpty, err := autoIndexer.CheckCollectionEmpty(context.Background(), collectionName)
@@ -479,8 +505,16 @@ func main() {
 				zap.String("collection", collectionName))
 			needsIndexing = true
 		} else {
-			logger.Info("Collection already has vectors - skipping indexing",
-				zap.String("collection", collectionName))
+			// Check for FORCE_REINDEX env var
+			forceReindex := os.Getenv("FORCE_REINDEX") == "true"
+			if forceReindex {
+				logger.Warn("FORCE_REINDEX=true - will re-index despite existing vectors",
+					zap.String("collection", collectionName))
+				needsIndexing = true
+			} else {
+				logger.Info("Collection already has vectors - skipping indexing",
+					zap.String("collection", collectionName))
+			}
 		}
 	}
 
