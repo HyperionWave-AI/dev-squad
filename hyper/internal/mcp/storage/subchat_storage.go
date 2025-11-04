@@ -32,6 +32,7 @@ type Subchat struct {
 	Status         SubchatStatus `bson:"status" json:"status"`
 	CreatedAt      time.Time     `bson:"createdAt" json:"createdAt"`
 	UpdatedAt      time.Time     `bson:"updatedAt" json:"updatedAt"`
+	DeletedAt      *time.Time    `bson:"deletedAt,omitempty" json:"deletedAt,omitempty"` // Soft delete timestamp
 }
 
 // Subagent represents an available specialist agent
@@ -95,13 +96,17 @@ func (s *SubchatStorage) CreateSubchat(parentChatID, subagentName string, taskID
 	return subchat, nil
 }
 
-// GetSubchat retrieves a subchat by ID
+// GetSubchat retrieves a subchat by ID (excluding soft-deleted)
 func (s *SubchatStorage) GetSubchat(id string) (*Subchat, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var subchat Subchat
-	err := s.collection.FindOne(ctx, bson.M{"_id": id}).Decode(&subchat)
+	filter := bson.M{
+		"_id":       id,
+		"deletedAt": bson.M{"$exists": false},
+	}
+	err := s.collection.FindOne(ctx, filter).Decode(&subchat)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, fmt.Errorf("subchat not found: %s", id)
@@ -113,12 +118,16 @@ func (s *SubchatStorage) GetSubchat(id string) (*Subchat, error) {
 	return &subchat, nil
 }
 
-// GetSubchatsByParent retrieves all subchats for a parent chat
+// GetSubchatsByParent retrieves all subchats for a parent chat (excluding soft-deleted)
 func (s *SubchatStorage) GetSubchatsByParent(parentChatID string) ([]*Subchat, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cursor, err := s.collection.Find(ctx, bson.M{"parentChatId": parentChatID})
+	filter := bson.M{
+		"parentChatId": parentChatID,
+		"deletedAt":    bson.M{"$exists": false},
+	}
+	cursor, err := s.collection.Find(ctx, filter)
 	if err != nil {
 		s.logger.Error("Failed to query subchats", zap.String("parentChatId", parentChatID), zap.Error(err))
 		return nil, fmt.Errorf("failed to query subchats: %w", err)
@@ -134,14 +143,18 @@ func (s *SubchatStorage) GetSubchatsByParent(parentChatID string) ([]*Subchat, e
 	return subchats, nil
 }
 
-// UpdateSubchatStatus updates the status of a subchat
+// UpdateSubchatStatus updates the status of a subchat (only non-deleted)
 func (s *SubchatStorage) UpdateSubchatStatus(id string, status SubchatStatus) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	filter := bson.M{
+		"_id":       id,
+		"deletedAt": bson.M{"$exists": false},
+	}
 	result, err := s.collection.UpdateOne(
 		ctx,
-		bson.M{"_id": id},
+		filter,
 		bson.M{
 			"$set": bson.M{
 				"status":    status,
@@ -262,6 +275,42 @@ func (s *SubchatStorage) UpdateSubchatSessionID(subchatID string, sessionID stri
 	s.logger.Info("Updated subchat with session ID",
 		zap.String("subchatId", subchatID),
 		zap.String("sessionId", sessionID))
+
+	return nil
+}
+
+// DeleteSubchat soft-deletes a subchat by setting deletedAt timestamp
+func (s *SubchatStorage) DeleteSubchat(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	filter := bson.M{
+		"_id":       id,
+		"deletedAt": bson.M{"$exists": false},
+	}
+	result, err := s.collection.UpdateOne(
+		ctx,
+		filter,
+		bson.M{
+			"$set": bson.M{
+				"deletedAt": now,
+				"updatedAt": now,
+			},
+		},
+	)
+	if err != nil {
+		s.logger.Error("Failed to delete subchat", zap.String("id", id), zap.Error(err))
+		return fmt.Errorf("failed to delete subchat: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("subchat not found or already deleted: %s", id)
+	}
+
+	s.logger.Info("Soft-deleted subchat",
+		zap.String("subchatId", id),
+		zap.Time("deletedAt", now))
 
 	return nil
 }
