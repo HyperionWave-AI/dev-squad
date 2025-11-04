@@ -36,6 +36,10 @@ type FileWatcher struct {
 	watchedFolders  map[string]*storage.IndexedFolder
 	foldersMutex    sync.RWMutex
 
+	// Async event processing
+	eventQueue      chan fsnotify.Event
+	workerCount     int
+
 	// Control
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -67,6 +71,8 @@ func NewFileWatcher(
 		debounceTime:    500 * time.Millisecond,
 		debounceTimers:  make(map[string]*time.Timer),
 		watchedFolders:  make(map[string]*storage.IndexedFolder),
+		eventQueue:      make(chan fsnotify.Event, 100), // Buffered channel for async processing
+		workerCount:     3,                               // Number of concurrent workers
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -104,8 +110,15 @@ func (fw *FileWatcher) Start() error {
 	fw.wg.Add(1)
 	go fw.processEvents()
 
+	// Start worker pool for async event processing
+	for i := 0; i < fw.workerCount; i++ {
+		fw.wg.Add(1)
+		go fw.processWorker(i)
+	}
+
 	fw.logger.Info("File watcher started",
-		zap.Int("watchedFolders", len(fw.watchedFolders)))
+		zap.Int("watchedFolders", len(fw.watchedFolders)),
+		zap.Int("workers", fw.workerCount))
 
 	return nil
 }
@@ -113,6 +126,7 @@ func (fw *FileWatcher) Start() error {
 // Stop stops the file watcher
 func (fw *FileWatcher) Stop() error {
 	fw.cancel()
+	close(fw.eventQueue) // Close queue to signal workers to stop
 	fw.wg.Wait()
 
 	if err := fw.watcher.Close(); err != nil {
@@ -346,13 +360,36 @@ func (fw *FileWatcher) debounceEvent(event fsnotify.Event) {
 
 	// Create new timer
 	fw.debounceTimers[event.Name] = time.AfterFunc(fw.debounceTime, func() {
-		fw.processFileEvent(event)
+		// Queue event for async processing (non-blocking)
+		select {
+		case fw.eventQueue <- event:
+			// Successfully queued
+		case <-fw.ctx.Done():
+			// Watcher stopped
+		default:
+			// Queue full - log warning but don't block
+			fw.logger.Warn("Event queue full, dropping event",
+				zap.String("path", event.Name))
+		}
 
 		// Clean up timer
 		fw.debounceMutex.Lock()
 		delete(fw.debounceTimers, event.Name)
 		fw.debounceMutex.Unlock()
 	})
+}
+
+// processWorker processes events from the queue asynchronously
+func (fw *FileWatcher) processWorker(workerID int) {
+	defer fw.wg.Done()
+
+	fw.logger.Info("File watcher worker started", zap.Int("workerID", workerID))
+
+	for event := range fw.eventQueue {
+		fw.processFileEvent(event)
+	}
+
+	fw.logger.Info("File watcher worker stopped", zap.Int("workerID", workerID))
 }
 
 // processFileEvent processes a debounced file event

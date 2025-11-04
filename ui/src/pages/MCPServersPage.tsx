@@ -27,13 +27,9 @@ import {
   Delete as DeleteIcon,
   Refresh as RefreshIcon,
   CloudQueue as ServerIcon,
-  Edit as EditIcon,
-  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import { mcpServerService, type MCPServer } from '../services/mcpServerService';
 import { AddMCPServerDialog } from '../components/AddMCPServerDialog';
-import { EditMCPServerDialog } from '../components/EditMCPServerDialog';
-import { ServerToolsList } from '../components/ServerToolsList';
 
 export const MCPServersPage: React.FC = () => {
   // State
@@ -42,12 +38,9 @@ export const MCPServersPage: React.FC = () => {
 
   // Dialog state
   const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedServer, setSelectedServer] = useState<MCPServer | null>(null);
   const [refreshingServer, setRefreshingServer] = useState<string | null>(null);
-  const [expandedServer, setExpandedServer] = useState<string | null>(null);
-  const [rediscoveringAll, setRediscoveringAll] = useState(false);
 
   // Snackbar state
   const [snackbar, setSnackbar] = useState<{
@@ -101,31 +94,6 @@ export const MCPServersPage: React.FC = () => {
     });
   };
 
-  // Handle edit server click
-  const handleEditClick = (server: MCPServer) => {
-    setSelectedServer(server);
-    setEditDialogOpen(true);
-  };
-
-  // Handle edit server success
-  const handleEditSuccess = () => {
-    setSnackbar({
-      open: true,
-      message: 'MCP server updated successfully',
-      severity: 'success',
-    });
-    loadServers();
-  };
-
-  // Handle edit server error
-  const handleEditError = (message: string) => {
-    setSnackbar({
-      open: true,
-      message,
-      severity: 'error',
-    });
-  };
-
   // Handle delete server click
   const handleDeleteClick = (server: MCPServer) => {
     setSelectedServer(server);
@@ -162,46 +130,19 @@ export const MCPServersPage: React.FC = () => {
       await mcpServerService.rediscoverMCPServer(serverName);
       setSnackbar({
         open: true,
-        message: `Capabilities from '${serverName}' rediscovered successfully`,
+        message: `Tools from '${serverName}' rediscovered successfully`,
         severity: 'success',
       });
       loadServers();
     } catch (error) {
       setSnackbar({
         open: true,
-        message: error instanceof Error ? error.message : 'Failed to rediscover server capabilities',
+        message: error instanceof Error ? error.message : 'Failed to rediscover server tools',
         severity: 'error',
       });
     } finally {
       setRefreshingServer(null);
     }
-  };
-
-  // Handle rediscover all servers
-  const handleRediscoverAll = async () => {
-    setRediscoveringAll(true);
-    try {
-      const result = await mcpServerService.rediscoverAllServers();
-      setSnackbar({
-        open: true,
-        message: result.message || `Rediscovered ${result.successCount}/${result.totalServers} servers: ${result.totalTools} tools, ${result.totalResources} resources, ${result.totalPrompts} prompts found`,
-        severity: 'success',
-      });
-      loadServers();
-    } catch (error) {
-      setSnackbar({
-        open: true,
-        message: error instanceof Error ? error.message : 'Failed to rediscover all servers',
-        severity: 'error',
-      });
-    } finally {
-      setRediscoveringAll(false);
-    }
-  };
-
-  // Handle expand/collapse
-  const handleToggleExpand = (serverName: string) => {
-    setExpandedServer(expandedServer === serverName ? null : serverName);
   };
 
   // Format date
@@ -222,26 +163,16 @@ export const MCPServersPage: React.FC = () => {
             MCP Servers
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Manage external MCP servers and their capabilities (tools, resources, and prompts)
+            Manage external MCP servers and their tools
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button
-            variant="outlined"
-            startIcon={rediscoveringAll ? <CircularProgress size={20} /> : <RefreshIcon />}
-            onClick={handleRediscoverAll}
-            disabled={rediscoveringAll || servers.length === 0}
-          >
-            {rediscoveringAll ? 'Rediscovering...' : 'Rediscover All'}
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => setAddDialogOpen(true)}
-          >
-            Add Server
-          </Button>
-        </Box>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => setAddDialogOpen(true)}
+        >
+          Add Server
+        </Button>
       </Box>
 
       {/* Server count */}
@@ -264,7 +195,7 @@ export const MCPServersPage: React.FC = () => {
               <TableCell>Server Name</TableCell>
               <TableCell>Server URL</TableCell>
               <TableCell>Description</TableCell>
-              <TableCell align="center">Capabilities</TableCell>
+              <TableCell align="center">Tools</TableCell>
               <TableCell>Created</TableCell>
               <TableCell>Updated</TableCell>
               <TableCell align="center">Actions</TableCell>
@@ -287,119 +218,67 @@ export const MCPServersPage: React.FC = () => {
               </TableRow>
             ) : (
               servers.map((server) => (
-                <React.Fragment key={server.serverName}>
-                  <TableRow hover>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <TableRow key={server.serverName} hover>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight="medium">
+                      {server.serverName}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                      {server.serverUrl}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" color="text.secondary">
+                      {server.description || '-'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="center">
+                    <Chip
+                      label={server.toolCount}
+                      size="small"
+                      color={server.toolCount > 0 ? 'success' : 'default'}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" color="text.secondary">
+                      {formatDate(server.createdAt)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" color="text.secondary">
+                      {formatDate(server.updatedAt)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="center">
+                    <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+                      <Tooltip title="Rediscover tools from this server">
                         <IconButton
                           size="small"
-                          onClick={() => handleToggleExpand(server.serverName)}
-                          sx={{
-                            transform: expandedServer === server.serverName ? 'rotate(180deg)' : 'rotate(0deg)',
-                            transition: 'transform 0.2s',
-                          }}
+                          onClick={() => handleRediscover(server.serverName)}
+                          disabled={refreshingServer === server.serverName}
+                          color="primary"
                         >
-                          <ExpandMoreIcon fontSize="small" />
+                          {refreshingServer === server.serverName ? (
+                            <CircularProgress size={20} />
+                          ) : (
+                            <RefreshIcon />
+                          )}
                         </IconButton>
-                        <Typography variant="body2" fontWeight="medium">
-                          {server.serverName}
-                        </Typography>
-                      </Box>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
-                        {server.serverUrl}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {server.description || '-'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="center">
-                      <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center', flexWrap: 'wrap' }}>
-                        <Chip
-                          label={`${server.toolCount} tool${server.toolCount !== 1 ? 's' : ''}`}
+                      </Tooltip>
+                      <Tooltip title="Remove this server">
+                        <IconButton
                           size="small"
-                          color={server.toolCount > 0 ? 'success' : 'default'}
-                          onClick={() => server.toolCount > 0 && handleToggleExpand(server.serverName)}
-                          sx={{ cursor: server.toolCount > 0 ? 'pointer' : 'default' }}
-                        />
-                        {server.resourceCount !== undefined && server.resourceCount > 0 && (
-                          <Chip
-                            label={`${server.resourceCount} resource${server.resourceCount !== 1 ? 's' : ''}`}
-                            size="small"
-                            color="info"
-                            onClick={() => handleToggleExpand(server.serverName)}
-                            sx={{ cursor: 'pointer' }}
-                          />
-                        )}
-                        {server.promptCount !== undefined && server.promptCount > 0 && (
-                          <Chip
-                            label={`${server.promptCount} prompt${server.promptCount !== 1 ? 's' : ''}`}
-                            size="small"
-                            color="warning"
-                            onClick={() => handleToggleExpand(server.serverName)}
-                            sx={{ cursor: 'pointer' }}
-                          />
-                        )}
-                      </Box>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {formatDate(server.createdAt)}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary">
-                        {formatDate(server.updatedAt)}
-                      </Typography>
-                    </TableCell>
-                    <TableCell align="center">
-                      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
-                        <Tooltip title="Rediscover capabilities from this server">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleRediscover(server.serverName)}
-                            disabled={refreshingServer === server.serverName}
-                            color="primary"
-                          >
-                            {refreshingServer === server.serverName ? (
-                              <CircularProgress size={20} />
-                            ) : (
-                              <RefreshIcon />
-                            )}
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Edit this server">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleEditClick(server)}
-                            color="primary"
-                          >
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Remove this server">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleDeleteClick(server)}
-                            color="error"
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </TableCell>
-                  </TableRow>
-                  {expandedServer === server.serverName && (
-                    <TableRow>
-                      <TableCell colSpan={7} sx={{ py: 0, bgcolor: 'action.hover' }}>
-                        <ServerToolsList serverName={server.serverName} />
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </React.Fragment>
+                          onClick={() => handleDeleteClick(server)}
+                          color="error"
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  </TableCell>
+                </TableRow>
               ))
             )}
           </TableBody>
@@ -414,18 +293,6 @@ export const MCPServersPage: React.FC = () => {
         onError={handleAddError}
       />
 
-      {/* Edit Server Dialog */}
-      <EditMCPServerDialog
-        open={editDialogOpen}
-        server={selectedServer}
-        onClose={() => {
-          setEditDialogOpen(false);
-          setSelectedServer(null);
-        }}
-        onSuccess={handleEditSuccess}
-        onError={handleEditError}
-      />
-
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
         <DialogTitle>Confirm Delete</DialogTitle>
@@ -434,16 +301,9 @@ export const MCPServersPage: React.FC = () => {
             Are you sure you want to remove the MCP server <strong>{selectedServer?.serverName}</strong>?
             <br />
             <br />
-            This will remove all associated capabilities:
-            <ul style={{ marginTop: 8, marginBottom: 8 }}>
-              <li>{selectedServer?.toolCount || 0} tool(s)</li>
-              {selectedServer?.resourceCount !== undefined && selectedServer.resourceCount > 0 && (
-                <li>{selectedServer.resourceCount} resource(s)</li>
-              )}
-              {selectedServer?.promptCount !== undefined && selectedServer.promptCount > 0 && (
-                <li>{selectedServer.promptCount} prompt(s)</li>
-              )}
-            </ul>
+            This will also remove all {selectedServer?.toolCount || 0} tool(s) associated with this server.
+            <br />
+            <br />
             This action cannot be undone.
           </DialogContentText>
         </DialogContent>
