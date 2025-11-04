@@ -188,6 +188,17 @@ func (fs *FileScanner) ScanDirectory(folderPath string) ([]*storage.IndexedFile,
 			if fs.shouldExcludePath(path, folderPath) {
 				return filepath.SkipDir
 			}
+
+			// Skip archived directories (CRITICAL FIX)
+			if dirName == ".archived" || dirName == ".archive" || dirName == "archived" {
+				return filepath.SkipDir
+			}
+
+			// Skip paths containing archived directories
+			if strings.Contains(path, "/.archived/") || strings.Contains(path, "/.archive/") {
+				return filepath.SkipDir
+			}
+
 			return nil
 		}
 

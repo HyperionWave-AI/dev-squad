@@ -8,8 +8,6 @@ import {
   Alert,
   TextField,
   InputAdornment,
-  ToggleButtonGroup,
-  ToggleButton,
 } from '@mui/material';
 import { Search } from '@mui/icons-material';
 import { DragDropContext, Droppable, type DropResult } from '@hello-pangea/dnd';
@@ -60,7 +58,6 @@ export function KanbanBoard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTask, setSelectedTask] = useState<FlattenedTask | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [timeFilter, setTimeFilter] = useState<'all' | 'today' | 'yesterday' | 'last100'>('all');
 
   // Load tasks on mount
   useEffect(() => {
@@ -209,47 +206,15 @@ export function KanbanBoard() {
       // They are visible inside the agent task card when clicked.
     });
 
-    // Apply time filter FIRST (before search)
-    let timeFiltered = flattenedTasks;
-    if (timeFilter !== 'all') {
-      const now = new Date();
-      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      const twoDaysAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-
-      timeFiltered = flattenedTasks.filter(task => {
-        const taskDate = new Date(task.createdAt);
-
-        switch (timeFilter) {
-          case 'today':
-            // Last 24 hours
-            return taskDate >= oneDayAgo;
-          case 'yesterday':
-            // Between 24-48 hours ago
-            return taskDate >= twoDaysAgo && taskDate < oneDayAgo;
-          case 'last100':
-            // Will be handled after sorting
-            return true;
-          default:
-            return true;
-        }
-      });
-
-      // For "Last 100", sort by date descending and take first 100
-      if (timeFilter === 'last100') {
-        timeFiltered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        timeFiltered = timeFiltered.slice(0, 100);
-      }
-    }
-
-    // Filter by search query AFTER time filter
+    // Filter by search query
     const filtered = searchQuery
-      ? timeFiltered.filter(
+      ? flattenedTasks.filter(
           (task) =>
             task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             task.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
             task.tags?.some((tag: string) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
         )
-      : timeFiltered;
+      : flattenedTasks;
 
     // Group by status
     const grouped: Record<TaskStatus, FlattenedTask[]> = {
@@ -264,7 +229,7 @@ export function KanbanBoard() {
     });
 
     return grouped;
-  }, [tasks, agentTasks, searchQuery, timeFilter]);
+  }, [tasks, agentTasks, searchQuery]);
 
   // Handle drag and drop (only for Human and Agent tasks, NOT TODOs)
   const onDragEnd = async (result: DropResult) => {
@@ -343,44 +308,8 @@ export function KanbanBoard() {
       minHeight: '100%',
       overflow: 'auto'
     }}>
-      {/* Time Filter Buttons */}
-      <Box sx={{ mb: 2, px: 2, pt: 2, display: 'flex', justifyContent: 'center' }}>
-        <ToggleButtonGroup
-          value={timeFilter}
-          exclusive
-          onChange={(_, newFilter) => {
-            if (newFilter !== null) {
-              setTimeFilter(newFilter);
-            }
-          }}
-          aria-label="time filter"
-          size="small"
-          sx={{
-            '& .MuiToggleButton-root': {
-              px: 3,
-              py: 1,
-              fontWeight: 500,
-              textTransform: 'none',
-              borderRadius: 1,
-              '&.Mui-selected': {
-                backgroundColor: '#2563eb',
-                color: 'white',
-                '&:hover': {
-                  backgroundColor: '#1d4ed8',
-                },
-              },
-            },
-          }}
-        >
-          <ToggleButton value="all">All</ToggleButton>
-          <ToggleButton value="today">Today</ToggleButton>
-          <ToggleButton value="yesterday">Yesterday</ToggleButton>
-          <ToggleButton value="last100">Last 100</ToggleButton>
-        </ToggleButtonGroup>
-      </Box>
-
       {/* Search Bar */}
-      <Box sx={{ mb: 3, px: 2 }}>
+      <Box sx={{ mb: 3, px: 2, pt: 2 }}>
         <TextField
           fullWidth
           placeholder="Search tasks..."

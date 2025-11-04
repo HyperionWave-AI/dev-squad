@@ -317,3 +317,10 @@ export function connectChatStream(
 
   return { ws, disconnect, sendMessage };
 }
+
+/**
+ * Refetch messages for a session (used after sending to confirm persistence)
+ */
+export async function refetchMessages(sessionId: string): Promise<ChatMessage[]> {
+  return getMessages(sessionId, 50, 0);
+}
