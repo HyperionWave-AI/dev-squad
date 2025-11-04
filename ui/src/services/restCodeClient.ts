@@ -5,6 +5,9 @@ import type {
   SearchResult,
   IndexStatus,
   SearchOptions,
+  AddFolderConfig,
+  FileDetails,
+  FileChunkDetails,
 } from '../types/codeIndex';
 
 const BASE_URL = '/api/v1/code-index';
@@ -30,10 +33,7 @@ class RestCodeClient {
   /**
    * Add a folder to the code index
    */
-  async addFolder(params: {
-    folderPath: string;
-    description?: string;
-  }): Promise<{ success: boolean; configId: string }> {
+  async addFolder(config: AddFolderConfig): Promise<{ success: boolean; configId: string }> {
     const result = await this.fetchJSON<{
       success: boolean;
       message: string;
@@ -43,8 +43,10 @@ class RestCodeClient {
       {
         method: 'POST',
         body: JSON.stringify({
-          folderPath: params.folderPath,
-          description: params.description,
+          folderPath: config.folderPath,
+          includePatterns: config.includePatterns,
+          excludePatterns: config.excludePatterns,
+          chunkSize: config.chunkSize,
         }),
       }
     );
@@ -182,6 +184,41 @@ class RestCodeClient {
     }>('/reindex-all', {
       method: 'POST',
     });
+  }
+
+  /**
+   * List files in a folder with metadata
+   */
+  async listFiles(folderId: string): Promise<FileDetails[]> {
+    const result = await this.fetchJSON<{
+      files: FileDetails[];
+      count: number;
+    }>(`/files/${encodeURIComponent(folderId)}`);
+
+    return result.files || [];
+  }
+
+  /**
+   * Get file details by ID
+   */
+  async getFile(fileId: string): Promise<FileDetails> {
+    const result = await this.fetchJSON<{
+      file: FileDetails;
+    }>(`/file/${encodeURIComponent(fileId)}`);
+
+    return result.file;
+  }
+
+  /**
+   * Get file chunks with AST metadata
+   */
+  async getFileChunks(fileId: string): Promise<FileChunkDetails[]> {
+    const result = await this.fetchJSON<{
+      chunks: FileChunkDetails[];
+      count: number;
+    }>(`/file/${encodeURIComponent(fileId)}/chunks`);
+
+    return result.chunks || [];
   }
 }
 

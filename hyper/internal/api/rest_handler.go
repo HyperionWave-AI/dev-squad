@@ -173,6 +173,41 @@ type AddFolderRequest struct {
 	Description string `json:"description,omitempty"`
 }
 
+type FileDetailsDTO struct {
+	ID           string `json:"id"`
+	FolderPath   string `json:"folderPath"`
+	RelativePath string `json:"relativePath"`
+	Language     string `json:"language"`
+	Size         int64  `json:"size"`
+	LineCount    int    `json:"lineCount"`
+	ChunkCount   int    `json:"chunkCount"`
+	IndexedAt    string `json:"indexedAt"`
+}
+
+type FileChunkDetailsDTO struct {
+	ChunkNum  int    `json:"chunkNum"`
+	StartLine int    `json:"startLine"`
+	EndLine   int    `json:"endLine"`
+	ChunkType string `json:"chunkType"` // "ast" or "line-based"
+	NodeType  string `json:"nodeType,omitempty"`
+	NodeName  string `json:"nodeName,omitempty"`
+	Signature string `json:"signature,omitempty"`
+}
+
+type ListFilesResponse struct {
+	Files []FileDetailsDTO `json:"files"`
+	Count int              `json:"count"`
+}
+
+type GetFileResponse struct {
+	File FileDetailsDTO `json:"file"`
+}
+
+type GetFileChunksResponse struct {
+	Chunks []FileChunkDetailsDTO `json:"chunks"`
+	Count  int                   `json:"count"`
+}
+
 type AddFolderResponse struct {
 	Success bool                   `json:"success"`
 	Message string                 `json:"message"`
@@ -1025,6 +1060,93 @@ func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 	})
 }
 
+// fileExtensionToLanguage maps file extensions to language names
+// This matches the language metadata stored during indexing
+func fileExtensionToLanguage(extension string) string {
+	extensionMap := map[string]string{
+		".go":      "go",
+		".js":      "javascript",
+		".ts":      "typescript",
+		".jsx":     "javascript",
+		".tsx":     "typescript",
+		".py":      "python",
+		".java":    "java",
+		".c":       "c",
+		".cpp":     "cpp",
+		".h":       "c",
+		".hpp":     "cpp",
+		".cs":      "csharp",
+		".rb":      "ruby",
+		".php":     "php",
+		".rs":      "rust",
+		".swift":   "swift",
+		".kt":      "kotlin",
+		".m":       "objective-c",
+		".scala":   "scala",
+		".r":       "r",
+		".sql":     "sql",
+		".sh":      "shell",
+		".bash":    "shell",
+		".yaml":    "yaml",
+		".yml":     "yaml",
+		".json":    "json",
+		".xml":     "xml",
+		".html":    "html",
+		".css":     "css",
+		".scss":    "scss",
+		".less":    "less",
+		".vue":     "vue",
+		".md":      "markdown",
+	}
+
+	// Normalize extension to lowercase with leading dot
+	normalizedExt := strings.ToLower(extension)
+	if !strings.HasPrefix(normalizedExt, ".") {
+		normalizedExt = "." + normalizedExt
+	}
+
+	if lang, ok := extensionMap[normalizedExt]; ok {
+		return lang
+	}
+	return ""
+}
+
+// buildFileTypeFilter creates a Qdrant filter for file types
+// Returns nil if no file types specified
+func buildFileTypeFilter(fileTypes []string) map[string]interface{} {
+	if len(fileTypes) == 0 {
+		return nil
+	}
+
+	// Convert file extensions to language names
+	var languages []string
+	for _, ext := range fileTypes {
+		if lang := fileExtensionToLanguage(ext); lang != "" {
+			languages = append(languages, lang)
+		}
+	}
+
+	if len(languages) == 0 {
+		return nil
+	}
+
+	// Build Qdrant filter with "should" clause for OR logic
+	// Match any of the selected languages
+	shouldClauses := make([]map[string]interface{}, 0, len(languages))
+	for _, lang := range languages {
+		shouldClauses = append(shouldClauses, map[string]interface{}{
+			"key": "language",
+			"match": map[string]interface{}{
+				"value": lang,
+			},
+		})
+	}
+
+	return map[string]interface{}{
+		"should": shouldClauses,
+	}
+}
+
 // SearchCode searches the code index
 // POST /api/v1/code-index/search
 func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
@@ -1068,8 +1190,16 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		}
 	}
 
-	// Search in Qdrant
-	searchResp, err := h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	// Build file type filter if fileTypes parameter is provided
+	filter := buildFileTypeFilter(req.FileTypes)
+
+	// Search in Qdrant with optional filter
+	var searchResp *storage.CodeIndexSearchResponse
+	if filter != nil {
+		searchResp, err = h.qdrantClient.SearchCodeIndexWithFilter(collectionName, queryEmbedding, limit, filter)
+	} else {
+		searchResp, err = h.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search: " + err.Error()})
 		return
@@ -1479,6 +1609,112 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 	})
 }
 
+// HandleListFiles lists all files in a folder with metadata
+// GET /api/v1/code-index/files/:folderId
+func (h *RESTAPIHandler) HandleListFiles(c *gin.Context) {
+	folderID := c.Param("folderId")
+
+	// Get files from storage
+	files, err := h.codeIndexStorage.ListFiles(folderID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list files: " + err.Error()})
+		return
+	}
+
+	// Convert to DTOs
+	dtos := make([]FileDetailsDTO, len(files))
+	for i, file := range files {
+		dtos[i] = FileDetailsDTO{
+			ID:           file.ID,
+			FolderPath:   file.FolderID,
+			RelativePath: file.RelativePath,
+			Language:     file.Language,
+			Size:         file.Size,
+			LineCount:    file.LineCount,
+			ChunkCount:   file.ChunkCount,
+			IndexedAt:    file.IndexedAt.Format(time.RFC3339),
+		}
+	}
+
+	h.logger.Info("Listed files",
+		zap.String("folderID", folderID),
+		zap.Int("count", len(dtos)))
+
+	c.JSON(http.StatusOK, ListFilesResponse{
+		Files: dtos,
+		Count: len(dtos),
+	})
+}
+
+// HandleGetFile returns details for a single file
+// GET /api/v1/code-index/file/:fileId
+func (h *RESTAPIHandler) HandleGetFile(c *gin.Context) {
+	fileID := c.Param("fileId")
+
+	// Get file from storage
+	file, err := h.codeIndexStorage.GetFile(fileID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found: " + fileID})
+		return
+	}
+
+	// Convert to DTO
+	dto := FileDetailsDTO{
+		ID:           file.ID,
+		FolderPath:   file.FolderID,
+		RelativePath: file.RelativePath,
+		Language:     file.Language,
+		Size:         file.Size,
+		LineCount:    file.LineCount,
+		ChunkCount:   file.ChunkCount,
+		IndexedAt:    file.IndexedAt.Format(time.RFC3339),
+	}
+
+	h.logger.Info("Retrieved file details",
+		zap.String("fileID", fileID),
+		zap.String("path", file.RelativePath))
+
+	c.JSON(http.StatusOK, GetFileResponse{
+		File: dto,
+	})
+}
+
+// HandleGetFileChunks returns chunks for a file with AST metadata
+// GET /api/v1/code-index/file/:fileId/chunks
+func (h *RESTAPIHandler) HandleGetFileChunks(c *gin.Context) {
+	fileID := c.Param("fileId")
+
+	// Get chunks from storage
+	chunks, err := h.codeIndexStorage.GetChunksByFileID(fileID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get chunks: " + err.Error()})
+		return
+	}
+
+	// Convert to DTOs (exclude content field for list view)
+	dtos := make([]FileChunkDetailsDTO, len(chunks))
+	for i, chunk := range chunks {
+		dtos[i] = FileChunkDetailsDTO{
+			ChunkNum:  chunk.ChunkNum,
+			StartLine: chunk.StartLine,
+			EndLine:   chunk.EndLine,
+			ChunkType: chunk.ChunkType,
+			NodeType:  chunk.NodeType,
+			NodeName:  chunk.NodeName,
+			Signature: chunk.Signature,
+		}
+	}
+
+	h.logger.Info("Retrieved file chunks",
+		zap.String("fileID", fileID),
+		zap.Int("count", len(dtos)))
+
+	c.JSON(http.StatusOK, GetFileChunksResponse{
+		Chunks: dtos,
+		Count:  len(dtos),
+	})
+}
+
 // RegisterRESTRoutes registers all REST API routes under /api/v1
 func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	// Human Tasks
@@ -1513,5 +1749,8 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		codeIndex.POST("/enable-watcher", h.EnableWatcher)
 		codeIndex.POST("/disable-watcher", h.DisableWatcher)
 		codeIndex.POST("/reindex-all", h.ReindexAll)
+		codeIndex.GET("/files/:folderId", h.HandleListFiles)
+		codeIndex.GET("/file/:fileId", h.HandleGetFile)
+		codeIndex.GET("/file/:fileId/chunks", h.HandleGetFileChunks)
 	}
 }
