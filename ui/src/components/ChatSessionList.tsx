@@ -572,6 +572,9 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
                             sx={{
                               fontWeight: isActive ? 600 : 400,
                               color: isActive ? 'primary.main' : 'text.primary',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
                               lineHeight: 1.3,
                             }}
                           >
