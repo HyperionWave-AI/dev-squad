@@ -96,6 +96,7 @@ type KnowledgeStorage interface {
 	UpdateEntry(id, text string, metadata map[string]interface{}) (*KnowledgeEntry, error)
 	DeleteEntry(id string) error
 	GetEntryByID(id string) (*KnowledgeEntry, error)
+	GetEntriesByCollection(collectionName string) ([]*KnowledgeEntry, error)
 	Query(collection, query string, limit int, taskId *string, voteBoost ...float64) ([]*QueryResult, error)
 	ListCollections() []string
 	CreateCollection(name, category, description string, tags []string) (*Collection, error)
@@ -129,7 +130,7 @@ func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInter
 		metadataCollection:    db.Collection("collection_metadata"),
 		votesCollection:       db.Collection("knowledge_votes"),
 		qdrantClient:          qdrantClient,
-		vectorDimension:       768, // TEI nomic-embed-text-v1.5 dimension
+		vectorDimension:       qdrantClient.GetDimensions(), // Get dimensions from shared embedding client
 		logger:                logger,
 	}
 
@@ -665,6 +666,50 @@ func (s *MongoKnowledgeStorage) GetEntryByID(id string) (*KnowledgeEntry, error)
 	return &entry, nil
 }
 
+// GetEntriesByCollection retrieves all knowledge entries for a collection from MongoDB
+// This is used for re-embedding data when recreating Qdrant collections after dimension changes
+func (s *MongoKnowledgeStorage) GetEntriesByCollection(collectionName string) ([]*KnowledgeEntry, error) {
+	ctx := context.Background()
+
+	// Lookup Collection object by name
+	collectionObj, err := s.GetCollection(collectionName)
+	if err != nil {
+		return nil, fmt.Errorf("collection not found: %w", err)
+	}
+
+	// Build filter - support both collectionId (new) and collection (old) for backward compatibility
+	filter := bson.M{
+		"$or": []bson.M{
+			{"collectionId": collectionObj.ID},
+			{"collection": collectionName},
+		},
+	}
+
+	// Query MongoDB for all entries
+	cursor, err := s.knowledgeCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch entries: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	// Decode results
+	var entries []*KnowledgeEntry
+	if err := cursor.All(ctx, &entries); err != nil {
+		return nil, fmt.Errorf("failed to decode entries: %w", err)
+	}
+
+	// Return empty slice (not nil) if no results
+	if entries == nil {
+		entries = make([]*KnowledgeEntry, 0)
+	}
+
+	s.logger.Info("Retrieved entries from MongoDB for reindexing",
+		zap.String("collection", collectionName),
+		zap.Int("count", len(entries)))
+
+	return entries, nil
+}
+
 // Query searches for knowledge entries using Qdrant vector search with optional vote boosting
 // taskId is an optional parameter for filtering by task
 // voteBoost is an optional parameter (default: 0.0 for no boosting)
@@ -704,12 +749,75 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, taskI
 			}
 			return queryResults, nil
 		}
-		// Log error but continue to MongoDB fallback
+
+		// Check if error is a dimension mismatch - trigger auto-recovery
 		if err != nil {
-			s.logger.Warn("Qdrant search failed, falling back to MongoDB",
-				zap.String("qdrantName", collectionObj.QdrantName),
-				zap.String("query", query),
-				zap.Error(err))
+			if dimErr, ok := err.(*DimensionMismatchError); ok {
+				s.logger.Warn("Detected dimension mismatch, initiating auto-recovery",
+					zap.String("collection", collection),
+					zap.String("qdrantName", collectionObj.QdrantName),
+					zap.Int("expectedDim", dimErr.ExpectedDim),
+					zap.Int("gotDim", dimErr.GotDim))
+
+				// Step 1: Get all entries from MongoDB (source of truth)
+				entries, err := s.GetEntriesByCollection(collection)
+				if err != nil {
+					s.logger.Error("Auto-recovery failed: could not retrieve entries from MongoDB",
+						zap.String("collection", collection),
+						zap.Error(err))
+					return nil, fmt.Errorf("auto-recovery failed: %w", err)
+				}
+
+				// Step 2: Recreate collection with correct dimensions and reindex
+				currentDimensions := s.qdrantClient.GetDimensions()
+				reindexedCount, err := s.qdrantClient.RecreateCollectionWithReindex(
+					collectionObj.QdrantName,
+					entries,
+					currentDimensions,
+				)
+				if err != nil {
+					s.logger.Error("Auto-recovery failed: could not recreate collection",
+						zap.String("collection", collection),
+						zap.String("qdrantName", collectionObj.QdrantName),
+						zap.Int("dimensions", currentDimensions),
+						zap.Error(err))
+					return nil, fmt.Errorf("auto-recovery failed: %w", err)
+				}
+
+				s.logger.Info("Auto-recovery completed successfully",
+					zap.String("collection", collection),
+					zap.String("qdrantName", collectionObj.QdrantName),
+					zap.Int("entriesReindexed", reindexedCount),
+					zap.Int("totalEntries", len(entries)),
+					zap.Int("newDimensions", currentDimensions))
+
+				// Step 3: Retry the search
+				results, err = s.qdrantClient.SearchSimilarWithFilter(collectionObj.QdrantName, query, limit, qdrantFilter, voteBoost...)
+				if err == nil && len(results) > 0 {
+					// Convert QdrantQueryResult to QueryResult
+					queryResults := make([]*QueryResult, len(results))
+					for i, r := range results {
+						queryResults[i] = &QueryResult{
+							Entry: r.Entry,
+							Score: r.Score,
+						}
+					}
+					return queryResults, nil
+				}
+
+				// If retry still fails, log and fall back to MongoDB
+				if err != nil {
+					s.logger.Warn("Search failed after auto-recovery, falling back to MongoDB",
+						zap.String("collection", collection),
+						zap.Error(err))
+				}
+			} else {
+				// Not a dimension mismatch - log as regular error and fall back
+				s.logger.Warn("Qdrant search failed, falling back to MongoDB",
+					zap.String("qdrantName", collectionObj.QdrantName),
+					zap.String("query", query),
+					zap.Error(err))
+			}
 		}
 	}
 
