@@ -12,6 +12,7 @@ import (
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/config"
+	"hyper/internal/metrics"
 	"hyper/internal/middleware"
 	"hyper/internal/models"
 
@@ -659,7 +660,13 @@ func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServi
 func (h *ChatWebSocketHandler) safeWriteJSON(conn *websocket.Conn, msg interface{}) error {
 	h.writeMutex.Lock()
 	defer h.writeMutex.Unlock()
-	return conn.WriteJSON(msg)
+
+	// Record message sent metric
+	err := conn.WriteJSON(msg)
+	if err == nil {
+		metrics.WebSocketMessagesSent.Inc()
+	}
+	return err
 }
 
 // safeWriteControl safely writes control frame to WebSocket with mutex protection
@@ -743,6 +750,14 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 	h.logger.Info("WebSocket connection established",
 		zap.String("sessionId", sessionID.Hex()),
 		zap.String("userId", userID))
+
+	// Record WebSocket connection metrics
+	connectionStart := time.Now()
+	metrics.RecordWebSocketConnection()
+	defer func() {
+		metrics.RecordWebSocketDisconnection()
+		metrics.WebSocketConnectionDuration.Observe(time.Since(connectionStart).Seconds())
+	}()
 
 	// Create background context for AI processing (not tied to HTTP lifecycle)
 	aiCtx := context.Background()
@@ -846,6 +861,10 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			// Read message from client
 			_, messageData, err := conn.ReadMessage()
 			if err != nil {
+				// Record WebSocket error
+				if !websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
+					metrics.WebSocketErrors.WithLabelValues("read_error").Inc()
+				}
 				// Check if this is a normal disconnection
 				if websocket.IsCloseError(err,
 					websocket.CloseGoingAway,          // 1001: browser navigation
@@ -865,12 +884,19 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				return
 			}
 
+			// Record message received and size
+			metrics.WebSocketMessagesReceived.Inc()
+			metrics.WebSocketMessageSize.Observe(float64(len(messageData)))
+
 			// Layer 1: Validate raw message size (fail fast before JSON parsing)
 			if len(messageData) > config.MaxMessageBytes {
 				h.logger.Warn("Message rejected - size exceeds limit",
 					zap.String("sessionId", sessionID.Hex()),
 					zap.Int("messageSize", len(messageData)),
 					zap.Int("maxSize", config.MaxMessageBytes))
+				// Record validation rejection metrics
+				metrics.RecordValidationRejection("websocket")
+				metrics.RecordMessageSizeExceeded("content")
 				h.sendError(conn, fmt.Sprintf("Message too large: %d bytes (max %d bytes / 1MB)", len(messageData), config.MaxMessageBytes))
 				continue
 			}
@@ -888,6 +914,9 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 					zap.String("sessionId", sessionID.Hex()),
 					zap.Int("contentSize", len(userMsg.Content)),
 					zap.Int("maxSize", config.MaxContentBytes))
+				// Record validation rejection metrics
+				metrics.RecordValidationRejection("content")
+				metrics.RecordMessageSizeExceeded("content")
 				h.sendError(conn, fmt.Sprintf("Message content too large: %d bytes (max %d bytes / 1MB)", len(userMsg.Content), config.MaxContentBytes))
 				continue
 			}
@@ -1139,6 +1168,10 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
 	ctxWithCompany := context.WithValue(ctxWithSession, "companyID", companyID)
 	maxToolCalls := h.aiService.GetConfig().MaxToolCalls
+
+	// Track AI streaming start time for metrics
+	streamStart := time.Now()
+
 	aiStream, err := h.aiService.StreamChatWithTools(ctxWithCompany, langchainMessages, maxToolCalls)
 	if err != nil {
 		h.logger.Error("Failed to get AI response", zap.Error(err))
@@ -1233,6 +1266,9 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 						}
 						h.safeWriteJSON(conn, truncationMsg)
 					}
+
+					// Record truncation metric
+					metrics.AIResponseTruncations.Inc()
 
 					// Break out of event loop to save what we have
 					break
@@ -1385,6 +1421,10 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 		}
 		return
 	}
+
+	// Record AI streaming metrics (tokens and duration)
+	metrics.AIStreamTokens.Add(float64(tokenCount))
+	metrics.AIStreamDuration.Observe(time.Since(streamStart).Seconds())
 
 	if clientDisconnected {
 		h.logger.Info("AI response completed in background after client disconnect",

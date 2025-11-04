@@ -22,6 +22,7 @@ import (
 	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
+	"hyper/internal/metrics"
 	"hyper/internal/middleware"
 	"hyper/internal/services"
 	userstorage "hyper/internal/storage"
@@ -29,6 +30,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 	"golang.org/x/term"
@@ -350,6 +352,14 @@ func StartHTTPServer(
 			"version": "2.0.0",
 		})
 	})
+
+	// Prometheus metrics endpoint
+	r.GET("/metrics", gin.WrapH(promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{
+		EnableOpenMetrics: true,
+	})))
+
+	logger.Info("Prometheus metrics endpoint registered",
+		zap.String("path", "/metrics"))
 
 	// Register panic test endpoints (for testing panic recovery in dev)
 	panicTestHandler := handlers.NewPanicTestHandler(logger)
