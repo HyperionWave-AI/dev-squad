@@ -124,9 +124,11 @@ type UpdateTodoStatusResponse struct {
 
 // Knowledge DTOs
 type KnowledgeCollectionDTO struct {
-	Name     string `json:"name"`
-	Category string `json:"category"`
-	Count    int    `json:"count"`
+	Name        string   `json:"name"`
+	Category    string   `json:"category"`
+	Count       int      `json:"count"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 type PopularCollectionDTO struct {
@@ -165,6 +167,14 @@ type QueryKnowledgeRequest struct {
 
 type QueryKnowledgeResponse struct {
 	Entries []KnowledgeEntryDTO `json:"entries"`
+}
+
+type RebuildCollectionCountsResponse struct {
+	Success            bool                     `json:"success"`
+	CollectionsUpdated int                      `json:"collectionsUpdated"`
+	TotalEntries       int                      `json:"totalEntries"`
+	Details            []map[string]interface{} `json:"details"`
+	Errors             []string                 `json:"errors,omitempty"`
 }
 
 // Code Index DTOs
@@ -614,14 +624,51 @@ func (h *RESTAPIHandler) ListCollections(c *gin.Context) {
 	dtos := make([]KnowledgeCollectionDTO, len(collections))
 	for i, col := range collections {
 		dtos[i] = KnowledgeCollectionDTO{
-			Name:     col.Name,
-			Category: col.Category,
-			Count:    col.Count,
+			Name:        col.Name,
+			Category:    col.Category,
+			Count:       col.Count,
+			Description: col.Description,
+			Tags:        col.Tags,
 		}
 	}
 
 	c.JSON(http.StatusOK, ListCollectionsResponse{
 		Collections: dtos,
+	})
+}
+
+// RebuildCollectionCounts recalculates entry counts for all collections
+// POST /api/v1/knowledge/collections/rebuild-counts
+func (h *RESTAPIHandler) RebuildCollectionCounts(c *gin.Context) {
+	h.logger.Info("Rebuilding collection counts")
+
+	// Call the storage method to rebuild counts
+	stats, err := h.knowledgeStorage.(*storage.MongoKnowledgeStorage).RebuildCollectionCounts()
+	if err != nil {
+		h.logger.Error("Failed to rebuild collection counts", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to rebuild collection counts: " + err.Error()})
+		return
+	}
+
+	// Extract stats
+	collectionsUpdated := stats["collectionsUpdated"].(int)
+	totalEntries := stats["totalEntries"].(int)
+	details := stats["details"].([]map[string]interface{})
+	errors := []string{}
+	if errList, ok := stats["errors"].([]string); ok && len(errList) > 0 {
+		errors = errList
+	}
+
+	h.logger.Info("Rebuild collection counts completed",
+		zap.Int("collectionsUpdated", collectionsUpdated),
+		zap.Int("totalEntries", totalEntries))
+
+	c.JSON(http.StatusOK, RebuildCollectionCountsResponse{
+		Success:            true,
+		CollectionsUpdated: collectionsUpdated,
+		TotalEntries:       totalEntries,
+		Details:            details,
+		Errors:             errors,
 	})
 }
 
@@ -1715,6 +1762,189 @@ func (h *RESTAPIHandler) HandleGetFileChunks(c *gin.Context) {
 	})
 }
 
+// HandleRemoveFolderByID removes a folder from the code index by folder ID
+// DELETE /api/v1/code-index/folders/:folderId
+func (h *RESTAPIHandler) HandleRemoveFolderByID(c *gin.Context) {
+	folderID := c.Param("folderId")
+
+	// Get folder
+	folder, err := h.codeIndexStorage.GetFolder(folderID)
+	if err != nil || folder == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Folder not found: " + folderID})
+		return
+	}
+
+	// Get all files to delete their vectors
+	files, err := h.codeIndexStorage.ListFiles(folder.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list files: " + err.Error()})
+		return
+	}
+
+	// Delete vectors from Qdrant - lookup collection from path mapping
+	if len(files) > 0 {
+		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+		if mapping != nil {
+			err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
+				"must": []map[string]interface{}{
+					{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
+				},
+			})
+			if err != nil {
+				h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
+			}
+		}
+	}
+
+	// Remove folder from file watcher
+	if h.fileWatcher != nil {
+		if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
+			h.logger.Warn("Failed to remove folder from file watcher", zap.Error(err))
+		} else {
+			h.logger.Info("Removed folder from file watcher", zap.String("path", folder.Path))
+		}
+	}
+
+	// Remove folder from MongoDB (cascades to files and chunks)
+	if err := h.codeIndexStorage.RemoveFolder(folder.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove folder: " + err.Error()})
+		return
+	}
+
+	h.logger.Info("Removed folder from code index",
+		zap.String("folderID", folder.ID),
+		zap.String("path", folder.Path),
+		zap.Int("filesRemoved", len(files)))
+
+	c.JSON(http.StatusOK, RemoveFolderResponse{
+		Success:      true,
+		Message:      "Folder removed successfully",
+		FilesRemoved: len(files),
+	})
+}
+
+// ToggleWatcherRequest is the request body for toggling watcher
+type ToggleWatcherRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// HandleToggleWatcher enables or disables the file watcher for a specific folder
+// PATCH /api/v1/code-index/folders/:folderId/watcher
+func (h *RESTAPIHandler) HandleToggleWatcher(c *gin.Context) {
+	folderID := c.Param("folderId")
+
+	var req ToggleWatcherRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// Get folder
+	folder, err := h.codeIndexStorage.GetFolder(folderID)
+	if err != nil || folder == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Folder not found: " + folderID})
+		return
+	}
+
+	if h.fileWatcher == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "File watcher is not available",
+		})
+		return
+	}
+
+	// Update folder status based on enabled flag
+	newStatus := "inactive"
+	if req.Enabled {
+		newStatus = "active"
+	}
+
+	// Update folder status in storage
+	if err := h.codeIndexStorage.UpdateFolderStatus(folderID, newStatus, ""); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update folder status: " + err.Error()})
+		return
+	}
+
+	// Add or remove from file watcher
+	if req.Enabled {
+		if err := h.fileWatcher.AddFolder(folder); err != nil {
+			h.logger.Error("Failed to add folder to watcher",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enable watcher: " + err.Error()})
+			return
+		}
+		h.logger.Info("Enabled watcher for folder", zap.String("path", folder.Path))
+	} else {
+		if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
+			h.logger.Warn("Failed to remove folder from watcher",
+				zap.String("path", folder.Path),
+				zap.Error(err))
+		}
+		h.logger.Info("Disabled watcher for folder", zap.String("path", folder.Path))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"enabled": req.Enabled,
+		"message": fmt.Sprintf("Watcher %s for folder", map[bool]string{true: "enabled", false: "disabled"}[req.Enabled]),
+	})
+}
+
+// GetFileWithContentResponse includes full file content
+type GetFileWithContentResponse struct {
+	FileID      string `json:"fileId"`
+	Path        string `json:"path"`
+	Language    string `json:"language"`
+	Content     string `json:"content"`
+	LineCount   int    `json:"lineCount"`
+	Size        int64  `json:"size"`
+	ChunkCount  int    `json:"chunkCount"`
+	IndexedAt   string `json:"indexedAt"`
+}
+
+// HandleGetFileWithContent returns a file with its full content assembled from chunks
+// GET /api/v1/code-index/files/:fileId
+func (h *RESTAPIHandler) HandleGetFileWithContent(c *gin.Context) {
+	fileID := c.Param("fileId")
+
+	// Get file metadata
+	file, err := h.codeIndexStorage.GetFile(fileID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found: " + fileID})
+		return
+	}
+
+	// Get all chunks and assemble content
+	chunks, err := h.codeIndexStorage.GetChunksByFileID(fileID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get file chunks: " + err.Error()})
+		return
+	}
+
+	// Concatenate all chunks to build full file content
+	var fullContent strings.Builder
+	for _, chunk := range chunks {
+		fullContent.WriteString(chunk.Content)
+	}
+
+	h.logger.Info("Retrieved file with content",
+		zap.String("fileID", fileID),
+		zap.String("path", file.Path),
+		zap.Int("chunks", len(chunks)))
+
+	c.JSON(http.StatusOK, GetFileWithContentResponse{
+		FileID:     file.ID,
+		Path:       file.Path,
+		Language:   file.Language,
+		Content:    fullContent.String(),
+		LineCount:  file.LineCount,
+		Size:       file.Size,
+		ChunkCount: len(chunks),
+		IndexedAt:  file.IndexedAt.Format(time.RFC3339),
+	})
+}
+
 // RegisterRESTRoutes registers all REST API routes under /api/v1
 func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	// Human Tasks
@@ -1743,13 +1973,16 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 	{
 		codeIndex.POST("/add-folder", h.AddFolder)
 		codeIndex.DELETE("/remove-folder/:configId", h.RemoveFolder)
+		codeIndex.DELETE("/folders/:folderId", h.HandleRemoveFolderByID)
+		codeIndex.PATCH("/folders/:folderId/watcher", h.HandleToggleWatcher)
 		codeIndex.POST("/scan", h.ScanFolder)
 		codeIndex.POST("/search", h.SearchCode)
 		codeIndex.GET("/status", h.GetIndexStatus)
 		codeIndex.POST("/enable-watcher", h.EnableWatcher)
 		codeIndex.POST("/disable-watcher", h.DisableWatcher)
 		codeIndex.POST("/reindex-all", h.ReindexAll)
-		codeIndex.GET("/files/:folderId", h.HandleListFiles)
+		codeIndex.GET("/folders/:folderId/files", h.HandleListFiles)
+		codeIndex.GET("/file/:fileId/content", h.HandleGetFileWithContent)
 		codeIndex.GET("/file/:fileId", h.HandleGetFile)
 		codeIndex.GET("/file/:fileId/chunks", h.HandleGetFileChunks)
 	}
