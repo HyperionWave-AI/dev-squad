@@ -25,6 +25,9 @@ type FileScanner struct {
 
 // NewFileScanner creates a new file scanner
 func NewFileScanner() *FileScanner {
+	// Initialize parsers (safe to call multiple times due to sync.Once)
+	parser.InitializeParsers()
+
 	// Get chunk size from ENV var (default: 200 lines)
 	chunkSize := 200
 	if envChunkSize := os.Getenv("CODE_INDEX_CHUNK_SIZE"); envChunkSize != "" {
@@ -76,6 +79,9 @@ func NewFileScanner() *FileScanner {
 
 // NewFileScannerWithConfig creates a file scanner with custom configuration
 func NewFileScannerWithConfig(includePatterns, excludePatterns []string, chunkSize string) *FileScanner {
+	// Initialize parsers (safe to call multiple times due to sync.Once)
+	parser.InitializeParsers()
+
 	// Convert t-shirt size to line count
 	chunkLines := storage.ChunkSizeToLines(chunkSize)
 
@@ -357,7 +363,7 @@ func (fs *FileScanner) CreateFileChunks(fileID, filePath string) ([]*storage.Fil
 	return fs.createLineBasedChunks(fileID, filePath)
 }
 
-// createASTChunks creates chunks using AST parsing
+// createASTChunks creates chunks using AST parsing with enhanced metadata
 func (fs *FileScanner) createASTChunks(fileID, filePath string) ([]*storage.FileChunk, error) {
 	// Read file content
 	content, err := os.ReadFile(filePath)
@@ -378,7 +384,7 @@ func (fs *FileScanner) createASTChunks(fileID, filePath string) ([]*storage.File
 		return nil, fmt.Errorf("AST parsing failed: %w", err)
 	}
 
-	// Convert AST nodes to file chunks
+	// Convert AST nodes to file chunks with enhanced metadata
 	var fileChunks []*storage.FileChunk
 	for i, node := range nodes {
 		chunk := &storage.FileChunk{
@@ -392,6 +398,28 @@ func (fs *FileScanner) createASTChunks(fileID, filePath string) ([]*storage.File
 			NodeName:  node.Name,
 			Signature: node.Signature,
 		}
+
+		// Extract enhanced metadata from node.Metadata map
+		if node.Metadata != nil {
+			// Extract symbols
+			if symbols, ok := node.Metadata["symbols"].([]string); ok {
+				chunk.Symbols = symbols
+			}
+
+			// Extract imports
+			if imports, ok := node.Metadata["imports"].([]string); ok {
+				chunk.Imports = imports
+			}
+
+			// Extract docstring information
+			if hasDoc, ok := node.Metadata["hasDocstring"].(bool); ok && hasDoc {
+				chunk.HasDocstring = true
+				if docContent, ok := node.Metadata["docContent"].(string); ok {
+					chunk.DocContent = docContent
+				}
+			}
+		}
+
 		fileChunks = append(fileChunks, chunk)
 	}
 
