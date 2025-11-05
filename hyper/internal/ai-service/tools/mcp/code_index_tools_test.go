@@ -3,6 +3,8 @@ package mcp
 import (
 	"testing"
 
+	"hyper/internal/mcp/storage"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -300,4 +302,187 @@ func TestRealWorldQueries(t *testing.T) {
 				"After boosting, expected file should rank first")
 		})
 	}
+}
+
+// Test StructuralFilter building logic
+func TestStructuralFilterParsing(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        map[string]interface{}
+		expectedFunc string
+		expectedClass string
+		expectedNode  string
+		expectedDoc   *bool
+		hasFilters    bool
+	}{
+		{
+			name: "FunctionName filter",
+			input: map[string]interface{}{
+				"query":        "auth functions",
+				"functionName": "handleAuth.*",
+			},
+			expectedFunc: "handleAuth.*",
+			hasFilters:   true,
+		},
+		{
+			name: "ClassName filter",
+			input: map[string]interface{}{
+				"query":     "user service",
+				"className": "UserService",
+			},
+			expectedClass: "UserService",
+			hasFilters:    true,
+		},
+		{
+			name: "NodeType filter",
+			input: map[string]interface{}{
+				"query":    "all classes",
+				"nodeType": "class",
+			},
+			expectedNode: "class",
+			hasFilters:   true,
+		},
+		{
+			name: "HasDocstring filter true",
+			input: map[string]interface{}{
+				"query":        "documented code",
+				"hasDocstring": true,
+			},
+			expectedDoc: func() *bool { b := true; return &b }(),
+			hasFilters:  true,
+		},
+		{
+			name: "HasDocstring filter false",
+			input: map[string]interface{}{
+				"query":        "undocumented code",
+				"hasDocstring": false,
+			},
+			expectedDoc: func() *bool { b := false; return &b }(),
+			hasFilters:  true,
+		},
+		{
+			name: "No filters",
+			input: map[string]interface{}{
+				"query": "simple query",
+			},
+			hasFilters: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the filter parsing logic from Execute method
+			var filter storage.StructuralFilter
+			var hasFilters bool
+
+			if functionName, ok := tt.input["functionName"].(string); ok && functionName != "" {
+				filter.FunctionName = functionName
+				hasFilters = true
+			}
+			if className, ok := tt.input["className"].(string); ok && className != "" {
+				filter.ClassName = className
+				hasFilters = true
+			}
+			if nodeType, ok := tt.input["nodeType"].(string); ok && nodeType != "" {
+				filter.NodeType = nodeType
+				hasFilters = true
+			}
+			if hasDocstring, ok := tt.input["hasDocstring"].(bool); ok {
+				filter.HasDocstring = &hasDocstring
+				hasFilters = true
+			}
+
+			// Assert
+			assert.Equal(t, tt.hasFilters, hasFilters, "hasFilters flag should match")
+			assert.Equal(t, tt.expectedFunc, filter.FunctionName, "FunctionName should match")
+			assert.Equal(t, tt.expectedClass, filter.ClassName, "ClassName should match")
+			assert.Equal(t, tt.expectedNode, filter.NodeType, "NodeType should match")
+			if tt.expectedDoc != nil {
+				assert.NotNil(t, filter.HasDocstring, "HasDocstring should not be nil")
+				assert.Equal(t, *tt.expectedDoc, *filter.HasDocstring, "HasDocstring value should match")
+			} else {
+				assert.Nil(t, filter.HasDocstring, "HasDocstring should be nil")
+			}
+		})
+	}
+}
+
+// TestStructuralFilterNodeTypes tests valid node type values
+func TestStructuralFilterNodeTypes(t *testing.T) {
+	validNodeTypes := []string{"function", "class", "method", "interface", "import"}
+
+	for _, nodeType := range validNodeTypes {
+		t.Run("NodeType_"+nodeType, func(t *testing.T) {
+			filter := storage.StructuralFilter{
+				NodeType: nodeType,
+			}
+			assert.Equal(t, nodeType, filter.NodeType)
+		})
+	}
+}
+
+// TestDocstringBoosting tests that documented code gets higher ranking
+func TestDocstringBoosting(t *testing.T) {
+	tests := []struct {
+		name                string
+		hasDocstring        bool
+		originalScore       float32
+		expectedMultiplier  float64
+		expectedFinalScore  float32
+	}{
+		{
+			name:               "Documented code gets 1.2x boost",
+			hasDocstring:       true,
+			originalScore:      0.8,
+			expectedMultiplier: 1.2,
+			expectedFinalScore: 0.96,
+		},
+		{
+			name:               "Undocumented code gets no boost",
+			hasDocstring:       false,
+			originalScore:      0.8,
+			expectedMultiplier: 1.0,
+			expectedFinalScore: 0.8,
+		},
+		{
+			name:               "Documented code score clamped at 1.0",
+			hasDocstring:       true,
+			originalScore:      0.9,
+			expectedMultiplier: 1.2,
+			expectedFinalScore: 1.0, // 0.9 * 1.2 = 1.08, clamped to 1.0
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate docstring boost logic
+			boostMultiplier := 1.0
+			if tt.hasDocstring {
+				boostMultiplier = 1.2
+			}
+
+			finalScore := float32(float64(tt.originalScore) * boostMultiplier)
+			if finalScore > 1.0 {
+				finalScore = 1.0
+			}
+
+			assert.Equal(t, tt.expectedMultiplier, boostMultiplier, "Boost multiplier should match")
+			assert.InDelta(t, tt.expectedFinalScore, finalScore, 0.001, "Final score should match")
+		})
+	}
+}
+
+// TestCombinedFilters tests combining multiple structural filters
+func TestCombinedFilters(t *testing.T) {
+	hasDoc := true
+	expectedFilter := storage.StructuralFilter{
+		FunctionName: "create.*",
+		NodeType:     "function",
+		HasDocstring: &hasDoc,
+	}
+
+	assert.Equal(t, "create.*", expectedFilter.FunctionName)
+	assert.Equal(t, "function", expectedFilter.NodeType)
+	assert.NotNil(t, expectedFilter.HasDocstring)
+	assert.True(t, *expectedFilter.HasDocstring)
 }

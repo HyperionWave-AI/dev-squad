@@ -185,6 +185,21 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 				payload["signature"] = chunk.Signature
 			}
 
+			// Enhanced AST metadata for hybrid search
+			if chunk.Symbols != nil && len(chunk.Symbols) > 0 {
+				payload["symbols"] = chunk.Symbols
+			}
+			if chunk.Imports != nil && len(chunk.Imports) > 0 {
+				payload["imports"] = chunk.Imports
+			}
+			if chunk.HasDocstring {
+				payload["hasDocstring"] = chunk.HasDocstring
+			}
+			if chunk.DocContent != "" {
+				payload["docContent"] = chunk.DocContent
+			}
+			// All 8 metadata fields now available for Qdrant filtering
+
 			point := storage.CodeIndexPoint{
 				ID:      pointID,
 				Vector:  embedding,
