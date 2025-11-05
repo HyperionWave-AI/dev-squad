@@ -38,3 +38,4 @@ third_party
 # Build artifacts
 hyper/coordinator
 /ui2/test-results
+/hyper/embed

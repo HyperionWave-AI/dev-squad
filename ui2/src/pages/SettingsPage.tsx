@@ -7,6 +7,7 @@ import type { Settings } from '@/utils/settings';
 import { Button } from '@/components/atoms/Button';
 import { Input } from '@/components/atoms/Input';
 import { Label } from '@/components/atoms/Label';
+import { PageHeader } from '@/components/organisms/PageHeader';
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<Settings>(getSettings());
@@ -30,25 +31,14 @@ export function SettingsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
       <div className="container mx-auto p-6 space-y-6 max-w-7xl">
-        {/* Header - Glassmorphic Container */}
-        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-br from-gray-400 to-slate-500 rounded-xl blur-lg opacity-30 animate-pulse"></div>
-              <div className="relative p-3 bg-gradient-to-br from-gray-500 to-slate-600 rounded-xl shadow-xl">
-                <SettingsIcon className="h-8 w-8 text-white" />
-              </div>
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-600 via-slate-600 to-gray-600 bg-clip-text text-transparent">
-                Settings
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400 mt-1">
-                Configure your preferences and application settings
-              </p>
-            </div>
-          </div>
-        </div>
+        {/* Header */}
+        <PageHeader
+          title="Settings"
+          description="Configure your preferences and application settings"
+          icon={<SettingsIcon className="h-8 w-8" />}
+          gradientFrom="#64748b"
+          gradientTo="#475569"
+        />
 
         {/* Appearance Section - Glassmorphic Container */}
         <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
