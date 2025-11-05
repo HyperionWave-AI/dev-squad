@@ -1031,9 +1031,15 @@ func (c *QdrantClient) EnsureCodeIndexCollection(expectedDimensions ...int) erro
 	}
 
 	// Create collection
+	// Determine the vector size to use
+	vectorSize := CodeIndexVectorSize // Default fallback
+	if len(expectedDimensions) > 0 && expectedDimensions[0] > 0 {
+		vectorSize = expectedDimensions[0] // Use provided dimension
+	}
+
 	collectionConfig := map[string]interface{}{
 		"vectors": map[string]interface{}{
-			"size":     CodeIndexVectorSize,
+			"size":     vectorSize,
 			"distance": "Cosine",
 		},
 	}

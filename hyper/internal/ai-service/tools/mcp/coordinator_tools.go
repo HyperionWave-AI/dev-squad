@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,62 +15,14 @@ import (
 
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
-	"hyper/internal/mcp/handlers"
-	reviewPkg "hyper/internal/mcp/review"
+	"hyper/internal/handlers"
+	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
 
-	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap"
 )
-
-// parseArrayParameter converts various array representations into []string using SchemaDeserializer.
-// Handles:
-// - JSON string arrays: "[\"item1\", \"item2\"]" → ["item1", "item2"]
-// - Native arrays: ["item1", "item2"]
-// - []interface{} with type coercion
-// - Single values → single-element array
-func parseArrayParameter(raw interface{}, paramName string) ([]string, error) {
-	if raw == nil {
-		return []string{}, nil
-	}
-
-	// Handle string input - try to parse as JSON array
-	if strVal, ok := raw.(string); ok {
-		var arr []interface{}
-		if err := json.Unmarshal([]byte(strVal), &arr); err == nil {
-			// Successfully parsed JSON string array
-			raw = arr
-		}
-		// If parse failed, treat as single-element array
-	}
-
-	// Handle different input types
-	switch v := raw.(type) {
-	case []interface{}:
-		// Convert each element to string
-		result := make([]string, len(v))
-		for i, item := range v {
-			str, ok := item.(string)
-			if !ok {
-				// Try to convert to string
-				str = fmt.Sprintf("%v", item)
-			}
-			result[i] = str
-		}
-		return result, nil
-
-	case []string:
-		// Already the right type
-		return v, nil
-
-	default:
-		// Single value - convert to single-element array
-		return []string{fmt.Sprintf("%v", raw)}, nil
-	}
-}
 
 // correctFilePaths attempts to fix invalid file paths using common correction strategies
 // Returns (correctedPaths, unfixablePaths, wasIndexingIssue)
@@ -363,31 +314,6 @@ func tryFixPath(path string, projectRoot string, logger *zap.Logger) string {
 	return "" // No correction worked
 }
 
-// truncateField truncates a string to maxBytes and adds a truncation indicator if needed.
-// Returns the truncated string and a boolean indicating if truncation occurred.
-// If truncation happens, appends "... [TRUNCATED]" to the result.
-func truncateField(text string, maxBytes int) (string, bool) {
-	if len(text) <= maxBytes {
-		return text, false
-	}
-
-	// Reserve 15 bytes for the truncation indicator
-	truncateAt := maxBytes - 15
-	if truncateAt < 0 {
-		truncateAt = 0
-	}
-
-	// Truncate and add indicator
-	truncated := text[:truncateAt] + "... [TRUNCATED]"
-	return truncated, true
-}
-
-// estimateTokens provides a rough estimate of token count for a string.
-// Uses the approximation that 1 token ≈ 4 characters.
-func estimateTokens(s string) int {
-	return len(s) / 4
-}
-
 // CoordinatorTools provides MCP coordinator tool executors for LangChain
 type CoordinatorTools struct {
 	taskStorage      storage.TaskStorage
@@ -560,20 +486,28 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("todos is required")
 	}
 
-	// Convert todos to []string using schema deserializer
-	// Handles: JSON string arrays, native arrays, type coercion, single values
-	todos, err := parseArrayParameter(todosRaw, "todos")
-	if err != nil {
-		return nil, err
+	// Convert todos to []string
+	var todos []string
+	switch v := todosRaw.(type) {
+	case []interface{}:
+		todos = make([]string, len(v))
+		for i, item := range v {
+			str, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("todos[%d] must be a string", i)
+			}
+			todos[i] = str
+		}
+	case []string:
+		todos = v
+	default:
+		return nil, fmt.Errorf("todos must be an array of strings")
 	}
 
 	if len(todos) == 0 {
 		return nil, fmt.Errorf("todos must not be empty")
 	}
 
-	// TODO validation temporarily disabled - see discussion about improving keyword matching
-	// to avoid false positives when TODOs legitimately reference search/find in implementation context
-	/*
 	// VALIDATION: Check for discovery keywords in TODOs (subagents cannot search/discover)
 	discoveryKeywords := []string{
 		"search", "find", "locate", "discover", "look for",
@@ -592,19 +526,26 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 						"• Discovery tools (code_index_search, list_directory) are BLOCKED\n"+
 						"• YOU must run code_index_search BEFORE creating this task\n"+
 						"• TODOs must be implementation steps only\n\n"+
+						"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n"+
+						"1. Send a developer-friendly message to user explaining the error:\n"+
+						"   \"Tool error: create_agent_task failed - TODO contains forbidden keyword '%s'.\n"+
+						"    Subagents can't discover files (write-only mode).\n"+
+						"    Fixing by: running code_index_search myself to find the files, then creating\n"+
+						"    task with implementation-only to-dos.\"\n"+
+						"2. Run code_index_search to find the files yourself\n"+
+						"3. Create new agent task with implementation-only to-dos\n\n"+
 						"✅ GOOD TODO examples:\n"+
 						"  - 'Add responsive CSS to Settings.tsx lines 15-45'\n"+
-						"  - 'Update login validation in AuthForm.tsx'\n"+
+						"  - 'Update login validation in AuthForm.tsx line 89'\n"+
 						"  - 'Test changes work on mobile viewport'\n\n"+
 						"❌ BAD TODO examples:\n"+
 						"  - 'Search for Settings component'  ← Discovery step!\n"+
 						"  - 'Find the auth logic'  ← Discovery step!\n"+
 						"  - 'Locate CSS files'  ← Discovery step!",
-					i+1, keyword, todo)
+					i+1, keyword, todo, keyword)
 			}
 		}
 	}
-	*/
 
 	// Convert todos to storage format
 	todoItems := make([]storage.TodoItemInput, len(todos))
@@ -618,12 +559,14 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 	contextSummary, _ := input["contextSummary"].(string)
 	priorWorkSummary, _ := input["priorWorkSummary"].(string)
 
-	// Convert filesModified to []string using schema deserializer
-	// Handles: JSON string arrays, native arrays, type coercion
 	var filesModified []string
-	if fm, ok := input["filesModified"]; ok && fm != nil {
-		filesModified, _ = parseArrayParameter(fm, "filesModified")
-		// Ignore error - filesModified is optional, will be auto-populated if empty
+	if fm, ok := input["filesModified"].([]interface{}); ok {
+		filesModified = make([]string, len(fm))
+		for i, f := range fm {
+			if str, ok := f.(string); ok {
+				filesModified[i] = str
+			}
+		}
 	}
 
 	// AUTO-POPULATE: If filesModified is empty, try to populate from last code_index_search
@@ -719,12 +662,14 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
-	// Convert qdrantCollections to []string using schema deserializer
-	// Handles: JSON string arrays, native arrays, type coercion
 	var qdrantCollections []string
-	if qc, ok := input["qdrantCollections"]; ok && qc != nil {
-		qdrantCollections, _ = parseArrayParameter(qc, "qdrantCollections")
-		// Ignore error - qdrantCollections is optional
+	if qc, ok := input["qdrantCollections"].([]interface{}); ok {
+		qdrantCollections = make([]string, len(qc))
+		for i, c := range qc {
+			if str, ok := c.(string); ok {
+				qdrantCollections[i] = str
+			}
+		}
 	}
 
 	// Validate file paths exist before creating task (Claude optimization)
@@ -741,7 +686,20 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 			}
 		}
 		if len(missingFiles) > 0 {
-			return nil, fmt.Errorf("file validation failed: the following files do not exist:\n%s\n\nPlease verify the file paths from code_index_search results and ensure they are copied exactly", strings.Join(missingFiles, "\n"))
+			return nil, fmt.Errorf(
+				"❌ File path validation failed: the following files do not exist:\n%s\n\n"+
+					"🚨 MOST COMMON CAUSE: You typed file paths manually instead of using FILE_PATHS_TO_USE array\n\n"+
+					"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n"+
+					"1. Send a developer-friendly message to user:\n"+
+					"   \"Tool error: create_agent_task failed - file path doesn't exist.\n"+
+					"    These paths aren't in the FILE_PATHS_TO_USE array from search results.\n"+
+					"    Fixing by: using exact paths from the code_index_search results.\"\n"+
+					"2. Check the code_index_search result for FILE_PATHS_TO_USE array\n"+
+					"3. Copy-paste EXACT paths from that array (do not type manually)\n"+
+					"4. Retry create_agent_task with corrected file paths\n\n"+
+					"✅ CORRECT: Use paths from FILE_PATHS_TO_USE: [\"/path/from/search/result.tsx\"]\n"+
+					"❌ WRONG: Manually typed path: \"./ui/src/MyGuess.tsx\"",
+				strings.Join(missingFiles, "\n"))
 		}
 	}
 
@@ -781,8 +739,7 @@ func (t *ListAgentTasksTool) Name() string {
 }
 
 func (t *ListAgentTasksTool) Description() string {
-	return "List agent tasks with optional filters. Returns up to 10 tasks with details. Supports pagination via offset/limit. Large fields (>2KB) are truncated with indicator. Use to check task status, find assignments, or review progress. " +
-		"Default filter excludes completed tasks (status != completed). " +
+	return "List agent tasks with optional filters. Returns up to 20 tasks with details. Supports pagination via offset/limit. Use to check task status, find assignments, or review progress. " +
 		"TIP: Filter by humanTaskId or agentName to narrow results. " +
 		"IMPORTANT: If you have a specific agentTaskId (e.g., from execute_subagent result), use coordinator_get_agent_task instead for direct lookup - DO NOT call this repeatedly without filters."
 }
@@ -799,17 +756,13 @@ func (t *ListAgentTasksTool) InputSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "Filter by parent human task ID (optional)",
 			},
-			"status": map[string]interface{}{
-				"type":        "string",
-				"description": "Filter by status. Options: 'all', 'pending', 'in_progress', 'blocked', 'completed'. Default: excludes completed tasks",
-			},
 			"offset": map[string]interface{}{
 				"type":        "integer",
 				"description": "Number of tasks to skip for pagination (default: 0)",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
-				"description": "Maximum number of tasks to return (default: 10, max: 10)",
+				"description": "Maximum number of tasks to return (default: 20, max: 20)",
 			},
 		},
 	}
@@ -819,7 +772,6 @@ func (t *ListAgentTasksTool) Execute(ctx context.Context, input map[string]inter
 	// Extract filter parameters
 	agentName, _ := input["agentName"].(string)
 	humanTaskID, _ := input["humanTaskId"].(string)
-	statusFilter, _ := input["status"].(string)
 
 	// Extract pagination parameters
 	offset := 0
@@ -827,76 +779,45 @@ func (t *ListAgentTasksTool) Execute(ctx context.Context, input map[string]inter
 		offset = int(o)
 	}
 
-	limit := 10
+	limit := 20
 	if l, ok := input["limit"].(float64); ok && l > 0 {
 		limit = int(l)
-		if limit > 10 {
-			limit = 10 // Enforce max limit per task context
+		if limit > 20 {
+			limit = 20 // Enforce max limit per task context
 		}
 	}
 
-	// Build MongoDB filter combining all filter parameters
-	filter := bson.M{}
+	// Get all tasks
+	allTasks := t.storage.ListAllAgentTasks()
 
-	// Add humanTaskId filter if provided
-	if humanTaskID != "" {
-		filter["humanTaskId"] = humanTaskID
-	}
-
-	// Add agentName filter if provided
-	if agentName != "" {
-		filter["agentName"] = agentName
-	}
-
-	// Add status filter
-	if statusFilter == "" {
-		// Default: exclude completed tasks
-		filter["status"] = bson.M{"$ne": "completed"}
-	} else if statusFilter != "all" {
-		// Filter by specific status (if "all", don't add status filter)
-		filter["status"] = statusFilter
-	}
-
-	// Query tasks with MongoDB filter and pagination
-	tasks, totalCount, err := t.storage.ListAgentTasks(filter, offset, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list agent tasks: %w", err)
-	}
-
-	// Create summary objects with only essential fields and enforce 20k token limit
-	const maxTokens = 20000
-	var summaries []map[string]interface{}
-	totalTokens := 0
-	originalCount := len(tasks)
-
-	for _, task := range tasks {
-		summary := map[string]interface{}{
-			"taskId":      task.ID,
-			"summary":     task.Role, // Using role as summary
-			"status":      task.Status,
-			"createdAt":   task.CreatedAt,
-			"humanTaskId": task.HumanTaskID,
-			"agentName":   task.AgentName,
+	// Apply filters
+	var filteredTasks []*storage.AgentTask
+	for _, task := range allTasks {
+		if humanTaskID != "" && task.HumanTaskID != humanTaskID {
+			continue
 		}
-
-		// Estimate tokens for this summary
-		summaryJSON, _ := json.Marshal(summary)
-		summaryTokens := estimateTokens(string(summaryJSON))
-
-		// Check if adding this summary would exceed token limit
-		if totalTokens+summaryTokens > maxTokens {
-			log.Printf("WARNING: List agent tasks truncated from %d to %d items to stay under 20k token limit", originalCount, len(summaries))
-			break
+		if agentName != "" && task.AgentName != agentName {
+			continue
 		}
-
-		summaries = append(summaries, summary)
-		totalTokens += summaryTokens
+		filteredTasks = append(filteredTasks, task)
 	}
+
+	// Apply pagination
+	totalCount := len(filteredTasks)
+	endIndex := offset + limit
+	if offset > totalCount {
+		offset = totalCount
+	}
+	if endIndex > totalCount {
+		endIndex = totalCount
+	}
+
+	paginatedTasks := filteredTasks[offset:endIndex]
 
 	// Format response
 	return map[string]interface{}{
-		"tasks":      summaries,
-		"count":      len(summaries),
+		"tasks":      paginatedTasks,
+		"count":      len(paginatedTasks),
 		"totalCount": totalCount,
 		"offset":     offset,
 		"limit":      limit,
@@ -958,7 +879,7 @@ func (t *QueryKnowledgeTool) Execute(ctx context.Context, input map[string]inter
 		}
 	}
 
-	// Query knowledge storage (no taskId filtering in this context)
+	// Query knowledge storage
 	results, err := t.storage.Query(collection, query, limit, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query knowledge: %w", err)
@@ -1037,7 +958,6 @@ func (t *UpsertKnowledgeTool) Execute(ctx context.Context, input map[string]inte
 		metadata = m
 	}
 
-	// No taskId filtering in this legacy context
 	entry, err := t.storage.Upsert(collection, text, metadata, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert knowledge: %w", err)
@@ -1097,91 +1017,6 @@ func (t *GetPopularCollectionsTool) Execute(ctx context.Context, input map[strin
 	return stats, nil
 }
 
-// KnowledgeVoteTool implements the ToolExecutor interface for voting on knowledge entries
-type KnowledgeVoteTool struct {
-	storage storage.KnowledgeStorage
-}
-
-func (t *KnowledgeVoteTool) Name() string {
-	return "knowledge_vote"
-}
-
-func (t *KnowledgeVoteTool) Description() string {
-	return "Vote on a knowledge entry with + or - and a reason (max 10 words). Returns vote summary with upvotes, downvotes, net score, and user's current vote. One vote per user per entry (upsert pattern)."
-}
-
-func (t *KnowledgeVoteTool) InputSchema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"entryId": map[string]interface{}{
-				"type":        "string",
-				"description": "UUID of the knowledge entry to vote on",
-			},
-			"vote": map[string]interface{}{
-				"type":        "string",
-				"description": "Vote value: '+' for upvote or '-' for downvote",
-				"enum":        []string{"+", "-"},
-			},
-			"reason": map[string]interface{}{
-				"type":        "string",
-				"description": "Reason for the vote (max 10 words)",
-			},
-		},
-		"required": []string{"entryId", "vote", "reason"},
-	}
-}
-
-func (t *KnowledgeVoteTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	entryID, ok := input["entryId"].(string)
-	if !ok || entryID == "" {
-		return nil, fmt.Errorf("entryId is required and must be a string")
-	}
-
-	vote, ok := input["vote"].(string)
-	if !ok || vote == "" {
-		return nil, fmt.Errorf("vote is required and must be a string")
-	}
-
-	reason, ok := input["reason"].(string)
-	if !ok || reason == "" {
-		return nil, fmt.Errorf("reason is required and must be a string")
-	}
-
-	// Extract user ID from context (JWT)
-	// For now, use a placeholder - this will be replaced with actual JWT extraction
-	userID := "system" // TODO: Extract from JWT context
-
-	// Record the vote
-	voteRecord, err := t.storage.VoteOnEntry(entryID, userID, vote, reason)
-	if err != nil {
-		return nil, fmt.Errorf("failed to vote on entry: %w", err)
-	}
-
-	// Get vote summary
-	summary, err := t.storage.GetEntryVotes(entryID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get vote summary: %w", err)
-	}
-
-	return map[string]interface{}{
-		"voteRecorded": map[string]interface{}{
-			"entryId":   voteRecord.EntryID,
-			"userId":    voteRecord.UserID,
-			"vote":      voteRecord.Vote,
-			"reason":    voteRecord.Reason,
-			"createdAt": voteRecord.CreatedAt,
-			"updatedAt": voteRecord.UpdatedAt,
-		},
-		"summary": map[string]interface{}{
-			"upvotes":   summary.Upvotes,
-			"downvotes": summary.Downvotes,
-			"netScore":  summary.NetScore,
-			"userVote":  summary.UserVote,
-		},
-	}, nil
-}
-
 // CreateHumanTaskTool implements the ToolExecutor interface
 type CreateHumanTaskTool struct {
 	storage       storage.TaskStorage
@@ -1233,8 +1068,18 @@ func (t *CreateHumanTaskTool) Execute(ctx context.Context, input map[string]inte
 	}
 
 	forceCreate := false
+	// Handle both boolean and string types (defensive programming)
+	// AI might send "true" as a string instead of boolean
 	if fc, ok := input["forceCreate"].(bool); ok {
 		forceCreate = fc
+	} else if fcStr, ok := input["forceCreate"].(string); ok {
+		// Accept "true", "True", "TRUE" as truthy values
+		forceCreate = (fcStr == "true" || fcStr == "True" || fcStr == "TRUE")
+		if forceCreate {
+			zap.L().Warn("forceCreate sent as string instead of boolean",
+				zap.String("value", fcStr),
+				zap.String("converted_to", "true"))
+		}
 	}
 
 	// Generate hash of prompt for tracking retry attempts
@@ -1489,112 +1334,21 @@ func (t *ListHumanTasksTool) Name() string {
 }
 
 func (t *ListHumanTasksTool) Description() string {
-	return "List human tasks from the coordinator database with pagination. Returns up to 10 tasks. Large fields (>2KB) are truncated with indicator. Use to check human task status or review user requests. Default filter excludes completed tasks (status != completed)."
+	return "List all human tasks from the coordinator database. Returns array of tasks with all fields."
 }
 
 func (t *ListHumanTasksTool) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"status": map[string]interface{}{
-				"type":        "string",
-				"description": "Filter by status. Options: 'all', 'pending', 'in_progress', 'blocked', 'completed'. Default: excludes completed tasks",
-			},
-			"offset": map[string]interface{}{
-				"type":        "integer",
-				"description": "Number of tasks to skip for pagination (default: 0)",
-			},
-			"limit": map[string]interface{}{
-				"type":        "integer",
-				"description": "Maximum number of tasks to return (default: 10, max: 10)",
-			},
-		},
+		"type":       "object",
+		"properties": map[string]interface{}{},
 	}
 }
 
 func (t *ListHumanTasksTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	// Extract status filter parameter
-	statusFilter, _ := input["status"].(string)
-
-	// Build MongoDB filter based on status parameter
-	var filter bson.M
-	if statusFilter == "" {
-		// Default: exclude completed tasks
-		filter = bson.M{"status": bson.M{"$ne": "completed"}}
-	} else if statusFilter == "all" {
-		// Show all tasks
-		filter = bson.M{}
-	} else {
-		// Filter by specific status
-		filter = bson.M{"status": statusFilter}
-	}
-
-	// Query tasks with MongoDB filter
-	tasks, err := t.storage.ListHumanTasks(filter)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list human tasks: %w", err)
-	}
-
-	// Extract pagination parameters for response formatting
-	offset := 0
-	if o, ok := input["offset"].(float64); ok && o >= 0 {
-		offset = int(o)
-	}
-
-	limit := 10
-	if l, ok := input["limit"].(float64); ok && l > 0 {
-		limit = int(l)
-		if limit > 10 {
-			limit = 10 // Enforce max limit
-		}
-	}
-
-	// Apply pagination in-memory (TODO: move to MongoDB query)
-	totalCount := len(tasks)
-	endIndex := offset + limit
-	if offset > totalCount {
-		offset = totalCount
-	}
-	if endIndex > totalCount {
-		endIndex = totalCount
-	}
-
-	paginatedTasks := tasks[offset:endIndex]
-
-	// Create summary objects with only essential fields and enforce 20k token limit
-	const maxTokens = 20000
-	var summaries []map[string]interface{}
-	totalTokens := 0
-	originalCount := len(paginatedTasks)
-
-	for _, task := range paginatedTasks {
-		summary := map[string]interface{}{
-			"taskId":    task.ID,
-			"summary":   task.Prompt, // Using prompt as summary
-			"status":    task.Status,
-			"createdAt": task.CreatedAt,
-		}
-
-		// Estimate tokens for this summary
-		summaryJSON, _ := json.Marshal(summary)
-		summaryTokens := estimateTokens(string(summaryJSON))
-
-		// Check if adding this summary would exceed token limit
-		if totalTokens+summaryTokens > maxTokens {
-			log.Printf("WARNING: List human tasks truncated from %d to %d items to stay under 20k token limit", originalCount, len(summaries))
-			break
-		}
-
-		summaries = append(summaries, summary)
-		totalTokens += summaryTokens
-	}
-
+	tasks := t.storage.ListAllHumanTasks()
 	return map[string]interface{}{
-		"tasks":      summaries,
-		"count":      len(summaries),
-		"totalCount": totalCount,
-		"offset":     offset,
-		"limit":      limit,
+		"tasks": tasks,
+		"count": len(tasks),
 	}, nil
 }
 
@@ -2200,7 +1954,7 @@ func (t *SetCurrentSubagentTool) Execute(ctx context.Context, input map[string]i
 
 // DiscoverToolsExecutor implements the discover_tools tool executor
 type DiscoverToolsExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *DiscoverToolsExecutor) Name() string {
@@ -2235,7 +1989,7 @@ func (e *DiscoverToolsExecutor) Execute(ctx context.Context, args map[string]int
 
 // GetToolSchemaExecutor implements the get_tool_schema tool executor
 type GetToolSchemaExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *GetToolSchemaExecutor) Name() string {
@@ -2266,7 +2020,7 @@ func (e *GetToolSchemaExecutor) Execute(ctx context.Context, args map[string]int
 
 // ExecuteToolExecutor implements the execute_tool tool executor
 type ExecuteToolExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *ExecuteToolExecutor) Name() string {
@@ -2301,7 +2055,7 @@ func (e *ExecuteToolExecutor) Execute(ctx context.Context, args map[string]inter
 
 // McpAddServerExecutor implements the mcp_add_server tool executor
 type McpAddServerExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *McpAddServerExecutor) Name() string {
@@ -2340,7 +2094,7 @@ func (e *McpAddServerExecutor) Execute(ctx context.Context, args map[string]inte
 
 // McpRediscoverServerExecutor implements the mcp_rediscover_server tool executor
 type McpRediscoverServerExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *McpRediscoverServerExecutor) Name() string {
@@ -2371,7 +2125,7 @@ func (e *McpRediscoverServerExecutor) Execute(ctx context.Context, args map[stri
 
 // McpRemoveServerExecutor implements the mcp_remove_server tool executor
 type McpRemoveServerExecutor struct {
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler
 }
 
 func (e *McpRemoveServerExecutor) Name() string {
@@ -2423,6 +2177,7 @@ type ChatServiceInterface interface {
 	CreateSession(ctx context.Context, userID, companyID, title string) (*models.ChatSession, error)
 	CreateSessionWithParent(ctx context.Context, userID, companyID, title string, parentChatID *primitive.ObjectID) (*models.ChatSession, error)
 	GetSession(ctx context.Context, sessionID primitive.ObjectID, companyID string) (*models.ChatSession, error)
+	GetMessages(ctx context.Context, sessionID primitive.ObjectID, companyID string, limit, offset int) (*models.GetMessagesResponse, error)
 	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
 	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
 	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
@@ -2461,7 +2216,15 @@ func (t *ExecuteSubagentTool) InputSchema() map[string]interface{} {
 func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	agentTaskID, ok := input["agentTaskId"].(string)
 	if !ok || agentTaskID == "" {
-		return nil, fmt.Errorf("agentTaskId is required and must be a string")
+		return nil, fmt.Errorf(
+			"❌ Parameter validation failed: agentTaskId is required and must be a string\n\n" +
+				"⚠️ MANDATORY ACTION - BEFORE RETRYING:\n" +
+				"1. Send a developer-friendly message to user:\n" +
+				"   \"Tool error: execute_subagent failed - missing task ID parameter.\n" +
+				"    Fixing by: retrieving the task ID from the create_agent_task result.\"\n" +
+				"2. Check the create_agent_task response for 'taskId' field\n" +
+				"3. Call execute_subagent with agentTaskId set to that taskId value\n\n" +
+				"Example: execute_subagent({ agentTaskId: \"<taskId from previous step>\" })")
 	}
 
 	// ALWAYS try to get session ID from context first (most reliable)
@@ -2480,8 +2243,25 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 				zap.String("agentTaskId", agentTaskID),
 				zap.String("parentChatId", providedID))
 		} else {
-			return nil, fmt.Errorf("parentChatId could not be determined: not in context and not provided by AI (or AI provided 'main' placeholder)")
+			return nil, fmt.Errorf(
+				"❌ Context error: parentChatId could not be determined\n\n" +
+					"Details: Not in session context and not provided by AI (or AI provided 'main' placeholder)\n\n" +
+					"⚠️ This is likely a system issue, not your fault.\n" +
+					"Inform user: \"Tool error: execute_subagent failed - unable to determine parent chat session.\n" +
+					"             This may be a context initialization issue. Please try again or contact support.\"")
 		}
+	}
+
+	// Extract company ID from context
+	var companyID string
+	if companyIDValue, hasCompanyID := ctx.Value("companyID").(string); hasCompanyID && companyIDValue != "" {
+		companyID = companyIDValue
+		t.logger.Info("✅ Using company ID from context",
+			zap.String("agentTaskId", agentTaskID),
+			zap.String("companyID", companyID))
+	} else {
+		t.logger.Warn("⚠️ Company ID not found in context, will try to extract from parent session",
+			zap.String("agentTaskId", agentTaskID))
 	}
 
 	t.logger.Info("🚀 execute_subagent tool called",
@@ -2521,7 +2301,7 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 		zap.String("agentName", agentTask.AgentName))
 
 	// Spawn background goroutine to execute the subagent
-	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID)
+	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID, companyID)
 
 	return map[string]interface{}{
 		"subchatId":   subchat.ID,
@@ -2602,10 +2382,12 @@ func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]
 			f.FilesWritten[path]++
 		}
 	case "apply_patch":
-		// For apply_patch, the file path is embedded in the patch content
-		// Format: "*** Update File: path/to/file.ext"
-		if patchContent, ok := args["patch"].(string); ok {
-			// Extract file path from patch
+		// FIRST: Check for explicit path parameter (apply_patch tool uses "path" parameter)
+		if path, ok := args["path"].(string); ok && path != "" {
+			f.FilesWritten[path]++
+		} else if patchContent, ok := args["patch"].(string); ok {
+			// FALLBACK: Try to extract file path from patch content
+			// Format: "*** Update File: path/to/file.ext"
 			if strings.Contains(patchContent, "*** Update File:") {
 				lines := strings.Split(patchContent, "\n")
 				for _, line := range lines {
@@ -2616,7 +2398,7 @@ func (f *FileOperationTracker) RecordOperation(toolName string, args map[string]
 					}
 				}
 			} else {
-				// Fallback: mark as generic write if we can't extract path
+				// Last resort: mark as generic write if we can't extract path
 				f.FilesWritten["<patch-unknown-file>"]++
 			}
 		}
@@ -2781,8 +2563,140 @@ func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.Agent
 	return true, matchedFiles, nil
 }
 
+// convertToolCallToPlainEnglish converts a tool call to a user-friendly plain English description
+func convertToolCallToPlainEnglish(toolName string, args map[string]interface{}) string {
+	switch toolName {
+	case "read_file":
+		if filePath, ok := args["file_path"].(string); ok {
+			// Extract just the filename for brevity
+			parts := strings.Split(filePath, "/")
+			filename := parts[len(parts)-1]
+			return fmt.Sprintf("📖 Reading file: %s", filename)
+		}
+		return "📖 Reading a file..."
+
+	case "write_file":
+		if filePath, ok := args["file_path"].(string); ok {
+			parts := strings.Split(filePath, "/")
+			filename := parts[len(parts)-1]
+			return fmt.Sprintf("✍️ Writing to file: %s", filename)
+		}
+		return "✍️ Writing to a file..."
+
+	case "apply_patch":
+		if filePath, ok := args["file_path"].(string); ok {
+			parts := strings.Split(filePath, "/")
+			filename := parts[len(parts)-1]
+			return fmt.Sprintf("🔧 Applying changes to: %s", filename)
+		}
+		return "🔧 Applying code changes..."
+
+	case "bash":
+		if command, ok := args["command"].(string); ok {
+			// Truncate long commands
+			if len(command) > 60 {
+				command = command[:60] + "..."
+			}
+			return fmt.Sprintf("⚡ Running command: %s", command)
+		}
+		return "⚡ Running a command..."
+
+	case "coordinator_update_todo_status":
+		if status, ok := args["status"].(string); ok {
+			if status == "completed" {
+				return "✅ Marking TODO as completed"
+			} else if status == "in_progress" {
+				return "▶️ Starting work on TODO"
+			}
+		}
+		return "📝 Updating TODO status..."
+
+	case "coordinator_upsert_knowledge":
+		return "💾 Saving knowledge entry..."
+
+	default:
+		return fmt.Sprintf("🔧 Using tool: %s", toolName)
+	}
+}
+
+// convertToolResultToPlainEnglish converts a tool result to a user-friendly plain English message
+func convertToolResultToPlainEnglish(toolName string, output interface{}, errorMsg string) string {
+	if errorMsg != "" {
+		// Handle errors
+		switch toolName {
+		case "read_file":
+			return fmt.Sprintf("❌ Failed to read file: %s", errorMsg)
+		case "write_file":
+			return fmt.Sprintf("❌ Failed to write file: %s", errorMsg)
+		case "apply_patch":
+			return fmt.Sprintf("❌ Failed to apply patch: %s", errorMsg)
+		case "bash":
+			return fmt.Sprintf("❌ Command failed: %s", errorMsg)
+		default:
+			return fmt.Sprintf("❌ Tool error: %s", errorMsg)
+		}
+	}
+
+	// Handle successes
+	switch toolName {
+	case "read_file":
+		if str, ok := output.(string); ok {
+			lineCount := len(strings.Split(str, "\n"))
+			return fmt.Sprintf("✓ File read successfully (%d lines)", lineCount)
+		}
+		return "✓ File read successfully"
+
+	case "write_file":
+		return "✓ File written successfully"
+
+	case "apply_patch":
+		return "✓ Changes applied successfully"
+
+	case "bash":
+		if str, ok := output.(string); ok {
+			// Show first line of output if it's short
+			lines := strings.Split(strings.TrimSpace(str), "\n")
+			if len(lines) > 0 && len(lines[0]) < 80 && len(lines[0]) > 0 {
+				return fmt.Sprintf("✓ Command completed: %s", lines[0])
+			}
+		}
+		return "✓ Command completed successfully"
+
+	case "coordinator_update_todo_status":
+		return "✓ TODO status updated"
+
+	case "coordinator_upsert_knowledge":
+		return "✓ Knowledge saved"
+
+	default:
+		return "✓ Tool completed"
+	}
+}
+
+// isSystemEnforcementMessage checks if a message is a system enforcement message that should be filtered
+func isSystemEnforcementMessage(content string) bool {
+	systemPatterns := []string{
+		"WRITE-ONLY MODE",
+		"FORCED WRITE SCAFFOLD",
+		"╔══════════════",
+		"🚨 WRITE-ONLY MODE ENFORCEMENT",
+		"EXECUTION SCORE:",
+		"📊 EXECUTION SCORE",
+		"CACHED FILE CONTENT",
+		"⚠️ CACHED FILE CONTENT",
+		"CURRENT EXECUTION SCORE:",
+	}
+
+	for _, pattern := range systemPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // executeSubagentInBackground runs the subagent AI streaming in a background goroutine
-func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string) {
+func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string, companyID string) {
 	// Create a new background context with generous timeout for long-running tasks
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -2817,28 +2731,60 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		return
 	}
 
-	// Get parent session to inherit userID and companyID
-	parentSession, err := t.chatService.GetSession(ctx, parentSessionID, "dev-company")
-	if err != nil {
-		t.logger.Error("Failed to get parent chat session",
-			zap.String("parentChatId", parentChatID),
-			zap.Error(err))
-		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v", err))
-		return
+	// Emit progress notification - subchat started
+	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("🤖 Starting subchat: %s", agentTask.AgentName))
+
+	// If companyID was not provided from context, we need to fetch parent session to get it
+	// Otherwise, we can skip fetching parent session just for companyID
+	var userID string
+	var finalCompanyID string
+
+	if companyID != "" {
+		// Company ID provided from context - still need to fetch parent session for userID
+		t.logger.Info("Using company ID from context, fetching parent session for user ID",
+			zap.String("companyID", companyID))
+		parentSession, err := t.chatService.GetSession(ctx, parentSessionID, companyID)
+		if err != nil {
+			t.logger.Error("Failed to get parent chat session",
+				zap.String("parentChatId", parentChatID),
+				zap.String("companyId", companyID),
+				zap.Error(err))
+			t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v", err))
+			return
+		}
+		userID = parentSession.UserID
+		finalCompanyID = companyID
+	} else {
+		// Company ID not in context - fetch parent session to get both userID and companyID
+		// This is a fallback for cases where context doesn't have companyID
+		t.logger.Warn("Company ID not in context, attempting to extract from parent session")
+
+		// Try with empty companyID first (some implementations might not enforce it)
+		parentSession, err := t.chatService.GetSession(ctx, parentSessionID, "")
+		if err != nil {
+			// If that fails, this is likely a configuration issue
+			t.logger.Error("Failed to get parent chat session without company ID",
+				zap.String("parentChatId", parentChatID),
+				zap.Error(err))
+			t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Failed to get parent session: %v (companyID not available in context)", err))
+			return
+		}
+		userID = parentSession.UserID
+		finalCompanyID = parentSession.CompanyID
+
+		t.logger.Info("Extracted company ID from parent session",
+			zap.String("companyID", finalCompanyID))
 	}
 
-	// Use parent session's userID and companyID for subchat
-	userID := parentSession.UserID
-	companyID := parentSession.CompanyID
 	sessionTitle := fmt.Sprintf("Subchat: %s - %s", agentTask.AgentName, agentTask.Role)
 
 	t.logger.Info("Creating subchat session with parent's credentials",
 		zap.String("subchatId", subchatID),
 		zap.String("parentChatId", parentChatID),
 		zap.String("userId", userID),
-		zap.String("companyId", companyID))
+		zap.String("companyId", finalCompanyID))
 
-	chatSession, err := t.chatService.CreateSessionWithParent(ctx, userID, companyID, sessionTitle, &parentSessionID)
+	chatSession, err := t.chatService.CreateSessionWithParent(ctx, userID, finalCompanyID, sessionTitle, &parentSessionID)
 	if err != nil {
 		t.logger.Error("Failed to create chat session for subchat",
 			zap.String("subchatId", subchatID),
@@ -2874,13 +2820,22 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.Int("todoCount", len(agentTask.Todos)))
 
 	// Save initial user message (task details only - system prompt is separate)
-	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "user", taskPrompt, companyID)
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "user", taskPrompt, finalCompanyID)
 	if err != nil {
 		t.logger.Warn("Failed to save initial user message",
 			zap.String("subchatId", subchatID),
 			zap.Error(err))
 		// Continue execution even if message save fails
 	}
+
+	// Register for message notifications (for user interruptions)
+	notifier := handlers.GetMessageNotifier(t.logger)
+	notifyCh := notifier.RegisterSession(chatSession.ID)
+	defer notifier.UnregisterSession(chatSession.ID)
+
+	t.logger.Info("🔔 Registered subagent session for message notifications",
+		zap.String("sessionId", chatSession.ID.Hex()),
+		zap.String("subchatId", subchatID))
 
 	// Create initial messages with SYSTEM prompt for phase isolation
 	messages := []aiservice.Message{
@@ -2918,6 +2873,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		t.logger.Error("Failed to start AI streaming for subagent",
 			zap.String("subchatId", subchatID),
 			zap.Error(err))
+		handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat failed: %s", agentTask.AgentName))
 		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI streaming failed: %v", err))
 		return
 	}
@@ -2926,6 +2882,14 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	fullResponse := ""
 	toolCallCount := 0
 	completedTodos := 0
+	readFileCount := 0         // Track read_file calls (after 3 reads, MUST write)
+	hasWrittenAnyFile := false // Track if any write has occurred
+
+	// RUNTIME ENFORCEMENT: File content cache to prevent re-reads
+	fileContentCache := make(map[string]string)
+
+	// RUNTIME ENFORCEMENT: Execution scoring system
+	executionScore := 0
 
 	t.logger.Info("📡 Subagent AI stream started - processing events...",
 		zap.String("subchatId", subchatID),
@@ -2936,17 +2900,438 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	t.logger.Info("╚═══════════════════════════════════════════════════════════════════",
 		zap.String("subchatId", subchatID))
 
-	for event := range aiStream {
+	// Track stream state for interrupt handling
+	streamActive := true
+	fullSystemPrompt := systemPrompt // Store system prompt for message rebuilding on interrupt
+
+	for streamActive {
+		// ═══════════════════════════════════════════════════════════════════
+		// STAGE 1: PRIORITY CHECK FOR INTERRUPTS (NON-BLOCKING)
+		// ═══════════════════════════════════════════════════════════════════
+		// This ensures interrupts are ALWAYS checked before processing AI events,
+		// preventing starvation when AI is streaming rapidly.
+		var interruptReceived bool
+		select {
+		case <-notifyCh:
+			// USER MESSAGE INTERRUPT - PRIORITY HANDLING
+			t.logger.Info("💬 🔥 PRIORITY: User interrupt detected (pre-check)",
+				zap.String("sessionId", chatSession.ID.Hex()),
+				zap.String("subchatId", subchatID))
+			interruptReceived = true
+		default:
+			// No interrupt pending, proceed to normal event processing
+		}
+
+		// If interrupt was detected in priority check, handle it now
+		if interruptReceived {
+			// ═══════════════════════════════════════════════════════════════════
+			// INTERRUPT HANDLER
+			// ═══════════════════════════════════════════════════════════════════
+
+			// Drain current stream if active
+			if aiStream != nil {
+				go func() {
+					for range aiStream {
+						// discard remaining events
+					}
+				}()
+			}
+
+			// Fetch all messages including new user message
+			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
+			if err != nil {
+				t.logger.Error("Failed to fetch messages after interrupt", zap.Error(err))
+				continue
+			}
+
+			// Extract latest user message for categorization
+			var latestUserMessage string
+			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
+				if messagesResp.Messages[i].Role == "user" {
+					latestUserMessage = messagesResp.Messages[i].Content
+					break
+				}
+			}
+
+			// Categorize the interrupt to determine intent
+			category, guidance, err := t.categorizeInterrupt(ctx, latestUserMessage)
+			if err != nil {
+				t.logger.Warn("Failed to categorize interrupt, defaulting to CONTINUE",
+					zap.Error(err),
+					zap.String("userMessage", latestUserMessage))
+				category = "CONTINUE"
+				guidance = "Continue with your work but acknowledge the user's message if relevant"
+			}
+
+			t.logger.Info("🎯 Interrupt categorized",
+				zap.String("category", category),
+				zap.String("guidance", guidance),
+				zap.String("userMessage", latestUserMessage))
+
+			// Emit progress notification about interrupt
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID,
+				fmt.Sprintf("📨 User interrupt received: %s", category))
+
+			// Build interrupt-aware system prompt guidance based on category
+			var interruptGuidance string
+			switch category {
+			case "STOP":
+				interruptGuidance = fmt.Sprintf(`
+⚠️ CRITICAL: USER INTERRUPT - STOP CURRENT TASK
+The user has sent a message indicating they want to STOP the current task.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. IMMEDIATELY acknowledge the user's message in your FIRST response
+2. STOP all current work - do not make ANY tool calls until you respond
+3. Ask the user what they would like you to do instead
+4. DO NOT continue with the original task unless they explicitly say to continue
+
+Start your response with: "I've stopped the current task. [address their message directly]"
+`, latestUserMessage, guidance)
+
+			case "MODIFY":
+				interruptGuidance = fmt.Sprintf(`
+🔄 USER INTERRUPT - MODIFY APPROACH
+The user wants to modify or adjust the current approach.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, acknowledge the user's request in your response (use text, not just tool calls)
+2. Explain how you'll adjust your approach based on their guidance
+3. THEN proceed with the modified approach using tool calls
+
+Start your response with: "I'll adjust my approach. [explain the changes]"
+`, latestUserMessage, guidance)
+
+			case "CLARIFY":
+				interruptGuidance = fmt.Sprintf(`
+❓ USER INTERRUPT - NEEDS CLARIFICATION
+The user has a question or needs clarification about your work.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. Answer their question directly and clearly in your FIRST response
+2. Do NOT make any tool calls before responding to their question
+3. After answering, ask if they want you to continue or adjust
+4. Wait for their response before making more tool calls
+
+Start your response by directly addressing their question.
+`, latestUserMessage, guidance)
+
+			case "STATUS":
+				interruptGuidance = fmt.Sprintf(`
+📊 USER INTERRUPT - STATUS CHECK
+The user is checking progress or giving encouragement.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, give a brief status update (what you've completed, what's next)
+2. Acknowledge their message warmly
+3. THEN continue with your work
+
+Keep your status response brief (2-3 sentences) before continuing.
+`, latestUserMessage, guidance)
+
+			case "CONTINUE":
+				interruptGuidance = fmt.Sprintf(`
+✅ USER MESSAGE NOTED
+The user sent a message that doesn't require action changes.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+Briefly acknowledge their message if appropriate (1 sentence), then continue your work.
+`, latestUserMessage, guidance)
+
+			default:
+				interruptGuidance = fmt.Sprintf(`
+📨 USER MESSAGE RECEIVED
+User's message: "%s"
+
+Acknowledge the message and continue your work.
+`, latestUserMessage)
+			}
+
+			// Rebuild message context with interrupt-aware system prompt
+			messages = []aiservice.Message{
+				{Role: "system", Content: fullSystemPrompt + "\n\n" + interruptGuidance},
+			}
+			for _, msg := range messagesResp.Messages {
+				messages = append(messages, aiservice.Message{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+
+			t.logger.Info("🔄 Resuming subagent with interrupt-aware context",
+				zap.Int("messageCount", len(messages)),
+				zap.String("category", category),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Restart AI stream with updated, interrupt-aware context
+			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+			if err != nil {
+				t.logger.Error("Failed to restart AI stream after interrupt", zap.Error(err))
+				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Stream restart failed: %v", err))
+				return
+			}
+
+			// Continue to next loop iteration to check for interrupts again
+			continue
+		}
+
+		// ═══════════════════════════════════════════════════════════════════
+		// STAGE 2: NORMAL EVENT PROCESSING (TIMEOUT, INTERRUPT BACKUP, AI EVENTS)
+		// ═══════════════════════════════════════════════════════════════════
 		select {
 		case <-ctx.Done():
 			t.logger.Warn("⏱️ Subagent execution cancelled by timeout",
 				zap.String("subchatId", subchatID))
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat timeout: %s", agentTask.AgentName))
 			t.handleExecutionFailure(agentTask.ID, "Execution timeout")
 			return
-		default:
+
+		case <-notifyCh:
+			// USER MESSAGE INTERRUPT - BACKUP HANDLER (caught in stage 2 when priority check missed it)
+			t.logger.Info("💬 User interrupt detected (backup - caught in stage 2)",
+				zap.String("sessionId", chatSession.ID.Hex()),
+				zap.String("subchatId", subchatID))
+
+			// Drain current stream if active
+			if aiStream != nil {
+				go func() {
+					for range aiStream {
+						// discard remaining events
+					}
+				}()
+			}
+
+			// Fetch all messages including new user message
+			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
+			if err != nil {
+				t.logger.Error("Failed to fetch messages after interrupt", zap.Error(err))
+				continue
+			}
+
+			// Extract latest user message for categorization
+			var latestUserMessage string
+			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
+				if messagesResp.Messages[i].Role == "user" {
+					latestUserMessage = messagesResp.Messages[i].Content
+					break
+				}
+			}
+
+			// Categorize the interrupt to determine intent
+			category, guidance, err := t.categorizeInterrupt(ctx, latestUserMessage)
+			if err != nil {
+				t.logger.Warn("Failed to categorize interrupt, defaulting to CONTINUE",
+					zap.Error(err),
+					zap.String("userMessage", latestUserMessage))
+				category = "CONTINUE"
+				guidance = "Continue with your work but acknowledge the user's message if relevant"
+			}
+
+			t.logger.Info("🎯 Interrupt categorized",
+				zap.String("category", category),
+				zap.String("guidance", guidance),
+				zap.String("userMessage", latestUserMessage))
+
+			// Emit progress notification about interrupt
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID,
+				fmt.Sprintf("📨 User interrupt received: %s", category))
+
+			// Build interrupt-aware system prompt guidance based on category
+			var interruptGuidance string
+			switch category {
+			case "STOP":
+				interruptGuidance = fmt.Sprintf(`
+⚠️ CRITICAL: USER INTERRUPT - STOP CURRENT TASK
+The user has sent a message indicating they want to STOP the current task.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. IMMEDIATELY acknowledge the user's message in your FIRST response
+2. STOP all current work - do not make ANY tool calls until you respond
+3. Ask the user what they would like you to do instead
+4. DO NOT continue with the original task unless they explicitly say to continue
+
+Start your response with: "I've stopped the current task. [address their message directly]"
+`, latestUserMessage, guidance)
+
+			case "MODIFY":
+				interruptGuidance = fmt.Sprintf(`
+🔄 USER INTERRUPT - MODIFY APPROACH
+The user wants to modify or adjust the current approach.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, acknowledge the user's request in your response (use text, not just tool calls)
+2. Explain how you'll adjust your approach based on their guidance
+3. THEN proceed with the modified approach using tool calls
+
+Start your response with: "I'll adjust my approach. [explain the changes]"
+`, latestUserMessage, guidance)
+
+			case "CLARIFY":
+				interruptGuidance = fmt.Sprintf(`
+❓ USER INTERRUPT - NEEDS CLARIFICATION
+The user has a question or needs clarification about your work.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. Answer their question directly and clearly in your FIRST response
+2. Do NOT make any tool calls before responding to their question
+3. After answering, ask if they want you to continue or adjust
+4. Wait for their response before making more tool calls
+
+Start your response by directly addressing their question.
+`, latestUserMessage, guidance)
+
+			case "STATUS":
+				interruptGuidance = fmt.Sprintf(`
+📊 USER INTERRUPT - STATUS CHECK
+The user is checking progress or giving encouragement.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+YOU MUST:
+1. FIRST, give a brief status update (what you've completed, what's next)
+2. Acknowledge their message warmly
+3. THEN continue with your work
+
+Keep your status response brief (2-3 sentences) before continuing.
+`, latestUserMessage, guidance)
+
+			case "CONTINUE":
+				interruptGuidance = fmt.Sprintf(`
+✅ USER MESSAGE NOTED
+The user sent a message that doesn't require action changes.
+
+User's message: "%s"
+
+AI Analysis: %s
+
+Briefly acknowledge their message if appropriate (1 sentence), then continue your work.
+`, latestUserMessage, guidance)
+
+			default:
+				interruptGuidance = fmt.Sprintf(`
+📨 USER MESSAGE RECEIVED
+User's message: "%s"
+
+Acknowledge the message and continue your work.
+`, latestUserMessage)
+			}
+
+			// Rebuild message context with interrupt-aware system prompt
+			messages = []aiservice.Message{
+				{Role: "system", Content: fullSystemPrompt + "\n\n" + interruptGuidance},
+			}
+			for _, msg := range messagesResp.Messages {
+				messages = append(messages, aiservice.Message{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+
+			t.logger.Info("🔄 Resuming subagent with interrupt-aware context",
+				zap.Int("messageCount", len(messages)),
+				zap.String("category", category),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Restart AI stream with updated, interrupt-aware context
+			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+			if err != nil {
+				t.logger.Error("Failed to restart AI stream after interrupt", zap.Error(err))
+				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Stream restart failed: %v", err))
+				return
+			}
+
+			// Continue to next loop iteration
+			continue
+
+		case event, ok := <-aiStream:
+			if !ok {
+				// Stream closed naturally
+				streamActive = false
+				break
+			}
+
 			switch event.Type {
 			case aiservice.StreamEventToken:
 				fullResponse += event.Content
+
+				// 📝 LOG EVERY TEXT TOKEN RECEIVED FROM AI
+				t.logger.Info("💬 AI TEXT TOKEN RECEIVED",
+					zap.String("subchatId", subchatID),
+					zap.String("sessionId", chatSession.ID.Hex()),
+					zap.String("content", event.Content),
+					zap.Int("contentLength", len(event.Content)),
+					zap.Bool("isSystemMessage", isSystemEnforcementMessage(event.Content)))
+
+				// Stream AI messages to progress channel (filter out system messages)
+				if event.Content != "" && !isSystemEnforcementMessage(event.Content) {
+					// Only emit substantive messages (not just whitespace or single characters)
+					trimmed := strings.TrimSpace(event.Content)
+					if len(trimmed) > 5 { // Only emit messages with substance
+						t.logger.Info("✅ EMITTING TEXT TO PROGRESS NOTIFIER",
+							zap.String("subchatId", subchatID),
+							zap.String("content", event.Content),
+							zap.Int("trimmedLength", len(trimmed)))
+
+						// 💾 SAVE TO DATABASE for persistence (so messages survive page refresh)
+						_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, finalCompanyID)
+						if err != nil {
+							t.logger.Warn("Failed to save streaming text chunk to database",
+								zap.String("subchatId", subchatID),
+								zap.String("sessionId", chatSession.ID.Hex()),
+								zap.Error(err))
+						} else {
+							t.logger.Debug("💾 Saved text chunk to database",
+								zap.String("subchatId", subchatID),
+								zap.String("sessionId", chatSession.ID.Hex()),
+								zap.Int("chunkLength", len(event.Content)))
+						}
+
+						// 📡 Send to WebSocket (CRITICAL: use subchat session, not parent!)
+						handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, event.Content)
+					} else {
+						t.logger.Info("⏭️ SKIPPING SHORT TEXT (< 5 chars)",
+							zap.String("subchatId", subchatID),
+							zap.String("content", event.Content),
+							zap.Int("trimmedLength", len(trimmed)))
+					}
+				} else {
+					t.logger.Info("🚫 FILTERED OUT (empty or system message)",
+						zap.String("subchatId", subchatID),
+						zap.String("content", event.Content))
+				}
 
 			case aiservice.StreamEventToolCall:
 				toolCallCount++
@@ -2959,6 +3344,87 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					zap.Any("args", event.ToolCall.Args),
 					zap.Time("timestamp", time.Now()))
 
+				// Emit progress notification with plain English tool call description
+				plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)
+				handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishToolCall)
+
+				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
+				if event.ToolCall.Name == "read_file" {
+					readFileCount++
+
+					// Check if this file was already read (duplicate read)
+					filePath := ""
+					if fp, ok := event.ToolCall.Args["file_path"].(string); ok {
+						filePath = fp
+					}
+
+					if _, alreadyRead := fileContentCache[filePath]; alreadyRead {
+						// Duplicate read - penalty
+						executionScore -= 5
+						t.logger.Warn("⚠️ DUPLICATE READ detected - scoring penalty",
+							zap.String("subchatId", subchatID),
+							zap.String("filePath", filePath),
+							zap.Int("score", executionScore))
+					} else {
+						// First read - small bonus
+						executionScore += 5
+						t.logger.Info("✅ First read of file - scoring bonus",
+							zap.String("subchatId", subchatID),
+							zap.String("filePath", filePath),
+							zap.Int("score", executionScore))
+					}
+
+					// RUNTIME ENFORCEMENT: Hard read limit - block reads after threshold
+					if readFileCount > 3 && !hasWrittenAnyFile {
+						executionScore -= 50
+						t.logger.Error("🚫 HARD LIMIT: Exceeded 3 reads without write - CRITICAL",
+							zap.String("subchatId", subchatID),
+							zap.Int("readFileCount", readFileCount),
+							zap.Int("score", executionScore))
+					}
+
+					// Penalty for exceeding 1 read without write (lowered threshold from 2 to 1)
+					if readFileCount > 1 && !hasWrittenAnyFile {
+						executionScore -= 20
+						t.logger.Warn("⚠️ Exceeded 1 read without write - large penalty (WRITE NOW)",
+							zap.String("subchatId", subchatID),
+							zap.Int("readFileCount", readFileCount),
+							zap.Int("score", executionScore))
+					}
+				}
+
+				// RUNTIME ENFORCEMENT: Track write operations and reward
+				if event.ToolCall.Name == "write_file" || event.ToolCall.Name == "apply_patch" {
+					hasWrittenAnyFile = true
+					readFileCount = 0    // Reset read counter after write
+					executionScore += 20 // Big reward for writing
+
+					t.logger.Info("✅ Write operation detected - BIG scoring bonus",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolCall.Name),
+						zap.Int("score", executionScore))
+				}
+
+				// RUNTIME ENFORCEMENT: Reward TODO completion
+				if event.ToolCall.Name == "coordinator_update_todo_status" {
+					if status, ok := event.ToolCall.Args["status"].(string); ok && status == "completed" {
+						executionScore += 10
+						t.logger.Info("✅ TODO completed - scoring bonus",
+							zap.String("subchatId", subchatID),
+							zap.Int("score", executionScore))
+					}
+				}
+
+				// Penalty for duplicate tool calls
+				warning := progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
+				if warning != "" {
+					executionScore -= 10
+					t.logger.Warn("⚠️ Duplicate operation - scoring penalty",
+						zap.String("subchatId", subchatID),
+						zap.String("toolName", event.ToolCall.Name),
+						zap.Int("score", executionScore))
+				}
+
 				// Record file operation in progress tracker (for reporting only)
 				progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
 
@@ -2969,7 +3435,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					zap.Int("toolCallNumber", toolCallCount))
 
 				// Save tool call to subchat messages
-				_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, companyID)
+				_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, finalCompanyID)
 				if err != nil {
 					t.logger.Error("Failed to save tool call",
 						zap.String("subchatId", subchatID),
@@ -2993,6 +3459,10 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				}
 
 			case aiservice.StreamEventToolResult:
+				// Emit progress notification with plain English tool result
+				plainEnglishResult := convertToolResultToPlainEnglish(event.ToolResult.Name, event.ToolResult.Output, event.ToolResult.Error)
+				handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishResult)
+
 				// Summarize tool result to prevent context bloat
 				var originalSize int
 				var summarizedOutput string
@@ -3015,14 +3485,66 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 					summarizedOutput = fmt.Sprintf("Error: %s", event.ToolResult.Error)
 				}
 
+				// RUNTIME ENFORCEMENT: File content caching and duplicate read blocking
+				if event.ToolResult.Name == "read_file" && event.ToolResult.Error == "" {
+					// Cache the full content (not the summarized version)
+					if fullContent, ok := event.ToolResult.Output.(string); ok {
+						// Check if this is a duplicate read by checking cache
+						if len(fileContentCache) > 0 {
+							// RUNTIME ENFORCEMENT: Return cached summary instead of full content
+							summarizedOutput = fmt.Sprintf("⚠️ CACHED FILE CONTENT - DO NOT RE-READ\n\nThis file was already read. Content is cached. You MUST use the previous read content.\n\nSUMMARY: File contains %d characters across %d lines.\n\nYour next action MUST be write_file or apply_patch - NOT another read_file.\n\nCURRENT SCORE: %d points", len(fullContent), len(strings.Split(fullContent, "\n")), executionScore)
+
+							t.logger.Warn("🚫 Returning cached summary - blocking duplicate read",
+								zap.String("subchatId", subchatID),
+								zap.Int("score", executionScore))
+						} else {
+							// First read - cache the content but still return it
+							fileContentCache["last_read"] = fullContent
+							t.logger.Info("💾 Cached file content for enforcement",
+								zap.String("subchatId", subchatID),
+								zap.Int("contentSize", len(fullContent)))
+						}
+					}
+				}
+
+				// RUNTIME ENFORCEMENT: Inject forced write scaffold after 1 read without write (lowered from 2)
+				if readFileCount >= 1 && !hasWrittenAnyFile {
+					forceScaffold := fmt.Sprintf("\n\n╔══════════════════════════════════════════════════════════════╗\n║          FORCED WRITE SCAFFOLD - COMPLETE AND SUBMIT          ║\n╚══════════════════════════════════════════════════════════════╝\n\n🚨 WRITE-ONLY MODE ENFORCEMENT 🚨\n\nYou have read %d file(s). Reading phase is COMPLETE.\n\nYour NEXT tool call MUST be either:\n1. write_file - to create or modify a file\n2. apply_patch - to apply code changes\n\nYou are BLOCKED from calling read_file again.\n\nCURRENT EXECUTION SCORE: %d points\n\nSCORING:\n- Next write_file/apply_patch: +20 points ✅\n- Another read_file: -50 points ❌ (HARD LIMIT)\n\nIMPLEMENT NOW - DO NOT READ ANOTHER FILE.", readFileCount, executionScore)
+					summarizedOutput += forceScaffold
+
+					// Save scaffold as visible message
+					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", forceScaffold, finalCompanyID)
+					if err != nil {
+						t.logger.Warn("Failed to save forced scaffold message",
+							zap.String("subchatId", subchatID),
+							zap.Error(err))
+					}
+
+					t.logger.Warn("🔨 Injected FORCED WRITE SCAFFOLD",
+						zap.String("subchatId", subchatID),
+						zap.Int("readFileCount", readFileCount),
+						zap.Int("score", executionScore))
+				}
+
+				// RUNTIME ENFORCEMENT: Inject scoring message (visible to model)
+				scoringMessage := fmt.Sprintf("\n\n📊 EXECUTION SCORE: %d points\n", executionScore)
+				if executionScore >= 30 {
+					scoringMessage += "✅ EXCELLENT - On track for successful completion!\n"
+				} else if executionScore >= 10 {
+					scoringMessage += "⚠️ NEEDS WRITE - Read enough, now implement changes!\n"
+				} else if executionScore < 0 {
+					scoringMessage += "🚨 CRITICAL - Too many reads, not enough writes!\n"
+				}
+				summarizedOutput += scoringMessage
+
 				// Inject progress summary every 3 tool calls
 				if toolCallCount%3 == 0 && (len(progressTracker.FilesRead) > 0 || len(progressTracker.DirectoriesListed) > 0) {
 					progressSummary := progressTracker.GetProgressSummary()
 					summarizedOutput += progressSummary
 
-					t.logger.Info("📊 Injected progress summary",
+					t.logger.Info("📊 Injected progress summary with scoring",
 						zap.String("subchatId", subchatID),
-						zap.Int("toolCallCount", toolCallCount))
+						zap.Int("score", executionScore))
 				}
 
 				// Log tool result with success/failure indicator and context size info
@@ -3040,7 +3562,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 						zap.Int("summarizedSize", len(summarizedOutput)))
 				}
 
-				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, summarizedOutput, event.ToolResult.Error, event.ToolResult.DurationMs, companyID)
+				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, summarizedOutput, event.ToolResult.Error, event.ToolResult.DurationMs, finalCompanyID)
 				if err != nil {
 					t.logger.Error("Failed to save tool result",
 						zap.String("subchatId", subchatID),
@@ -3064,28 +3586,28 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.String("agentName", agentTask.AgentName))
 	t.logger.Info("╠═══════════════════════════════════════════════════════════════════")
 	t.logger.Info("║ Tool Calls",
-		zap.Int("total", toolCallCount))
+		zap.Int("total", toolCallCount),
+		zap.Int("reads", readFileCount),
+		zap.Int("writes", len(progressTracker.FilesWritten)),
+		zap.Int("bash", len(progressTracker.BashCalls)))
 	t.logger.Info("║ TODOs",
 		zap.Int("completed", completedTodos),
 		zap.Int("total", len(agentTask.Todos)))
+	t.logger.Info("║ Score",
+		zap.Int("finalScore", executionScore),
+		zap.Bool("hasWritten", hasWrittenAnyFile))
 	t.logger.Info("║ Files",
 		zap.Int("filesRead", len(progressTracker.FilesRead)),
 		zap.Int("filesWritten", len(progressTracker.FilesWritten)),
-		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)),
-		zap.Int("bashCalls", len(progressTracker.BashCalls)))
+		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)))
 	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
 
-	t.logger.Info("📝 Saving final AI response to subchat",
+	// NOTE: We now save text chunks as they stream (lines 3073-3085), so we don't need to save
+	// the full response here. This prevents duplicate messages in the database.
+	// The fullResponse variable is still useful for logging and validation purposes.
+	t.logger.Info("📝 Text chunks already saved during streaming (no final save needed)",
 		zap.String("subchatId", subchatID),
-		zap.Int("responseLength", len(fullResponse)))
-
-	// Save final AI response to subchat
-	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", fullResponse, companyID)
-	if err != nil {
-		t.logger.Error("Failed to save subagent final response",
-			zap.String("subchatId", subchatID),
-			zap.Error(err))
-	}
+		zap.Int("totalResponseLength", len(fullResponse)))
 
 	// ========================================
 	// VALIDATION LAYER 1: File Modification Validation
@@ -3123,6 +3645,27 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				zap.String("subchatId", subchatID),
 				zap.String("agentTaskId", agentTask.ID),
 				zap.String("reason", "no files modified"))
+
+			// Send failure message to user
+			failureMessage := fmt.Sprintf("❌ **Task Blocked - File Validation Failed**\n\n**Reason:** %s\n\n**Tool Calls Made:** %d\n**TODOs Claimed:** %d/%d\n\nThe expected files were not modified. This might be because:\n- The file paths in the task don't match what was actually written\n- The tool used a different file path format\n- The changes were not actually applied\n\nPlease review the task and try again, or ask me for help!",
+				validationErr.Error(), toolCallCount, completedTodos, len(agentTask.Todos))
+
+			// Save failure message to database
+			_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", failureMessage, finalCompanyID)
+			if err != nil {
+				t.logger.Warn("Failed to save failure message to database",
+					zap.String("subchatId", subchatID),
+					zap.Error(err))
+			}
+
+			// Emit failure message to WebSocket
+			handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, failureMessage)
+			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("❌ Subchat blocked: %s - %s", agentTask.AgentName, validationErr.Error()))
+
+			// Keep subchat alive for user to investigate or provide guidance
+			t.logger.Info("💬 Task blocked - waiting for user messages",
+				zap.String("subchatId", subchatID),
+				zap.String("sessionId", chatSession.ID.Hex()))
 			return
 		}
 
@@ -3160,6 +3703,29 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 				zap.Error(err))
 		}
 
+
+	// Send incomplete work message to user
+	incompleteMessage := fmt.Sprintf("⚠️ **Task Incomplete - More Work Needed**\n\n**Progress:** %d/%d TODOs completed\n**Tool Calls Made:** %d\n**Files Modified:** %v\n\nI've made progress but haven't completed all the TODOs yet. Would you like me to:\n1. Continue working on the remaining tasks\n2. Review what's been done so far\n3. Adjust the approach\n\nLet me know how you'd like to proceed!",
+		completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+	// Save incomplete message to database
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", incompleteMessage, finalCompanyID)
+	if err != nil {
+		t.logger.Warn("Failed to save incomplete message to database",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	// Emit incomplete message to WebSocket for real-time display
+	handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, incompleteMessage)
+	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat incomplete: %s - %d/%d TODOs done", agentTask.AgentName, completedTodos, len(agentTask.Todos)))
+
+	// Keep subchat alive for user to provide guidance
+	t.logger.Info("💬 Task incomplete - waiting for user messages",
+		zap.String("subchatId", subchatID),
+		zap.String("sessionId", chatSession.ID.Hex()),
+		zap.Int("completedTodos", completedTodos),
+		zap.Int("totalTodos", len(agentTask.Todos)))
 		return
 	}
 
@@ -3209,18 +3775,250 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.Int("toolCalls", toolCallCount),
 		zap.Int("completedTodos", completedTodos),
 		zap.Int("totalTodos", len(agentTask.Todos)))
+
+	// Send completion message to subchat WebSocket
+	completionMessage := fmt.Sprintf("✅ **Task Completed!**\n\n**Agent:** %s\n**TODOs Completed:** %d/%d\n**Tool Calls:** %d\n**Files Modified:** %v\n\nThe task has been successfully completed. You can ask me questions or request changes!",
+		agentTask.AgentName, completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+	// Save completion message to database
+	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", completionMessage, finalCompanyID)
+	if err != nil {
+		t.logger.Warn("Failed to save completion message to database",
+			zap.String("subchatId", subchatID),
+			zap.Error(err))
+	}
+
+	// Emit completion message to WebSocket
+	handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, completionMessage)
+	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("✅ Subchat completed: %s", agentTask.AgentName))
+
+	t.logger.Info("💬 Task completed - now waiting for user messages",
+		zap.String("subchatId", subchatID),
+		zap.String("sessionId", chatSession.ID.Hex()))
+
+	// KEEP SUBCHAT ALIVE: Instead of returning, wait for new user messages
+	// This allows the user to continue interacting with the agent after task completion
+	for {
+		select {
+		case <-ctx.Done():
+			t.logger.Info("⏱️ Context cancelled while waiting for user messages",
+				zap.String("subchatId", subchatID))
+			return
+
+		case <-notifyCh:
+			// USER MESSAGE RECEIVED AFTER COMPLETION
+			t.logger.Info("💬 User message received after task completion - resuming AI",
+				zap.String("sessionId", chatSession.ID.Hex()),
+				zap.String("subchatId", subchatID))
+
+			// Fetch all messages including new user message
+			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
+			if err != nil {
+				t.logger.Error("Failed to fetch messages after completion", zap.Error(err))
+				continue
+			}
+
+			// Extract latest user message
+			var latestUserMessage string
+			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
+				if messagesResp.Messages[i].Role == "user" {
+					latestUserMessage = messagesResp.Messages[i].Content
+					break
+				}
+			}
+
+			t.logger.Info("🔄 Resuming AI after task completion with user question",
+				zap.String("userMessage", latestUserMessage),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Build post-completion system prompt
+			postCompletionPrompt := fmt.Sprintf(`You are %s. You have successfully completed the assigned task.
+
+**Task Summary:**
+- Agent: %s
+- TODOs Completed: %d/%d
+- Tool Calls: %d
+- Files Modified: %v
+
+The user has sent you a new message. You should:
+1. Answer their question or address their request directly
+2. Use tools if needed to implement changes or gather information
+3. Be helpful and responsive
+4. If they want changes, implement them using the available tools
+
+You have access to all the same tools as before. You can read files, write files, run commands, etc.`,
+				agentTask.AgentName, agentTask.AgentName, completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+
+			// Rebuild message context with post-completion system prompt
+			messages = []aiservice.Message{
+				{Role: "system", Content: postCompletionPrompt},
+			}
+			for _, msg := range messagesResp.Messages {
+				messages = append(messages, aiservice.Message{
+					Role:    msg.Role,
+					Content: msg.Content,
+				})
+			}
+
+			t.logger.Info("🚀 Starting new AI stream for post-completion conversation",
+				zap.Int("messageCount", len(messages)),
+				zap.String("sessionId", chatSession.ID.Hex()))
+
+			// Start new AI stream with updated context
+			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+			if err != nil {
+				t.logger.Error("Failed to start AI stream after completion", zap.Error(err))
+				continue
+			}
+
+			// Process the new AI stream (reuse existing event processing logic)
+			// Reset counters for new conversation turn
+			fullResponse = ""
+
+			for {
+				select {
+				case <-ctx.Done():
+					t.logger.Warn("⏱️ Context cancelled during post-completion stream",
+						zap.String("subchatId", subchatID))
+					return
+
+				case <-notifyCh:
+					// Another interrupt during post-completion conversation
+					t.logger.Info("💬 Another user message during post-completion conversation",
+						zap.String("sessionId", chatSession.ID.Hex()))
+					// Drain current stream
+					if aiStream != nil {
+						go func() {
+							for range aiStream {
+								// discard remaining events
+							}
+						}()
+					}
+					// Break to outer loop to fetch and process new message
+					goto FETCH_NEW_MESSAGE
+
+				case event, ok := <-aiStream:
+					if !ok {
+						// Stream closed naturally
+						t.logger.Info("✅ Post-completion stream completed",
+							zap.String("subchatId", subchatID))
+						goto WAIT_FOR_NEXT_MESSAGE
+					}
+
+					switch event.Type {
+					case aiservice.StreamEventToken:
+						fullResponse += event.Content
+
+						// Stream AI messages to progress channel
+						if event.Content != "" && !isSystemEnforcementMessage(event.Content) {
+							trimmed := strings.TrimSpace(event.Content)
+							if len(trimmed) > 5 {
+								// Save to database
+								_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, finalCompanyID)
+								if err != nil {
+									t.logger.Warn("Failed to save streaming text chunk",
+										zap.String("subchatId", subchatID),
+										zap.Error(err))
+								}
+
+								// Send to WebSocket
+								handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, event.Content)
+							}
+						}
+
+					case aiservice.StreamEventToolCall:
+						t.logger.Info("🔧 Tool call in post-completion conversation",
+							zap.String("subchatId", subchatID),
+							zap.String("toolName", event.ToolCall.Name))
+
+						// Execute tool and emit progress
+						plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)
+						handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishToolCall)
+
+						// Save tool call
+						_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, finalCompanyID)
+						if err != nil {
+							t.logger.Error("Failed to save tool call", zap.Error(err))
+						}
+
+					case aiservice.StreamEventToolResult:
+						t.logger.Info("✓ Tool result in post-completion conversation",
+							zap.String("subchatId", subchatID),
+							zap.String("toolName", event.ToolResult.Name))
+
+						// Save tool result
+						var output interface{}
+						if event.ToolResult.Error != "" {
+							output = event.ToolResult.Error
+						} else {
+							output = event.ToolResult.Output
+						}
+						outputStr := t.summarizeToolResult(event.ToolResult.Name, output)
+
+						_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, outputStr, event.ToolResult.Error, event.ToolResult.DurationMs, finalCompanyID)
+						if err != nil {
+							t.logger.Error("Failed to save tool result", zap.Error(err))
+						}
+
+					case aiservice.StreamEventError:
+						t.logger.Error("❌ AI service error during post-completion conversation",
+							zap.String("subchatId", subchatID),
+							zap.String("error", event.Error))
+						goto WAIT_FOR_NEXT_MESSAGE
+					}
+				}
+			}
+
+		FETCH_NEW_MESSAGE:
+			continue
+
+		WAIT_FOR_NEXT_MESSAGE:
+			continue
+		}
+	}
 }
 
 // buildExecutionPhaseSystemPrompt creates a strict system prompt using OPERATIONAL enforcement language
 // Uses concrete "WRITE-ONLY MODE" instead of abstract "PHASE: EXECUTE" for better model compliance
 func (t *ExecuteSubagentTool) buildExecutionPhaseSystemPrompt() string {
 	return `╔══════════════════════════════════════════════════════════════╗
-║                  WRITE-ONLY MODE ACTIVATED                    ║
+║            GUIDED EXECUTION MODE ACTIVATED                    ║
 ╚══════════════════════════════════════════════════════════════╝
 
-🚨 YOU ARE NOW IN WRITE-ONLY MODE 🚨
+🎯 YOUR MISSION: Execute the task efficiently while keeping the user informed
 
-ALLOWED TOOLS (you may ONLY use these):
+═══════════════════════════════════════════════════════════════
+📢 COMMUNICATION REQUIREMENTS (CRITICAL):
+═══════════════════════════════════════════════════════════════
+
+YOU MUST communicate with the user throughout execution:
+
+✅ BEFORE each TODO: Announce what you're working on
+   Example: "Working on adding error handling to the authentication module..."
+
+✅ DURING implementation: Briefly explain your approach
+   Example: "I'll add a try-catch block and log errors to the console."
+
+✅ AFTER tool calls: Explain what you just did
+   Example: "I've updated the login function with proper error handling."
+
+✅ ON errors: Explain what went wrong and your next step
+   Example: "Test failed: missing import. I'll add the required import now."
+
+✅ WHEN blocked: Ask the user for guidance
+   Example: "I need clarification: should I use async/await or promises?"
+
+✅ ON completion: Summarize what was accomplished
+   Example: "Completed: Added error handling with logging to 3 files."
+
+❌ NEVER be silent - the user is watching and needs updates
+❌ NEVER create new tasks when asked about progress - just respond
+❌ NEVER show scoring or enforcement messages to the user
+
+═══════════════════════════════════════════════════════════════
+🔧 AVAILABLE TOOLS:
+═══════════════════════════════════════════════════════════════
+
 ✅ read_file       - Read source file ONCE per file
 ✅ write_file      - Write/create files
 ✅ apply_patch     - Apply code changes
@@ -3229,48 +4027,54 @@ ALLOWED TOOLS (you may ONLY use these):
 ✅ coordinator_upsert_knowledge   - Save decisions
 
 BLOCKED TOOLS (these will FAIL):
-❌ code_index_search - Discovery disabled in WRITE-ONLY MODE
-❌ list_directory    - Discovery disabled in WRITE-ONLY MODE
+❌ code_index_search - Discovery disabled in execution mode
+❌ list_directory    - Discovery disabled in execution mode
 ❌ All coordinator tools (for task creation, listing, etc.)
 
 ═══════════════════════════════════════════════════════════════
-
-⏱️ RECOMMENDED WORKFLOW - EFFICIENT IMPLEMENTATION:
-
-Step 1: read_file on target files to understand current state
-Step 2: write_file or apply_patch to implement changes
-Step 3: coordinator_update_todo_status to mark TODO completed
-
-REPEAT for next TODO.
-
+⏱️ EFFICIENT WORKFLOW (3-5 tool calls per TODO):
 ═══════════════════════════════════════════════════════════════
 
-🎯 BEST PRACTICES:
-
-0. FOCUS ON FILES SPECIFIED IN TASK
-   • Task specifies EXACT file paths to modify
-   • Prioritize these files over exploration
-   • Use the exact paths provided in filesModified
-   • You can read files multiple times if needed for correctness
-
-1. EFFICIENT FILE READING
-   • Read files as needed to understand the code
-   • Re-read if you need to verify changes
-   • Balance understanding with execution speed
-
-2. WRITE EARLY AND OFTEN
-   • Don't over-analyze before implementing
-   • Start writing code once you understand the requirements
-   • Test and iterate as needed
-
-3. TRACK YOUR PROGRESS
-   • Use coordinator_update_todo_status to track completion
-   • Store key decisions with coordinator_upsert_knowledge
-   • Update status as you complete each TODO
+For each TODO:
+1. ANNOUNCE: Tell user what you're working on
+2. READ: Use read_file on target file (ONCE per file)
+3. EXPLAIN: Briefly describe your implementation approach
+4. IMPLEMENT: Use write_file or apply_patch
+5. VERIFY: Run tests with bash if applicable, report results
+6. COMPLETE: Use coordinator_update_todo_status with notes
+7. REPORT: Tell user what you accomplished
 
 ═══════════════════════════════════════════════════════════════
+⚠️ EFFICIENCY RULES (RUNTIME ENFORCEMENT):
+═══════════════════════════════════════════════════════════════
 
+• READ ONLY FILES SPECIFIED IN TASK - exact paths in filesModified
+• Read each file ONCE - file content is cached after first read
+• Aim for 3-5 tool calls per TODO maximum
+• Do NOT explore, search, or read unrelated files
+• Do NOT call list_directory - IT IS BLOCKED
+
+═══════════════════════════════════════════════════════════════
+💬 USER INTERACTION GUIDELINES:
+═══════════════════════════════════════════════════════════════
+
+IF user asks "what's the status?" or "what are you doing?":
+→ Respond with current progress, do NOT create a new task
+→ Example: "I'm currently working on the authentication module (TODO 2 of 4).
+   I've completed the error handling and I'm now adding unit tests."
+
+IF user says "stop" or "wait":
+→ Acknowledge and pause for instructions
+→ Example: "Understood, pausing execution. What would you like me to do?"
+
+IF a tool call fails:
+→ Explain the error clearly and your recovery plan
+→ Example: "The test failed with 'module not found'. I'll install the missing
+   dependency now."
+
+═══════════════════════════════════════════════════════════════
 📋 TASK CONTRACT (arriving in next message):
+═══════════════════════════════════════════════════════════════
 
 You will receive:
 • Exact file paths to modify (use these EXACT paths)
@@ -3281,6 +4085,7 @@ You must produce:
 • Modified files (via write_file or apply_patch)
 • Updated TODO status for each item
 • Knowledge entries for key decisions
+• Clear communication to the user throughout
 
 ═══════════════════════════════════════════════════════════════
 
@@ -3442,19 +4247,105 @@ func (t *ExecuteSubagentTool) handleExecutionFailure(agentTaskID, errorMsg strin
 	}
 }
 
+// InterruptCategorization holds the result of interrupt analysis
+type InterruptCategorization struct {
+	Category string `json:"category"`
+	Guidance string `json:"guidance"`
+}
+
+// categorizeInterrupt analyzes user interrupt message to determine intent and provide guidance
+func (t *ExecuteSubagentTool) categorizeInterrupt(ctx context.Context, userMessage string) (string, string, error) {
+	categorizationPrompt := fmt.Sprintf(`You are an interrupt analyzer. Analyze this user message sent while an AI agent was working:
+
+User message: "%s"
+
+Categorize the interrupt intent:
+- STOP: User wants to completely stop current work and do something different (e.g., "stop", "nevermind", "do this instead")
+- MODIFY: User wants to change/adjust the current approach (e.g., "use X instead of Y", "add also Z", "change this")
+- CLARIFY: User has a question or needs clarification (e.g., "why are you doing X?", "what does Y mean?")
+- STATUS: User checking progress or giving encouragement (e.g., "how's it going?", "good job!", "what are you doing now?")
+- CONTINUE: Message doesn't require action change (e.g., "ok", "thanks", general comments)
+
+Respond with ONLY valid JSON (no markdown, no explanation):
+{
+  "category": "STOP|MODIFY|CLARIFY|STATUS|CONTINUE",
+  "guidance": "Brief instruction for the agent (1 sentence)"
+}`, userMessage)
+
+	// Quick Claude API call for categorization (use minimal tokens)
+	messages := []aiservice.Message{
+		{Role: "user", Content: categorizationPrompt},
+	}
+
+	t.logger.Debug("Categorizing interrupt", zap.String("userMessage", userMessage))
+
+	// Use streaming API to get categorization (collect full response)
+	stream, err := t.aiService.StreamChatWithTools(ctx, messages, 1) // maxToolCalls=1 (no tools needed)
+	if err != nil {
+		t.logger.Warn("Failed to start categorization stream", zap.Error(err))
+		return "CONTINUE", "", err
+	}
+
+	// Collect the full response from stream
+	var response strings.Builder
+	for event := range stream {
+		if event.Type == aiservice.StreamEventToken {
+			response.WriteString(event.Content)
+		}
+	}
+
+	responseStr := response.String()
+	t.logger.Debug("Raw categorization response", zap.String("response", responseStr))
+
+	// Try to extract JSON from response (handle markdown code blocks)
+	jsonStr := responseStr
+	if strings.Contains(responseStr, "```json") {
+		start := strings.Index(responseStr, "```json") + 7
+		end := strings.LastIndex(responseStr, "```")
+		if start > 7 && end > start {
+			jsonStr = responseStr[start:end]
+		}
+	} else if strings.Contains(responseStr, "```") {
+		start := strings.Index(responseStr, "```") + 3
+		end := strings.LastIndex(responseStr, "```")
+		if start > 3 && end > start {
+			jsonStr = responseStr[start:end]
+		}
+	}
+
+	// Parse JSON response
+	var result InterruptCategorization
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonStr)), &result); err != nil {
+		t.logger.Warn("Failed to parse categorization JSON, defaulting to CONTINUE",
+			zap.Error(err),
+			zap.String("jsonStr", jsonStr))
+		return "CONTINUE", "", err
+	}
+
+	// Validate category
+	validCategories := map[string]bool{
+		"STOP": true, "MODIFY": true, "CLARIFY": true, "STATUS": true, "CONTINUE": true,
+	}
+	if !validCategories[result.Category] {
+		t.logger.Warn("Invalid category returned, defaulting to CONTINUE",
+			zap.String("category", result.Category))
+		return "CONTINUE", "", fmt.Errorf("invalid category: %s", result.Category)
+	}
+
+	return result.Category, result.Guidance, nil
+}
+
 // RegisterCoordinatorTools registers all coordinator tools with the tool registry
 func RegisterCoordinatorTools(
 	registry *aiservice.ToolRegistry,
 	taskStorage storage.TaskStorage,
 	knowledgeStorage storage.KnowledgeStorage,
-	toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler,
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler,
 	subchatStorage *storage.SubchatStorage,
 	aiService AIServiceInterface,
 	chatService ChatServiceInterface,
 	aiSettingsService AISettingsServiceInterface,
-	aiConfig *aiservice.AIConfig, // AI configuration for compaction engine
 	logger *zap.Logger,
-	mongoDatabase ...*mongo.Database, // Optional: for review tools
 ) error {
 	tools := []aiservice.ToolExecutor{
 		// Existing tools
@@ -3465,7 +4356,6 @@ func RegisterCoordinatorTools(
 		// New tools
 		&UpsertKnowledgeTool{storage: knowledgeStorage},
 		&GetPopularCollectionsTool{storage: knowledgeStorage},
-		&KnowledgeVoteTool{storage: knowledgeStorage},
 		&CreateHumanTaskTool{storage: taskStorage},
 		&UpdateTaskStatusTool{storage: taskStorage},
 		&UpdateTodoStatusTool{storage: taskStorage},
@@ -3506,74 +4396,6 @@ func RegisterCoordinatorTools(
 			return fmt.Errorf("failed to register %s: %w", tool.Name(), err)
 		}
 	}
-
-	// Register review tools (knowledge quality review system)
-	// Note: Review tools are optional - only register if mongoDatabase is provided
-	if len(mongoDatabase) > 0 && mongoDatabase[0] != nil {
-		if err := registerReviewTools(registry, knowledgeStorage, mongoDatabase[0], aiConfig, logger); err != nil {
-			logger.Warn("Failed to register review tools", zap.Error(err))
-			// Don't fail the entire registration - review tools are optional
-		} else {
-			logger.Info("Review tools registered successfully")
-		}
-	}
-
-	return nil
-}
-
-// registerReviewTools initializes and registers knowledge review tools
-func registerReviewTools(
-	registry *aiservice.ToolRegistry,
-	knowledgeStorage storage.KnowledgeStorage,
-	mongoDatabase *mongo.Database,
-	aiConfig *aiservice.AIConfig,
-	logger *zap.Logger,
-) error {
-	// Get Qdrant client from knowledge storage
-	// We need to type assert to get access to the qdrantClient
-	_, ok := knowledgeStorage.(*storage.MongoKnowledgeStorage)
-	if !ok {
-		return fmt.Errorf("knowledge storage is not MongoKnowledgeStorage")
-	}
-
-	// Initialize review storage
-	reviewStorage, err := reviewPkg.NewMongoReviewStorage(mongoDatabase, logger)
-	if err != nil {
-		return fmt.Errorf("failed to create review storage: %w", err)
-	}
-
-	// Get Qdrant client (we need reflection or a getter method - for now, create new engines without it)
-	// Initialize scoring engine (will work without Qdrant, with reduced functionality)
-	scoringEngine := reviewPkg.NewScoringEngine(nil, logger)
-
-	// Initialize action engine
-	actionEngine := reviewPkg.NewActionEngine(knowledgeStorage, reviewStorage, logger)
-
-	// Initialize compaction engine with AI config
-	compactionEngine, err := reviewPkg.NewCompactionEngine(aiConfig)
-	if err != nil {
-		logger.Warn("Failed to create compaction engine, compaction tools will be unavailable", zap.Error(err))
-		// Continue without compaction engine - review tools will still work
-		compactionEngine = nil
-	}
-
-	// Initialize orchestrator
-	orchestrator := reviewPkg.NewReviewOrchestrator(
-		scoringEngine,
-		actionEngine,
-		compactionEngine,
-		knowledgeStorage,
-		reviewStorage,
-		logger,
-	)
-
-	// Register review tools
-	if err := RegisterReviewTools(registry, orchestrator); err != nil {
-		return fmt.Errorf("failed to register review tools: %w", err)
-	}
-
-	logger.Info("Review tools initialized and registered",
-		zap.Int("toolCount", 4))
 
 	return nil
 }
