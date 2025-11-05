@@ -31,6 +31,45 @@ export interface SessionListProps {
   className?: string;
 }
 
+// Helper to organize sessions into parent-child hierarchy
+const organizeSessionsHierarchy = (sessions: ChatSession[]) => {
+  const sessionMap = new Map<string, ChatSession & { children: ChatSession[] }>();
+  const rootSessions: (ChatSession & { children: ChatSession[] })[] = [];
+
+  // Create map with all sessions
+  sessions.forEach(session => {
+    sessionMap.set(session.id, { ...session, children: [] });
+  });
+
+  // Build parent-child relationships
+  sessions.forEach(session => {
+    const node = sessionMap.get(session.id)!;
+
+    if (session.parentChatId && sessionMap.has(session.parentChatId)) {
+      // This is a subchat with a valid parent
+      const parentNode = sessionMap.get(session.parentChatId)!;
+      parentNode.children.push(node);
+    } else {
+      // This is a root session
+      rootSessions.push(node);
+    }
+  });
+
+  // Sort root sessions by creation date (newest first)
+  rootSessions.sort((a, b) =>
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  // Sort children by creation date (oldest first - chronological)
+  rootSessions.forEach(parent => {
+    parent.children.sort((a, b) =>
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+  });
+
+  return rootSessions;
+};
+
 export const SessionList: React.FC<SessionListProps> = ({
   sessions,
   activeSessionId,
@@ -46,6 +85,12 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Organize sessions into hierarchy
+  const organizedSessions = React.useMemo(
+    () => organizeSessionsHierarchy(sessions),
+    [sessions]
+  );
 
   const handleNewChat = async () => {
     setIsLoading(true);
@@ -148,21 +193,27 @@ export const SessionList: React.FC<SessionListProps> = ({
           </div>
         ) : (
           <div className="p-2 space-y-1">
-            {sessions.map((session) => {
-              const isActive = session.id === activeSessionId;
-              const isSubchat = !!session.parentChatId || session.title.startsWith('Subchat:');
-              const isRenaming = renameSessionId === session.id;
+            {organizedSessions.map((parentSession) => {
+              // Render helper for a single session
+              const renderSession = (
+                session: ChatSession & { children?: ChatSession[] },
+                isChild: boolean = false
+              ) => {
+                const isActive = session.id === activeSessionId;
+                const isSubchat = !!session.parentChatId || session.title.startsWith('Subchat:');
+                const isRenaming = renameSessionId === session.id;
 
-              return (
-                <div
-                  key={session.id}
-                  className={cn(
-                    'group relative rounded-lg transition-colors',
-                    isActive
-                      ? 'bg-primary-100 dark:bg-primary-900/30'
-                      : 'hover:bg-gray-100 dark:hover:bg-gray-700/50'
-                  )}
-                >
+                return (
+                  <div
+                    key={session.id}
+                    className={cn(
+                      'group relative rounded-lg transition-colors',
+                      isChild && 'ml-6 border-l-2 border-gray-300 dark:border-gray-600 pl-3',
+                      isActive
+                        ? 'bg-primary-100 dark:bg-primary-900/30'
+                        : 'hover:bg-gray-100 dark:hover:bg-gray-700/50'
+                    )}
+                  >
                   {isRenaming ? (
                     // Rename Input
                     <div className="p-2">
@@ -286,7 +337,18 @@ export const SessionList: React.FC<SessionListProps> = ({
                   )}
                 </div>
               );
-            })}
+            };
+
+            // Return parent session and its children
+            return (
+              <React.Fragment key={parentSession.id}>
+                {renderSession(parentSession, false)}
+                {parentSession.children?.map((childSession) =>
+                  renderSession(childSession, true)
+                )}
+              </React.Fragment>
+            );
+          })}
           </div>
         )}
       </div>

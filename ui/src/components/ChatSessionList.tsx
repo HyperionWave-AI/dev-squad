@@ -441,6 +441,19 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Header with New Chat and Delete All buttons */}
       <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+        {/* Chat Sessions Heading with Robot Icon */}
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+          <SmartToy 
+            sx={{ 
+              mr: 1, 
+              color: 'primary.main',
+              fontSize: '1.5rem'
+            }} 
+          />
+          <Typography variant="h6" sx={{ fontWeight: 600, color: 'text.primary' }}>
+            Chat Sessions
+          </Typography>
+        </Box>
         <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
           <Button
             variant="contained"
@@ -454,11 +467,19 @@ export const ChatSessionList: React.FC<ChatSessionListProps> = ({
           <IconButton
             onClick={handleDeleteAllClick}
             disabled={sessions.length === 0}
-            color="error"
             sx={{
               minWidth: 48,
+              backgroundColor: 'error.main',
+              color: 'white',
               '& .MuiSvgIcon-root': {
                 fontSize: '2rem', // Increased from default 1.5rem to 2rem (33% larger)
+              },
+              '&:hover': {
+                backgroundColor: 'error.dark',
+              },
+              '&:disabled': {
+                backgroundColor: 'action.disabled',
+                color: 'action.disabled',
               }
             }}
             title="Delete All Chats"
