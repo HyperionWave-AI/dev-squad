@@ -1,4 +1,4 @@
-import type { Decision, Lesson, QueryResult, Outcome } from '@/types/reflection';
+import type { Decision, Lesson, Outcome } from '@/types/reflection';
 import { fetchWithAuth } from './restClient';
 
 const API_BASE = '';
@@ -38,11 +38,11 @@ export const reflectionService = {
     });
   },
 
-  async queryLessons(situation: string, limit: number = 5): Promise<{ results: QueryResult[] }> {
-    return fetchWithAuth(`${API_BASE}/api/v1/reflection/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ situation, limit }),
+  async queryLessons(query: string, limit: number = 10): Promise<{ lessons: Lesson[]; count: number }> {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit)
     });
+    return fetchWithAuth(`${API_BASE}/api/v1/reflection/search?${params}`);
   },
 };
