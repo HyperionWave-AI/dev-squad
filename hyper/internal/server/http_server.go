@@ -204,9 +204,7 @@ func StartHTTPServer(
 		aiChatService,  // AI service for sub-agent streaming
 		chatService,    // Chat service for message storage
 		aiSettingsService, // AI settings service for subagent prompts
-		aiConfig,       // AI configuration for compaction engine
 		logger,         // Logger for debugging
-		mongoDatabase,  // MongoDB database for review tools
 	); err != nil {
 		logger.Error("Failed to register coordinator tools", zap.Error(err))
 		return err
