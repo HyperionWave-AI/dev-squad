@@ -16,6 +16,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/qdrant/go-client v1.15.2
+	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
 	github.com/stretchr/testify v1.11.1
 	github.com/tmc/langchaingo v0.1.14
 	go.mongodb.org/mongo-driver v1.17.2

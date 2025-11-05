@@ -79,6 +79,20 @@ func (p *GoParser) extractFuncDecl(fn *ast.FuncDecl, fset *token.FileSet, conten
 	// Check if function is exported
 	metadata["exported"] = fn.Name.IsExported()
 
+	// Extract docstring from comments
+	if fn.Doc != nil && fn.Doc.Text() != "" {
+		metadata["hasDocstring"] = true
+		metadata["docContent"] = strings.TrimSpace(fn.Doc.Text())
+	}
+
+	// Extract symbols (identifiers used in function body)
+	if fn.Body != nil {
+		symbols := p.extractSymbols(fn.Body)
+		if len(symbols) > 0 {
+			metadata["symbols"] = symbols
+		}
+	}
+
 	// Extract function content
 	nodeContent := p.extractContent(content, startPos.Line, endPos.Line)
 
@@ -280,4 +294,52 @@ func (p *GoParser) extractContent(content []byte, startLine, endLine int) string
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// extractSymbols extracts identifiers (variables, function calls, etc.) used in a function body
+func (p *GoParser) extractSymbols(body *ast.BlockStmt) []string {
+	symbolsMap := make(map[string]bool)
+
+	// Walk the AST and collect identifiers
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.Ident:
+			// Skip built-in identifiers and common keywords
+			if node.Name != "_" && !isBuiltin(node.Name) && !isKeyword(node.Name) {
+				symbolsMap[node.Name] = true
+			}
+		}
+		return true
+	})
+
+	// Convert map to sorted slice
+	symbols := make([]string, 0, len(symbolsMap))
+	for symbol := range symbolsMap {
+		symbols = append(symbols, symbol)
+	}
+
+	return symbols
+}
+
+// isBuiltin checks if an identifier is a Go built-in
+func isBuiltin(name string) bool {
+	builtins := map[string]bool{
+		"append": true, "cap": true, "close": true, "complex": true, "copy": true,
+		"delete": true, "imag": true, "len": true, "make": true, "new": true,
+		"panic": true, "print": true, "println": true, "real": true, "recover": true,
+		"nil": true, "true": true, "false": true, "iota": true,
+	}
+	return builtins[name]
+}
+
+// isKeyword checks if an identifier is a Go keyword
+func isKeyword(name string) bool {
+	keywords := map[string]bool{
+		"break": true, "case": true, "chan": true, "const": true, "continue": true,
+		"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,
+		"func": true, "go": true, "goto": true, "if": true, "import": true,
+		"interface": true, "map": true, "package": true, "range": true, "return": true,
+		"select": true, "struct": true, "switch": true, "type": true, "var": true,
+	}
+	return keywords[name]
 }
