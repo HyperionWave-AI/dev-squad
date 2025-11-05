@@ -187,7 +187,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                   )}
                   <Badge variant="outline" className={cn('text-xs uppercase', getStatusColor(task.status))}>
                     {getStatusIcon(task.status)}
-                    <span className="ml-1">{task.status.replace('_', ' ')}</span>
+                    <span className="ml-1">{task.status?.replace('_', ' ') || 'unknown'}</span>
                   </Badge>
                   {task.tags?.map((tag, idx) => (
                     <Badge key={idx} variant="outline" className="text-xs">
@@ -197,7 +197,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                 </div>
               </div>
               <Dialog.Close asChild>
-                <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="Close dialog">
                   <X className="w-4 h-4" />
                 </Button>
               </Dialog.Close>
@@ -357,7 +357,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                     </p>
                     <div className="flex gap-2">
                       <Badge variant="outline" className={cn('text-xs', getStatusColor(parentTask.status))}>
-                        {parentTask.status.replace('_', ' ')}
+                        {parentTask.status?.replace('_', ' ') || 'unknown'}
                       </Badge>
                       <Badge variant="outline" className="text-xs">
                         Created {formatDate(parentTask.createdAt)}

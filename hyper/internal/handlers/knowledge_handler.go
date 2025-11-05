@@ -1041,10 +1041,53 @@ You are tasked with verifying the accuracy of a knowledge article against the cu
 	})
 }
 
+// RebuildCollectionCountsHandler recalculates entry counts for all collections
+// POST /api/v1/knowledge/collections/rebuild-counts
+func (h *KnowledgeHandler) RebuildCollectionCountsHandler(c *gin.Context) {
+	h.logger.Info("Rebuilding collection counts")
+
+	// Type assertion to get MongoKnowledgeStorage (needed for RebuildCollectionCounts method)
+	mongoStorage, ok := h.knowledgeStorage.(*storage.MongoKnowledgeStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Rebuild counts only supported with MongoDB storage"})
+		return
+	}
+
+	// Call the storage method to rebuild counts
+	stats, err := mongoStorage.RebuildCollectionCounts()
+	if err != nil {
+		h.logger.Error("Failed to rebuild collection counts", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to rebuild collection counts: " + err.Error()})
+		return
+	}
+
+	// Extract stats
+	collectionsUpdated := stats["collectionsUpdated"].(int)
+	totalEntries := stats["totalEntries"].(int)
+	details := stats["details"].([]map[string]interface{})
+	errors := []string{}
+	if errList, ok := stats["errors"].([]string); ok && len(errList) > 0 {
+		errors = errList
+	}
+
+	h.logger.Info("Rebuild collection counts completed",
+		zap.Int("collectionsUpdated", collectionsUpdated),
+		zap.Int("totalEntries", totalEntries))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":            true,
+		"collectionsUpdated": collectionsUpdated,
+		"totalEntries":       totalEntries,
+		"details":            details,
+		"errors":             errors,
+	})
+}
+
 func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/popular-collections", h.GetPopularCollections)
 	r.GET("/collections", h.GetAllCollections)
 	r.POST("/collections", h.CreateCollectionHandler)
+	r.POST("/collections/rebuild-counts", h.RebuildCollectionCountsHandler)
 	r.DELETE("/collections/:id", h.DeleteCollectionHandler)
 	r.GET("/browse", h.BrowseKnowledge)
 	r.POST("/query", h.QueryKnowledge)
