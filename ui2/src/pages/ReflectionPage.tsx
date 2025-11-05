@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import * as Accordion from '@radix-ui/react-accordion';
 import { Brain, TrendingUp, Search, AlertCircle, CheckCircle, XCircle, ChevronDown } from 'lucide-react';
 import { reflectionService } from '@/services/reflectionService';
-import type { Decision, Lesson, QueryResult } from '@/types/reflection';
+import type { Decision, Lesson } from '@/types/reflection';
 import { Button } from '@/components/atoms/Button';
 import { Input } from '@/components/atoms/Input';
 import { Badge } from '@/components/atoms/Badge';
@@ -11,7 +11,7 @@ import { Badge } from '@/components/atoms/Badge';
 export function ReflectionPage() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [lessons, setLessons] = useState<Lesson[]>([]);
-  const [queryResults, setQueryResults] = useState<QueryResult[]>([]);
+  const [queryResults, setQueryResults] = useState<Lesson[]>([]);
   const [loading, setLoading] = useState(false);
   const [queryText, setQueryText] = useState('');
 
@@ -47,8 +47,8 @@ export function ReflectionPage() {
     if (!queryText.trim()) return;
     try {
       setLoading(true);
-      const { results } = await reflectionService.queryLessons(queryText, 10);
-      setQueryResults(results || []);
+      const { lessons: data } = await reflectionService.queryLessons(queryText, 10);
+      setQueryResults(data || []);
     } catch (error) {
       console.error('Failed to query lessons:', error);
       setQueryResults([]);
@@ -61,12 +61,6 @@ export function ReflectionPage() {
     if (confidence >= 0.9) return <Badge variant="success">High ({(confidence * 100).toFixed(0)}%)</Badge>;
     if (confidence >= 0.7) return <Badge variant="warning">Medium ({(confidence * 100).toFixed(0)}%)</Badge>;
     return <Badge variant="default">Low ({(confidence * 100).toFixed(0)}%)</Badge>;
-  };
-
-  const getCalibrationIcon = (calibration: string) => {
-    if (calibration === 'well-calibrated') return <CheckCircle className="h-4 w-4 text-green-500" />;
-    if (calibration === 'overconfident') return <AlertCircle className="h-4 w-4 text-orange-500" />;
-    return <XCircle className="h-4 w-4 text-red-500" />;
   };
 
   return (
@@ -144,7 +138,7 @@ export function ReflectionPage() {
                 <Accordion.Root type="single" collapsible className="space-y-4">
                   {decisions.map((decision) => {
                     // Add safety checks for data structure
-                    if (!decision?.decision) return null;
+                    if (!decision?.data?.decision) return null;
 
                     return (
                     <Accordion.Item
@@ -155,7 +149,7 @@ export function ReflectionPage() {
                       <Accordion.Header>
                         <Accordion.Trigger className="group w-full px-6 py-4 text-left hover:bg-gray-50 transition-colors flex justify-between items-center">
                           <div className="flex-1">
-                            <div className="font-semibold text-gray-900 text-lg">{decision.decision?.action || 'No action specified'}</div>
+                            <div className="font-semibold text-gray-900 text-lg">{decision.data.decision?.action || 'No action specified'}</div>
                             <div className="text-sm text-gray-500 mt-1.5 flex items-center gap-2">
                               <span>{new Date(decision.timestamp).toLocaleDateString()}</span>
                               <span className="text-gray-300">•</span>
@@ -163,39 +157,39 @@ export function ReflectionPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
-                            {getConfidenceBadge(decision.decision?.confidence || 0)}
+                            {getConfidenceBadge(decision.data.decision?.confidence || 0)}
                             <ChevronDown className="h-5 w-5 text-gray-400 transition-transform group-data-[state=open]:rotate-180" />
                           </div>
                         </Accordion.Trigger>
                       </Accordion.Header>
                       <Accordion.Content className="px-6 py-4 bg-white/50 border-t border-white/30 backdrop-blur-sm">
                         <div className="space-y-4">
-                          {decision.context?.userRequest && (
+                          {decision.data.context?.userRequest && (
                             <div className="backdrop-blur-sm bg-blue-50/80 rounded-xl p-4 border border-blue-200/40 shadow-lg">
                               <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
                                 <div className="h-1.5 w-1.5 rounded-full bg-blue-600"></div>
                                 Context
                               </h4>
-                              <p className="text-sm text-gray-700 leading-relaxed">{decision.context.userRequest}</p>
+                              <p className="text-sm text-gray-700 leading-relaxed">{decision.data.context.userRequest}</p>
                             </div>
                           )}
-                          {decision.decision?.reasoning && (
+                          {decision.data.decision?.reasoning && (
                             <div className="backdrop-blur-sm bg-emerald-50/80 rounded-xl p-4 border border-emerald-200/40 shadow-lg">
                               <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
                                 <div className="h-1.5 w-1.5 rounded-full bg-green-600"></div>
                                 Reasoning
                               </h4>
-                              <p className="text-sm text-gray-700 leading-relaxed">{decision.decision.reasoning}</p>
+                              <p className="text-sm text-gray-700 leading-relaxed">{decision.data.decision.reasoning}</p>
                             </div>
                           )}
-                          {decision.decision?.alternatives && decision.decision.alternatives.length > 0 && (
+                          {decision.data.decision?.alternatives && decision.data.decision.alternatives.length > 0 && (
                             <div className="backdrop-blur-sm bg-yellow-50/80 rounded-xl p-4 border border-yellow-200/40 shadow-lg">
                               <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
                                 <div className="h-1.5 w-1.5 rounded-full bg-yellow-600"></div>
                                 Alternatives Considered
                               </h4>
                               <ul className="text-sm text-gray-700 space-y-1.5">
-                                {decision.decision.alternatives.map((alt, i) => (
+                                {decision.data.decision.alternatives.map((alt, i) => (
                                   <li key={i} className="flex items-start gap-2">
                                     <span className="text-gray-400 mt-1">•</span>
                                     <span className="flex-1">{alt}</span>
@@ -204,25 +198,29 @@ export function ReflectionPage() {
                               </ul>
                             </div>
                           )}
-                          {decision.predictions && (
+                          {decision.data.predictions && (
                             <div className="backdrop-blur-sm bg-purple-50/80 rounded-xl p-4 border border-purple-200/40 shadow-lg">
                               <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                                 <div className="h-1.5 w-1.5 rounded-full bg-purple-600"></div>
                                 Predictions
                               </h4>
                               <div className="grid grid-cols-2 gap-4">
-                                <div className="backdrop-blur-sm bg-white/60 rounded-lg px-3 py-2 border border-white/20">
-                                  <div className="text-xs text-gray-500 mb-1">Success Probability</div>
-                                  <div className="text-lg font-semibold text-gray-900">
-                                    {(decision.predictions.successProbability * 100).toFixed(0)}%
+                                {decision.data.predictions.successProbability !== undefined && (
+                                  <div className="backdrop-blur-sm bg-white/60 rounded-lg px-3 py-2 border border-white/20">
+                                    <div className="text-xs text-gray-500 mb-1">Success Probability</div>
+                                    <div className="text-lg font-semibold text-gray-900">
+                                      {(decision.data.predictions.successProbability * 100).toFixed(0)}%
+                                    </div>
                                   </div>
-                                </div>
-                                <div className="backdrop-blur-sm bg-white/60 rounded-lg px-3 py-2 border border-white/20">
-                                  <div className="text-xs text-gray-500 mb-1">Time Estimate</div>
-                                  <div className="text-lg font-semibold text-gray-900">
-                                    {decision.predictions.timeEstimate}
+                                )}
+                                {decision.data.predictions.timeEstimate && (
+                                  <div className="backdrop-blur-sm bg-white/60 rounded-lg px-3 py-2 border border-white/20">
+                                    <div className="text-xs text-gray-500 mb-1">Time Estimate</div>
+                                    <div className="text-lg font-semibold text-gray-900">
+                                      {decision.data.predictions.timeEstimate}
+                                    </div>
                                   </div>
-                                </div>
+                                )}
                               </div>
                             </div>
                           )}
@@ -248,8 +246,8 @@ export function ReflectionPage() {
                   {lessons.map((lesson) => (
                     <div key={lesson.id} className="backdrop-blur-sm bg-white/90 border border-white/25 shadow-2xl rounded-2xl p-6 space-y-4 hover:shadow-xl hover:-translate-y-1 transition-all duration-300">
                       <div className="flex justify-between items-start gap-4">
-                        <h3 className="font-bold text-lg text-gray-900">{lesson.patternName}</h3>
-                        {getConfidenceBadge(lesson.confidence)}
+                        <h3 className="font-bold text-lg text-gray-900">{lesson.data.patternName}</h3>
+                        {lesson.confidence && getConfidenceBadge(lesson.confidence)}
                       </div>
 
                       <div className="space-y-3">
@@ -258,7 +256,7 @@ export function ReflectionPage() {
                             <AlertCircle className="h-4 w-4" />
                             Problem
                           </h4>
-                          <p className="text-sm text-red-800 leading-relaxed">{lesson.problem}</p>
+                          <p className="text-sm text-red-800 leading-relaxed">{lesson.data.problem}</p>
                         </div>
 
                         <div className="backdrop-blur-sm bg-emerald-50/80 border-l-4 border-green-500 rounded-xl p-3 shadow-lg">
@@ -266,29 +264,31 @@ export function ReflectionPage() {
                             <CheckCircle className="h-4 w-4" />
                             Solution
                           </h4>
-                          <p className="text-sm text-green-800 leading-relaxed">{lesson.solution}</p>
+                          <p className="text-sm text-green-800 leading-relaxed">{lesson.data.solution}</p>
                         </div>
 
-                        {lesson.antipattern && (
+                        {lesson.data.antipattern && (
                           <div className="backdrop-blur-sm bg-orange-50/80 border-l-4 border-orange-500 rounded-xl p-3 shadow-lg">
                             <h4 className="text-sm font-semibold text-orange-900 mb-1.5 flex items-center gap-2">
                               <XCircle className="h-4 w-4" />
                               Anti-pattern (What NOT to do)
                             </h4>
-                            <p className="text-sm text-orange-800 leading-relaxed">{lesson.antipattern}</p>
+                            <p className="text-sm text-orange-800 leading-relaxed">{lesson.data.antipattern}</p>
                           </div>
                         )}
 
-                        <div className="backdrop-blur-sm bg-blue-50/80 border-l-4 border-blue-500 rounded-xl p-3 shadow-lg">
-                          <h4 className="text-sm font-semibold text-blue-900 mb-1.5">Context</h4>
-                          <p className="text-sm text-blue-800 leading-relaxed">{lesson.context}</p>
-                        </div>
+                        {lesson.data.context && (
+                          <div className="backdrop-blur-sm bg-blue-50/80 border-l-4 border-blue-500 rounded-xl p-3 shadow-lg">
+                            <h4 className="text-sm font-semibold text-blue-900 mb-1.5">Context</h4>
+                            <p className="text-sm text-blue-800 leading-relaxed">{lesson.data.context}</p>
+                          </div>
+                        )}
                       </div>
 
-                      {lesson.applicableTo && lesson.applicableTo.length > 0 && (
+                      {lesson.data.applicableTo && lesson.data.applicableTo.length > 0 && (
                         <div className="pt-3 border-t border-gray-200">
                           <div className="flex flex-wrap gap-2">
-                            {lesson.applicableTo.map((tag, i) => (
+                            {lesson.data.applicableTo.map((tag, i) => (
                               <Badge key={i} variant="outline" className="bg-gray-50">{tag}</Badge>
                             ))}
                           </div>
@@ -348,15 +348,12 @@ export function ReflectionPage() {
                       </h4>
                     </div>
                     <div className="space-y-4">
-                      {queryResults.map((result, i) => (
-                        <div key={i} className="backdrop-blur-sm bg-white/90 border border-white/25 shadow-2xl rounded-2xl p-6 space-y-4 hover:shadow-xl hover:-translate-y-1 transition-all duration-300">
+                      {queryResults.map((lesson) => (
+                        <div key={lesson.id} className="backdrop-blur-sm bg-white/90 border border-white/25 shadow-2xl rounded-2xl p-6 space-y-4 hover:shadow-xl hover:-translate-y-1 transition-all duration-300">
                           <div className="flex justify-between items-start gap-4">
-                            <h3 className="font-bold text-lg text-gray-900">{result.lesson.patternName}</h3>
+                            <h3 className="font-bold text-lg text-gray-900">{lesson.data.patternName}</h3>
                             <div className="flex items-center gap-2 flex-shrink-0">
-                              <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300">
-                                Match: {(result.score * 100).toFixed(0)}%
-                              </Badge>
-                              {getConfidenceBadge(result.lesson.confidence)}
+                              {lesson.confidence && getConfidenceBadge(lesson.confidence)}
                             </div>
                           </div>
 
@@ -366,7 +363,7 @@ export function ReflectionPage() {
                                 <AlertCircle className="h-4 w-4" />
                                 Problem
                               </h4>
-                              <p className="text-sm text-red-800 leading-relaxed">{result.lesson.problem}</p>
+                              <p className="text-sm text-red-800 leading-relaxed">{lesson.data.problem}</p>
                             </div>
 
                             <div className="backdrop-blur-sm bg-emerald-50/80 border-l-4 border-green-500 rounded-xl p-4 shadow-lg">
@@ -374,19 +371,36 @@ export function ReflectionPage() {
                                 <CheckCircle className="h-4 w-4" />
                                 Solution
                               </h4>
-                              <p className="text-sm text-green-800 leading-relaxed">{result.lesson.solution}</p>
+                              <p className="text-sm text-green-800 leading-relaxed">{lesson.data.solution}</p>
                             </div>
 
-                            {result.lesson.antipattern && (
+                            {lesson.data.antipattern && (
                               <div className="backdrop-blur-sm bg-orange-50/80 border-l-4 border-orange-500 rounded-xl p-4 shadow-lg">
                                 <h4 className="text-sm font-semibold text-orange-900 mb-2 flex items-center gap-2">
                                   <XCircle className="h-4 w-4" />
                                   What NOT to do
                                 </h4>
-                                <p className="text-sm text-orange-800 leading-relaxed">{result.lesson.antipattern}</p>
+                                <p className="text-sm text-orange-800 leading-relaxed">{lesson.data.antipattern}</p>
+                              </div>
+                            )}
+
+                            {lesson.data.context && (
+                              <div className="backdrop-blur-sm bg-blue-50/80 border-l-4 border-blue-500 rounded-xl p-4 shadow-lg">
+                                <h4 className="text-sm font-semibold text-blue-900 mb-2">Context</h4>
+                                <p className="text-sm text-blue-800 leading-relaxed">{lesson.data.context}</p>
                               </div>
                             )}
                           </div>
+
+                          {lesson.data.applicableTo && lesson.data.applicableTo.length > 0 && (
+                            <div className="pt-3 border-t border-gray-200">
+                              <div className="flex flex-wrap gap-2">
+                                {lesson.data.applicableTo.map((tag, i) => (
+                                  <Badge key={i} variant="outline" className="bg-gray-50">{tag}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
