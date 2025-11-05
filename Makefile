@@ -21,12 +21,26 @@ native: ## Build native self-contained binary with embedded UI
 	./build-native.sh
 	@echo "✓ Native build complete: bin/hyper"
 
+native2: ## Build native self-contained binary with embedded UI2
+	@echo "Building unified hyper binary with embedded UI2..."
+	./build-native2.sh
+	@echo "✓ Native2 build complete: bin/hyper2"
+
 install: ## Install all dependencies (Go + Node)
 	@echo "Installing Go dependencies..."
 	cd hyper && go mod download
 	@echo "✓ Go dependencies installed"
 	@echo "Installing Node.js dependencies..."
 	cd ui && npm install
+	@echo "✓ Node.js dependencies installed"
+	@echo "✓ All dependencies installed"
+
+install2: ## Install all dependencies (Go + Node for UI2)
+	@echo "Installing Go dependencies..."
+	cd hyper && go mod download
+	@echo "✓ Go dependencies installed"
+	@echo "Installing Node.js dependencies for UI2..."
+	cd ui2 && npm install
 	@echo "✓ Node.js dependencies installed"
 	@echo "✓ All dependencies installed"
 
@@ -193,7 +207,10 @@ test: ## Run tests
 clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
 	@rm -rf bin/hyper || true
+	@rm -rf bin/hyper2 || true
 	@rm -rf hyper/bin/ || true
 	@rm -rf ui/dist || true
+	@rm -rf ui2/dist || true
 	@rm -rf hyper/embed/ui || true
+	@rm -rf hyper/embed/ui2 || true
 	@echo "✓ Clean complete (node_modules preserved)"

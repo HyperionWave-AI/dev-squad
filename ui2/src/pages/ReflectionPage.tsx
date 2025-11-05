@@ -7,6 +7,7 @@ import type { Decision, Lesson } from '@/types/reflection';
 import { Button } from '@/components/atoms/Button';
 import { Input } from '@/components/atoms/Input';
 import { Badge } from '@/components/atoms/Badge';
+import { PageHeader } from '@/components/organisms/PageHeader';
 
 export function ReflectionPage() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
@@ -66,25 +67,14 @@ export function ReflectionPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header - Glassmorphic Container */}
-        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-br from-pink-400 to-rose-500 rounded-xl blur-lg opacity-30 animate-pulse"></div>
-              <div className="relative p-3 bg-gradient-to-br from-pink-500 to-rose-600 rounded-xl shadow-xl">
-                <Brain className="h-8 w-8 text-white" />
-              </div>
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-pink-600 via-rose-600 to-pink-600 bg-clip-text text-transparent">
-                Reflection System
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400 mt-1">
-                Metacognitive learning - Track decisions, extract lessons, and query relevant patterns
-              </p>
-            </div>
-          </div>
-        </div>
+        {/* Header */}
+        <PageHeader
+          title="Reflection System"
+          description="Metacognitive learning - Track decisions, extract lessons, and query relevant patterns"
+          icon={<Brain className="h-8 w-8" />}
+          gradientFrom="#ec4899"
+          gradientTo="#f43f5e"
+        />
 
         {/* Tabs Card with Glassmorphism */}
         <div className="backdrop-blur-sm bg-white/80 border border-white/20 shadow-2xl rounded-2xl overflow-hidden">
