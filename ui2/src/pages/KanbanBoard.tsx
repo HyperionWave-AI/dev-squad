@@ -366,72 +366,70 @@ export function KanbanBoard() {
         />
 
         {/* Filters and Search - Glassmorphic Container */}
-        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-4">
-              {/* Time Filter Buttons */}
-              <div className="flex gap-2">
-                {(['all', 'today', 'yesterday', 'last100'] as TimeFilter[]).map((filter) => (
-                  <Button
-                    key={filter}
-                    variant={timeFilter === filter ? 'primary' : 'outline'}
-                    size="sm"
-                    onClick={() => setTimeFilter(filter)}
-                    className="capitalize"
-                  >
-                    {filter === 'last100' ? 'Last 100' : filter}
-                  </Button>
-                ))}
-              </div>
-
-              {/* Search Bar */}
-              <div className="flex-1 relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <Input
-                  type="text"
-                  placeholder="Search tasks..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
+        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-4 shadow-lg">
+          <div className="flex items-center gap-3">
+            {/* Time Filter Buttons */}
+            <div className="flex gap-1">
+              {(['all', 'today', 'yesterday', 'last100'] as TimeFilter[]).map((filter) => (
+                <Button
+                  key={filter}
+                  variant={timeFilter === filter ? 'primary' : 'outline'}
+                  size="sm"
+                  onClick={() => setTimeFilter(filter)}
+                  className="capitalize text-xs px-3 py-1.5 h-8"
+                >
+                  {filter === 'last100' ? '100' : filter === 'yesterday' ? 'Yest' : filter}
+                </Button>
+              ))}
             </div>
 
+            {/* Divider */}
+            <div className="h-8 w-px bg-gray-300 dark:bg-gray-600"></div>
+
             {/* Task Type Toggle Filter */}
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Type:</span>
-              <div className="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden">
-                <button
-                  onClick={() => setTaskTypeFilter('all')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${
-                    taskTypeFilter === 'all'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setTaskTypeFilter('agent')}
-                  className={`px-4 py-2 text-sm font-medium border-l border-gray-300 dark:border-gray-600 transition-colors ${
-                    taskTypeFilter === 'agent'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  Agent
-                </button>
-                <button
-                  onClick={() => setTaskTypeFilter('human')}
-                  className={`px-4 py-2 text-sm font-medium border-l border-gray-300 dark:border-gray-600 transition-colors ${
-                    taskTypeFilter === 'human'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  Human
-                </button>
-              </div>
+            <div className="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden">
+              <button
+                onClick={() => setTaskTypeFilter('all')}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  taskTypeFilter === 'all'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setTaskTypeFilter('agent')}
+                className={`px-3 py-1.5 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors ${
+                  taskTypeFilter === 'agent'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                }`}
+              >
+                🤖 Agent
+              </button>
+              <button
+                onClick={() => setTaskTypeFilter('human')}
+                className={`px-3 py-1.5 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors ${
+                  taskTypeFilter === 'human'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                }`}
+              >
+                👤 Human
+              </button>
+            </div>
+
+            {/* Search Bar */}
+            <div className="flex-1 relative min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <Input
+                type="text"
+                placeholder="Search tasks..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 h-8 text-sm"
+              />
             </div>
           </div>
         </div>
