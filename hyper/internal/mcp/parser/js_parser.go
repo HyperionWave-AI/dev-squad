@@ -97,6 +97,17 @@ func (p *JSParser) extractFunctions(lines []string) []CodeNode {
 			metadata["async"] = isAsync
 			metadata["exported"] = isExported
 
+			// Extract docstring
+			if doc := p.extractDocstring(lines, i); doc != "" {
+				metadata["hasDocstring"] = true
+				metadata["docContent"] = doc
+			}
+
+			// Extract symbols
+			if symbols := p.extractSymbols(content); len(symbols) > 0 {
+				metadata["symbols"] = symbols
+			}
+
 			nodes = append(nodes, CodeNode{
 				Type:      NodeTypeFunction,
 				Name:      functionName,
@@ -137,6 +148,17 @@ func (p *JSParser) extractArrowFunctions(lines []string) []CodeNode {
 			metadata["async"] = isAsync
 			metadata["exported"] = isExported
 			metadata["arrow_function"] = true
+
+			// Extract docstring
+			if doc := p.extractDocstring(lines, i); doc != "" {
+				metadata["hasDocstring"] = true
+				metadata["docContent"] = doc
+			}
+
+			// Extract symbols
+			if symbols := p.extractSymbols(content); len(symbols) > 0 {
+				metadata["symbols"] = symbols
+			}
 
 			nodes = append(nodes, CodeNode{
 				Type:      NodeTypeArrowFunction,
@@ -373,4 +395,74 @@ func (p *JSParser) buildMethodSignature(className, methodName string, isAsync bo
 		return fmt.Sprintf("async %s.%s(...)", className, methodName)
 	}
 	return fmt.Sprintf("%s.%s(...)", className, methodName)
+}
+
+// extractDocstring extracts JSDoc or single-line comments before a function
+func (p *JSParser) extractDocstring(lines []string, lineIdx int) string {
+	var docLines []string
+
+	// Look backwards for comments (up to 10 lines)
+	for i := lineIdx - 1; i >= 0 && i >= lineIdx-10; i-- {
+		line := strings.TrimSpace(lines[i])
+
+		// JSDoc comment block
+		if strings.HasPrefix(line, "*/") {
+			// Found end of JSDoc, now find start
+			for j := i; j >= 0; j-- {
+				docLines = append([]string{strings.TrimSpace(lines[j])}, docLines...)
+				if strings.HasPrefix(strings.TrimSpace(lines[j]), "/**") {
+					return strings.Join(docLines, "\n")
+				}
+			}
+			break
+		}
+
+		// Single-line comment
+		if strings.HasPrefix(line, "//") {
+			docLines = append([]string{line}, docLines...)
+		} else if line != "" && !strings.HasPrefix(line, "/*") {
+			// Stop at first non-comment, non-empty line
+			break
+		}
+	}
+
+	if len(docLines) > 0 {
+		return strings.Join(docLines, "\n")
+	}
+
+	return ""
+}
+
+// extractSymbols extracts identifiers from function body using regex
+func (p *JSParser) extractSymbols(content string) []string {
+	// Match JavaScript identifiers (variables, functions, etc.)
+	identifierRegex := regexp.MustCompile(`\b([a-zA-Z_$][a-zA-Z0-9_$]*)\b`)
+	matches := identifierRegex.FindAllString(content, -1)
+
+	// Deduplicate and filter out keywords
+	symbolsMap := make(map[string]bool)
+	jsKeywords := map[string]bool{
+		"const": true, "let": true, "var": true, "function": true, "return": true,
+		"if": true, "else": true, "for": true, "while": true, "do": true,
+		"switch": true, "case": true, "break": true, "continue": true,
+		"try": true, "catch": true, "finally": true, "throw": true,
+		"new": true, "this": true, "super": true, "class": true, "extends": true,
+		"import": true, "export": true, "from": true, "default": true,
+		"async": true, "await": true, "yield": true, "typeof": true,
+		"null": true, "undefined": true, "true": true, "false": true,
+	}
+
+	for _, match := range matches {
+		if !jsKeywords[match] && match != "" {
+			symbolsMap[match] = true
+		}
+	}
+
+	// Convert to slice
+	symbols := make([]string, 0, len(symbolsMap))
+	for symbol := range symbolsMap {
+		symbols = append(symbols, symbol)
+	}
+
+	return symbols
 }
