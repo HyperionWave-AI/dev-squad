@@ -1,18 +1,27 @@
-import type { MCPServer, MCPTool } from '@/types/mcp';
+import type { MCPServer, MCPServerDetails, MCPTool, ListMCPServersResponse } from '@/types/mcp';
 import { fetchWithAuth } from './restClient';
 
 const API_BASE = '';
 
 export const mcpService = {
-  async listServers(): Promise<{ servers: MCPServer[] }> {
+  async listServers(): Promise<ListMCPServersResponse> {
     return fetchWithAuth(`${API_BASE}/api/v1/mcp/servers`);
   },
 
-  async addServer(server: Omit<MCPServer, 'toolCount' | 'status' | 'lastDiscovery'>): Promise<{ message: string }> {
+  async getServerDetails(serverName: string): Promise<MCPServerDetails> {
+    return fetchWithAuth(`${API_BASE}/api/v1/mcp/servers/${serverName}`);
+  },
+
+  async addServer(params: {
+    serverName: string;
+    serverUrl: string;
+    description?: string;
+    headers?: Record<string, any>;
+  }): Promise<{ message: string }> {
     return fetchWithAuth(`${API_BASE}/api/v1/mcp/servers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(server),
+      body: JSON.stringify(params),
     });
   },
 
@@ -22,8 +31,14 @@ export const mcpService = {
     });
   },
 
-  async rediscoverServer(serverName: string): Promise<{ tools: MCPTool[] }> {
+  async rediscoverServer(serverName: string): Promise<{ message: string; toolCount: number; resourceCount: number; promptCount: number }> {
     return fetchWithAuth(`${API_BASE}/api/v1/mcp/servers/${serverName}/rediscover`, {
+      method: 'POST',
+    });
+  },
+
+  async rediscoverAll(): Promise<{ message: string; results: Array<{ serverName: string; success: boolean; error?: string }> }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/mcp/servers/rediscover-all`, {
       method: 'POST',
     });
   },

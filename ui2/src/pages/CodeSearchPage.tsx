@@ -1,266 +1,252 @@
 import React, { useState, useEffect } from 'react';
-import { Code, Search, RefreshCw, Folder } from 'lucide-react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import * as Select from '@radix-ui/react-select';
-import { codeIndexService } from '@/services/codeIndexService';
-import type { SearchResult, IndexStatus } from '@/types/codeIndex';
-import { Button } from '@/components/atoms/Button';
-import { Input } from '@/components/atoms/Input';
-import { Badge } from '@/components/atoms/Badge';
+import { CodeSearchForm } from '../components/organisms/CodeSearchForm';
+import { CodeResultsList } from '../components/organisms/CodeResultsList';
+import { FolderManager } from '../components/organisms/FolderManager';
+import { IndexStatusDisplay } from '../components/organisms/IndexStatusDisplay';
+import { FileInspector } from '../components/organisms/FileInspector';
+import { PageHeader } from '../components/organisms/PageHeader';
+import ErrorBoundary from '../components/organisms/ErrorBoundary';
+import { codeIndexService } from '../services/codeIndexService';
+import type { CodeResult, IndexedFolder, IndexStatus, FolderConfig, SearchOptions } from '../types/codeSearch';
+import { Code2 } from 'lucide-react';
 
-export function CodeSearchPage() {
-  const [query, setQuery] = useState('');
-  const [retrieveMode, setRetrieveMode] = useState('chunk-m');
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+export const CodeSearchPage: React.FC = () => {
+  // Search state
+  const [results, setResults] = useState<CodeResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
+  // Index management state
+  const [folders, setFolders] = useState<IndexedFolder[]>([]);
+  const [status, setStatus] = useState<IndexStatus>({
+    totalFiles: 0,
+    totalFolders: 0,
+    isRunning: false,
+  });
+
+  // Load initial status on mount
   useEffect(() => {
-    loadIndexStatus();
+    loadStatus();
   }, []);
 
-  const loadIndexStatus = async () => {
-    try {
-      const status = await codeIndexService.getStatus();
-      setIndexStatus(status);
-    } catch (error) {
-      console.error('Failed to load index status:', error);
-    }
-  };
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+K or Ctrl+K to focus search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
+        searchInput?.focus();
+      }
 
-  const handleSearch = async () => {
-    if (!query.trim()) return;
+      // Esc to close file inspector
+      if (e.key === 'Escape' && selectedFileId) {
+        setSelectedFileId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedFileId]);
+
+  const loadStatus = async () => {
     try {
-      setLoading(true);
-      const { results: data } = await codeIndexService.search({
-        query,
-        retrieve: retrieveMode as any,
-        limit: 20,
+      const statusData = await codeIndexService.getStatus();
+      setStatus({
+        totalFiles: statusData.totalFiles || 0,
+        totalFolders: statusData.folders?.length || 0,
+        lastScanTime: statusData.lastScan,
+        isRunning: false, // Will be updated by actual API
       });
-      setResults(data);
-      if (data.length > 0) {
-        setSelectedResult(data[0]);
+
+      // Convert folders array to IndexedFolder format
+      if (statusData.folders) {
+        const foldersData: IndexedFolder[] = statusData.folders.map((folder, index) => ({
+          id: folder.configId || `folder-${index}`,
+          path: folder.folderPath,
+          fileCount: folder.fileCount || 0,
+          enabled: folder.enabled ?? true,
+        }));
+        setFolders(foldersData);
       }
     } catch (error) {
-      console.error('Search failed:', error);
-    } finally {
-      setLoading(false);
+      console.error('Failed to load status:', error);
     }
   };
 
-  const handleScan = async () => {
+  const handleSearch = async (query: string, options: SearchOptions) => {
+    setLoading(true);
     try {
-      setLoading(true);
-      await codeIndexService.triggerScan();
-      await loadIndexStatus();
+      const response = await codeIndexService.search({
+        query,
+        limit: options.maxResults,
+        minScore: options.minRelevanceScore,
+      });
+
+      // Transform results to match our interface
+      const transformedResults: CodeResult[] = response.results.map((result, index) => {
+        const fileExtension = result.filePath.split('.').pop()?.toLowerCase() || '';
+        const languageMap: Record<string, string> = {
+          'ts': 'typescript',
+          'tsx': 'tsx',
+          'js': 'javascript',
+          'jsx': 'jsx',
+          'go': 'go',
+          'py': 'python',
+        };
+
+        return {
+          id: `${result.filePath}-${result.lineStart}-${index}`,
+          filePath: result.filePath,
+          fileName: result.filePath.split('/').pop() || '',
+          language: languageMap[fileExtension] || 'text',
+          content: result.content,
+          lineStart: result.lineStart,
+          lineEnd: result.lineEnd,
+          relevanceScore: result.score,
+        };
+      });
+
+      setResults(transformedResults);
     } catch (error) {
-      console.error('Scan failed:', error);
+      console.error('Search failed:', error);
+      alert('Search failed. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  const getLanguage = (filePath: string): string => {
-    const ext = filePath.split('.').pop()?.toLowerCase();
-    const langMap: Record<string, string> = {
-      ts: 'typescript',
-      tsx: 'typescript',
-      js: 'javascript',
-      jsx: 'javascript',
-      py: 'python',
-      go: 'go',
-      rs: 'rust',
-      java: 'java',
-      cpp: 'cpp',
-      c: 'c',
-      md: 'markdown',
-      json: 'json',
-      yaml: 'yaml',
-      yml: 'yaml',
-    };
-    return langMap[ext || ''] || 'text';
+  const handleInspect = (fileId: string) => {
+    setSelectedFileId(fileId);
+  };
+
+  const handleAddFolder = async (config: FolderConfig) => {
+    try {
+      // Trigger scan with the new folder path
+      await codeIndexService.triggerScan(config.path);
+      await loadStatus();
+    } catch (error) {
+      console.error('Failed to add folder:', error);
+      alert('Failed to add folder. Please try again.');
+    }
+  };
+
+  const handleRemoveFolder = async (_folderId: string) => {
+    if (!confirm('Are you sure you want to remove this folder?')) return;
+
+    try {
+      // Note: API doesn't support removing folders yet
+      // This is a placeholder for when the API is implemented
+      alert('Remove folder functionality is not yet implemented in the API');
+      // await codeIndexService.removeFolder(folder.path);
+      // await loadStatus();
+    } catch (error) {
+      console.error('Failed to remove folder:', error);
+      alert('Failed to remove folder. Please try again.');
+    }
+  };
+
+  const handleWatcherToggle = async (_folderId: string, _enabled: boolean) => {
+    try {
+      // Note: API doesn't support watcher toggle yet
+      // This is a placeholder for when the API is implemented
+      alert('Watcher toggle functionality is not yet implemented in the API');
+      // await codeIndexService.toggleWatcher(enabled);
+      // await loadStatus();
+    } catch (error) {
+      console.error('Failed to toggle watcher:', error);
+      alert('Failed to toggle watcher. Please try again.');
+    }
+  };
+
+  const handleReindex = async () => {
+    if (!confirm('This will reindex all folders. Continue?')) return;
+
+    try {
+      // Trigger scan for each folder
+      for (const folder of folders) {
+        await codeIndexService.triggerScan(folder.path);
+      }
+      await loadStatus();
+    } catch (error) {
+      console.error('Failed to reindex:', error);
+      alert('Failed to reindex. Please try again.');
+    }
+  };
+
+  const handleRefreshStatus = () => {
+    loadStatus();
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
-      <div className="container mx-auto p-6 space-y-6 max-w-7xl">
-        {/* Header - Glassmorphic Container */}
-        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-br from-blue-400 to-cyan-500 rounded-xl blur-lg opacity-30 animate-pulse"></div>
-              <div className="relative p-3 bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl shadow-xl">
-                <Code className="h-8 w-8 text-white" />
-              </div>
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 via-cyan-600 to-teal-600 bg-clip-text text-transparent">
-                Code Search
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400 mt-1">
-                Semantic code search with natural language queries
-              </p>
-            </div>
-          </div>
-        </div>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Page Header */}
+        <PageHeader
+          title="Code Search"
+          description="Semantic search across your indexed codebase"
+          icon={<Code2 className="h-8 w-8" />}
+          gradientFrom="#3b82f6"
+          gradientTo="#1d4ed8"
+        />
 
+        {/* Main Grid Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="space-y-6">
-            {/* Search Panel - Glassmorphic Container */}
-            <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 space-y-4 shadow-lg">
-            <h3 className="font-semibold flex items-center gap-2">
-              <Search className="h-5 w-5" />
-              Search
-            </h3>
-            <Input
-              placeholder="e.g., 'authentication logic', 'error handling'..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+          {/* Left Column: Search & Results (2/3) */}
+          <div className="lg:col-span-2 space-y-6">
+            <CodeSearchForm
+              onSearch={handleSearch}
+              loading={loading}
             />
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Retrieve Mode</label>
-              <Select.Root value={retrieveMode} onValueChange={setRetrieveMode}>
-                <Select.Trigger className="w-full px-3 py-2 border border-border rounded-md bg-background text-sm">
-                  <Select.Value />
-                </Select.Trigger>
-                <Select.Portal>
-                  <Select.Content className="bg-background border border-border rounded-md shadow-lg z-50">
-                    <Select.Viewport className="p-1">
-                      <Select.Item value="chunk-s" className="px-3 py-2 text-sm hover:bg-accent cursor-pointer rounded">
-                        <Select.ItemText>Small (50 lines)</Select.ItemText>
-                      </Select.Item>
-                      <Select.Item value="chunk-m" className="px-3 py-2 text-sm hover:bg-accent cursor-pointer rounded">
-                        <Select.ItemText>Medium (100 lines)</Select.ItemText>
-                      </Select.Item>
-                      <Select.Item value="chunk-l" className="px-3 py-2 text-sm hover:bg-accent cursor-pointer rounded">
-                        <Select.ItemText>Large (200 lines)</Select.ItemText>
-                      </Select.Item>
-                      <Select.Item value="chunk-xl" className="px-3 py-2 text-sm hover:bg-accent cursor-pointer rounded">
-                        <Select.ItemText>XL (400 lines)</Select.ItemText>
-                      </Select.Item>
-                      <Select.Item value="full" className="px-3 py-2 text-sm hover:bg-accent cursor-pointer rounded">
-                        <Select.ItemText>Full File</Select.ItemText>
-                      </Select.Item>
-                    </Select.Viewport>
-                  </Select.Content>
-                </Select.Portal>
-              </Select.Root>
-            </div>
-            <Button onClick={handleSearch} disabled={loading || !query.trim()} className="w-full">
-              {loading ? 'Searching...' : 'Search'}
-            </Button>
+
+            <CodeResultsList
+              results={results}
+              loading={loading}
+              onInspect={handleInspect}
+            />
           </div>
 
-          {indexStatus && (
-            <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 space-y-4 shadow-lg">
-              <div className="flex justify-between items-center">
-                <h3 className="font-semibold flex items-center gap-2">
-                  <Folder className="h-5 w-5" />
-                  Index Status
-                </h3>
-                <Button onClick={handleScan} variant="outline" size="sm" disabled={loading}>
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-              </div>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Total Files:</span>
-                  <span className="font-medium">{indexStatus.totalFiles}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Folders:</span>
-                  <span className="font-medium">{indexStatus.folders.length}</span>
-                </div>
-                {indexStatus.lastScan && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Last Scan:</span>
-                    <span className="font-medium text-xs">
-                      {new Date(indexStatus.lastScan).toLocaleString()}
-                    </span>
-                  </div>
-                )}
-              </div>
-              {indexStatus.folders.length > 0 && (
-                <div className="space-y-1">
-                  <div className="text-xs font-semibold text-muted-foreground">Indexed Folders:</div>
-                  {indexStatus.folders.map((folder, i) => (
-                    <div key={i} className="text-xs flex justify-between items-center">
-                      <span className="truncate">{folder.path}</span>
-                      <Badge variant="outline" className="ml-2">{folder.fileCount}</Badge>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          {/* Right Column: Config & Status (1/3) */}
+          <div className="space-y-6">
+            <FolderManager
+              folders={folders}
+              status={status}
+              onAdd={handleAddFolder}
+              onRemove={handleRemoveFolder}
+              onWatcherToggle={handleWatcherToggle}
+              onReindex={handleReindex}
+            />
+
+            <IndexStatusDisplay
+              status={status}
+              onRefresh={handleRefreshStatus}
+            />
+          </div>
         </div>
 
-          <div className="lg:col-span-2 space-y-4">
-            {results.length === 0 ? (
-              <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-12 text-center shadow-lg">
-                <Code className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Enter a search query to find code</p>
-              </div>
-            ) : (
-              <>
-                <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
-                <h3 className="font-semibold mb-3">Results ({results.length})</h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {results.map((result, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setSelectedResult(result)}
-                      className={'w-full text-left p-3 rounded-md border transition-colors ' +
-                        (selectedResult === result
-                          ? 'border-primary bg-accent'
-                          : 'border-border hover:bg-accent')
-                      }
-                    >
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="text-sm font-medium truncate">{result.filePath}</span>
-                        <Badge variant="outline" className="ml-2">
-                          {(result.score * 100).toFixed(0)}%
-                        </Badge>
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Lines {result.lineStart}-{result.lineEnd}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
+        {/* File Inspector Drawer */}
+        {selectedFileId && (
+          <FileInspector
+            fileId={selectedFileId}
+            onClose={() => setSelectedFileId(null)}
+          />
+        )}
 
-                {selectedResult && (
-                  <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg overflow-hidden shadow-lg">
-                    <div className="bg-white/30 dark:bg-gray-700/30 px-4 py-2 border-b border-white/30 dark:border-gray-700/30">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium">{selectedResult.filePath}</span>
-                      <Badge variant="outline">
-                        Lines {selectedResult.lineStart}-{selectedResult.lineEnd}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <SyntaxHighlighter
-                      language={getLanguage(selectedResult.filePath)}
-                      style={vscDarkPlus}
-                      showLineNumbers
-                      startingLineNumber={selectedResult.lineStart}
-                      customStyle={{ margin: 0, fontSize: '0.875rem' }}
-                    >
-                      {selectedResult.content}
-                    </SyntaxHighlighter>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-          </div>
+        {/* Keyboard Shortcuts Info */}
+        <div className="mt-8 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+          <p className="text-sm text-blue-800 dark:text-blue-200">
+            <strong>Keyboard Shortcuts:</strong> Cmd+K to focus search • Esc to close inspector
+          </p>
         </div>
       </div>
     </div>
   );
-}
+};
+
+// Wrap with ErrorBoundary for production error handling
+// Keep named export for testing purposes
+export default () => (
+  <ErrorBoundary>
+    <CodeSearchPage />
+  </ErrorBoundary>
+);

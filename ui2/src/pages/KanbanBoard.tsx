@@ -4,6 +4,9 @@ import { Input } from '@/components/atoms/Input';
 import { Button } from '@/components/atoms/Button';
 import { KanbanColumn } from '@/components/organisms/KanbanColumn';
 import { TaskDetailDialog } from '@/components/organisms/TaskDetailDialog';
+import { MetricsDashboard } from '@/components/organisms/MetricsDashboard';
+import { PageHeader } from '@/components/organisms/PageHeader';
+import ErrorBoundary from '@/components/organisms/ErrorBoundary';
 import { restClient } from '@/services/restClient';
 import type { HumanTask, AgentTask, TaskStatus, FlattenedTask } from '@/types/coordinator';
 import { Search, Loader, AlertCircle, LayoutDashboard } from 'lucide-react';
@@ -43,8 +46,9 @@ const columns: KanbanColumnConfig[] = [
 ];
 
 type TimeFilter = 'all' | 'today' | 'yesterday' | 'last100';
+type TaskTypeFilter = 'all' | 'agent' | 'human';
 
-export default function KanbanBoard() {
+export function KanbanBoard() {
   const [tasks, setTasks] = useState<HumanTask[]>([]);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +57,7 @@ export default function KanbanBoard() {
   const [selectedTask, setSelectedTask] = useState<FlattenedTask | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
+  const [taskTypeFilter, setTaskTypeFilter] = useState<TaskTypeFilter>('all');
 
   // Load tasks on mount and auto-refresh
   useEffect(() => {
@@ -210,15 +215,20 @@ export default function KanbanBoard() {
       }
     }
 
+    // Filter by task type
+    const typeFiltered = taskTypeFilter === 'all'
+      ? timeFiltered
+      : timeFiltered.filter((task) => task.taskType === taskTypeFilter);
+
     // Filter by search query
     const filtered = searchQuery
-      ? timeFiltered.filter(
+      ? typeFiltered.filter(
           (task) =>
             task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
             task.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
             task.tags?.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
         )
-      : timeFiltered;
+      : typeFiltered;
 
     // Group by status
     const grouped: Record<TaskStatus, FlattenedTask[]> = {
@@ -233,7 +243,55 @@ export default function KanbanBoard() {
     });
 
     return grouped;
-  }, [tasks, agentTasks, searchQuery, timeFilter]);
+  }, [tasks, agentTasks, searchQuery, timeFilter, taskTypeFilter]);
+
+  // Calculate metrics from task data
+  const taskMetrics = useMemo(() => {
+    const allTasks = [...tasks, ...agentTasks];
+    const totalTasks = allTasks.length;
+    const completedTasks = allTasks.filter(task => task.status === 'completed').length;
+
+    // Calculate average execution time for completed tasks
+    let totalExecutionTimeMs = 0;
+    let tasksWithExecutionTime = 0;
+
+    allTasks.forEach(task => {
+      if (task.status === 'completed' && task.completedAt && task.createdAt) {
+        const completedDate = new Date(task.completedAt).getTime();
+        const createdDate = new Date(task.createdAt).getTime();
+        const executionTime = completedDate - createdDate;
+
+        if (executionTime > 0) {
+          totalExecutionTimeMs += executionTime;
+          tasksWithExecutionTime++;
+        }
+      }
+    });
+
+    // Format average execution time
+    let averageExecutionTime = 'N/A';
+    if (tasksWithExecutionTime > 0) {
+      const avgMs = totalExecutionTimeMs / tasksWithExecutionTime;
+      const hours = Math.floor(avgMs / (1000 * 60 * 60));
+      const minutes = Math.floor((avgMs % (1000 * 60 * 60)) / (1000 * 60));
+
+      if (hours > 0) {
+        averageExecutionTime = `${hours}h ${minutes}m`;
+      } else {
+        averageExecutionTime = `${minutes}m`;
+      }
+    }
+
+    // Calculate success rate (completed / total * 100)
+    const successRate = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
+
+    return {
+      totalTasks,
+      completedTasks,
+      averageExecutionTime,
+      successRate,
+    };
+  }, [tasks, agentTasks]);
 
   // Handle drag and drop
   const onDragEnd = async (result: DropResult) => {
@@ -298,57 +356,86 @@ export default function KanbanBoard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
       <div className="container mx-auto p-6 space-y-6 max-w-7xl">
-        {/* Header - Glassmorphic Container */}
-        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-br from-purple-400 to-indigo-500 rounded-xl blur-lg opacity-30 animate-pulse"></div>
-              <div className="relative p-3 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl shadow-xl">
-                <LayoutDashboard className="h-8 w-8 text-white" />
-              </div>
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                Task Board
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400 mt-1">
-                Manage and track your tasks across different stages
-              </p>
-            </div>
-          </div>
-        </div>
+        {/* Header */}
+        <PageHeader
+          title="Task Board"
+          description="Manage and track your tasks across different stages"
+          icon={<LayoutDashboard className="h-8 w-8" />}
+          gradientFrom="#a855f7"
+          gradientTo="#6366f1"
+        />
 
         {/* Filters and Search - Glassmorphic Container */}
-        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
-          <div className="flex items-center gap-4">
+        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-4 shadow-lg">
+          <div className="flex items-center gap-3">
             {/* Time Filter Buttons */}
-            <div className="flex gap-2">
+            <div className="flex gap-1">
               {(['all', 'today', 'yesterday', 'last100'] as TimeFilter[]).map((filter) => (
                 <Button
                   key={filter}
                   variant={timeFilter === filter ? 'primary' : 'outline'}
                   size="sm"
                   onClick={() => setTimeFilter(filter)}
-                  className="capitalize"
+                  className="capitalize text-xs px-3 py-1.5 h-8"
                 >
-                  {filter === 'last100' ? 'Last 100' : filter}
+                  {filter === 'last100' ? '100' : filter === 'yesterday' ? 'Yest' : filter}
                 </Button>
               ))}
             </div>
 
+            {/* Divider */}
+            <div className="h-8 w-px bg-gray-300 dark:bg-gray-600"></div>
+
+            {/* Task Type Toggle Filter */}
+            <div className="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden">
+              <button
+                onClick={() => setTaskTypeFilter('all')}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  taskTypeFilter === 'all'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setTaskTypeFilter('agent')}
+                className={`px-3 py-1.5 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors ${
+                  taskTypeFilter === 'agent'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                }`}
+              >
+                🤖 Agent
+              </button>
+              <button
+                onClick={() => setTaskTypeFilter('human')}
+                className={`px-3 py-1.5 text-xs font-medium border-l border-gray-300 dark:border-gray-600 transition-colors ${
+                  taskTypeFilter === 'human'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                }`}
+              >
+                👤 Human
+              </button>
+            </div>
+
             {/* Search Bar */}
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <div className="flex-1 relative min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
               <Input
                 type="text"
                 placeholder="Search tasks..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
+                className="pl-9 h-8 text-sm"
               />
             </div>
           </div>
         </div>
+
+        {/* Metrics Dashboard */}
+        <MetricsDashboard metrics={taskMetrics} />
 
         {/* Kanban Board */}
         <DragDropContext onDragEnd={onDragEnd}>
@@ -380,3 +467,11 @@ export default function KanbanBoard() {
     </div>
   );
 }
+
+// Wrap with ErrorBoundary for production error handling
+// Keep named export for testing purposes
+export default () => (
+  <ErrorBoundary>
+    <KanbanBoard />
+  </ErrorBoundary>
+);

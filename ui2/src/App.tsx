@@ -17,7 +17,7 @@ import { CodeChatPage } from '@/pages/CodeChatPage';
 import { KnowledgeBasePage } from '@/pages/KnowledgeBasePage';
 import KanbanBoard from '@/pages/KanbanBoard';
 import { ReflectionPage } from '@/pages/ReflectionPage';
-import { CodeSearchPage } from '@/pages/CodeSearchPage';
+import CodeSearchPage from '@/pages/CodeSearchPage';
 import { MCPServersPage } from '@/pages/MCPServersPage';
 import { HTTPToolsPage } from '@/pages/HTTPToolsPage';
 import { SubagentsPage } from '@/pages/SubagentsPage';

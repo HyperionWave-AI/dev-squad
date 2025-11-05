@@ -15,9 +15,17 @@ export interface SearchRequest {
   retrieve?: 'chunk' | 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
 }
 
+export interface FolderInfo {
+  configId?: string;
+  folderPath: string;
+  fileCount?: number;
+  enabled?: boolean;
+}
+
 export interface IndexStatus {
   indexed: boolean;
-  folders: string[];
-  fileCount: number;
+  folders: FolderInfo[];
+  totalFiles: number;
+  fileCount?: number; // Legacy field, use totalFiles instead
   lastScan?: string;
 }

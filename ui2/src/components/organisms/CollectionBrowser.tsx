@@ -251,7 +251,7 @@ export function CollectionBrowser({
                               <p className="text-sm font-bold text-gray-900 dark:text-gray-100 truncate">
                                 {collection.name}
                               </p>
-                              <span className="shrink-0 px-2.5 py-1 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-xs font-bold rounded-lg shadow-sm">
+                              <span className="shrink-0 px-2.5 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg">
                                 {collection.count}
                               </span>
                             </div>

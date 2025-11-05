@@ -22,6 +22,8 @@ import {
   Lightbulb,
   Circle,
   CircleDot,
+  Copy,
+  CheckCheck,
 } from 'lucide-react';
 
 interface TaskDetailDialogProps {
@@ -99,6 +101,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [parentTask, setParentTask] = useState<HumanTask | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const isAgentTask = task?.taskType === 'agent';
 
@@ -136,6 +139,134 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
       console.error('Failed to load parent task:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const generateExecutePrompt = (): string => {
+    if (!task) return '';
+
+    const parts: string[] = [];
+
+    // Header
+    if (isAgentTask) {
+      parts.push(`# Execute Agent Task: ${task.agentName || 'Unknown Agent'}\n`);
+      parts.push(`**Task ID:** ${task.id}\n`);
+      parts.push(`**Role:** ${task.role || task.title}\n`);
+      parts.push(`**Status:** ${task.status}\n`);
+    } else {
+      parts.push(`# Execute Human Task\n`);
+      parts.push(`**Task ID:** ${task.id}\n`);
+      parts.push(`**Title:** ${task.title}\n`);
+      parts.push(`**Status:** ${task.status}\n`);
+    }
+
+    parts.push('');
+
+    // Instructions
+    parts.push('## Instructions\n');
+    parts.push(`1. Find task with id=\`${task.id}\``);
+    parts.push('2. Read all task details including context summary, todos, and files to modify');
+
+    if (isAgentTask && task.agentName) {
+      parts.push(`3. Use agent: **${task.agentName}** to execute this task`);
+      parts.push(`4. Follow the role: "${task.role}"`);
+    } else {
+      parts.push('3. Create appropriate agent tasks to execute this work');
+    }
+
+    parts.push('');
+
+    // Description
+    parts.push('## Description\n');
+    parts.push(task.description || 'No description available');
+    parts.push('');
+
+    // Context Summary (for agent tasks)
+    if (isAgentTask && task.contextSummary) {
+      parts.push('## Context Summary\n');
+      parts.push(task.contextSummary);
+      parts.push('');
+    }
+
+    // Files to Modify (for agent tasks)
+    if (isAgentTask && task.filesModified && task.filesModified.length > 0) {
+      parts.push('## Files to Modify\n');
+      task.filesModified.forEach((file) => {
+        parts.push(`- \`${file}\``);
+      });
+      parts.push('');
+    }
+
+    // Qdrant Collections (for agent tasks)
+    if (isAgentTask && task.qdrantCollections && task.qdrantCollections.length > 0) {
+      parts.push('## Suggested Qdrant Collections\n');
+      parts.push('💡 Query these collections only if you need specific technical patterns:\n');
+      task.qdrantCollections.forEach((collection) => {
+        parts.push(`- \`${collection}\``);
+      });
+      parts.push('');
+    }
+
+    // TODOs (for agent tasks)
+    if (isAgentTask && task.todos && task.todos.length > 0) {
+      parts.push(`## TODOs (${task.todos.filter(t => t.status === 'completed').length}/${task.todos.length} completed)\n`);
+      task.todos.forEach((todo, idx) => {
+        const statusEmoji = todo.status === 'completed' ? '✅' : todo.status === 'in_progress' ? '🔄' : '⬜';
+        parts.push(`${idx + 1}. ${statusEmoji} ${todo.description}`);
+
+        if (todo.filePath) {
+          parts.push(`   - File: \`${todo.filePath}\``);
+        }
+        if (todo.functionName) {
+          parts.push(`   - Function: \`${todo.functionName}()\``);
+        }
+        if (todo.contextHint) {
+          parts.push(`   - Hint: ${todo.contextHint}`);
+        }
+      });
+      parts.push('');
+    }
+
+    // Prior Work Summary (for agent tasks)
+    if (isAgentTask && task.priorWorkSummary) {
+      parts.push('## Prior Work Summary\n');
+      parts.push(task.priorWorkSummary);
+      parts.push('');
+    }
+
+    // Notes
+    if (task.notes) {
+      parts.push('## Notes\n');
+      parts.push(task.notes);
+      parts.push('');
+    }
+
+    // Footer
+    parts.push('---');
+    parts.push(`Generated from Hyperion Task Board at ${new Date().toLocaleString()}`);
+
+    return parts.join('\n');
+  };
+
+  const handleCopyExecutePrompt = async () => {
+    const prompt = generateExecutePrompt();
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      // Fallback: create a temporary textarea
+      const textarea = document.createElement('textarea');
+      textarea.value = prompt;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -187,7 +318,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                   )}
                   <Badge variant="outline" className={cn('text-xs uppercase', getStatusColor(task.status))}>
                     {getStatusIcon(task.status)}
-                    <span className="ml-1">{task.status.replace('_', ' ')}</span>
+                    <span className="ml-1">{task.status?.replace('_', ' ') || 'unknown'}</span>
                   </Badge>
                   {task.tags?.map((tag, idx) => (
                     <Badge key={idx} variant="outline" className="text-xs">
@@ -197,7 +328,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                 </div>
               </div>
               <Dialog.Close asChild>
-                <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="Close dialog">
                   <X className="w-4 h-4" />
                 </Button>
               </Dialog.Close>
@@ -357,7 +488,7 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
                     </p>
                     <div className="flex gap-2">
                       <Badge variant="outline" className={cn('text-xs', getStatusColor(parentTask.status))}>
-                        {parentTask.status.replace('_', ' ')}
+                        {parentTask.status?.replace('_', ' ') || 'unknown'}
                       </Badge>
                       <Badge variant="outline" className="text-xs">
                         Created {formatDate(parentTask.createdAt)}
@@ -509,7 +640,24 @@ export function TaskDetailDialog({ task, open, onClose }: TaskDetailDialogProps)
 
           {/* Footer */}
           <div className="sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 p-4">
-            <div className="flex justify-end">
+            <div className="flex justify-between items-center">
+              <Button
+                variant="outline"
+                onClick={handleCopyExecutePrompt}
+                className="flex items-center gap-2"
+              >
+                {copied ? (
+                  <>
+                    <CheckCheck className="w-4 h-4 text-green-600" />
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    Copy Execute Prompt
+                  </>
+                )}
+              </Button>
               <Dialog.Close asChild>
                 <Button>Close</Button>
               </Dialog.Close>

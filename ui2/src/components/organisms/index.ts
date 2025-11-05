@@ -17,3 +17,5 @@ export * from './SessionList';
 export * from './TaskCard';
 export * from './TaskDetailDialog';
 export * from './KanbanColumn';
+export * from './MetricsDashboard';
+export * from './PageHeader';
