@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { PageLayout } from '@templates/PageLayout';
 import { initializeTheme, applyTheme, setStoredTheme, watchSystemTheme } from '@/utils/theme';
+import { ConversationModeProvider } from '@/contexts/ConversationModeContext';
 import { CodeChatPage } from '@/pages/CodeChatPage';
 import { KnowledgeBasePage } from '@/pages/KnowledgeBasePage';
 import KanbanBoard from '@/pages/KanbanBoard';
@@ -74,31 +75,33 @@ function App() {
   ];
 
   return (
-    <BrowserRouter basename="/ui">
-      <Routes>
-        <Route
-          element={
-            <PageLayout
-              navigationItems={navigationItems}
-              onRefresh={handleRefresh}
-              theme={theme}
-              onThemeToggle={handleThemeToggle}
-            />
-          }
-        >
-          <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
-          <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
-          <Route path="/knowledge" element={<KnowledgeBasePage key={refreshKey} />} />
-          <Route path="/reflection" element={<ReflectionPage key={refreshKey} />} />
-          <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
-          <Route path="/mcp-servers" element={<MCPServersPage key={refreshKey} />} />
-          <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
-          <Route path="/subagents" element={<SubagentsPage key={refreshKey} />} />
-          <Route path="/settings" element={<SettingsPage key={refreshKey} />} />
-          <Route path="/" element={<Navigate to="/chat" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ConversationModeProvider>
+      <BrowserRouter basename="/ui">
+        <Routes>
+          <Route
+            element={
+              <PageLayout
+                navigationItems={navigationItems}
+                onRefresh={handleRefresh}
+                theme={theme}
+                onThemeToggle={handleThemeToggle}
+              />
+            }
+          >
+            <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
+            <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
+            <Route path="/knowledge" element={<KnowledgeBasePage key={refreshKey} />} />
+            <Route path="/reflection" element={<ReflectionPage key={refreshKey} />} />
+            <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
+            <Route path="/mcp-servers" element={<MCPServersPage key={refreshKey} />} />
+            <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
+            <Route path="/subagents" element={<SubagentsPage key={refreshKey} />} />
+            <Route path="/settings" element={<SettingsPage key={refreshKey} />} />
+            <Route path="/" element={<Navigate to="/chat" replace />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ConversationModeProvider>
   );
 }
 
