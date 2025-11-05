@@ -8,7 +8,7 @@ interface ChatSession {
   id: string;
   title: string;
   lastMessage?: string;
-  timestamp: Date;
+  timestamp: Date | string;
   messageCount: number;
 }
 
@@ -178,7 +178,18 @@ export const SessionList: React.FC<SessionListProps> = ({
                         <div className="flex items-center gap-3 mt-2 text-xs text-gray-400 dark:text-gray-500">
                           <div className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {formatDistanceToNow(session.timestamp, { addSuffix: true })}
+                            {(() => {
+                              try {
+                                const date = typeof session.timestamp === 'string'
+                                  ? new Date(session.timestamp)
+                                  : session.timestamp;
+                                return isNaN(date.getTime())
+                                  ? 'Invalid date'
+                                  : formatDistanceToNow(date, { addSuffix: true });
+                              } catch {
+                                return 'Invalid date';
+                              }
+                            })()}
                           </div>
                           <div className="flex items-center gap-1">
                             <MessageSquare className="w-3 h-3" />
