@@ -1,0 +1,255 @@
+import React, { useState, useEffect } from 'react';
+import { CodeSearchForm } from '../components/organisms/CodeSearchForm';
+import { CodeResultsList } from '../components/organisms/CodeResultsList';
+import { FolderManager } from '../components/organisms/FolderManager';
+import { IndexStatusDisplay } from '../components/organisms/IndexStatusDisplay';
+import { FileInspector } from '../components/organisms/FileInspector';
+import ErrorBoundary from '../components/organisms/ErrorBoundary';
+import { ErrorBoundaryTest } from '../components/organisms/ErrorBoundaryTest';
+import { codeIndexService } from '../services/codeIndexService';
+import type { CodeResult, IndexedFolder, IndexStatus, FolderConfig, SearchOptions } from '../types/codeSearch';
+
+export const CodeSearchPage: React.FC = () => {
+  // Search state
+  const [results, setResults] = useState<CodeResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+
+  // Index management state
+  const [folders, setFolders] = useState<IndexedFolder[]>([]);
+  const [status, setStatus] = useState<IndexStatus>({
+    totalFiles: 0,
+    totalFolders: 0,
+    isRunning: false,
+  });
+
+  // Load initial status on mount
+  useEffect(() => {
+    loadStatus();
+  }, []);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+K or Ctrl+K to focus search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
+        searchInput?.focus();
+      }
+
+      // Esc to close file inspector
+      if (e.key === 'Escape' && selectedFileId) {
+        setSelectedFileId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedFileId]);
+
+  const loadStatus = async () => {
+    try {
+      const statusData = await codeIndexService.getStatus();
+      setStatus({
+        totalFiles: statusData.totalFiles || 0,
+        totalFolders: statusData.folders?.length || 0,
+        lastScanTime: statusData.lastScan,
+        isRunning: false, // Will be updated by actual API
+      });
+
+      // Convert folders array to IndexedFolder format
+      if (statusData.folders) {
+        const foldersData: IndexedFolder[] = statusData.folders.map((folder, index) => ({
+          id: folder.configId || `folder-${index}`,
+          path: folder.folderPath,
+          fileCount: folder.fileCount || 0,
+          enabled: folder.enabled ?? true,
+        }));
+        setFolders(foldersData);
+      }
+    } catch (error) {
+      console.error('Failed to load status:', error);
+    }
+  };
+
+  const handleSearch = async (query: string, options: SearchOptions) => {
+    setLoading(true);
+    try {
+      const response = await codeIndexService.search({
+        query,
+        limit: options.maxResults,
+        minScore: options.minRelevanceScore,
+      });
+
+      // Transform results to match our interface
+      const transformedResults: CodeResult[] = response.results.map((result, index) => {
+        const fileExtension = result.filePath.split('.').pop()?.toLowerCase() || '';
+        const languageMap: Record<string, string> = {
+          'ts': 'typescript',
+          'tsx': 'tsx',
+          'js': 'javascript',
+          'jsx': 'jsx',
+          'go': 'go',
+          'py': 'python',
+        };
+
+        return {
+          id: `${result.filePath}-${result.lineStart}-${index}`,
+          filePath: result.filePath,
+          fileName: result.filePath.split('/').pop() || '',
+          language: languageMap[fileExtension] || 'text',
+          content: result.content,
+          lineStart: result.lineStart,
+          lineEnd: result.lineEnd,
+          relevanceScore: result.score,
+        };
+      });
+
+      setResults(transformedResults);
+    } catch (error) {
+      console.error('Search failed:', error);
+      alert('Search failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleInspect = (fileId: string) => {
+    setSelectedFileId(fileId);
+  };
+
+  const handleAddFolder = async (config: FolderConfig) => {
+    try {
+      // Trigger scan with the new folder path
+      await codeIndexService.triggerScan(config.path);
+      await loadStatus();
+    } catch (error) {
+      console.error('Failed to add folder:', error);
+      alert('Failed to add folder. Please try again.');
+    }
+  };
+
+  const handleRemoveFolder = async (_folderId: string) => {
+    if (!confirm('Are you sure you want to remove this folder?')) return;
+
+    try {
+      // Note: API doesn't support removing folders yet
+      // This is a placeholder for when the API is implemented
+      alert('Remove folder functionality is not yet implemented in the API');
+      // await codeIndexService.removeFolder(folder.path);
+      // await loadStatus();
+    } catch (error) {
+      console.error('Failed to remove folder:', error);
+      alert('Failed to remove folder. Please try again.');
+    }
+  };
+
+  const handleWatcherToggle = async (_folderId: string, _enabled: boolean) => {
+    try {
+      // Note: API doesn't support watcher toggle yet
+      // This is a placeholder for when the API is implemented
+      alert('Watcher toggle functionality is not yet implemented in the API');
+      // await codeIndexService.toggleWatcher(enabled);
+      // await loadStatus();
+    } catch (error) {
+      console.error('Failed to toggle watcher:', error);
+      alert('Failed to toggle watcher. Please try again.');
+    }
+  };
+
+  const handleReindex = async () => {
+    if (!confirm('This will reindex all folders. Continue?')) return;
+
+    try {
+      // Trigger scan for each folder
+      for (const folder of folders) {
+        await codeIndexService.triggerScan(folder.path);
+      }
+      await loadStatus();
+    } catch (error) {
+      console.error('Failed to reindex:', error);
+      alert('Failed to reindex. Please try again.');
+    }
+  };
+
+  const handleRefreshStatus = () => {
+    loadStatus();
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Page Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+            Code Search
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Semantic search across your indexed codebase
+          </p>
+        </div>
+
+        {/* Main Grid Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left Column: Search & Results (2/3) */}
+          <div className="lg:col-span-2 space-y-6">
+            <CodeSearchForm
+              onSearch={handleSearch}
+              loading={loading}
+            />
+
+            <CodeResultsList
+              results={results}
+              loading={loading}
+              onInspect={handleInspect}
+            />
+          </div>
+
+          {/* Right Column: Config & Status (1/3) */}
+          <div className="space-y-6">
+            <FolderManager
+              folders={folders}
+              status={status}
+              onAdd={handleAddFolder}
+              onRemove={handleRemoveFolder}
+              onWatcherToggle={handleWatcherToggle}
+              onReindex={handleReindex}
+            />
+
+            <IndexStatusDisplay
+              status={status}
+              onRefresh={handleRefreshStatus}
+            />
+          </div>
+        </div>
+
+        {/* File Inspector Drawer */}
+        {selectedFileId && (
+          <FileInspector
+            fileId={selectedFileId}
+            onClose={() => setSelectedFileId(null)}
+          />
+        )}
+
+        {/* Keyboard Shortcuts Info */}
+        <div className="mt-8 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+          <p className="text-sm text-blue-800 dark:text-blue-200">
+            <strong>Keyboard Shortcuts:</strong> Cmd+K to focus search • Esc to close inspector
+          </p>
+        </div>
+      </div>
+
+      {/* Error Boundary Test Component - TEMPORARY FOR TESTING */}
+      <ErrorBoundaryTest />
+    </div>
+  );
+};
+
+// Wrap with ErrorBoundary for production error handling
+// Keep named export for testing purposes
+export default () => (
+  <ErrorBoundary>
+    <CodeSearchPage />
+  </ErrorBoundary>
+);
