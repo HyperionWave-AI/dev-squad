@@ -51,6 +51,12 @@ type FileChunk struct {
 	NodeType  string `bson:"nodeType,omitempty" json:"nodeType,omitempty"`   // function, class, method, interface, etc.
 	NodeName  string `bson:"nodeName,omitempty" json:"nodeName,omitempty"`   // Name of the function/class/method
 	Signature string `bson:"signature,omitempty" json:"signature,omitempty"` // Function/method signature or type declaration
+
+	// Enhanced AST metadata from smart chunking
+	Symbols      []string `bson:"symbols,omitempty" json:"symbols,omitempty"`           // Identifiers defined in this chunk
+	Imports      []string `bson:"imports,omitempty" json:"imports,omitempty"`           // Import statements used in chunk
+	HasDocstring bool     `bson:"hasDocstring,omitempty" json:"hasDocstring,omitempty"` // Whether chunk has documentation
+	DocContent   string   `bson:"docContent,omitempty" json:"docContent,omitempty"`     // Documentation/comment content
 }
 
 // SearchResult represents a search result from the code index
@@ -74,6 +80,12 @@ type SearchResult struct {
 	NodeType  string `json:"nodeType,omitempty"`  // function, class, method, interface, etc.
 	NodeName  string `json:"nodeName,omitempty"`  // Name of the function/class/method
 	Signature string `json:"signature,omitempty"` // Function/method signature or type declaration
+
+	// Enhanced AST metadata from smart chunking
+	Symbols      []string `json:"symbols,omitempty"`      // Identifiers defined in this chunk
+	Imports      []string `json:"imports,omitempty"`      // Import statements used in chunk
+	HasDocstring bool     `json:"hasDocstring,omitempty"` // Whether chunk has documentation
+	DocContent   string   `json:"docContent,omitempty"`   // Documentation/comment content
 }
 
 // IndexStatus represents the current status of the code index
