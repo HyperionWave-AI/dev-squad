@@ -399,6 +399,79 @@ func (s *MongoKnowledgeStorage) DeleteCollection(id string) (string, int64, erro
 	return collectionObj.Name, entriesDeleted, nil
 }
 
+// RebuildCollectionCounts recalculates and updates entry counts for all collections
+// This is useful for fixing collections with incorrect cached counts
+func (s *MongoKnowledgeStorage) RebuildCollectionCounts() (map[string]interface{}, error) {
+	ctx := context.Background()
+
+	// Get all Collection objects
+	collections, err := s.ListCollectionsObjects()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	stats := map[string]interface{}{
+		"collectionsUpdated": 0,
+		"totalEntries":       0,
+		"details":            []map[string]interface{}{},
+		"errors":             []string{},
+	}
+
+	for _, collection := range collections {
+		// Count actual entries for this collection
+		// Support both collectionId (new) and collection (old) for backward compatibility
+		filter := bson.M{
+			"$or": []bson.M{
+				{"collectionId": collection.ID},
+				{"collection": collection.Name},
+			},
+		}
+
+		actualCount, err := s.knowledgeCollection.CountDocuments(ctx, filter)
+		if err != nil {
+			errMsg := fmt.Sprintf("Failed to count entries for collection %s: %v", collection.Name, err)
+			stats["errors"] = append(stats["errors"].([]string), errMsg)
+			continue
+		}
+
+		// Update the collection's entryCount if it differs from actual count
+		if int(actualCount) != collection.EntryCount {
+			_, err := s.collectionsCollection.UpdateOne(ctx,
+				bson.M{"_id": collection.ID},
+				bson.M{"$set": bson.M{"entryCount": int(actualCount)}},
+			)
+			if err != nil {
+				errMsg := fmt.Sprintf("Failed to update count for collection %s: %v", collection.Name, err)
+				stats["errors"] = append(stats["errors"].([]string), errMsg)
+				continue
+			}
+
+			stats["collectionsUpdated"] = stats["collectionsUpdated"].(int) + 1
+
+			s.logger.Info("Rebuilt collection entry count",
+				zap.String("collection", collection.Name),
+				zap.String("id", collection.ID.Hex()),
+				zap.Int("oldCount", collection.EntryCount),
+				zap.Int64("actualCount", actualCount))
+		}
+
+		stats["totalEntries"] = stats["totalEntries"].(int) + int(actualCount)
+
+		// Add collection details
+		details := stats["details"].([]map[string]interface{})
+		details = append(details, map[string]interface{}{
+			"name":        collection.Name,
+			"id":          collection.ID.Hex(),
+			"oldCount":    collection.EntryCount,
+			"actualCount": int(actualCount),
+			"updated":     int(actualCount) != collection.EntryCount,
+		})
+		stats["details"] = details
+	}
+
+	return stats, nil
+}
+
 // MigrateToCollectionObjects creates Collection objects from existing knowledge entries
 // This is a one-time migration function that converts string-based collections to Collection objects
 func (s *MongoKnowledgeStorage) MigrateToCollectionObjects() (map[string]interface{}, error) {
@@ -529,6 +602,17 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 		return nil, fmt.Errorf("failed to insert knowledge entry in MongoDB: %w", err)
 	}
 
+	// Increment the collection's entry count atomically
+	_, err = s.collectionsCollection.UpdateOne(ctx,
+		bson.M{"_id": collectionObj.ID},
+		bson.M{"$inc": bson.M{"entryCount": 1}},
+	)
+	if err != nil {
+		s.logger.Warn("Failed to increment collection entry count",
+			zap.String("collectionId", collectionObj.ID.Hex()),
+			zap.Error(err))
+	}
+
 	// Store in Qdrant using QdrantName (immutable)
 	if s.qdrantClient != nil {
 		// Ensure collection exists using immutable QdrantName
@@ -635,6 +719,19 @@ func (s *MongoKnowledgeStorage) DeleteEntry(id string) error {
 	_, err = s.knowledgeCollection.DeleteOne(ctx, bson.M{"entryId": id})
 	if err != nil {
 		return fmt.Errorf("failed to delete knowledge entry from MongoDB: %w", err)
+	}
+
+	// Decrement the collection's entry count atomically
+	if existingEntry.CollectionID != primitive.NilObjectID {
+		_, err = s.collectionsCollection.UpdateOne(ctx,
+			bson.M{"_id": existingEntry.CollectionID},
+			bson.M{"$inc": bson.M{"entryCount": -1}},
+		)
+		if err != nil {
+			s.logger.Warn("Failed to decrement collection entry count",
+				zap.String("collectionId", existingEntry.CollectionID.Hex()),
+				zap.Error(err))
+		}
 	}
 
 	// Delete from Qdrant

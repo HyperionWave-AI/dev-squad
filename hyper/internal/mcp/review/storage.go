@@ -148,7 +148,33 @@ func (s *MongoReviewStorage) StoreReview(result *ReviewResult) error {
 
 	// Upsert by entryId to keep only the latest review per entry
 	filter := bson.M{"entryId": result.EntryID}
-	update := bson.M{"$set": result}
+
+	// Build update document - exclude _id from $set to avoid immutable field error
+	update := bson.M{
+		"$set": bson.M{
+			"entryId":          result.EntryID,
+			"collectionName":   result.CollectionName,
+			"reviewedAt":       result.ReviewedAt,
+			"schemaValid":      result.SchemaValid,
+			"minWordCount":     result.MinWordCount,
+			"actualWordCount":  result.ActualWordCount,
+			"alignmentScore":   result.AlignmentScore,
+			"freshnessScore":   result.FreshnessScore,
+			"verbosityScore":   result.VerbosityScore,
+			"uniquenessScore":  result.UniquenessScore,
+			"healthScore":      result.HealthScore,
+			"totalReferences":  result.TotalReferences,
+			"validReferences":  result.ValidReferences,
+			"brokenReferences": result.BrokenReferences,
+			"actionsTaken":     result.ActionsTaken,
+			"suggestedActions": result.SuggestedActions,
+			"reviewMode":       result.ReviewMode,
+			"dryRun":           result.DryRun,
+		},
+		"$setOnInsert": bson.M{
+			"_id": result.ID,
+		},
+	}
 	opts := options.Update().SetUpsert(true)
 
 	_, err := s.reviewsCollection.UpdateOne(ctx, filter, update, opts)
