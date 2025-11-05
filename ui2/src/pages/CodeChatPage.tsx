@@ -98,6 +98,21 @@ export const CodeChatPage: React.FC = () => {
     return () => clearInterval(intervalId);
   }, []);
 
+  // Auto-refresh messages for active session (Fix #2: Messages not appearing without refresh)
+  useEffect(() => {
+    if (!activeSessionId) return;
+
+    // Poll messages every 3 seconds for active session
+    const intervalId = setInterval(() => {
+      // Only poll if not currently streaming (avoid conflicts)
+      if (!isStreaming) {
+        loadMessages(activeSessionId);
+      }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [activeSessionId, isStreaming]);
+
   // Connect WebSocket when active session changes
   useEffect(() => {
     if (activeSessionId) {
@@ -449,6 +464,26 @@ export const CodeChatPage: React.FC = () => {
               {messages.map((message) => (
                 <ChatMessage key={message.id} message={message} />
               ))}
+
+              {/* AI Thinking Indicator (Fix #1: Show before content arrives) */}
+              {isStreaming && !streamingContent && (
+                <div className="flex items-start gap-3 p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                  <div className="flex-shrink-0 mt-1">
+                    <div className="relative flex items-center justify-center w-6 h-6">
+                      <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse z-10" />
+                      <div className="absolute inset-0 w-3 h-3 bg-blue-500 rounded-full animate-ping opacity-75" />
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+                      Assistant
+                    </div>
+                    <div className="text-sm text-gray-600 dark:text-gray-400 italic">
+                      AI is thinking...
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Streaming Assistant Message */}
               {isStreaming && streamingContent && (
