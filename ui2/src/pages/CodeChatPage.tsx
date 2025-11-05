@@ -16,6 +16,7 @@ import { SessionList } from '@/components/organisms/SessionList';
 import { ChatMessage } from '@/components/organisms/ChatMessage';
 import { ChatInput } from '@/components/organisms/ChatInput';
 import { PerformanceMonitor } from '@/components/organisms/PerformanceMonitor';
+import { ConversationModeToggle } from '@/components/molecules/ConversationModeToggle';
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
 import {
   createSession,
@@ -154,7 +155,7 @@ export const CodeChatPage: React.FC = () => {
     const connection = connectChatStream(sessionId, {
       onMessage: (content: string, done: boolean) => {
         if (done) {
-          // Stream complete - add AI message to chat
+          // Stream complete - save final AI message if there's any remaining content
           const finalContent = streamingContentRef.current;
           const tools = currentMessageToolsRef.current;
 
@@ -168,10 +169,21 @@ export const CodeChatPage: React.FC = () => {
               toolCalls: tools.toolCalls.length > 0 ? tools.toolCalls : undefined,
               toolResults: tools.toolResults.size > 0 ? tools.toolResults : undefined,
             };
-            setMessages((prev) => [...prev, newMessage]);
+            console.log('[CodeChatPage] ✅ Creating completed AI message:', {
+              id: newMessage.id,
+              hasContent: !!finalContent,
+              toolCallsCount: tools.toolCalls.length,
+              toolResultsCount: tools.toolResults.size,
+            });
+            setMessages((prev) => {
+              const updated = [...prev, newMessage];
+              console.log('[CodeChatPage] ✅ Messages array updated. New length:', updated.length);
+              return updated;
+            });
           }
 
           // Refresh sessions in case AI created subchats
+          console.log('[CodeChatPage] Refreshing sessions after AI response completion');
           loadSessions();
 
           // Clear streaming state
@@ -196,6 +208,25 @@ export const CodeChatPage: React.FC = () => {
         }
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
+        console.log('[CodeChatPage] Tool call received:', tool, id);
+
+        // If we have accumulated content before the tool call, save it as a separate message
+        if (streamingContentRef.current.trim()) {
+          const messageBeforeToolCall: ChatMessageType = {
+            id: `msg-${Date.now()}`,
+            sessionId,
+            role: 'assistant',
+            content: streamingContentRef.current,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, messageBeforeToolCall]);
+          console.log('[CodeChatPage] Saved message before tool call');
+
+          // Clear streaming content for next message
+          streamingContentRef.current = '';
+          setStreamingContent('');
+        }
+
         const toolCall: ToolCall = {
           id,
           tool,
@@ -358,7 +389,19 @@ export const CodeChatPage: React.FC = () => {
       </div>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Chat Header with Mode Toggle */}
+        {activeSessionId && (
+          <div className="shrink-0 px-6 py-3 border-b border-gray-200 dark:border-gray-700 bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm">
+            <div className="flex items-center justify-between">
+              <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                {sessions.find((s) => s.id === activeSessionId)?.title || 'Chat'}
+              </h1>
+              <ConversationModeToggle showLabel={true} />
+            </div>
+          </div>
+        )}
+
         {/* Chat Messages Area */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {!activeSessionId ? (
