@@ -250,6 +250,10 @@ type SearchResultDTO struct {
 	FolderID          string  `json:"folderId"`
 	FolderPath        string  `json:"folderPath"`
 	FullFileRetrieved bool    `json:"fullFileRetrieved"`
+	// AST metadata
+	ChunkType    string `json:"chunkType,omitempty"`
+	NodeType     string `json:"nodeType,omitempty"`
+	NodeName     string `json:"nodeName,omitempty"`
 }
 
 type SearchResponse struct {
@@ -1238,6 +1242,16 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		}
 		if endLine, ok := hit.Payload["endLine"].(float64); ok {
 			result.EndLine = int(endLine)
+		}
+		// Extract AST metadata
+		if chunkType, ok := hit.Payload["chunkType"].(string); ok {
+			result.ChunkType = chunkType
+		}
+		if nodeType, ok := hit.Payload["nodeType"].(string); ok {
+			result.NodeType = nodeType
+		}
+		if nodeName, ok := hit.Payload["nodeName"].(string); ok {
+			result.NodeName = nodeName
 		}
 
 		// Handle content based on retrieve mode

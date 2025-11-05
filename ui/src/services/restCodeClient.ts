@@ -104,6 +104,17 @@ class RestCodeClient {
     query: string,
     options?: SearchOptions
   ): Promise<SearchResult[]> {
+    const requestBody = {
+      query,
+      fileTypes: options?.fileTypes,
+      minScore: options?.minScore,
+      folderPath: options?.folderPath,
+      limit: options?.limit,
+      retrieve: options?.retrieve,
+    };
+
+    console.log('🌐 API Request Body:', JSON.stringify(requestBody, null, 2));
+
     const result = await this.fetchJSON<{
       success: boolean;
       query: string;
@@ -114,16 +125,11 @@ class RestCodeClient {
       '/search',
       {
         method: 'POST',
-        body: JSON.stringify({
-          query,
-          fileTypes: options?.fileTypes,
-          minScore: options?.minScore,
-          folderPath: options?.folderPath,
-          limit: options?.limit,
-          retrieve: options?.retrieve,
-        }),
+        body: JSON.stringify(requestBody),
       }
     );
+
+    console.log('🌐 API Response:', { success: result.success, count: result.count, resultCount: result.results?.length });
 
     return result.results || [];
   }
