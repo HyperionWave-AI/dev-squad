@@ -3,6 +3,40 @@ import { fetchWithAuth } from './restClient';
 
 const API_BASE = '';
 
+export interface AddFolderConfig {
+  folderPath: string;
+  includePatterns?: string[];
+  excludePatterns?: string[];
+  chunkSize?: number;
+}
+
+export interface FileDetails {
+  id: string;
+  filePath: string;
+  language: string;
+  size: number;
+  lines: number;
+  chunkCount: number;
+  indexed: string;
+}
+
+export interface ASTNode {
+  type: string; // function, class, interface, struct, etc.
+  name: string;
+  signature?: string;
+  startLine: number;
+  endLine: number;
+}
+
+export interface FileChunkDetails {
+  chunkId: string;
+  content: string;
+  startLine: number;
+  endLine: number;
+  chunkType: 'ast' | 'line-based';
+  astNodes?: ASTNode[];
+}
+
 export const codeIndexService = {
   async getStatus(): Promise<IndexStatus> {
     return fetchWithAuth(`${API_BASE}/api/v1/code-index/status`);
@@ -22,5 +56,76 @@ export const codeIndexService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folderPath }),
     });
+  },
+
+  async addFolder(config: AddFolderConfig): Promise<{ success: boolean; configId: string }> {
+    const result = await fetchWithAuth<{
+      success: boolean;
+      message: string;
+      folder: { id: string; path: string; description: string };
+    }>(`${API_BASE}/api/v1/code-index/add-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folderPath: config.folderPath,
+        includePatterns: config.includePatterns,
+        excludePatterns: config.excludePatterns,
+        chunkSize: config.chunkSize,
+      }),
+    });
+
+    return { success: result.success, configId: result.folder.id };
+  },
+
+  async removeFolder(configId: string): Promise<{ success: boolean }> {
+    const result = await fetchWithAuth<{
+      success: boolean;
+      message: string;
+      filesRemoved: number;
+    }>(`${API_BASE}/api/v1/code-index/remove-folder/${encodeURIComponent(configId)}`, {
+      method: 'DELETE',
+    });
+
+    return { success: result.success };
+  },
+
+  async enableWatcher(): Promise<{ success: boolean; message: string }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/code-index/enable-watcher`, {
+      method: 'POST',
+    });
+  },
+
+  async disableWatcher(): Promise<{ success: boolean; message: string }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/code-index/disable-watcher`, {
+      method: 'POST',
+    });
+  },
+
+  async reindexAll(): Promise<{
+    success: boolean;
+    message: string;
+    foldersReindexed: number;
+    totalFilesIndexed: number;
+  }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/code-index/reindex-all`, {
+      method: 'POST',
+    });
+  },
+
+  async getFile(fileId: string): Promise<FileDetails> {
+    const result = await fetchWithAuth<{
+      file: FileDetails;
+    }>(`${API_BASE}/api/v1/code-index/file/${encodeURIComponent(fileId)}`);
+
+    return result.file;
+  },
+
+  async getFileChunks(fileId: string): Promise<FileChunkDetails[]> {
+    const result = await fetchWithAuth<{
+      chunks: FileChunkDetails[];
+      count: number;
+    }>(`${API_BASE}/api/v1/code-index/file/${encodeURIComponent(fileId)}/chunks`);
+
+    return result.chunks || [];
   },
 };

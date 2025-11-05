@@ -36,4 +36,6 @@ export interface SearchOptions {
   fileTypes?: string[];
   minRelevanceScore?: number;
   maxResults?: number;
+  folderPath?: string;
+  retrieve?: 'chunk' | 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
 }

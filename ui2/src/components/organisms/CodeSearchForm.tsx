@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Search } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import { Button } from '../atoms/Button';
 import { Input } from '../atoms/Input';
 import { Badge } from '../atoms/Badge';
+import * as Select from '@radix-ui/react-select';
 import type { SearchOptions } from '../../types/codeSearch';
 
 interface CodeSearchFormProps {
@@ -18,11 +19,22 @@ const FILE_TYPES = [
   { id: 'js', label: 'JavaScript', extension: '.js' },
 ];
 
+const RETRIEVE_MODES = [
+  { value: 'chunk', label: 'Chunk (default)', description: '~200 lines' },
+  { value: 'chunk-s', label: 'Small Chunk', description: '~50 lines' },
+  { value: 'chunk-m', label: 'Medium Chunk', description: '~100 lines' },
+  { value: 'chunk-l', label: 'Large Chunk', description: '~200 lines' },
+  { value: 'chunk-xl', label: 'Extra Large Chunk', description: '~400 lines' },
+  { value: 'full', label: 'Full File', description: 'Entire file content' },
+];
+
 export const CodeSearchForm: React.FC<CodeSearchFormProps> = ({ onSearch, loading }) => {
   const [query, setQuery] = useState('');
   const [selectedFileTypes, setSelectedFileTypes] = useState<string[]>([]);
   const [minRelevance, setMinRelevance] = useState(0);
   const [maxResults, setMaxResults] = useState(10);
+  const [folderPath, setFolderPath] = useState('');
+  const [retrieveMode, setRetrieveMode] = useState<'chunk' | 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full'>('chunk');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,6 +44,8 @@ export const CodeSearchForm: React.FC<CodeSearchFormProps> = ({ onSearch, loadin
       fileTypes: selectedFileTypes.length > 0 ? selectedFileTypes : undefined,
       minRelevanceScore: minRelevance,
       maxResults,
+      folderPath: folderPath.trim() || undefined,
+      retrieve: retrieveMode,
     };
 
     onSearch(query, options);
@@ -133,6 +147,57 @@ export const CodeSearchForm: React.FC<CodeSearchFormProps> = ({ onSearch, loadin
             <span>1</span>
             <span>50</span>
           </div>
+        </div>
+
+        {/* Folder Path Filter */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Folder Path (optional)
+          </label>
+          <div className="relative">
+            <Input
+              type="text"
+              value={folderPath}
+              onChange={(e) => setFolderPath(e.target.value)}
+              placeholder="/path/to/folder"
+              disabled={loading}
+            />
+            {folderPath && (
+              <button
+                type="button"
+                onClick={() => setFolderPath('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                title="Clear folder path"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Search within a specific folder only
+          </p>
+        </div>
+
+        {/* Retrieval Mode Selection */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Content Retrieval Mode
+          </label>
+          <select
+            value={retrieveMode}
+            onChange={(e) => setRetrieveMode(e.target.value as typeof retrieveMode)}
+            className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={loading}
+          >
+            {RETRIEVE_MODES.map((mode) => (
+              <option key={mode.value} value={mode.value}>
+                {mode.label} - {mode.description}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Controls how much content to retrieve per match
+          </p>
         </div>
 
         {/* Submit Button */}
