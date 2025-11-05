@@ -7,15 +7,17 @@
  * - WebSocket real-time streaming
  * - Tool calls display with Radix Accordion
  * - Session management (create, rename, delete)
- * - Subchat support with read-only indicator
+ * - Subchat support with intelligent interrupt categorization (STOP, MODIFY, CLARIFY, STATUS, CONTINUE)
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, BarChart3, X } from 'lucide-react';
 import { SessionList } from '@/components/organisms/SessionList';
 import { ChatMessage } from '@/components/organisms/ChatMessage';
 import { ChatInput } from '@/components/organisms/ChatInput';
 import { PerformanceMonitor } from '@/components/organisms/PerformanceMonitor';
+import { ProgressTracker, type ProgressEvent } from '@/components/organisms/ProgressTracker';
+import { MetricsDashboard } from '@/components/organisms/MetricsDashboard';
 import { ConversationModeToggle } from '@/components/molecules/ConversationModeToggle';
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
 import {
@@ -48,6 +50,12 @@ export const CodeChatPage: React.FC = () => {
   const [streamingToolResults, setStreamingToolResults] = useState<Map<string, ToolResult>>(
     new Map()
   );
+
+  // Progress tracking state
+  const [progressEvents, setProgressEvents] = useState<ProgressEvent[]>([]);
+
+  // Metrics drawer state
+  const [metricsDrawerOpen, setMetricsDrawerOpen] = useState(false);
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -365,13 +373,8 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
-  // Check if active session is a subchat (read-only)
-  const isActiveSessionSubchat = (): boolean => {
-    if (!activeSessionId) return false;
-    const activeSession = sessions.find((s) => s.id === activeSessionId);
-    if (!activeSession) return false;
-    return activeSession.title.startsWith('Subchat:') || !!activeSession.parentChatId;
-  };
+  // Note: Subchats are now interruptible (supports intelligent interrupt categorization)
+  // Backend handles STOP, MODIFY, CLARIFY, STATUS, CONTINUE categories
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -397,7 +400,16 @@ export const CodeChatPage: React.FC = () => {
               <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 {sessions.find((s) => s.id === activeSessionId)?.title || 'Chat'}
               </h1>
-              <ConversationModeToggle showLabel={true} />
+              <div className="flex items-center gap-3">
+                <ConversationModeToggle showLabel={true} />
+                <button
+                  onClick={() => setMetricsDrawerOpen(!metricsDrawerOpen)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  title="Toggle metrics dashboard"
+                >
+                  <BarChart3 className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -481,12 +493,10 @@ export const CodeChatPage: React.FC = () => {
         {/* Chat Input */}
         <ChatInput
           onSendMessage={handleSendMessage}
-          disabled={!activeSessionId || isStreaming || isActiveSessionSubchat()}
+          disabled={!activeSessionId || isStreaming}
           placeholder={
             !activeSessionId
               ? 'Create a new chat to get started'
-              : isActiveSessionSubchat()
-              ? 'This subchat is read-only. Monitor the AI agent progress here.'
               : 'Type your message...'
           }
         />
@@ -499,6 +509,45 @@ export const CodeChatPage: React.FC = () => {
         isPerformanceGood={performance.isPerformanceGood}
         isStreaming={isStreaming}
       />
+
+      {/* Progress Tracker - Fixed bottom-right (above performance monitor) */}
+      <ProgressTracker
+        progress={progressEvents}
+        onClose={() => setProgressEvents([])}
+      />
+
+      {/* Metrics Drawer - Slide in from right */}
+      {metricsDrawerOpen && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/20 dark:bg-black/40 z-40 backdrop-blur-sm"
+            onClick={() => setMetricsDrawerOpen(false)}
+          />
+
+          {/* Drawer */}
+          <div className="fixed right-0 top-0 h-full w-full max-w-4xl bg-white dark:bg-gray-900 shadow-2xl z-50 overflow-y-auto animate-in slide-in-from-right duration-300">
+            {/* Drawer Header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+                System Metrics
+              </h2>
+              <button
+                onClick={() => setMetricsDrawerOpen(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                aria-label="Close metrics drawer"
+              >
+                <X className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+              </button>
+            </div>
+
+            {/* Drawer Content */}
+            <div className="p-6">
+              <MetricsDashboard />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
