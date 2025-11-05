@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
+import { Library } from 'lucide-react';
 import {
   CollectionBrowser,
   ArticleList,
   ArticleViewer,
   ArticleEditor,
-  KnowledgeHeader,
+  PageHeader,
 } from '@/components/organisms';
+import { Badge } from '@/components/atoms/Badge';
 import { knowledgeApi } from '@/services/knowledgeApi';
 import { knowledgeService } from '@/services/knowledgeService';
 import type { KnowledgeCollection, KnowledgeEntry } from '@/types/knowledge';
@@ -221,11 +223,24 @@ export function KnowledgeBasePage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-      {/* Glassmorphism Header */}
-      <KnowledgeHeader
-        totalCollections={collections.length}
-        totalEntries={totalEntries}
-      />
+      {/* Header with Stats */}
+      <div className="space-y-4">
+        <PageHeader
+          title="Knowledge Base"
+          description="Explore, search, and manage your knowledge collections"
+          icon={<Library className="h-8 w-8" />}
+          gradientFrom="#3b82f6"
+          gradientTo="#8b5cf6"
+        />
+        <div className="flex gap-4 justify-end">
+          <Badge variant="default" className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600">
+            {collections.length} Collections
+          </Badge>
+          <Badge variant="default" className="px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600">
+            {totalEntries} Entries
+          </Badge>
+        </div>
+      </div>
 
       {/* Error Alert */}
       {error && (

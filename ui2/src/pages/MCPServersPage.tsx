@@ -10,6 +10,7 @@ import type { MCPServer, MCPServerDetails } from '@/types/mcp';
 import { Button } from '@/components/atoms/Button';
 import { Input } from '@/components/atoms/Input';
 import { Badge } from '@/components/atoms/Badge';
+import { PageHeader } from '@/components/organisms/PageHeader';
 
 export function MCPServersPage() {
   const [servers, setServers] = useState<MCPServer[]>([]);
@@ -133,25 +134,18 @@ export function MCPServersPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
       <div className="container mx-auto p-6 space-y-6 max-w-7xl">
-        {/* Header - Glassmorphic Container */}
-        <div className="backdrop-blur-xl bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-2xl p-6 shadow-xl sticky top-0 z-10">
-          <div className="flex justify-between items-start">
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-br from-orange-400 to-red-500 rounded-xl blur-xl opacity-40 animate-pulse"></div>
-                <div className="relative p-3 bg-gradient-to-br from-orange-500 to-red-600 rounded-xl shadow-xl">
-                  <Plug className="h-8 w-8 text-white" />
-                </div>
-              </div>
-              <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-orange-600 via-red-600 to-orange-600 bg-clip-text text-transparent">
-                  MCP Servers
-                </h1>
-                <p className="text-gray-600 dark:text-gray-400 mt-1">
-                  Manage external Model Context Protocol servers and tools
-                </p>
-              </div>
-            </div>
+        {/* Header */}
+        <PageHeader
+          title="MCP Servers"
+          description="Manage external Model Context Protocol servers and tools"
+          icon={<Plug className="h-8 w-8" />}
+          gradientFrom="#f97316"
+          gradientTo="#dc2626"
+        />
+
+        {/* Actions and Search Bar */}
+        <div className="backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border border-white/30 dark:border-gray-700/30 rounded-lg p-6 shadow-lg">
+          <div className="flex justify-between items-center mb-4">
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={handleRediscoverAll} disabled={loading}>
                 <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
@@ -207,7 +201,7 @@ export function MCPServersPage() {
           </div>
 
           {/* Search and Stats */}
-          <div className="flex items-center gap-4 mt-4">
+          <div className="flex items-center gap-4">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
