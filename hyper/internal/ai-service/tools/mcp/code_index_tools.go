@@ -199,6 +199,23 @@ func (t *CodeIndexSearchTool) InputSchema() map[string]interface{} {
 				"description": "Content retrieval mode: 'chunk' (default - 200 lines), 'chunk-s' (50 lines), 'chunk-m' (100 lines), 'chunk-l' (200 lines), 'chunk-xl' (400 lines), or 'full' (entire file)",
 				"enum":        []string{"chunk", "chunk-s", "chunk-m", "chunk-l", "chunk-xl", "full"},
 			},
+			"functionName": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional: Filter by function name pattern (supports regex, e.g., 'handleAuth.*' or 'createUser')",
+			},
+			"className": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional: Filter by exact class name (e.g., 'UserService', 'TaskHandler')",
+			},
+			"nodeType": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional: Filter by code element type",
+				"enum":        []string{"function", "class", "method", "interface", "import"},
+			},
+			"hasDocstring": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Optional: Filter to only well-documented code (true) or undocumented code (false)",
+			},
 		},
 		"required": []string{"query"},
 	}
@@ -252,6 +269,53 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.String("projectRoot", projectRoot),
 		zap.String("query", query))
 
+	// Parse structural filter parameters
+	var structuralFilter storage.StructuralFilter
+	var hasStructuralFilters bool
+
+	if functionName, ok := input["functionName"].(string); ok && functionName != "" {
+		structuralFilter.FunctionName = functionName
+		hasStructuralFilters = true
+	}
+	if className, ok := input["className"].(string); ok && className != "" {
+		structuralFilter.ClassName = className
+		hasStructuralFilters = true
+	}
+	if nodeType, ok := input["nodeType"].(string); ok && nodeType != "" {
+		structuralFilter.NodeType = nodeType
+		hasStructuralFilters = true
+	}
+	if hasDocstring, ok := input["hasDocstring"].(bool); ok {
+		structuralFilter.HasDocstring = &hasDocstring
+		hasStructuralFilters = true
+	}
+
+	// Apply MongoDB pre-filtering if structural filters provided
+	var chunkIDs []string
+	if hasStructuralFilters {
+		chunkIDs, err = t.codeIndexStorage.FindChunksWithFilters(structuralFilter)
+		if err != nil {
+			return nil, fmt.Errorf("failed to apply structural filters: %w", err)
+		}
+		t.logger.Info("Code search: structural pre-filter applied",
+			zap.Int("matchingChunks", len(chunkIDs)),
+			zap.String("functionName", structuralFilter.FunctionName),
+			zap.String("className", structuralFilter.ClassName),
+			zap.String("nodeType", structuralFilter.NodeType))
+
+		// If no chunks match the structural filter, return empty results
+		if len(chunkIDs) == 0 {
+			return map[string]interface{}{
+				"success":           true,
+				"query":             query,
+				"FILE_PATHS_TO_USE": []string{},
+				"results":           []storage.SearchResult{},
+				"resultCount":       0,
+				"message":           "No code chunks match the specified structural filters",
+			}, nil
+		}
+	}
+
 	// Generate embedding for query
 	queryEmbedding, err := t.embeddingClient.CreateEmbedding(query)
 	if err != nil {
@@ -261,8 +325,15 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Int("dimensions", len(queryEmbedding)),
 		zap.String("collection", collectionName))
 
-	// Search in Qdrant using the correct collection
-	searchResp, err := t.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	// Search in Qdrant using the correct collection with optional chunk ID filter
+	var searchResp *storage.CodeIndexSearchResponse
+	if len(chunkIDs) > 0 {
+		// Use structural filter with chunk IDs
+		searchResp, err = t.qdrantClient.SearchCodeIndexWithFilter(collectionName, queryEmbedding, limit, nil, chunkIDs)
+	} else {
+		// Standard semantic search without structural filters
+		searchResp, err = t.qdrantClient.SearchCodeIndex(collectionName, queryEmbedding, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to search in collection '%s': %w", collectionName, err)
 	}
@@ -270,7 +341,7 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Int("resultCount", len(searchResp.Result)),
 		zap.String("collection", collectionName))
 
-	// FILENAME-AWARE SCORE BOOSTING
+	// FILENAME-AWARE SCORE BOOSTING + DOCSTRING BOOSTING
 	// Parse query once to extract filename matching criteria
 	queryTokens, queryExtensions, exactFilename := parseQueryForFilenameBoost(query)
 	t.logger.Debug("Query parsed for filename boosting",
@@ -278,8 +349,9 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Strings("extensions", queryExtensions),
 		zap.String("exactFilename", exactFilename))
 
-	// Apply score boosting to each hit based on filename matching
+	// Apply score boosting to each hit based on filename matching AND docstring presence
 	boostedCount := 0
+	docstringBoostedCount := 0
 	for i := range searchResp.Result {
 		hit := &searchResp.Result[i]
 
@@ -289,12 +361,22 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 			filePath = fp
 		}
 
-		// Calculate boost multiplier
-		boostMultiplier := calculateFilenameBoost(filePath, queryTokens, queryExtensions, exactFilename)
+		// Calculate filename boost multiplier
+		filenameBoostMultiplier := calculateFilenameBoost(filePath, queryTokens, queryExtensions, exactFilename)
+
+		// Calculate docstring boost multiplier (1.2x for documented code)
+		docstringBoostMultiplier := 1.0
+		if hasDoc, ok := hit.Payload["hasDocstring"].(bool); ok && hasDoc {
+			docstringBoostMultiplier = 1.2
+			docstringBoostedCount++
+		}
+
+		// Combine boosts (multiplicative)
+		totalBoostMultiplier := filenameBoostMultiplier * docstringBoostMultiplier
 
 		// Apply boost to score (multiplicative)
 		originalScore := hit.Score
-		hit.Score = float32(float64(originalScore) * boostMultiplier)
+		hit.Score = float32(float64(originalScore) * totalBoostMultiplier)
 
 		// Clamp score to maximum of 1.0
 		if hit.Score > 1.0 {
@@ -302,18 +384,20 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		}
 
 		// Log boosted scores for debugging
-		if boostMultiplier > 1.0 {
+		if totalBoostMultiplier > 1.0 {
 			boostedCount++
-			t.logger.Debug("Score boosted for filename match",
+			t.logger.Debug("Score boosted",
 				zap.String("filePath", filePath),
 				zap.Float64("originalScore", float64(originalScore)),
-				zap.Float64("boostMultiplier", boostMultiplier),
+				zap.Float64("filenameBoost", filenameBoostMultiplier),
+				zap.Float64("docstringBoost", docstringBoostMultiplier),
+				zap.Float64("totalBoost", totalBoostMultiplier),
 				zap.Float64("boostedScore", float64(hit.Score)))
 		}
 	}
 
 	// Re-sort results by boosted scores (descending order)
-	// This ensures files with filename matches rank higher
+	// This ensures files with filename matches and docstrings rank higher
 	if boostedCount > 0 {
 		// Simple bubble sort for small result sets (max 50 items)
 		for i := 0; i < len(searchResp.Result)-1; i++ {
@@ -323,8 +407,9 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 				}
 			}
 		}
-		t.logger.Info("Results re-sorted after filename boosting",
+		t.logger.Info("Results re-sorted after boosting",
 			zap.Int("boostedCount", boostedCount),
+			zap.Int("docstringBoostedCount", docstringBoostedCount),
 			zap.Int("totalResults", len(searchResp.Result)))
 	}
 
@@ -387,6 +472,28 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		}
 		if signature, ok := hit.Payload["signature"].(string); ok {
 			result.Signature = signature
+		}
+
+		// Extract enhanced AST metadata from smart chunking
+		if symbols, ok := hit.Payload["symbols"].([]interface{}); ok {
+			for _, sym := range symbols {
+				if str, ok := sym.(string); ok {
+					result.Symbols = append(result.Symbols, str)
+				}
+			}
+		}
+		if imports, ok := hit.Payload["imports"].([]interface{}); ok {
+			for _, imp := range imports {
+				if str, ok := imp.(string); ok {
+					result.Imports = append(result.Imports, str)
+				}
+			}
+		}
+		if hasDocstring, ok := hit.Payload["hasDocstring"].(bool); ok {
+			result.HasDocstring = hasDocstring
+		}
+		if docContent, ok := hit.Payload["docContent"].(string); ok {
+			result.DocContent = docContent
 		}
 
 		// Handle content based on retrieve type
