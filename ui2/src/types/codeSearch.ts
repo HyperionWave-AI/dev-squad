@@ -37,5 +37,5 @@ export interface SearchOptions {
   minRelevanceScore?: number;
   maxResults?: number;
   folderPath?: string;
-  retrieve?: 'chunk' | 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
+  retrieve?: 'chunk' | 'full';
 }

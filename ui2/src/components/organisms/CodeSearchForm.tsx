@@ -20,11 +20,7 @@ const FILE_TYPES = [
 ];
 
 const RETRIEVE_MODES = [
-  { value: 'chunk', label: 'Chunk (default)', description: '~200 lines' },
-  { value: 'chunk-s', label: 'Small Chunk', description: '~50 lines' },
-  { value: 'chunk-m', label: 'Medium Chunk', description: '~100 lines' },
-  { value: 'chunk-l', label: 'Large Chunk', description: '~200 lines' },
-  { value: 'chunk-xl', label: 'Extra Large Chunk', description: '~400 lines' },
+  { value: 'chunk', label: 'Chunk (default)', description: 'Single matching chunk' },
   { value: 'full', label: 'Full File', description: 'Entire file content' },
 ];
 
@@ -34,7 +30,7 @@ export const CodeSearchForm: React.FC<CodeSearchFormProps> = ({ onSearch, loadin
   const [minRelevance, setMinRelevance] = useState(0);
   const [maxResults, setMaxResults] = useState(10);
   const [folderPath, setFolderPath] = useState('');
-  const [retrieveMode, setRetrieveMode] = useState<'chunk' | 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full'>('chunk');
+  const [retrieveMode, setRetrieveMode] = useState<'chunk' | 'full'>('chunk');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
