@@ -4,9 +4,11 @@ import { CodeResultsList } from '../components/organisms/CodeResultsList';
 import { FolderManager } from '../components/organisms/FolderManager';
 import { IndexStatusDisplay } from '../components/organisms/IndexStatusDisplay';
 import { FileInspector } from '../components/organisms/FileInspector';
+import { PageHeader } from '../components/organisms/PageHeader';
 import ErrorBoundary from '../components/organisms/ErrorBoundary';
 import { codeIndexService } from '../services/codeIndexService';
 import type { CodeResult, IndexedFolder, IndexStatus, FolderConfig, SearchOptions } from '../types/codeSearch';
+import { Code2 } from 'lucide-react';
 
 export const CodeSearchPage: React.FC = () => {
   // Search state
@@ -177,17 +179,16 @@ export const CodeSearchPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Page Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">
-            Code Search
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            Semantic search across your indexed codebase
-          </p>
-        </div>
+        <PageHeader
+          title="Code Search"
+          description="Semantic search across your indexed codebase"
+          icon={<Code2 className="h-8 w-8" />}
+          gradientFrom="#3b82f6"
+          gradientTo="#1d4ed8"
+        />
 
         {/* Main Grid Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
