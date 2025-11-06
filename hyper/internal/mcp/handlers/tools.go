@@ -860,6 +860,11 @@ func (h *ToolHandler) handleListHumanTasks(ctx context.Context) (*mcp.CallToolRe
 			taskMap["notes"] = task.Notes
 		}
 
+		// Include agent task IDs for bidirectional traceability
+		if len(task.AgentTaskIDs) > 0 {
+			taskMap["agentTaskIds"] = task.AgentTaskIDs
+		}
+
 		summarizedTasks[i] = taskMap
 	}
 
@@ -899,32 +904,20 @@ func (h *ToolHandler) handleListAgentTasks(ctx context.Context, args map[string]
 		}
 	}
 
-	allTasks := h.taskStorage.ListAllAgentTasks()
-
-	// Apply filters if provided
-	var filteredTasks []*storage.AgentTask
-	for _, task := range allTasks {
-		if humanTaskID != "" && task.HumanTaskID != humanTaskID {
-			continue
-		}
-		if agentName != "" && task.AgentName != agentName {
-			continue
-		}
-		filteredTasks = append(filteredTasks, task)
+	// Build MongoDB filter from parameters
+	filter := make(map[string]interface{})
+	if humanTaskID != "" {
+		filter["humanTaskId"] = humanTaskID
+	}
+	if agentName != "" {
+		filter["agentName"] = agentName
 	}
 
-	totalCount := len(filteredTasks)
-
-	// Apply pagination
-	endIndex := offset + limit
-	if offset > totalCount {
-		offset = totalCount
+	// Use storage method with proper filtering, pagination, and sorting
+	paginatedTasks, totalCount, err := h.taskStorage.ListAgentTasks(filter, offset, limit)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("failed to list agent tasks: %s", err.Error())), nil, nil
 	}
-	if endIndex > totalCount {
-		endIndex = totalCount
-	}
-
-	paginatedTasks := filteredTasks[offset:endIndex]
 
 	// Create summarized view (return only summary field, not full context)
 	truncatedTasks := make([]map[string]interface{}, len(paginatedTasks))

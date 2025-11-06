@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import {
   MessageSquare,
@@ -10,6 +10,7 @@ import {
   Wrench,
   Bot,
   Settings,
+  KanbanSquare,
 } from 'lucide-react';
 import { PageLayout } from '@templates/PageLayout';
 import { initializeTheme, applyTheme, setStoredTheme, watchSystemTheme } from '@/utils/theme';
@@ -23,6 +24,7 @@ import { MCPServersPage } from '@/pages/MCPServersPage';
 import { HTTPToolsPage } from '@/pages/HTTPToolsPage';
 import { SubagentsPage } from '@/pages/SubagentsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { BlogProgressPage } from '@/pages/BlogProgressPage';
 
 function App() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -64,7 +66,8 @@ function App() {
   // Navigation items matching the original UI
   const navigationItems = [
     { path: '/chat', label: 'Chat', icon: <MessageSquare className="h-5 w-5" />, priority: 'high' as const },
-    { path: '/tasks', label: 'Tasks', icon: <LayoutDashboard className="h-5 w-5" />, priority: 'high' as const },
+    { path: '/blog', label: 'Dashboard', icon: <LayoutDashboard className="h-5 w-5" />, priority: 'high' as const },
+    { path: '/tasks', label: 'Tasks', icon: <KanbanSquare className="h-5 w-5" />, priority: 'high' as const },
     { path: '/knowledge', label: 'Knowledge', icon: <BookOpen className="h-5 w-5" />, priority: 'medium' as const },
     { path: '/reflection', label: 'Reflection', icon: <Brain className="h-5 w-5" />, priority: 'medium' as const },
     { path: '/code', label: 'Code', icon: <Code className="h-5 w-5" />, priority: 'medium' as const },
@@ -90,6 +93,7 @@ function App() {
           >
             <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
             <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
+            <Route path="/blog" element={<BlogProgressPage key={refreshKey} />} />
             <Route path="/knowledge" element={<KnowledgeBasePage key={refreshKey} />} />
             <Route path="/reflection" element={<ReflectionPage key={refreshKey} />} />
             <Route path="/code" element={<CodeSearchPage key={refreshKey} />} />
@@ -97,7 +101,7 @@ function App() {
             <Route path="/tools" element={<HTTPToolsPage key={refreshKey} />} />
             <Route path="/subagents" element={<SubagentsPage key={refreshKey} />} />
             <Route path="/settings" element={<SettingsPage key={refreshKey} />} />
-            <Route path="/" element={<Navigate to="/chat" replace />} />
+            <Route path="/" element={<Navigate to="/blog" replace />} />
           </Route>
         </Routes>
       </BrowserRouter>
