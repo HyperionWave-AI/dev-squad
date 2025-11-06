@@ -19,7 +19,6 @@ export interface ChatSession {
   companyId: string;
   title: string;
   parentChatId?: string; // For subchats - links to parent session
-  activeSubagentId?: string; // Indicates session is being processed by a subagent
   createdAt: string;
   updatedAt: string;
 }
@@ -64,7 +63,7 @@ export interface ToolResult {
 }
 
 export interface StreamMessage {
-  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved';
+  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error';
   content?: string;
   toolCall?: {
     tool: string;
@@ -212,7 +211,6 @@ export interface StreamCallbacks {
   onMessage: (content: string, done: boolean) => void;
   onToolCall?: (tool: string, args: Record<string, any>, id: string) => void;
   onToolResult?: (id: string, tool: string, result: any, error: string | null, durationMs: number) => void;
-  onMessageSaved?: (databaseId: string) => void;
   onError: (error: Error) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -283,13 +281,6 @@ export function connectChatStream(
         case 'done':
           // Stream complete
           callbacks.onMessage('', true);
-          break;
-
-        case 'message_saved':
-          // Message saved with database ID
-          if (data.content && callbacks.onMessageSaved) {
-            callbacks.onMessageSaved(data.content);
-          }
           break;
       }
     } catch (error) {
