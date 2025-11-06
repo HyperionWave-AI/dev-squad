@@ -2884,6 +2884,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		"bash",                           // Run commands, tests, syntax checks
 		"coordinator_update_todo_status", // Update TODO status
 		"coordinator_upsert_knowledge",   // Store knowledge/decisions
+		"discover_tools",                 // Discover available MCP tools
 	}
 
 	t.logger.Info("🔒 Filtering tools for subagent",

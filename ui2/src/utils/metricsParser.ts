@@ -160,6 +160,7 @@ function parseMetricLine(line: string): MetricLine | null {
       const name = match[1];
       const labelsStr = match[2];
       const value = parseFloat(match[3]);
+      if (isNaN(value)) return null;
 
       // Parse labels
       const labels: Record<string, string> = {};
@@ -176,9 +177,11 @@ function parseMetricLine(line: string): MetricLine | null {
     // Match: metric_name 123.45 (no labels)
     const simpleMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s+([0-9.]+)$/);
     if (simpleMatch) {
+      const value = parseFloat(simpleMatch[2]);
+      if (isNaN(value)) return null;
       return {
         name: simpleMatch[1],
-        value: parseFloat(simpleMatch[2]),
+        value: value,
         labels: {},
       };
     }
@@ -232,7 +235,15 @@ function getMetricValue(
  * @param type Value type (number, duration, percentage, bytes)
  * @returns Formatted string
  */
-export function formatMetricValue(value: number, type: 'number' | 'duration' | 'percentage' | 'bytes'): string {
+export function formatMetricValue(
+    value: number | undefined | null, 
+    type: 'number' | 'duration' | 'percentage' | 'bytes'
+): string {
+  // ⭐️ FIX: This guard clause prevents crashes from null, undefined, or NaN values.
+  if (value === null || typeof value === 'undefined' || isNaN(value)) {
+    return 'N/A';
+  }
+
   switch (type) {
     case 'number':
       if (value >= 1_000_000) {
