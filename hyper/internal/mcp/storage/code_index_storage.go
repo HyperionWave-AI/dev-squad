@@ -171,8 +171,13 @@ func (s *CodeIndexStorage) RemoveFolder(folderID string) error {
 		return fmt.Errorf("failed to delete files: %w", err)
 	}
 
-	// Delete the folder
-	_, err = s.foldersCol.DeleteOne(ctx, bson.M{"_id": folderID})
+	// Delete the folder - convert string ID to ObjectID
+	objectID, err := primitive.ObjectIDFromHex(folderID)
+	if err != nil {
+		return fmt.Errorf("invalid folder ID format: %s", folderID)
+	}
+
+	_, err = s.foldersCol.DeleteOne(ctx, bson.M{"_id": objectID})
 	if err != nil {
 		return fmt.Errorf("failed to delete folder: %w", err)
 	}
@@ -182,14 +187,23 @@ func (s *CodeIndexStorage) RemoveFolder(folderID string) error {
 
 // GetFolder retrieves a folder by ID
 func (s *CodeIndexStorage) GetFolder(folderID string) (*IndexedFolder, error) {
+	// Convert string ID to ObjectID
+	objectID, err := primitive.ObjectIDFromHex(folderID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid folder ID format: %s", folderID)
+	}
+
 	var folder IndexedFolder
-	err := s.foldersCol.FindOne(context.Background(), bson.M{"_id": folderID}).Decode(&folder)
+	err = s.foldersCol.FindOne(context.Background(), bson.M{"_id": objectID}).Decode(&folder)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, fmt.Errorf("folder not found: %s", folderID)
 		}
 		return nil, fmt.Errorf("failed to get folder: %w", err)
 	}
+
+	// Populate the ID field from MongoDB's _id
+	folder.ID = objectID.Hex()
 	return &folder, nil
 }
 
@@ -224,6 +238,12 @@ func (s *CodeIndexStorage) ListFolders() ([]*IndexedFolder, error) {
 
 // UpdateFolderStatus updates the status of a folder
 func (s *CodeIndexStorage) UpdateFolderStatus(folderID, status, errorMsg string) error {
+	// Convert string ID to ObjectID
+	objectID, err := primitive.ObjectIDFromHex(folderID)
+	if err != nil {
+		return fmt.Errorf("invalid folder ID format: %s", folderID)
+	}
+
 	update := bson.M{
 		"$set": bson.M{
 			"status": status,
@@ -234,9 +254,9 @@ func (s *CodeIndexStorage) UpdateFolderStatus(folderID, status, errorMsg string)
 		update["$set"].(bson.M)["error"] = errorMsg
 	}
 
-	_, err := s.foldersCol.UpdateOne(
+	_, err = s.foldersCol.UpdateOne(
 		context.Background(),
-		bson.M{"_id": folderID},
+		bson.M{"_id": objectID},
 		update,
 	)
 	if err != nil {
@@ -248,9 +268,15 @@ func (s *CodeIndexStorage) UpdateFolderStatus(folderID, status, errorMsg string)
 
 // UpdateFolderScanTime updates the last scanned time for a folder
 func (s *CodeIndexStorage) UpdateFolderScanTime(folderID string, fileCount int) error {
-	_, err := s.foldersCol.UpdateOne(
+	// Convert string ID to ObjectID
+	objectID, err := primitive.ObjectIDFromHex(folderID)
+	if err != nil {
+		return fmt.Errorf("invalid folder ID format: %s", folderID)
+	}
+
+	_, err = s.foldersCol.UpdateOne(
 		context.Background(),
-		bson.M{"_id": folderID},
+		bson.M{"_id": objectID},
 		bson.M{
 			"$set": bson.M{
 				"lastScanned": time.Now(),

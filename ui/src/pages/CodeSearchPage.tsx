@@ -19,10 +19,12 @@ export const CodeSearchPage: React.FC = () => {
   const handleSearch = async (query: string, options: SearchOptions) => {
     try {
       setLoading(true);
+      console.log('🔍 Search Request:', { query, options });
       const searchResults = await restCodeClient.search(query, options);
+      console.log('✅ Search Response:', { count: searchResults.length, results: searchResults });
       setResults(searchResults);
     } catch (err) {
-      console.error('Search failed:', err);
+      console.error('❌ Search failed:', err);
       alert(err instanceof Error ? err.message : 'Search failed');
       setResults([]);
     } finally {
