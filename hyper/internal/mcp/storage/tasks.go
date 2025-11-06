@@ -66,13 +66,14 @@ type TodoItemInput struct {
 
 // HumanTask represents a task created by a human user
 type HumanTask struct {
-	ID        string     `json:"taskId" bson:"taskId"`
-	Prompt    string     `json:"prompt" bson:"prompt"`
-	Summary   string     `json:"summary,omitempty" bson:"summary,omitempty"` // AI-generated summary (max 100 tokens)
-	CreatedAt time.Time  `json:"createdAt" bson:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt" bson:"updatedAt"`
-	Status    TaskStatus `json:"status" bson:"status"`
-	Notes     string     `json:"notes,omitempty" bson:"notes,omitempty"`
+	ID           string     `json:"taskId" bson:"taskId"`
+	Prompt       string     `json:"prompt" bson:"prompt"`
+	Summary      string     `json:"summary,omitempty" bson:"summary,omitempty"` // AI-generated summary (max 100 tokens)
+	AgentTaskIDs []string   `json:"agentTaskIds,omitempty" bson:"agentTaskIds,omitempty"` // Bidirectional traceability to agent tasks
+	CreatedAt    time.Time  `json:"createdAt" bson:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt" bson:"updatedAt"`
+	Status       TaskStatus `json:"status" bson:"status"`
+	Notes        string     `json:"notes,omitempty" bson:"notes,omitempty"`
 }
 
 // AgentTask represents a task assigned to an agent
@@ -319,6 +320,24 @@ func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, 
 		return nil, fmt.Errorf("failed to insert agent task: %w", err)
 	}
 
+	// Update human task with bidirectional traceability
+	// Push this agent task ID to the human task's AgentTaskIDs array
+	_, err = s.humanTasksCollection.UpdateOne(
+		ctx,
+		bson.M{"taskId": humanTaskID},
+		bson.M{
+			"$push": bson.M{"agentTaskIds": task.ID},
+			"$set":  bson.M{"updatedAt": now},
+		},
+	)
+	if err != nil {
+		// Log error but don't fail task creation since agent task is already created
+		s.logger.Warn("Failed to update human task with agent task ID",
+			zap.String("humanTaskId", humanTaskID),
+			zap.String("agentTaskId", task.ID),
+			zap.Error(err))
+	}
+
 	return task, nil
 }
 
@@ -391,7 +410,7 @@ func (s *MongoTaskStorage) ListAllHumanTasks() []*HumanTask {
 	return tasks
 }
 
-// ListHumanTasks returns human tasks matching the given filter
+// ListHumanTasks returns human tasks matching the given filter, sorted by createdAt descending (newest first)
 func (s *MongoTaskStorage) ListHumanTasks(filter bson.M) ([]*HumanTask, error) {
 	ctx := context.Background()
 
@@ -400,7 +419,11 @@ func (s *MongoTaskStorage) ListHumanTasks(filter bson.M) ([]*HumanTask, error) {
 		filter = bson.M{}
 	}
 
-	cursor, err := s.humanTasksCollection.Find(ctx, filter)
+	// Sort by createdAt descending (newest first)
+	findOptions := options.Find()
+	findOptions.SetSort(bson.D{{Key: "createdAt", Value: -1}})
+
+	cursor, err := s.humanTasksCollection.Find(ctx, filter, findOptions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query human tasks: %w", err)
 	}
@@ -453,6 +476,8 @@ func (s *MongoTaskStorage) ListAgentTasks(filter bson.M, offset, limit int) ([]*
 	findOptions := options.Find()
 	findOptions.SetSkip(int64(offset))
 	findOptions.SetLimit(int64(limit))
+	// Sort by createdAt descending (newest first)
+	findOptions.SetSort(bson.D{{Key: "createdAt", Value: -1}})
 
 	cursor, err := s.agentTasksCollection.Find(ctx, filter, findOptions)
 	if err != nil {

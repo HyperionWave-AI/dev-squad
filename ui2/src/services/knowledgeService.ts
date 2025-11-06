@@ -404,6 +404,26 @@ class KnowledgeService {
       collectionsWithData
     };
   }
+
+  /**
+   * Generate a new blog entry from recent task progress
+   * Calls the backend endpoint to create a progress article
+   */
+  async generateBlogEntry(): Promise<{ entry: KnowledgeEntry }> {
+    const response = await fetch('/api/v1/blog/generate-entry', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to generate blog entry');
+    }
+
+    return response.json();
+  }
 }
 
 export const knowledgeService = new KnowledgeService();

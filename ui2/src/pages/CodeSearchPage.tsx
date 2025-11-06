@@ -81,6 +81,8 @@ export const CodeSearchPage: React.FC = () => {
         query,
         limit: options.maxResults,
         minScore: options.minRelevanceScore,
+        folderPath: options.folderPath,
+        retrieve: options.retrieve,
       });
 
       // Transform results to match our interface
@@ -122,55 +124,77 @@ export const CodeSearchPage: React.FC = () => {
 
   const handleAddFolder = async (config: FolderConfig) => {
     try {
-      // Trigger scan with the new folder path
-      await codeIndexService.triggerScan(config.path);
-      await loadStatus();
+      // Add folder with full configuration
+      const result = await codeIndexService.addFolder({
+        folderPath: config.path,
+        includePatterns: config.filePatterns,
+        excludePatterns: config.excludePatterns,
+        chunkSize: config.chunkSize,
+      });
+
+      if (result.success) {
+        // Trigger initial scan for the new folder
+        await codeIndexService.triggerScan(config.path);
+        await loadStatus();
+        alert('Folder added successfully!');
+      }
     } catch (error) {
       console.error('Failed to add folder:', error);
-      alert('Failed to add folder. Please try again.');
+      alert(`Failed to add folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
-  const handleRemoveFolder = async (_folderId: string) => {
+  const handleRemoveFolder = async (folderId: string) => {
     if (!confirm('Are you sure you want to remove this folder?')) return;
 
     try {
-      // Note: API doesn't support removing folders yet
-      // This is a placeholder for when the API is implemented
-      alert('Remove folder functionality is not yet implemented in the API');
-      // await codeIndexService.removeFolder(folder.path);
-      // await loadStatus();
+      const result = await codeIndexService.removeFolder(folderId);
+
+      if (result.success) {
+        await loadStatus();
+        alert('Folder removed successfully!');
+      }
     } catch (error) {
       console.error('Failed to remove folder:', error);
-      alert('Failed to remove folder. Please try again.');
+      alert(`Failed to remove folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
-  const handleWatcherToggle = async (_folderId: string, _enabled: boolean) => {
+  const handleWatcherToggle = async (folderId: string, enabled: boolean) => {
     try {
-      // Note: API doesn't support watcher toggle yet
-      // This is a placeholder for when the API is implemented
-      alert('Watcher toggle functionality is not yet implemented in the API');
-      // await codeIndexService.toggleWatcher(enabled);
-      // await loadStatus();
+      // Toggle watcher for all folders (API doesn't support per-folder control yet)
+      const result = enabled
+        ? await codeIndexService.enableWatcher()
+        : await codeIndexService.disableWatcher();
+
+      if (result.success) {
+        await loadStatus();
+      } else {
+        alert(result.message || 'Failed to toggle watcher');
+      }
     } catch (error) {
       console.error('Failed to toggle watcher:', error);
-      alert('Failed to toggle watcher. Please try again.');
+      alert(`Failed to toggle watcher: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
   const handleReindex = async () => {
     if (!confirm('This will reindex all folders. Continue?')) return;
 
+    setStatus(prev => ({ ...prev, isRunning: true }));
+
     try {
-      // Trigger scan for each folder
-      for (const folder of folders) {
-        await codeIndexService.triggerScan(folder.path);
+      const result = await codeIndexService.reindexAll();
+
+      if (result.success) {
+        alert(`Reindexed ${result.foldersReindexed} folders (${result.totalFilesIndexed} files)`);
+        await loadStatus();
       }
-      await loadStatus();
     } catch (error) {
       console.error('Failed to reindex:', error);
-      alert('Failed to reindex. Please try again.');
+      alert(`Failed to reindex: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setStatus(prev => ({ ...prev, isRunning: false }));
     }
   };
 
