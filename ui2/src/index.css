@@ -186,3 +186,197 @@ body {
     color: black;
   }
 }
+
+/* Session List Hierarchical Styles */
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
+}
+
+.session-item-container {
+  position: relative;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: var(--color-background);
+  border: 1px solid transparent;
+  min-height: var(--touch-target-min);
+  position: relative;
+}
+
+.session-item:hover {
+  background-color: var(--color-background-alt);
+  border-color: var(--color-border-light);
+}
+
+.session-item.active {
+  background-color: var(--color-primary-50);
+  border-color: var(--color-primary);
+  color: var(--color-primary-700);
+}
+
+.dark .session-item.active {
+  background-color: rgba(96, 165, 250, 0.1);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* Subchat specific styling */
+.session-item.subchat {
+  background-color: var(--color-background-alt);
+  border-left: 3px solid var(--color-primary-light);
+  margin-top: var(--spacing-xs);
+  font-size: var(--text-sm);
+}
+
+.session-item.subchat:hover {
+  background-color: var(--color-secondary-hover);
+  border-left-color: var(--color-primary);
+}
+
+.session-item.subchat.active {
+  background-color: var(--color-primary-100);
+  border-left-color: var(--color-primary-dark);
+}
+
+.dark .session-item.subchat {
+  background-color: var(--color-background-elevated);
+  border-left-color: var(--color-primary);
+}
+
+.dark .session-item.subchat:hover {
+  background-color: var(--color-secondary-hover);
+}
+
+/* Subchat indicator line */
+.subchat-indicator {
+  border-top: 1px solid var(--color-border);
+}
+
+.dark .subchat-indicator {
+  border-top-color: var(--color-border-light);
+}
+
+/* Session content layout */
+.session-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: var(--spacing-sm);
+}
+
+.session-info {
+  flex: 1;
+  min-width: 0; /* Allow text truncation */
+}
+
+.session-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.session-name.subchat-name {
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.session-date {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* Session actions */
+.session-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.session-item:hover .session-actions {
+  opacity: 1;
+}
+
+.session-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--spacing-xs);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  transition: background-color 0.2s ease;
+  min-width: var(--touch-target-min);
+  min-height: var(--touch-target-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-action-btn:hover {
+  background-color: var(--color-secondary-hover);
+}
+
+.session-action-btn.delete:hover {
+  background-color: #fee2e2;
+  color: #dc2626;
+}
+
+.dark .session-action-btn.delete:hover {
+  background-color: rgba(220, 38, 38, 0.1);
+  color: #f87171;
+}
+
+/* Session name input for editing */
+.session-name-input {
+  background: var(--color-background);
+  border: 1px solid var(--color-border-focus);
+  border-radius: 4px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  width: 100%;
+  outline: none;
+}
+
+.session-name-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+/* Empty state */
+.session-list-empty {
+  text-align: center;
+  padding: var(--spacing-2xl);
+  color: var(--color-text-muted);
+}
+
+.session-list-empty p {
+  margin-bottom: var(--spacing-sm);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .session-item {
+    padding: var(--spacing-sm);
+  }
+  
+  .session-actions {
+    opacity: 1; /* Always show on mobile */
+  }
+}
