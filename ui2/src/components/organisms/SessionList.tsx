@@ -309,11 +309,11 @@ export const SessionList: React.FC<SessionListProps> = ({
                 Create a new chat session to start a fresh conversation.
               </Dialog.Description>
               <div className="flex justify-end gap-3">
-                <Button variant="ghost" disabled={isLoading}>
+                <Button variant="ghost" disabled={isLoading} onClick={() => setIsNewDialogOpen(false)}>
                   Cancel
                 </Button>
                 <Button onClick={handleNewChat} variant="primary" disabled={isLoading}>
-                  {isLoading ? 'Creating...' : 'Create Chat'}
+                  New Chat
                 </Button>
               </div>
             </div>
