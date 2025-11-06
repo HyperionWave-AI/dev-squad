@@ -1,303 +1,274 @@
-import React, { useState, useEffect } from 'react';
-import { Button } from '../atoms/Button';
-import { Plus, MessageSquare, Trash2, Calendar, Clock, MoreVertical, Edit2 } from 'lucide-react';
-import * as Dialog from '@radix-ui/react-dialog';
-import { formatDistanceToNow } from 'date-fns';
-
-interface ChatSession {
-  id: string;
-  title: string;
-  lastMessage?: string;
-  timestamp: Date | string;
-  messageCount: number;
-}
+import React, { useState } from 'react';
+import type { Session } from '../../types/chat';
+import { formatSessionDate, isValidDate } from '../../utils/dateUtils';
 
 interface SessionListProps {
-  sessions: ChatSession[];
+  sessions: Session[];
   currentSessionId?: string;
   onSessionSelect: (sessionId: string) => void;
-  onNewChat: () => void;
-  onDeleteSession: (sessionId: string) => void;
-  onDeleteAllSessions: () => void;
-  onRenameSession: (sessionId: string, newTitle: string) => void;
-  isLoading?: boolean;
+  onSessionDelete?: (sessionId: string) => void;
+  onSessionRename?: (sessionId: string, newName: string) => void;
 }
 
-export const SessionList: React.FC<SessionListProps> = ({
-  sessions,
-  currentSessionId,
-  onSessionSelect,
-  onNewChat,
-  onDeleteSession,
-  onDeleteAllSessions,
-  onRenameSession,
-  isLoading = false,
-}) => {
-  const [isNewDialogOpen, setIsNewDialogOpen] = useState(false);
-  const [isDeleteAllDialogOpen, setIsDeleteAllDialogOpen] = useState(false);
+// Tree node structure for hierarchical rendering
+interface SessionTreeNode {
+  session: Session;
+  children: SessionTreeNode[];
+  depth: number;
+}
+
+// Helper function to detect if a session is a subchat
+const isSubchat = (session: Session): boolean => {
+  return session.name?.startsWith('Subchat:') || !!session.metadata?.parentChatId;
+};
+
+// Organize sessions into hierarchical structure with proper sorting
+const organizeSessionsHierarchy = (sessions: Session[]): SessionTreeNode[] => {
+  const sessionMap = new Map<string, SessionTreeNode>();
+  const rootNodes: SessionTreeNode[] = [];
+
+  console.log('🔍 organizeSessionsHierarchy called with sessions:', sessions.map(s => ({
+    id: s.id,
+    name: s.name,
+    parentChatId: s.metadata?.parentChatId,
+    updatedAt: s.updatedAt,
+    isSubchat: isSubchat(s)
+  })));
+
+  // First pass: create all nodes
+  sessions.forEach(session => {
+    sessionMap.set(session.id, { session, children: [], depth: 0 });
+  });
+
+  // Second pass: build parent-child relationships
+  sessions.forEach(session => {
+    const node = sessionMap.get(session.id)!;
+    const parentChatId = session.metadata?.parentChatId;
+
+    if (parentChatId && sessionMap.has(parentChatId)) {
+      // This is a subchat with a valid parent
+      console.log(`✅ Found parent-child link: ${session.name} → parent: ${parentChatId}`);
+      const parentNode = sessionMap.get(parentChatId)!;
+      parentNode.children.push(node);
+    } else if (isSubchat(session) && !parentChatId) {
+      // Legacy subchat detection by name - try to find parent by parsing name
+      console.log(`⚠️ Subchat without parentChatId: ${session.name}`);
+      const nameToCheck = session.name || '';
+      const parentIdMatch = nameToCheck.match(/Subchat:\s*(.+?)\s*-/);
+      if (parentIdMatch) {
+        const parentName = parentIdMatch[1].trim();
+        const parentSession = sessions.find(s => 
+          s.name === parentName && s.id !== session.id
+        );
+        if (parentSession) {
+          console.log(`✅ Found parent by name match: ${session.name} → ${parentName}`);
+          const parentNode = sessionMap.get(parentSession.id)!;
+          parentNode.children.push(node);
+        } else {
+          console.log(`❌ No parent found for subchat: ${session.name} (looking for: ${parentName})`);
+          rootNodes.push(node);
+        }
+      } else {
+        console.log(`❌ Could not parse parent from name: ${session.name}`);
+        rootNodes.push(node);
+      }
+    } else {
+      // This is a root chat
+      console.log(`📁 Root chat: ${session.name}`);
+      rootNodes.push(node);
+    }
+  });
+
+  // Set depths recursively
+  const setDepth = (node: SessionTreeNode, depth: number) => {
+    node.depth = depth;
+    node.children.forEach(child => setDepth(child, depth + 1));
+  };
+
+  // Sort root nodes by date (most recent first) with proper date validation
+  rootNodes.sort((a, b) => {
+    const dateA = isValidDate(a.session.updatedAt) ? new Date(a.session.updatedAt).getTime() : 0;
+    const dateB = isValidDate(b.session.updatedAt) ? new Date(b.session.updatedAt).getTime() : 0;
+    return dateB - dateA;
+  });
+
+  // Sort children by date (most recent first) with proper date validation
+  sessionMap.forEach(node => {
+    node.children.sort((a, b) => {
+      const dateA = isValidDate(a.session.updatedAt) ? new Date(a.session.updatedAt).getTime() : 0;
+      const dateB = isValidDate(b.session.updatedAt) ? new Date(b.session.updatedAt).getTime() : 0;
+      return dateB - dateA;
+    });
+  });
+
+  // Set depths for all nodes
+  rootNodes.forEach(node => setDepth(node, 0));
+
+  console.log('📊 Final hierarchical structure (root nodes):', rootNodes.map(node => ({
+    id: node.session.id,
+    name: node.session.name,
+    depth: node.depth,
+    childrenCount: node.children.length,
+    children: node.children.map(child => ({
+      id: child.session.id,
+      name: child.session.name,
+      parentId: child.session.metadata?.parentChatId,
+      depth: child.depth
+    }))
+  })));
+
+  return rootNodes;
+};
+
+export function SessionList({ 
+  sessions, 
+  currentSessionId, 
+  onSessionSelect, 
+  onSessionDelete,
+  onSessionRename 
+}: SessionListProps) {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState('');
-  const [dropdownSessionId, setDropdownSessionId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
 
-  const handleNewChat = () => {
-    setIsNewDialogOpen(false);
-    onNewChat();
-  };
+  // Organize sessions into hierarchical structure
+  const organizedSessions = organizeSessionsHierarchy(sessions);
 
-  const handleDeleteAll = () => {
-    setIsDeleteAllDialogOpen(false);
-    onDeleteAllSessions();
-  };
-
-  const handleRename = (sessionId: string, currentTitle: string) => {
+  const handleRename = (sessionId: string, currentName: string) => {
     setEditingSessionId(sessionId);
-    setEditingTitle(currentTitle);
-    setDropdownSessionId(null);
+    setEditingName(currentName);
   };
 
-  const handleRenameSubmit = (sessionId: string) => {
-    if (editingTitle.trim()) {
-      onRenameSession(sessionId, editingTitle.trim());
+  const handleSaveRename = (sessionId: string) => {
+    if (editingName.trim() && onSessionRename) {
+      onSessionRename(sessionId, editingName.trim());
     }
     setEditingSessionId(null);
-    setEditingTitle('');
+    setEditingName('');
   };
 
-  const handleRenameCancel = () => {
+  const handleCancelRename = () => {
     setEditingSessionId(null);
-    setEditingTitle('');
+    setEditingName('');
   };
 
-  const handleDeleteSession = (sessionId: string) => {
-    onDeleteSession(sessionId);
-    setDropdownSessionId(null);
-  };
+  const renderSessionItem = (node: SessionTreeNode) => {
+    const { session, depth } = node;
+    const isActive = session.id === currentSessionId;
+    const isEditing = editingSessionId === session.id;
+    const hasSubchats = node.children.length > 0;
+    const isSubchatItem = isSubchat(session);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = () => {
-      setDropdownSessionId(null);
-    };
-
-    if (dropdownSessionId) {
-      document.addEventListener('click', handleClickOutside);
-      return () => document.removeEventListener('click', handleClickOutside);
-    }
-  }, [dropdownSessionId]);
-
-  return (
-    <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Chat Sessions
-          </h2>
-          <span className="text-sm text-gray-500 dark:text-gray-400">
-            {sessions.length}
-          </span>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex flex-col gap-2">
-          <Button
-            onClick={() => setIsNewDialogOpen(true)}
-            variant="primary"
-            size="sm"
-            aria-label="New chat"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            New Chat
-          </Button>
-          
-          {sessions.length > 0 && (
-            <Button
-              onClick={() => setIsDeleteAllDialogOpen(true)}
-              variant="outline"
-              size="sm"
-              className="text-red-600 hover:text-red-700 hover:bg-red-50"
-              aria-label="Delete all chats"
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete All
-            </Button>
+    return (
+      <div key={session.id} className="session-item-container">
+        <div 
+          className={`session-item ${isActive ? 'active' : ''} ${isSubchatItem ? 'subchat' : 'parent-chat'}`}
+          style={{ 
+            paddingLeft: `${depth * 24 + 12}px`,
+            position: 'relative'
+          }}
+        >
+          {/* Indentation indicator for subchats */}
+          {isSubchatItem && depth > 0 && (
+            <div 
+              className="subchat-indicator"
+              style={{
+                position: 'absolute',
+                left: `${(depth - 1) * 24 + 24}px`,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: '12px',
+                height: '1px',
+                backgroundColor: 'var(--border-color, #e0e0e0)',
+              }}
+            />
           )}
-        </div>
-      </div>
-
-      {/* Session List */}
-      <div className="flex-1 overflow-y-auto">
-        {sessions.length === 0 ? (
-          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-            <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No chat sessions yet</p>
-            <p className="text-xs mt-1">Create your first chat to get started</p>
-          </div>
-        ) : (
-          <div className="p-2">
-            {sessions.map((session) => (
-              <div
-                key={session.id}
-                className={`relative group rounded-lg p-3 mb-2 cursor-pointer transition-colors ${
-                  currentSessionId === session.id
-                    ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700'
-                    : 'hover:bg-gray-50 dark:hover:bg-gray-800'
-                }`}
-                onClick={() => onSessionSelect(session.id)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    {editingSessionId === session.id ? (
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          value={editingTitle}
-                          onChange={(e) => setEditingTitle(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleRenameSubmit(session.id);
-                            } else if (e.key === 'Escape') {
-                              handleRenameCancel();
-                            }
-                          }}
-                          onBlur={() => handleRenameSubmit(session.id)}
-                          className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          autoFocus
-                        />
-                      </div>
-                    ) : (
-                      <>
-                        <h3 className="font-medium text-gray-900 dark:text-white truncate">
-                          {session.title}
-                        </h3>
-                        {session.lastMessage && (
-                          <p className="text-sm text-gray-500 dark:text-gray-400 truncate mt-1">
-                            {session.lastMessage}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-3 mt-2 text-xs text-gray-400 dark:text-gray-500">
-                          <div className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {(() => {
-                              try {
-                                const date = typeof session.timestamp === 'string'
-                                  ? new Date(session.timestamp)
-                                  : session.timestamp;
-                                return isNaN(date.getTime())
-                                  ? 'Invalid date'
-                                  : formatDistanceToNow(date, { addSuffix: true });
-                              } catch {
-                                return 'Invalid date';
-                              }
-                            })()}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <MessageSquare className="w-3 h-3" />
-                            {session.messageCount}
-                          </div>
-                        </div>
-                      </>
-                    )}
+          
+          <div 
+            className="session-content"
+            onClick={() => !isEditing && onSessionSelect(session.id)}
+          >
+            <div className="session-info">
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editingName}
+                  onChange={(e) => setEditingName(e.target.value)}
+                  onBlur={() => handleSaveRename(session.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleSaveRename(session.id);
+                    } else if (e.key === 'Escape') {
+                      handleCancelRename();
+                    }
+                  }}
+                  className="session-name-input"
+                  autoFocus
+                />
+              ) : (
+                <>
+                  <div className={`session-name ${isSubchatItem ? 'subchat-name' : ''}`}>
+                    {session.name || 'Untitled Chat'}
                   </div>
-
-                  {editingSessionId !== session.id && (
-                    <div className="relative">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDropdownSessionId(
-                            dropdownSessionId === session.id ? null : session.id
-                          );
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-opacity"
-                        aria-label="Session options"
-                      >
-                        <MoreVertical className="w-4 h-4" />
-                      </button>
-
-                      {dropdownSessionId === session.id && (
-                        <div className="absolute right-0 top-8 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg z-10 min-w-[120px]">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRename(session.id, session.title);
-                            }}
-                            className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                            Rename
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteSession(session.id);
-                            }}
-                            className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            Delete
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                  <div className="session-date">
+                    {formatSessionDate(session.updatedAt)}
+                  </div>
+                </>
+              )}
+            </div>
+            
+            {!isEditing && (
+              <div className="session-actions">
+                {onSessionRename && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRename(session.id, session.name || 'Untitled Chat');
+                    }}
+                    className="session-action-btn"
+                    title="Rename session"
+                  >
+                    ✏️
+                  </button>
+                )}
+                {onSessionDelete && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm('Are you sure you want to delete this session?')) {
+                        onSessionDelete(session.id);
+                      }
+                    }}
+                    className="session-action-btn delete"
+                    title="Delete session"
+                  >
+                    🗑️
+                  </button>
+                )}
               </div>
-            ))}
+            )}
           </div>
+        </div>
+        
+        {/* Render subchats recursively */}
+        {hasSubchats && node.children.map(childNode => 
+          renderSessionItem(childNode)
         )}
       </div>
+    );
+  };
 
-      {/* New Chat Dialog */}
-      <Dialog.Root open={isNewDialogOpen} onOpenChange={setIsNewDialogOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-md mx-4">
-            <div className="p-6">
-              <Dialog.Title className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Start New Chat
-              </Dialog.Title>
-              <Dialog.Description className="text-sm text-gray-600 dark:text-gray-300 mb-6">
-                Create a new chat session to start a fresh conversation.
-              </Dialog.Description>
-              <div className="flex justify-end gap-3">
-                <Button variant="ghost" disabled={isLoading}>
-                  Cancel
-                </Button>
-                <Button onClick={handleNewChat} variant="primary" disabled={isLoading}>
-                  {isLoading ? 'Creating...' : 'Create Chat'}
-                </Button>
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+  if (sessions.length === 0) {
+    return (
+      <div className="session-list-empty">
+        <p>No chat sessions yet</p>
+        <p className="text-sm text-gray-500">Start a new conversation to see it here</p>
+      </div>
+    );
+  }
 
-      {/* Delete All Confirmation Dialog */}
-      <Dialog.Root open={isDeleteAllDialogOpen} onOpenChange={setIsDeleteAllDialogOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-md mx-4">
-            <div className="p-6">
-              <Dialog.Title className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Delete All Sessions
-              </Dialog.Title>
-              <Dialog.Description className="text-sm text-gray-600 dark:text-gray-300 mb-6">
-                This will permanently delete all {sessions.length} chat sessions and their messages.
-                This action cannot be undone.
-              </Dialog.Description>
-              <div className="flex justify-end gap-3">
-                <Button variant="ghost" disabled={isLoading}>
-                  Cancel
-                </Button>
-                <Button onClick={handleDeleteAll} variant="danger" disabled={isLoading}>
-                  {isLoading ? 'Deleting...' : 'Delete All'}
-                </Button>
-              </div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+  return (
+    <div className="session-list">
+      {organizedSessions.map(node => renderSessionItem(node))}
     </div>
   );
-};
+}

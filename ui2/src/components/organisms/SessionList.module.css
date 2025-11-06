@@ -1,0 +1,136 @@
+.sessionList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sessionItem {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  position: relative;
+}
+
+.sessionItem:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.sessionItem.active {
+  background-color: rgba(59, 130, 246, 0.1);
+  border-left: 3px solid #3b82f6;
+}
+
+.sessionItem.subchat {
+  position: relative;
+  background-color: rgba(0, 0, 0, 0.02);
+  border-left: 2px solid rgba(0, 0, 0, 0.1);
+  margin-left: 8px;
+}
+
+.sessionItem.subchat::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background-color: rgba(0, 0, 0, 0.2);
+  transform: translateY(-50%);
+}
+
+.sessionItem.subchat:hover {
+  background-color: rgba(0, 0, 0, 0.08);
+}
+
+.sessionContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sessionTitle {
+  font-weight: 500;
+  font-size: 14px;
+  color: #1f2937;
+  line-height: 1.4;
+}
+
+.sessionItem.subchat .sessionTitle {
+  font-weight: 400;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.sessionMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.sessionDate {
+  font-size: 11px;
+}
+
+.sessionActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.sessionItem:hover .sessionActions {
+  opacity: 1;
+}
+
+.actionButton {
+  padding: 4px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 4px;
+  color: #6b7280;
+  transition: all 0.2s ease;
+}
+
+.actionButton:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: #374151;
+}
+
+/* Depth-based indentation for deeper nesting */
+.sessionItem[data-depth="1"] {
+  padding-left: 24px;
+}
+
+.sessionItem[data-depth="2"] {
+  padding-left: 36px;
+}
+
+.sessionItem[data-depth="3"] {
+  padding-left: 48px;
+}
+
+.sessionItem[data-depth="4"] {
+  padding-left: 60px;
+}
+
+/* Visual hierarchy indicators */
+.hierarchyIndicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(to bottom, transparent 0%, rgba(59, 130, 246, 0.3) 20%, rgba(59, 130, 246, 0.3) 80%, transparent 100%);
+}
+
+.sessionItem.subchat .hierarchyIndicator {
+  background: linear-gradient(to bottom, transparent 0%, rgba(156, 163, 175, 0.4) 20%, rgba(156, 163, 175, 0.4) 80%, transparent 100%);
+}
