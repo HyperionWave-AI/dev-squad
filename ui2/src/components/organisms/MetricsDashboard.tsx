@@ -72,11 +72,11 @@ const MetricCard: React.FC<MetricCardProps> = ({
         : 'bg-white/70 dark:bg-gray-800/70'
     )}
   >
-    <CardContent className="p-6">
+    <CardContent className="p-4">
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
-            <p className="text-sm font-medium text-gray-600 dark:text-gray-400">
+            <p className="text-xs font-medium text-gray-600 dark:text-gray-400">
               {title}
             </p>
             {trend && (
@@ -87,7 +87,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
               </div>
             )}
           </div>
-          <p className="text-3xl font-bold text-gray-900 dark:text-white mb-1">
+          <p className="text-lg font-bold text-gray-900 dark:text-white mb-1">
             {value}
           </p>
           {subtitle && (
@@ -96,7 +96,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
             </p>
           )}
         </div>
-        <div className={cn('p-3 rounded-lg', iconBgColor)}>
+        <div className={cn('p-2 rounded-lg', iconBgColor)}>
           <div className={iconColor}>{icon}</div>
         </div>
       </div>
@@ -143,7 +143,7 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({
     return (
       <div className={cn('w-full', className)}>
         <div className="flex items-center justify-center p-12">
-          <Activity className="w-8 h-8 text-blue-500 animate-spin" />
+          <Activity className="w-6 h-6 text-blue-500 animate-spin" />
           <span className="ml-3 text-gray-600 dark:text-gray-400">
             Loading metrics...
           </span>
@@ -158,7 +158,7 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({
         <Card className="bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700">
           <CardContent className="p-6">
             <div className="flex items-center gap-3">
-              <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
+              <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
               <div>
                 <p className="font-semibold text-red-900 dark:text-red-100">
                   Failed to load metrics
@@ -189,7 +189,7 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({
           : metrics.systemHealth === 'degraded'
           ? 'Degraded'
           : 'Unhealthy',
-      icon: <Activity className="w-6 h-6" />,
+      icon: <Activity className="w-4 h-4" />,
       iconColor:
         metrics.systemHealth === 'healthy'
           ? 'text-green-600 dark:text-green-400'
@@ -215,7 +215,7 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({
     {
       title: 'WebSocket Connections',
       value: `${metrics.wsConnectionsActive}/${metrics.wsConnectionsTotal}`,
-      icon: <Activity className="w-6 h-6" />,
+      icon: <Activity className="w-4 h-4" />,
       iconColor: 'text-blue-600 dark:text-blue-400',
       iconBgColor: 'bg-blue-100 dark:bg-blue-900/30',
       subtitle: 'Active / Total',
@@ -225,7 +225,7 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({
     {
       title: 'Message Validation',
       value: formatMetricValue(metrics.messageValidationSuccessRate, 'percentage'),
-      icon: <CheckCircle className="w-6 h-6" />,
+      icon: <CheckCircle className="w-4 h-4" />,
       iconColor:
         metrics.messageValidationSuccessRate >= 0.95
           ? 'text-green-600 dark:text-green-400'
@@ -251,7 +251,7 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({
     {
       title: 'Chat Messages',
       value: formatMetricValue(metrics.chatMessagesTotal, 'number'),
-      icon: <MessageSquare className="w-6 h-6" />,
+      icon: <MessageSquare className="w-4 h-4" />,
       iconColor: 'text-purple-600 dark:text-purple-400',
       iconBgColor: 'bg-purple-100 dark:bg-purple-900/30',
       subtitle: `${formatMetricValue(
@@ -270,142 +270,176 @@ export const MetricsDashboard: React.FC<MetricsDashboardProps> = ({
     {
       title: 'AI Stream Tokens',
       value: formatMetricValue(metrics.aiStreamTokensTotal, 'number'),
-      icon: <Zap className="w-6 h-6" />,
+      icon: <Zap className="w-4 h-4" />,
       iconColor: 'text-yellow-600 dark:text-yellow-400',
       iconBgColor: 'bg-yellow-100 dark:bg-yellow-900/30',
-      subtitle: `${metrics.aiStreamChunksTotal} chunks`,
-    },
-
-    // AI Streaming Duration
-    {
-      title: 'AI Stream Duration',
-      value: formatMetricValue(metrics.aiStreamDurationMs, 'duration'),
-      icon: <Clock className="w-6 h-6" />,
-      iconColor: 'text-orange-600 dark:text-orange-400',
-      iconBgColor: 'bg-orange-100 dark:bg-orange-900/30',
-      subtitle: 'Total streaming time',
+      subtitle: `${formatMetricValue(
+        metrics.aiStreamTokensPerSecond,
+        'number'
+      )}/sec`,
     },
 
     // HTTP Requests
     {
       title: 'HTTP Requests',
       value: formatMetricValue(metrics.httpRequestsTotal, 'number'),
-      icon: <Globe className="w-6 h-6" />,
-      iconColor: 'text-blue-600 dark:text-blue-400',
-      iconBgColor: 'bg-blue-100 dark:bg-blue-900/30',
+      icon: <Globe className="w-4 h-4" />,
+      iconColor: 'text-indigo-600 dark:text-indigo-400',
+      iconBgColor: 'bg-indigo-100 dark:bg-indigo-900/30',
       subtitle: `${formatMetricValue(
-        metrics.httpRequestsErrorRate,
+        metrics.httpRequestsSuccessRate,
         'percentage'
-      )} error rate`,
+      )} success rate`,
       status:
-        metrics.httpRequestsErrorRate <= 0.05
+        metrics.httpRequestsSuccessRate >= 0.95
           ? 'success'
-          : metrics.httpRequestsErrorRate <= 0.2
+          : metrics.httpRequestsSuccessRate >= 0.8
           ? 'warning'
           : 'error',
     },
 
-    // MongoDB Reads
+    // MongoDB Operations
     {
-      title: 'MongoDB Reads',
-      value: formatMetricValue(metrics.mongoReadsTotal, 'number'),
-      icon: <Database className="w-6 h-6" />,
+      title: 'MongoDB Operations',
+      value: formatMetricValue(metrics.mongoOperationsTotal, 'number'),
+      icon: <Database className="w-4 h-4" />,
       iconColor: 'text-green-600 dark:text-green-400',
       iconBgColor: 'bg-green-100 dark:bg-green-900/30',
-      subtitle: 'Total read operations',
-    },
-
-    // MongoDB Writes
-    {
-      title: 'MongoDB Writes',
-      value: formatMetricValue(metrics.mongoWritesTotal, 'number'),
-      icon: <Database className="w-6 h-6" />,
-      iconColor: 'text-blue-600 dark:text-blue-400',
-      iconBgColor: 'bg-blue-100 dark:bg-blue-900/30',
-      subtitle: 'Total write operations',
-    },
-
-    // MongoDB Errors
-    {
-      title: 'MongoDB Errors',
-      value: metrics.mongoErrorsTotal,
-      icon: <XCircle className="w-6 h-6" />,
-      iconColor:
-        metrics.mongoErrorsTotal === 0
-          ? 'text-green-600 dark:text-green-400'
-          : metrics.mongoErrorsTotal < 10
-          ? 'text-yellow-600 dark:text-yellow-400'
-          : 'text-red-600 dark:text-red-400',
-      iconBgColor:
-        metrics.mongoErrorsTotal === 0
-          ? 'bg-green-100 dark:bg-green-900/30'
-          : metrics.mongoErrorsTotal < 10
-          ? 'bg-yellow-100 dark:bg-yellow-900/30'
-          : 'bg-red-100 dark:bg-red-900/30',
-      subtitle: 'Database errors',
+      subtitle: `${formatMetricValue(
+        metrics.mongoOperationsSuccessRate,
+        'percentage'
+      )} success rate`,
       status:
-        metrics.mongoErrorsTotal === 0
+        metrics.mongoOperationsSuccessRate >= 0.95
           ? 'success'
-          : metrics.mongoErrorsTotal < 10
+          : metrics.mongoOperationsSuccessRate >= 0.8
           ? 'warning'
           : 'error',
     },
 
     // Response Time P50
     {
-      title: 'Response Time (P50)',
+      title: 'Response Time P50',
       value: formatMetricValue(metrics.responseTimeP50, 'duration'),
-      icon: <Clock className="w-6 h-6" />,
+      icon: <Clock className="w-4 h-4" />,
       iconColor: 'text-cyan-600 dark:text-cyan-400',
       iconBgColor: 'bg-cyan-100 dark:bg-cyan-900/30',
       subtitle: '50th percentile',
+      status:
+        metrics.responseTimeP50 <= 100
+          ? 'success'
+          : metrics.responseTimeP50 <= 500
+          ? 'warning'
+          : 'error',
     },
 
     // Response Time P95
     {
-      title: 'Response Time (P95)',
+      title: 'Response Time P95',
       value: formatMetricValue(metrics.responseTimeP95, 'duration'),
-      icon: <Clock className="w-6 h-6" />,
-      iconColor: 'text-indigo-600 dark:text-indigo-400',
-      iconBgColor: 'bg-indigo-100 dark:bg-indigo-900/30',
+      icon: <Clock className="w-4 h-4" />,
+      iconColor: 'text-orange-600 dark:text-orange-400',
+      iconBgColor: 'bg-orange-100 dark:bg-orange-900/30',
       subtitle: '95th percentile',
+      status:
+        metrics.responseTimeP95 <= 500
+          ? 'success'
+          : metrics.responseTimeP95 <= 1000
+          ? 'warning'
+          : 'error',
     },
 
     // Response Time P99
     {
-      title: 'Response Time (P99)',
+      title: 'Response Time P99',
       value: formatMetricValue(metrics.responseTimeP99, 'duration'),
-      icon: <Clock className="w-6 h-6" />,
-      iconColor: 'text-violet-600 dark:text-violet-400',
-      iconBgColor: 'bg-violet-100 dark:bg-violet-900/30',
+      icon: <Clock className="w-4 h-4" />,
+      iconColor: 'text-red-600 dark:text-red-400',
+      iconBgColor: 'bg-red-100 dark:bg-red-900/30',
       subtitle: '99th percentile',
+      status:
+        metrics.responseTimeP99 <= 1000
+          ? 'success'
+          : metrics.responseTimeP99 <= 2000
+          ? 'warning'
+          : 'error',
+    },
+
+    // Error Rate
+    {
+      title: 'Error Rate',
+      value: formatMetricValue(metrics.errorRate, 'percentage'),
+      icon: <XCircle className="w-4 h-4" />,
+      iconColor:
+        metrics.errorRate <= 0.01
+          ? 'text-green-600 dark:text-green-400'
+          : metrics.errorRate <= 0.05
+          ? 'text-yellow-600 dark:text-yellow-400'
+          : 'text-red-600 dark:text-red-400',
+      iconBgColor:
+        metrics.errorRate <= 0.01
+          ? 'bg-green-100 dark:bg-green-900/30'
+          : metrics.errorRate <= 0.05
+          ? 'bg-yellow-100 dark:bg-yellow-900/30'
+          : 'bg-red-100 dark:bg-red-900/30',
+      subtitle: 'System-wide errors',
+      status:
+        metrics.errorRate <= 0.01
+          ? 'success'
+          : metrics.errorRate <= 0.05
+          ? 'warning'
+          : 'error',
+    },
+
+    // Memory Usage
+    {
+      title: 'Memory Usage',
+      value: formatMetricValue(metrics.memoryUsage, 'percentage'),
+      icon: <Activity className="w-4 h-4" />,
+      iconColor:
+        metrics.memoryUsage <= 0.7
+          ? 'text-green-600 dark:text-green-400'
+          : metrics.memoryUsage <= 0.85
+          ? 'text-yellow-600 dark:text-yellow-400'
+          : 'text-red-600 dark:text-red-400',
+      iconBgColor:
+        metrics.memoryUsage <= 0.7
+          ? 'bg-green-100 dark:bg-green-900/30'
+          : metrics.memoryUsage <= 0.85
+          ? 'bg-yellow-100 dark:bg-yellow-900/30'
+          : 'bg-red-100 dark:bg-red-900/30',
+      subtitle: 'System memory',
+      status:
+        metrics.memoryUsage <= 0.7
+          ? 'success'
+          : metrics.memoryUsage <= 0.85
+          ? 'warning'
+          : 'error',
     },
   ];
 
   return (
-    <div className={cn('w-full', className)}>
+    <div className={cn('w-full space-y-4', className)}>
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
             System Metrics
           </h2>
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Real-time Prometheus metrics • Auto-refresh every 5s
+            Last updated: {lastUpdate.toLocaleTimeString()}
           </p>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-gray-500 dark:text-gray-500">
-            Last updated
-          </p>
-          <p className="text-sm font-mono text-gray-700 dark:text-gray-300">
-            {lastUpdate.toLocaleTimeString()}
-          </p>
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+          <span className="text-sm text-gray-600 dark:text-gray-400">
+            Live
+          </span>
         </div>
       </div>
 
       {/* Metrics Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {metricCards.map((card, index) => (
           <MetricCard key={index} {...card} />
         ))}
