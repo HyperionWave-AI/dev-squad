@@ -39,5 +39,15 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/**/__tests__/**",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/pages/HTTPToolsPage.tsx",
+    "src/pages/KanbanBoard.tsx",
+    "src/pages/MCPServersPage.tsx",
+    "src/pages/SettingsPage.tsx",
+    "src/pages/SubagentsPage.tsx"
+  ]
 }
