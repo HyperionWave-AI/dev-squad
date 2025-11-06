@@ -38,7 +38,7 @@ const FILE_TYPE_OPTIONS = [
 export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => {
   const [query, setQuery] = useState('');
   const [selectedFileTypes, setSelectedFileTypes] = useState<string[]>([]);
-  const [minScore, setMinScore] = useState(0.5);
+  const [minScore, setMinScore] = useState(0.2);
   const [limit, setLimit] = useState(10);
 
   const handleSearch = () => {
@@ -54,7 +54,7 @@ export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => 
   const handleClear = () => {
     setQuery('');
     setSelectedFileTypes([]);
-    setMinScore(0.5);
+    setMinScore(0.2);
     setLimit(10);
   };
 
@@ -128,13 +128,15 @@ export const CodeSearch: React.FC<CodeSearchProps> = ({ onSearch, loading }) => 
             <Slider
               value={minScore}
               onChange={(_, value) => setMinScore(value as number)}
-              min={0.5}
-              max={1.0}
+              min={0.0}
+              max={0.8}
               step={0.05}
               marks={[
-                { value: 0.5, label: '50%' },
-                { value: 0.75, label: '75%' },
-                { value: 1.0, label: '100%' },
+                { value: 0.0, label: '0%' },
+                { value: 0.2, label: '20%' },
+                { value: 0.4, label: '40%' },
+                { value: 0.6, label: '60%' },
+                { value: 0.8, label: '80%' },
               ]}
               valueLabelDisplay="auto"
               valueLabelFormat={(value) => `${(value * 100).toFixed(0)}%`}

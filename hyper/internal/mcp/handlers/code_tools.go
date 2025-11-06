@@ -258,7 +258,30 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 			continue
 		}
 
-		// Generate embeddings for chunks
+		h.logger.Info("Created chunks for file",
+			zap.String("file", scannedFile.Path),
+			zap.Int("chunkCount", len(chunks)))
+
+		// CRITICAL: Store ALL chunks to MongoDB first, BEFORE embedding
+		// This ensures chunks persist even if embedding fails
+		var chunksStored int
+		for _, chunk := range chunks {
+			if err := h.codeIndexStorage.UpsertChunk(chunk); err != nil {
+				h.logger.Error("CRITICAL: Failed to save chunk to MongoDB",
+					zap.String("file", scannedFile.Path),
+					zap.Int("chunkNum", chunk.ChunkNum),
+					zap.Error(err))
+			} else {
+				chunksStored++
+			}
+		}
+
+		h.logger.Info("Stored chunks to MongoDB",
+			zap.String("file", scannedFile.Path),
+			zap.Int("chunksStored", chunksStored),
+			zap.Int("totalChunks", len(chunks)))
+
+		// Generate embeddings for chunks (for Qdrant)
 		var qdrantPoints []storage.CodeIndexPoint
 		for _, chunk := range chunks {
 			// Generate embedding
@@ -289,13 +312,17 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 					"startLine":    chunk.StartLine,
 					"endLine":      chunk.EndLine,
 					"content":      chunk.Content,
+					"chunkType":    chunk.ChunkType,
+					"nodeType":     chunk.NodeType,
+					"nodeName":     chunk.NodeName,
 				},
 			}
 			qdrantPoints = append(qdrantPoints, point)
 
-			// Save chunk to MongoDB
+			// Update chunk with vectorID after successful embedding
+			chunk.VectorID = pointID
 			if err := h.codeIndexStorage.UpsertChunk(chunk); err != nil {
-				h.logger.Warn("Failed to save chunk", zap.Error(err))
+				h.logger.Warn("Failed to update chunk vectorID", zap.Error(err))
 			}
 		}
 
