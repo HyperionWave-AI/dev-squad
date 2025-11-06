@@ -479,6 +479,16 @@ func StartHTTPServer(
 		zap.String("lessonsPath", "/api/v1/reflection/lessons"),
 		zap.String("searchPath", "/api/v1/reflection/search"))
 
+	// Register blog routes (AI-powered progress report generation)
+	blogHandler := mcphandlers.NewBlogHandler(taskStorage, knowledgeStorage, aiChatService, logger)
+	blogGroup := r.Group("/api/v1/blog")
+	{
+		blogGroup.POST("/generate-entry", blogHandler.GenerateEntry)
+	}
+
+	logger.Info("Blog API routes registered",
+		zap.String("generatePath", "/api/v1/blog/generate-entry"))
+
 	// Subchat storage already initialized earlier for execute_subagent tool
 	// Use it to seed system subagents and create handlers
 
