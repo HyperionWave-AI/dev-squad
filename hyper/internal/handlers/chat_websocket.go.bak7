@@ -857,6 +857,20 @@ func (h *ChatWebSocketHandler) safeWriteJSON(conn *websocket.Conn, msg interface
 	return err
 }
 
+// safeWriteStreamMessage writes a StreamMessage with sequence number and timestamp
+// This ensures all events have proper ordering metadata for client-side buffering
+func (h *ChatWebSocketHandler) safeWriteStreamMessage(conn *websocket.Conn, msg models.StreamMessage, sequence *int64) error {
+	// Add sequence number and timestamp if not already set
+	if msg.Sequence == 0 && sequence != nil {
+		*sequence++
+		msg.Sequence = *sequence
+	}
+	if msg.Timestamp == 0 {
+		msg.Timestamp = time.Now().UnixMilli()
+	}
+	return h.safeWriteJSON(conn, msg)
+}
+
 // safeWriteControl safely writes control frame to WebSocket with mutex protection
 // Prevents race condition between ping goroutine and message streaming goroutine
 func (h *ChatWebSocketHandler) safeWriteControl(conn *websocket.Conn, messageType int, data []byte, deadline time.Time) error {
@@ -894,6 +908,9 @@ func (h *ChatWebSocketHandler) extractAuthFromContext(c *gin.Context) (string, s
 // HandleChatWebSocket handles WebSocket connections for chat streaming
 // GET /api/v1/chat/stream?sessionId=xxx
 func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
+	// Initialize event sequence counter at function start (used for ordering all WebSocket events)
+	var eventSequence int64 = 0
+
 	// Extract authentication from context (set by middleware)
 	userID, companyID, err := h.extractAuthFromContext(c)
 	if err != nil {
@@ -956,7 +973,7 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 	httpCtx := c.Request.Context()
 
 	// Pass both contexts to handleMessages
-	h.handleMessages(aiCtx, httpCtx, conn, sessionID, userID, companyID)
+	h.handleMessages(aiCtx, httpCtx, conn, sessionID, userID, companyID, &eventSequence)
 }
 
 // StreamCleanup manages channel lifecycle and goroutine coordination
@@ -978,7 +995,7 @@ func (sc *StreamCleanup) Close() {
 }
 
 // handleMessages manages the WebSocket message loop with processing state
-func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string) {
+func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string, eventSequence *int64) {
 	// Set read deadline for ping/pong
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
@@ -1145,6 +1162,19 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				continue
 			}
 
+			// FIX: Emit saved message with database ID for frontend reconciliation
+			// This allows frontend to update optimistic message with correct database ID
+			savedMsgEvent := models.StreamMessage{
+				Type:    "message_saved",
+				Content: savedUserMsg.ID.Hex(), // Send database ID as content
+			}
+			if err := h.safeWriteStreamMessage(conn, savedMsgEvent, eventSequence); err != nil {
+				h.logger.Warn("Failed to emit saved message ID",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.String("messageId", savedUserMsg.ID.Hex()),
+					zap.Error(err))
+			}
+
 			// Notify any running subagents about new message (for subchats)
 			notifier := GetMessageNotifier(h.logger)
 			notifier.NotifyNewMessage(sessionID)
@@ -1171,7 +1201,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				doneEvent := models.StreamMessage{
 					Type: "done",
 				}
-				if err := h.safeWriteJSON(conn, doneEvent); err != nil {
+				if err := h.safeWriteStreamMessage(conn, doneEvent, &eventSequence); err != nil {
 					h.logger.Warn("Failed to send done event for interrupt",
 						zap.String("sessionId", sessionID.Hex()),
 						zap.Error(err))
@@ -1388,6 +1418,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	tokenCount := 0
 	toolCallCount := 0
 	clientDisconnected := false // Track client disconnect state
+	// Note: eventSequence declared at function start
 
 	// Panic recovery for stream processing
 	defer func() {
@@ -1463,7 +1494,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 							Type:    "token",
 							Content: "\n\n_[Response truncated - exceeded maximum size limit]_",
 						}
-						h.safeWriteJSON(conn, truncationMsg)
+						h.safeWriteStreamMessage(conn, truncationMsg, &eventSequence)
 					}
 
 					// Record truncation metric
@@ -1479,7 +1510,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 						Type:    "token",
 						Content: event.Content,
 					}
-					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
+					if err := h.safeWriteStreamMessage(conn, streamMsg, &eventSequence); err != nil {
 						// Check if this is a normal disconnection (client closed browser/refreshed)
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during streaming - continuing processing in background",
@@ -1517,7 +1548,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 							ID:   event.ToolCall.ID,
 						},
 					}
-					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
+					if err := h.safeWriteStreamMessage(conn, streamMsg, &eventSequence); err != nil {
 						// Check if this is a normal disconnection
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during tool call streaming - continuing processing",
@@ -1566,7 +1597,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 							DurationMs: int(event.ToolResult.DurationMs),
 						},
 					}
-					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
+					if err := h.safeWriteStreamMessage(conn, streamMsg, &eventSequence); err != nil {
 						// Check if this is a normal disconnection
 						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 							h.logger.Debug("Client disconnected during tool result streaming - continuing processing",
@@ -1597,7 +1628,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 			Type:    "done",
 			Content: "",
 		}
-		if err := h.safeWriteJSON(conn, doneMsg); err != nil {
+		if err := h.safeWriteStreamMessage(conn, doneMsg, &eventSequence); err != nil {
 			// Check if this is a normal disconnection
 			if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 				h.logger.Debug("Client disconnected before completion message",

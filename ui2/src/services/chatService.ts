@@ -244,31 +244,19 @@ export function connectChatStream(
     try {
       const data: StreamMessage = JSON.parse(event.data);
 
-      switch (data.type) {
-        case 'error':
-          callbacks.onError(new Error(data.error || 'Unknown error'));
-          break;
+      console.log('[ChatService] Received event:', { type: data.type });
 
+      switch (data.type) {
         case 'token':
-          // Streaming token
           callbacks.onMessage(data.content || '', false);
           break;
-
         case 'tool_call':
-          // Tool execution started
           if (data.toolCall && callbacks.onToolCall) {
-            callbacks.onToolCall(
-              data.toolCall.tool,
-              data.toolCall.args,
-              data.toolCall.id
-            );
+            callbacks.onToolCall(data.toolCall.tool, data.toolCall.args, data.toolCall.id);
           }
           break;
-
         case 'tool_result':
-          // Tool execution completed
           if (data.toolResult && callbacks.onToolResult) {
-            // Note: tool name should be included in toolResult from backend
             const toolName = (data.toolResult as any).tool || 'unknown';
             callbacks.onToolResult(
               data.toolResult.id,
@@ -279,14 +267,13 @@ export function connectChatStream(
             );
           }
           break;
-
         case 'done':
-          // Stream complete
           callbacks.onMessage('', true);
           break;
-
+        case 'error':
+          callbacks.onError(new Error(data.error || 'Unknown error'));
+          break;
         case 'message_saved':
-          // Message saved with database ID
           if (data.content && callbacks.onMessageSaved) {
             callbacks.onMessageSaved(data.content);
           }
