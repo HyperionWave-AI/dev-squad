@@ -2007,6 +2007,39 @@ func (e *DiscoverToolsExecutor) InputSchema() map[string]interface{} {
 }
 
 func (e *DiscoverToolsExecutor) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	// Extract query to check for misuse
+	query, _ := args["query"].(string)
+
+	// List of built-in tool keywords that should NOT be searched with discover_tools
+	builtInKeywords := []string{
+		"coordinator", "create_agent_task", "execute_subagent", "list_subagent",
+		"code_index", "list_human_tasks", "create_human_task", "update_task",
+		"update_todo", "upsert_knowledge", "query_knowledge", "list_agent_tasks",
+		"get_agent_task",
+	}
+
+	// Check if query contains built-in tool keywords
+	queryLower := strings.ToLower(query)
+	for _, keyword := range builtInKeywords {
+		if strings.Contains(queryLower, keyword) {
+			// Return warning instead of executing search
+			return map[string]interface{}{
+				"_warning": fmt.Sprintf("⚠️ WARNING: You tried to search for '%s' which is a BUILT-IN tool. You already have direct access to it!", query),
+				"_guidance": "DO NOT use discover_tools for built-in coordinator tools. Just call them directly!",
+				"_builtInTools": []string{
+					"coordinator_list_human_tasks", "coordinator_create_human_task",
+					"coordinator_list_agent_tasks", "coordinator_get_agent_task",
+					"coordinator_update_task_status", "coordinator_update_todo_status",
+					"coordinator_upsert_knowledge", "coordinator_query_knowledge",
+					"code_index_search", "create_agent_task", "execute_subagent", "list_subagents",
+				},
+				"_correctUsage": "discover_tools is ONLY for external MCP server tools (e.g., 'video tools', 'database tools')",
+				"tools": []interface{}{}, // Empty results - don't confuse the AI with search results
+			}, nil
+		}
+	}
+
+	// Normal execution for valid queries
 	_, data, err := e.toolsDiscoveryHandler.HandleDiscoverTools(ctx, args)
 	return data, err
 }

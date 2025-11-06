@@ -1401,6 +1401,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	tokenCount := 0
 	toolCallCount := 0
 	clientDisconnected := false // Track client disconnect state
+	// Note: eventSequence declared at function start
 
 	// Panic recovery for stream processing
 	defer func() {
