@@ -27,9 +27,9 @@
   position: relative;
   background-color: rgba(0, 0, 0, 0.02);
   border-left: 2px solid rgba(0, 0, 0, 0.1);
+  padding-left: 24px;
   margin-left: 8px;
 }
-
 .sessionItem.subchat::before {
   content: '';
   position: absolute;
