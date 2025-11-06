@@ -27,7 +27,6 @@ import {
   deleteSession,
   updateSession,
   connectChatStream,
-  type ChatSession,
   type ChatMessage as ChatMessageType,
   type ChatStreamConnection,
   type ToolCall,
@@ -41,6 +40,7 @@ interface SessionItem {
   timestamp: Date | string;
   messageCount: number;
   lastMessage?: string;
+  activeSubagentId?: string; // Indicates session is being processed by a subagent
 }
 
 export const CodeChatPage: React.FC = () => {
@@ -162,6 +162,7 @@ export const CodeChatPage: React.FC = () => {
         timestamp: session.updatedAt || session.createdAt,
         messageCount: 0, // Will be populated when we load messages
         lastMessage: undefined,
+        activeSubagentId: session.activeSubagentId, // Preserve processing indicator
       }));
       setSessions(mappedSessions);
 
@@ -331,6 +332,23 @@ export const CodeChatPage: React.FC = () => {
         });
         setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
       },
+      onMessageSaved: (databaseId: string) => {
+        // FIX: Reconcile optimistic message ID with database ID
+        // Find the most recent user message and update its ID
+        console.log('[CodeChatPage] Message saved with database ID:', databaseId);
+        setMessages((prev) => {
+          // Find most recent message with optimistic ID (msg-timestamp)
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].role === 'user' && updated[i].id.startsWith('msg-')) {
+              console.log('[CodeChatPage] Updating message ID:', updated[i].id, '→', databaseId);
+              updated[i] = { ...updated[i], id: databaseId };
+              break;
+            }
+          }
+          return updated;
+        });
+      },
       onError: (err: Error) => {
         setError(`Connection error: ${err.message}`);
         setIsStreaming(false);
@@ -358,7 +376,15 @@ export const CodeChatPage: React.FC = () => {
   // Session management handlers
   const handleNewChat = async () => {
     const newSession = await createSession('New Chat');
-    setSessions((prev) => [newSession, ...prev]);
+    const sessionItem: SessionItem = {
+      id: newSession.id,
+      title: newSession.title,
+      timestamp: newSession.updatedAt || newSession.createdAt,
+      messageCount: 0,
+      lastMessage: undefined,
+      activeSubagentId: newSession.activeSubagentId,
+    };
+    setSessions((prev) => [sessionItem, ...prev]);
     setActiveSessionId(newSession.id);
     setMessages([]);
     setStreamingContent('');
@@ -399,7 +425,15 @@ export const CodeChatPage: React.FC = () => {
 
   const handleRenameSession = async (sessionId: string, newTitle: string) => {
     const updatedSession = await updateSession(sessionId, newTitle);
-    setSessions((prev) => prev.map((s) => (s.id === sessionId ? updatedSession : s)));
+    const sessionItem: SessionItem = {
+      id: updatedSession.id,
+      title: updatedSession.title,
+      timestamp: updatedSession.updatedAt || updatedSession.createdAt,
+      messageCount: 0,
+      lastMessage: undefined,
+      activeSubagentId: updatedSession.activeSubagentId,
+    };
+    setSessions((prev) => prev.map((s) => (s.id === sessionId ? sessionItem : s)));
   };
 
   // Message sending handler
@@ -461,7 +495,7 @@ export const CodeChatPage: React.FC = () => {
       <div className="w-80 shrink-0 backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border-r border-white/30 dark:border-gray-700/30">
         <SessionList
           sessions={sessions}
-          activeSessionId={activeSessionId}
+          currentSessionId={activeSessionId ?? undefined}
           onSessionSelect={handleSessionSelect}
           onNewChat={handleNewChat}
           onDeleteSession={handleDeleteSession}
@@ -530,24 +564,33 @@ export const CodeChatPage: React.FC = () => {
               ))}
 
               {/* AI Thinking Indicator (Fix #1: Show before content arrives) */}
-              {isStreaming && !streamingContent && (
-                <div className="flex items-start gap-3 p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                  <div className="flex-shrink-0 mt-1">
-                    <div className="relative flex items-center justify-center w-6 h-6">
-                      <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse z-10" />
-                      <div className="absolute inset-0 w-3 h-3 bg-blue-500 rounded-full animate-ping opacity-75" />
+              {/* Also show when session is being processed by a subagent */}
+              {(() => {
+                const activeSession = sessions.find((s) => s.id === activeSessionId);
+                const isProcessing = activeSession?.activeSubagentId != null;
+                const showIndicator = (isStreaming && !streamingContent) || isProcessing;
+
+                if (!showIndicator) return null;
+
+                return (
+                  <div className="flex items-start gap-3 p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                    <div className="flex-shrink-0 mt-1">
+                      <div className="relative flex items-center justify-center w-6 h-6">
+                        <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse z-10" />
+                        <div className="absolute inset-0 w-3 h-3 bg-blue-500 rounded-full animate-ping opacity-75" />
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+                        Assistant
+                      </div>
+                      <div className="text-sm text-gray-600 dark:text-gray-400 italic">
+                        {isProcessing ? 'Agent is processing task...' : 'AI is thinking...'}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
-                      Assistant
-                    </div>
-                    <div className="text-sm text-gray-600 dark:text-gray-400 italic">
-                      AI is thinking...
-                    </div>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Streaming Assistant Message */}
               {isStreaming && streamingContent && (
