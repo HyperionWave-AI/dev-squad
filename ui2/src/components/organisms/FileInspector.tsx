@@ -2,7 +2,8 @@ import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { X, Copy, Download, FileCode, AlertCircle } from 'lucide-react';
 import { Button } from '../atoms/Button';
 import { Badge } from '../atoms/Badge';
-import { codeIndexService } from '../../services/codeIndexService';
+import { codeIndexService, type FileDetails, type FileChunkDetails } from '../../services/codeIndexService';
+import { ChunkList } from './ChunkList';
 
 // Lazy load syntax highlighter
 const SyntaxHighlighter = lazy(() =>
@@ -18,18 +19,12 @@ interface FileInspectorProps {
   onClose: () => void;
 }
 
-interface FileData {
-  path: string;
-  content: string;
-  language: string;
-  size: number;
-  lines: number;
-}
-
 export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose }) => {
-  const [fileData, setFileData] = useState<FileData | null>(null);
+  const [fileDetails, setFileDetails] = useState<FileDetails | null>(null);
+  const [chunks, setChunks] = useState<FileChunkDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'chunks' | 'full'>('chunks');
 
   useEffect(() => {
     loadFileContent();
@@ -40,45 +35,14 @@ export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose })
     setError(null);
 
     try {
-      // Note: API doesn't have a dedicated getFile endpoint yet
-      // For now, we'll show a placeholder message
-      // In a real implementation, this would fetch the file via the API
-      const data = {
-        path: fileId,
-        content: '// File content loading not yet implemented in API\n// This would show the full file content when the API endpoint is ready',
-      };
+      // Fetch file details and chunks in parallel
+      const [details, chunksData] = await Promise.all([
+        codeIndexService.getFile(fileId),
+        codeIndexService.getFileChunks(fileId),
+      ]);
 
-      if (!data) {
-        throw new Error('File not found');
-      }
-
-      // Detect language from file extension
-      const extension = data.path.split('.').pop()?.toLowerCase() || 'text';
-      const languageMap: Record<string, string> = {
-        'ts': 'typescript',
-        'tsx': 'tsx',
-        'js': 'javascript',
-        'jsx': 'jsx',
-        'go': 'go',
-        'py': 'python',
-        'rb': 'ruby',
-        'java': 'java',
-        'cpp': 'cpp',
-        'c': 'c',
-        'rs': 'rust',
-        'html': 'html',
-        'css': 'css',
-        'json': 'json',
-        'md': 'markdown',
-      };
-
-      setFileData({
-        path: data.path || fileId,
-        content: data.content || 'No content available',
-        language: languageMap[extension] || 'text',
-        size: new Blob([data.content || '']).size,
-        lines: (data.content || '').split('\n').length,
-      });
+      setFileDetails(details);
+      setChunks(chunksData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load file');
     } finally {
@@ -87,19 +51,21 @@ export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose })
   };
 
   const handleCopy = () => {
-    if (fileData) {
-      navigator.clipboard.writeText(fileData.content);
+    if (chunks.length > 0) {
+      const allContent = chunks.map(c => c.content).join('\n\n');
+      navigator.clipboard.writeText(allContent);
     }
   };
 
   const handleDownload = () => {
-    if (!fileData) return;
+    if (!fileDetails || chunks.length === 0) return;
 
-    const blob = new Blob([fileData.content], { type: 'text/plain' });
+    const allContent = chunks.map(c => c.content).join('\n\n');
+    const blob = new Blob([allContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileData.path.split('/').pop() || 'file.txt';
+    a.download = fileDetails.filePath.split('/').pop() || 'file.txt';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -129,26 +95,32 @@ export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose })
               <div className="flex items-center gap-2 mb-2">
                 <FileCode className="h-5 w-5 text-gray-500 flex-shrink-0" />
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
-                  {fileData?.path || 'Loading...'}
+                  {fileDetails?.filePath || 'Loading...'}
                 </h2>
               </div>
-              {fileData && (
+              {fileDetails && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="secondary" className="text-xs">
-                    {fileData.language.toUpperCase()}
+                    {fileDetails.language.toUpperCase()}
                   </Badge>
                   <span className="text-xs text-gray-500 dark:text-gray-400">
-                    {formatFileSize(fileData.size)}
+                    {formatFileSize(fileDetails.size)}
                   </span>
                   <span className="text-xs text-gray-500 dark:text-gray-400">
-                    {fileData.lines.toLocaleString()} lines
+                    {fileDetails.lines.toLocaleString()} lines
+                  </span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {fileDetails.chunkCount} chunk{fileDetails.chunkCount !== 1 ? 's' : ''}
+                  </span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    Indexed: {new Date(fileDetails.indexed).toLocaleDateString()}
                   </span>
                 </div>
               )}
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
-              {fileData && (
+              {fileDetails && (
                 <>
                   <Button
                     variant="outline"
@@ -202,41 +174,15 @@ export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose })
                 </Button>
               </div>
             </div>
-          ) : fileData ? (
-            <Suspense
-              fallback={
-                <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-                  Loading syntax highlighting...
-                </div>
-              }
-            >
-              <SyntaxHighlighter
-                language={fileData.language}
-                style={vscDarkPlus}
-                customStyle={{
-                  margin: 0,
-                  padding: '1.5rem',
-                  fontSize: '0.875rem',
-                  borderRadius: 0,
-                  height: '100%',
-                }}
-                showLineNumbers
-                wrapLines
-                lineNumberStyle={{
-                  minWidth: '3em',
-                  paddingRight: '1em',
-                  color: '#858585',
-                  textAlign: 'right',
-                }}
-              >
-                {fileData.content}
-              </SyntaxHighlighter>
-            </Suspense>
+          ) : fileDetails ? (
+            <div className="p-6">
+              <ChunkList chunks={chunks} language={fileDetails.language} />
+            </div>
           ) : null}
         </div>
 
         {/* Footer Info */}
-        {fileData && (
+        {fileDetails && (
           <div className="flex-shrink-0 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-4 py-2">
             <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
               Press <kbd className="px-1.5 py-0.5 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded dark:bg-gray-700 dark:text-gray-100 dark:border-gray-600">Esc</kbd> to close
