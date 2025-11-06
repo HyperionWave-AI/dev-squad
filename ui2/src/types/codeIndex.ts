@@ -12,7 +12,7 @@ export interface SearchRequest {
   folderPath?: string;
   limit?: number;
   minScore?: number;
-  retrieve?: 'chunk' | 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
+  retrieve?: 'chunk' | 'full';
 }
 
 export interface FolderInfo {
