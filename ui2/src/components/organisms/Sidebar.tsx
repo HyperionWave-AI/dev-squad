@@ -18,6 +18,8 @@ import {
   Sun,
   Moon,
   RefreshCw,
+  Sparkles,
+  KanbanSquare,
 } from 'lucide-react';
 import { Button } from '@atoms/Button';
 import { Badge } from '@atoms/Badge';
@@ -90,9 +92,9 @@ export function Sidebar({
   const navigationSections: NavigationSection[] = [
     {
       id: 'dashboard',
-      title: 'Dashboard',
-      icon: House,
-      href: '/chat',
+      title: 'Progress blog',
+      icon: Sparkles,
+      href: '/blog',
       isDirectLink: true,
     },
     {
@@ -101,7 +103,7 @@ export function Sidebar({
       icon: LayoutDashboard,
       items: [
         { path: '/chat', label: 'Chat', icon: MessageSquare },
-        { path: '/tasks', label: 'Tasks', icon: LayoutDashboard },
+        { path: '/tasks', label: 'Tasks', icon: KanbanSquare },
         { path: '/code', label: 'Code Search', icon: Code },
       ],
     },

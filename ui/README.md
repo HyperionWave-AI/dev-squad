@@ -1,4 +1,11 @@
-# Hyperion Coordinator UI
+# ⚠️ DEPRECATED - Hyperion Coordinator UI (Old)
+
+> **DEPRECATION NOTICE**: This UI has been deprecated and replaced by **UI2** (`/ui2`).
+> **Please use `/ui2` for all new development.**
+> **Removal planned**: May 2026
+> **See**: [DEPRECATED.md](./DEPRECATED.md) for migration guide and details.
+
+---
 
 Frontend UI for the Hyperion Task Coordinator - Task and Knowledge Management for the Parallel Squad System.
 

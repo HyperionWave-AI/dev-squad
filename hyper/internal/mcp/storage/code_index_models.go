@@ -99,10 +99,15 @@ type IndexStatus struct {
 	ErrorFolders   int       `json:"errorFolders"`
 }
 
-// GetIncludePatterns returns include patterns with defaults if empty
+// GetIncludePatterns returns include patterns, or nil to use extension-based matching
+// CRITICAL FIX: Return nil (not defaults) when no custom patterns are set
+// This allows the scanner to use its built-in supportedExtensions map
+// If we return defaults here, files NOT in the default list (like .go if someone set only ["*.tsx"])
+// will be excluded even though they're in supportedExtensions
 func (f *IndexedFolder) GetIncludePatterns() []string {
+	// Return nil to signal "use all supported extensions" rather than specific patterns
 	if len(f.IncludePatterns) == 0 {
-		return []string{"*.go", "*.ts", "*.js", "*.tsx", "*.jsx", "*.py"}
+		return nil
 	}
 	return f.IncludePatterns
 }
