@@ -92,6 +92,7 @@ function App() {
             }
           >
             <Route path="/chat" element={<CodeChatPage key={refreshKey} />} />
+            <Route path="/chat/:sessionId" element={<CodeChatPage key={refreshKey} />} />
             <Route path="/tasks" element={<KanbanBoard key={refreshKey} />} />
             <Route path="/blog" element={<BlogProgressPage key={refreshKey} />} />
             <Route path="/knowledge" element={<KnowledgeBasePage key={refreshKey} />} />
