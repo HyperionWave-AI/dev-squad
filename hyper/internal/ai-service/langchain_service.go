@@ -1191,6 +1191,60 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 				}
 
+				// CACHE INVALIDATION: Clear related caches after successful write operations
+				// CRITICAL: This must run BEFORE TaskId Validator to prevent stale cache reads
+				// Bug fix: Previously ran after validation, causing validator to see stale cached data
+				if result.Error == "" {
+					switch toolCall.Name {
+					case "coordinator_create_human_task":
+						// Clear all list_human_tasks cache entries (any filter parameters)
+						count := resultCache.DeletePrefix("coordinator_list_human_tasks:")
+						log.Printf("[Cache Invalidation] coordinator_create_human_task: cleared %d coordinator_list_human_tasks cache entries", count)
+
+					case "coordinator_create_agent_task":
+						// Clear all list_agent_tasks cache entries (any filter parameters)
+						count := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						log.Printf("[Cache Invalidation] coordinator_create_agent_task: cleared %d coordinator_list_agent_tasks cache entries", count)
+
+					case "coordinator_update_task_status":
+						// Clear human tasks, agent tasks, and specific task get caches
+						count1 := resultCache.DeletePrefix("coordinator_list_human_tasks:")
+						count2 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						count3 := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] coordinator_update_task_status: cleared %d human_tasks + %d agent_tasks + %d get_task cache entries", count1, count2, count3)
+
+					case "coordinator_update_todo_status":
+						// Clear agent tasks and specific task get caches
+						count1 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						count2 := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] coordinator_update_todo_status: cleared %d agent_tasks + %d get_task cache entries", count1, count2)
+
+					case "coordinator_add_task_prompt_notes", "coordinator_update_task_prompt_notes", "coordinator_clear_task_prompt_notes":
+						// Clear specific task get cache
+						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
+
+					case "coordinator_add_todo_prompt_notes", "coordinator_update_todo_prompt_notes", "coordinator_clear_todo_prompt_notes":
+						// Clear specific task get cache
+						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
+
+					case "coordinator_upsert_knowledge":
+						// Clear knowledge query cache
+						count := resultCache.DeletePrefix("coordinator_query_knowledge:")
+						log.Printf("[Cache Invalidation] coordinator_upsert_knowledge: cleared %d knowledge query cache entries", count)
+
+					case "coordinator_clear_task_board":
+						// Clear ALL coordinator caches (nuclear option)
+						count1 := resultCache.DeletePrefix("coordinator_list_human_tasks:")
+						count2 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
+						count3 := resultCache.DeletePrefix("coordinator_get_agent_task:")
+						count4 := resultCache.DeletePrefix("coordinator_query_knowledge:")
+						log.Printf("[Cache Invalidation] coordinator_clear_task_board: cleared %d human_tasks + %d agent_tasks + %d get_task + %d knowledge cache entries",
+							count1, count2, count3, count4)
+					}
+				}
+
 				// TASK ID VALIDATION: For create_agent_task, validate humanTaskId exists before proceeding
 				if toolCall.Name == "create_agent_task" && result.Error == "" {
 					// Extract humanTaskId from arguments
@@ -1290,45 +1344,6 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
-
-				// CACHE INVALIDATION: Clear related caches after successful write operations
-				// This prevents stale cache data from causing validation failures and incorrect state
-				if result.Error == "" {
-					switch toolCall.Name {
-					case "coordinator_create_human_task":
-						// Clear all list_human_tasks cache entries (any filter parameters)
-						count := resultCache.DeletePrefix("coordinator_list_human_tasks:")
-						log.Printf("[Cache Invalidation] coordinator_create_human_task: cleared %d coordinator_list_human_tasks cache entries", count)
-
-					case "coordinator_create_agent_task":
-						// Clear all list_agent_tasks cache entries (any filter parameters)
-						count := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
-						log.Printf("[Cache Invalidation] coordinator_create_agent_task: cleared %d coordinator_list_agent_tasks cache entries", count)
-
-					case "coordinator_update_task_status":
-						// Clear human tasks, agent tasks, and specific task get caches
-						count1 := resultCache.DeletePrefix("coordinator_list_human_tasks:")
-						count2 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
-						count3 := resultCache.DeletePrefix("coordinator_get_agent_task:")
-						log.Printf("[Cache Invalidation] coordinator_update_task_status: cleared %d human_tasks + %d agent_tasks + %d get_task cache entries", count1, count2, count3)
-
-					case "coordinator_update_todo_status":
-						// Clear agent tasks and specific task get caches
-						count1 := resultCache.DeletePrefix("coordinator_list_agent_tasks:")
-						count2 := resultCache.DeletePrefix("coordinator_get_agent_task:")
-						log.Printf("[Cache Invalidation] coordinator_update_todo_status: cleared %d agent_tasks + %d get_task cache entries", count1, count2)
-
-					case "coordinator_add_task_prompt_notes", "coordinator_update_task_prompt_notes", "coordinator_clear_task_prompt_notes":
-						// Clear specific task get cache
-						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
-						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
-
-					case "coordinator_add_todo_prompt_notes", "coordinator_update_todo_prompt_notes", "coordinator_clear_todo_prompt_notes":
-						// Clear specific task get cache
-						count := resultCache.DeletePrefix("coordinator_get_agent_task:")
-						log.Printf("[Cache Invalidation] %s: cleared %d get_task cache entries", toolCall.Name, count)
-					}
-				}
 
 				// Track tool execution in history for smart filtering (keep last 20)
 				toolCallHistory = append(toolCallHistory, result)
@@ -1606,9 +1621,27 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 			}
 		}
 
-		// Max iterations reached
-		log.Printf("[ChatService] Max tool calls reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
+		// Max iterations reached - send user-friendly error notification
+		log.Printf("[ChatService] Max iterations reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
 			requestID, iterationCount, toolCallCount)
+
+		// Send error notification to user via WebSocket
+		eventChan <- StreamEvent{
+			Type: StreamEventError,
+			Error: fmt.Sprintf(
+				"⚠️ Maximum iteration limit reached (%d iterations).\n\n"+
+					"The AI needs more steps to complete this task than currently allowed.\n\n"+
+					"**What happened:**\n"+
+					"- The AI made %d tool calls across %d reasoning iterations\n"+
+					"- This usually indicates a complex task or a retry loop\n\n"+
+					"**What you can do:**\n"+
+					"1. **Break the task into smaller steps** - Ask for one thing at a time\n"+
+					"2. **Provide more specific instructions** - Reduce ambiguity\n"+
+					"3. **Check for errors** - Review any error messages above\n"+
+					"4. **Increase the limit** - Set MAX_ITERATIONS higher in .env (current: %d)\n\n"+
+					"The conversation has been saved. You can continue by sending a new message.",
+				iterationCount, toolCallCount, iterationCount, s.config.MaxIterations),
+		}
 	}()
 
 	return eventChan, nil
@@ -1643,10 +1676,29 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 	// Create output channel for events
 	eventChan := make(chan StreamEvent, 100)
 
+	// SECURITY: Validate that no blocked coordinator tools are in the allowed list
+	// This prevents subchats from creating subchats or calling coordinator functions
+	blockedToolsForSubchats := []string{
+		"execute_subagent",              // CRITICAL: Prevent subchats from creating subchats
+		"coordinator_create_human_task", // Subchats cannot create human tasks
+		"coordinator_create_agent_task", // Subchats cannot create agent tasks (use create_agent_task wrapper)
+		"coordinator_list_human_tasks",  // Subchats should not list human tasks
+		"coordinator_list_agent_tasks",  // Subchats should not list agent tasks
+		"create_agent_task",             // Subchats use predefined tasks only
+	}
+
+	for _, blocked := range blockedToolsForSubchats {
+		for _, allowed := range allowedToolNames {
+			if allowed == blocked {
+				return nil, fmt.Errorf("SECURITY VIOLATION: Tool '%s' is blocked in subchat context. Subchats cannot create subchats or call coordinator functions", blocked)
+			}
+		}
+	}
+
 	// Get FILTERED tools for LangChain (only allowed tools)
 	tools := s.toolRegistry.GetFilteredToolsForLangChain(allowedToolNames)
 
-	log.Printf("[ChatService] Filtered %d tools for subagent (from allowlist of %d tools)", len(tools), len(allowedToolNames))
+	log.Printf("[ChatService] Filtered %d tools for subagent (from allowlist of %d tools) - Security validated", len(tools), len(allowedToolNames))
 
 	// Check if provider supports tools
 	supportsTools := false
@@ -1932,14 +1984,34 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						result.Output = newOutput
 					}
 				} else {
-					// Execute tool (no cached result available)
-					// Inject humanTaskId from workflowState into context for auto-population
-					toolCtx := ctx
-					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
-						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+					// RUNTIME SECURITY CHECK: Block coordinator tools even if AI tries to call them
+					// This is a defense-in-depth measure (should be caught earlier by filtering)
+					isBlocked := false
+					for _, blocked := range blockedToolsForSubchats {
+						if toolCall.Name == blocked {
+							isBlocked = true
+							result = ToolResult{
+								ID:         toolCall.ID,
+								Name:       toolCall.Name,
+								Output:     nil,
+								Error:      fmt.Sprintf("🚫 SECURITY BLOCK: Tool '%s' is not allowed in subchat context. Subchats cannot create subchats or call coordinator functions. Use only allowed tools: read_file, write_file, apply_patch, bash, coordinator_update_todo_status, coordinator_upsert_knowledge", toolCall.Name),
+								DurationMs: 0,
+							}
+							log.Printf("[SECURITY] Blocked attempt to call '%s' in filtered context - Tool not in allowlist", toolCall.Name)
+							break
+						}
 					}
-					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
-					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
+
+					if !isBlocked {
+						// Execute tool (no cached result available)
+						// Inject humanTaskId from workflowState into context for auto-population
+						toolCtx := ctx
+						if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+							toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+						}
+						result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
+						log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
+					}
 
 					// Store in cache for future duplicate calls
 					resultCache.Set(signature, &result)
@@ -2137,9 +2209,27 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 			}
 		}
 
-		// Max iterations reached
-		log.Printf("[ChatService - Filtered] Max tool calls reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
+		// Max iterations reached - send user-friendly error notification
+		log.Printf("[ChatService - Filtered] Max iterations reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
 			requestID, iterationCount, toolCallCount)
+
+		// Send error notification to user via WebSocket
+		eventChan <- StreamEvent{
+			Type: StreamEventError,
+			Error: fmt.Sprintf(
+				"⚠️ Maximum iteration limit reached (%d iterations).\n\n"+
+					"The AI needs more steps to complete this task than currently allowed.\n\n"+
+					"**What happened:**\n"+
+					"- The AI made %d tool calls across %d reasoning iterations\n"+
+					"- This usually indicates a complex task or a retry loop\n\n"+
+					"**What you can do:**\n"+
+					"1. **Break the task into smaller steps** - Ask for one thing at a time\n"+
+					"2. **Provide more specific instructions** - Reduce ambiguity\n"+
+					"3. **Check for errors** - Review any error messages above\n"+
+					"4. **Increase the limit** - Set MAX_ITERATIONS higher in .env (current: %d)\n\n"+
+					"The conversation has been saved. You can continue by sending a new message.",
+				iterationCount, toolCallCount, iterationCount, s.config.MaxIterations),
+		}
 	}()
 
 	return eventChan, nil

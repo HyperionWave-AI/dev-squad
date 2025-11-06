@@ -1145,19 +1145,6 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				continue
 			}
 
-			// FIX: Emit saved message with database ID for frontend reconciliation
-			// This allows frontend to update optimistic message with correct database ID
-			savedMsgEvent := models.StreamMessage{
-				Type:    "message_saved",
-				Content: savedUserMsg.ID.Hex(), // Send database ID as content
-			}
-			if err := h.safeWriteJSON(conn, savedMsgEvent); err != nil {
-				h.logger.Warn("Failed to emit saved message ID",
-					zap.String("sessionId", sessionID.Hex()),
-					zap.String("messageId", savedUserMsg.ID.Hex()),
-					zap.Error(err))
-			}
-
 			// Notify any running subagents about new message (for subchats)
 			notifier := GetMessageNotifier(h.logger)
 			notifier.NotifyNewMessage(sessionID)
