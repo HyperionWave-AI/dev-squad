@@ -425,10 +425,23 @@ func (h *RESTAPIHandler) CreateHumanTask(c *gin.Context) {
 	})
 }
 
-// ListHumanTasks returns all human tasks
-// GET /api/v1/tasks
+// ListHumanTasks returns all human tasks with optional status filtering
+// GET /api/v1/tasks?status=...
 func (h *RESTAPIHandler) ListHumanTasks(c *gin.Context) {
-	tasks := h.taskStorage.ListAllHumanTasks()
+	statusFilter := c.Query("status")
+
+	// Build MongoDB filter
+	filter := make(map[string]interface{})
+	if statusFilter != "" {
+		filter["status"] = statusFilter
+	}
+
+	// Use storage method with MongoDB-level filtering (sorting by createdAt descending is built-in)
+	tasks, err := h.taskStorage.ListHumanTasks(filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list tasks: " + err.Error()})
+		return
+	}
 
 	dtos := make([]TaskDTO, len(tasks))
 	for i, task := range tasks {
@@ -507,11 +520,12 @@ func (h *RESTAPIHandler) CreateAgentTask(c *gin.Context) {
 	})
 }
 
-// ListAgentTasks returns agent tasks with optional filters
-// GET /api/v1/agent-tasks?humanTaskId=...&agentName=...&offset=0&limit=50
+// ListAgentTasks returns agent tasks with optional filters and pagination
+// GET /api/v1/agent-tasks?humanTaskId=...&agentName=...&status=...&offset=0&limit=50
 func (h *RESTAPIHandler) ListAgentTasks(c *gin.Context) {
 	humanTaskID := c.Query("humanTaskId")
 	agentName := c.Query("agentName")
+	statusFilter := c.Query("status")
 	offset := 0
 	limit := 50
 
@@ -530,32 +544,24 @@ func (h *RESTAPIHandler) ListAgentTasks(c *gin.Context) {
 		}
 	}
 
-	allTasks := h.taskStorage.ListAllAgentTasks()
-
-	// Apply filters
-	var filteredTasks []*storage.AgentTask
-	for _, task := range allTasks {
-		if humanTaskID != "" && task.HumanTaskID != humanTaskID {
-			continue
-		}
-		if agentName != "" && task.AgentName != agentName {
-			continue
-		}
-		filteredTasks = append(filteredTasks, task)
+	// Build MongoDB filter from query parameters
+	filter := make(map[string]interface{})
+	if humanTaskID != "" {
+		filter["humanTaskId"] = humanTaskID
+	}
+	if agentName != "" {
+		filter["agentName"] = agentName
+	}
+	if statusFilter != "" {
+		filter["status"] = statusFilter
 	}
 
-	totalCount := len(filteredTasks)
-
-	// Apply pagination
-	endIndex := offset + limit
-	if offset > totalCount {
-		offset = totalCount
+	// Use storage method with MongoDB-level filtering, pagination, and sorting (descending by createdAt)
+	paginatedTasks, totalCount, err := h.taskStorage.ListAgentTasks(filter, offset, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list agent tasks: " + err.Error()})
+		return
 	}
-	if endIndex > totalCount {
-		endIndex = totalCount
-	}
-
-	paginatedTasks := filteredTasks[offset:endIndex]
 
 	// Convert to DTOs
 	dtos := make([]AgentTaskDTO, len(paginatedTasks))
