@@ -228,9 +228,13 @@ func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.Objec
 		return nil, err
 	}
 
-	filter := bson.M{"sessionId": sessionID}
+	// Filter out system_internal messages (scaffold/enforcement messages not meant for end users)
+	filter := bson.M{
+		"sessionId": sessionID,
+		"role": bson.M{"$ne": "system_internal"},
+	}
 
-	// Count total messages
+	// Count total user-visible messages
 	total, err := s.messagesCollection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count messages: %w", err)

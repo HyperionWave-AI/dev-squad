@@ -17,6 +17,7 @@ import * as Accordion from '@radix-ui/react-accordion';
 import { ChevronDown, Wrench, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { cn } from '@/utils';
 import { Badge } from '@/components/atoms/Badge';
+import { useConversationMode } from '@/contexts/ConversationModeContext';
 import type { ChatMessage as ChatMessageType, ToolCall, ToolResult } from '@/services/chatService';
 
 export interface ChatMessageProps {
@@ -38,7 +39,113 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 }) => {
   const isUser = message.role === 'user';
   const isAssistant = message.role === 'assistant';
+  const isToolCall = message.role === 'tool_call';
+  const isToolResult = message.role === 'tool_result';
   const content = isStreaming && isAssistant ? streamingContent : message.content;
+
+  // Get conversation mode to determine if we should show tool calls
+  const { mode } = useConversationMode();
+  const showToolDetails = mode === 'debug';
+
+  // Handle tool_call messages - only show in debug mode
+  if (isToolCall && message.toolCall && !showToolDetails) {
+    return null; // Hide in default mode
+  }
+
+  // Render tool_call message in debug mode
+  if (isToolCall && message.toolCall && showToolDetails) {
+    return (
+      <div className="flex w-full mb-4 justify-start px-2">
+        <div className="max-w-[75%] w-full">
+          <div className="border border-blue-200 dark:border-blue-700 rounded-lg overflow-hidden bg-blue-50 dark:bg-blue-900/20">
+            <div className="flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900/40 border-b border-blue-200 dark:border-blue-700">
+              <Wrench className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <span className="font-mono text-sm font-medium text-blue-900 dark:text-blue-100">
+                {message.toolCall.name}
+              </span>
+              <span className="text-xs text-blue-600 dark:text-blue-400 ml-auto">
+                {new Date(message.timestamp).toLocaleTimeString()}
+              </span>
+            </div>
+            <div className="p-3">
+              <div className="text-xs text-gray-700 dark:text-gray-300 font-semibold mb-1">
+                Arguments:
+              </div>
+              <pre className="bg-gray-900 text-gray-100 p-2 rounded text-xs overflow-x-auto">
+                {JSON.stringify(message.toolCall.args, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Handle tool_result messages - only show in debug mode
+  if (isToolResult && message.toolResult && !showToolDetails) {
+    return null; // Hide in default mode
+  }
+
+  // Render tool_result message in debug mode
+  if (isToolResult && message.toolResult && showToolDetails) {
+    const hasError = message.toolResult.error;
+    return (
+      <div className="flex w-full mb-4 justify-start px-2">
+        <div className="max-w-[75%] w-full">
+          <div className={cn(
+            "border rounded-lg overflow-hidden",
+            hasError
+              ? "border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/20"
+              : "border-green-200 dark:border-green-700 bg-green-50 dark:bg-green-900/20"
+          )}>
+            <div className={cn(
+              "flex items-center gap-2 px-3 py-2 border-b",
+              hasError
+                ? "bg-red-100 dark:bg-red-900/40 border-red-200 dark:border-red-700"
+                : "bg-green-100 dark:bg-green-900/40 border-green-200 dark:border-green-700"
+            )}>
+              {hasError ? (
+                <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+              ) : (
+                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+              )}
+              <span className={cn(
+                "font-mono text-sm font-medium",
+                hasError
+                  ? "text-red-900 dark:text-red-100"
+                  : "text-green-900 dark:text-green-100"
+              )}>
+                {message.toolResult.name}
+              </span>
+              <span className={cn(
+                "text-xs ml-auto",
+                hasError
+                  ? "text-red-600 dark:text-red-400"
+                  : "text-green-600 dark:text-green-400"
+              )}>
+                {message.toolResult.durationMs}ms
+              </span>
+            </div>
+            <div className="p-3">
+              <div className="text-xs text-gray-700 dark:text-gray-300 font-semibold mb-1">
+                {hasError ? 'Error:' : 'Result:'}
+              </div>
+              <pre className={cn(
+                "p-2 rounded text-xs overflow-x-auto",
+                hasError
+                  ? "bg-red-900/20 text-red-300"
+                  : "bg-gray-900 text-gray-100"
+              )}>
+                {hasError
+                  ? message.toolResult.error
+                  : JSON.stringify(message.toolResult.output, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Combine persisted tool calls with streaming ones
   const allToolCalls = [
@@ -64,6 +171,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
       <div
         className={cn(
           'max-w-[85%] rounded-lg px-4 py-3 shadow-sm',
+          'overflow-x-auto',
           isUser
             ? 'bg-primary-500 text-white'
             : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
@@ -134,8 +242,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
           </div>
         )}
 
-        {/* Tool Calls Accordion */}
-        {hasToolCalls && (
+        {/* Tool Calls Accordion - Only show in debug mode */}
+        {showToolDetails && hasToolCalls && (
           <Accordion.Root type="multiple" className="mt-3">
             {allToolCalls.map((toolCall, index) => {
               const toolResult = allToolResults.get(toolCall.id);
