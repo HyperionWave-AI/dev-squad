@@ -573,7 +573,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		recentToolCalls := make([]string, 0, 10)
 		failedToolCalls := make(map[string]int)        // Track failed attempts separately
 		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
-		taskIdValidationAttempts := 0                   // Track taskId validation attempts for create_agent_task (max 3)
+		taskIdValidationAttempts := 0                  // Track taskId validation attempts for create_agent_task (max 3)
 
 		// Tool call history: track all executed tools for smart filtering (reduces token usage by ~70%)
 		toolCallHistory := make([]ToolResult, 0, 20)
@@ -765,15 +765,15 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 				var allowedTools []string
 				switch step {
 				case 0: // Step 0: ONLY allow coordinator_list_human_tasks
-					allowedTools = []string{"coordinator_list_human_tasks"}
+					allowedTools = []string{"coordinator_list_human_tasks", "discover_tools"}
 				case 1: // Step 1: ONLY allow coordinator_create_human_task
-					allowedTools = []string{"coordinator_create_human_task"}
+					allowedTools = []string{"coordinator_create_human_task", "discover_tools"}
 				case 2: // Step 2: ONLY allow code_index_search
-					allowedTools = []string{"code_index_search"}
+					allowedTools = []string{"code_index_search", "discover_tools"}
 				case 3: // Step 3: ONLY allow create_agent_task
-					allowedTools = []string{"create_agent_task"}
+					allowedTools = []string{"create_agent_task", "discover_tools"}
 				case 4: // Step 4: ONLY allow execute_subagent
-					allowedTools = []string{"execute_subagent"}
+					allowedTools = []string{"execute_subagent", "discover_tools"}
 				case 5: // Step 5: Workflow complete - NO TOOLS NEEDED (subagent is executing)
 					// DO NOT provide list_agent_tasks - it causes hallucinated humanTaskIds
 					// The subagent is executing in background, coordinator should inform user and STOP
@@ -1173,9 +1173,9 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 									if outputMap, ok := result.Output.(map[string]interface{}); ok {
 										outputMap["_validationWarning"] = fmt.Sprintf(
 											"⚠️ VALIDATION FAILED: %d out of %d file paths are INVALID (files don't exist on filesystem). "+
-											"You MUST retry code_index_search with a different query to find the CORRECT file paths. "+
-											"DO NOT proceed with create_agent_task using these invalid paths. "+
-											"Invalid paths: %s",
+												"You MUST retry code_index_search with a different query to find the CORRECT file paths. "+
+												"DO NOT proceed with create_agent_task using these invalid paths. "+
+												"Invalid paths: %s",
 											len(invalidPaths), len(filePaths), strings.Join(invalidPaths, "\n"))
 										outputMap["invalidPaths"] = invalidPaths
 										outputMap["validPaths"] = validPaths
@@ -1325,8 +1325,8 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 								Args: result.Args,
 								Output: map[string]interface{}{
 									"_validationError": "BLOCKED",
-									"_reason": fmt.Sprintf("Invalid humanTaskId: '%s' does not exist", humanTaskId),
-									"NEXT":    "Call coordinator_list_human_tasks to see all tasks, find the correct task, and COPY its exact 'taskId' field",
+									"_reason":          fmt.Sprintf("Invalid humanTaskId: '%s' does not exist", humanTaskId),
+									"NEXT":             "Call coordinator_list_human_tasks to see all tasks, find the correct task, and COPY its exact 'taskId' field",
 								},
 								Error: fmt.Sprintf("❌ BLOCKED: humanTaskId '%s' is INVALID (does not exist). "+
 									"You MUST call coordinator_list_human_tasks to get all tasks and find the EXACT taskId. "+
@@ -1736,7 +1736,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
-		failedToolCalls := make(map[string]int)        // Track failed attempts separately
+		failedToolCalls := make(map[string]int) // Track failed attempts separately
 		// pathValidationRetries not needed in fallback model (Claude handles its own validation)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
@@ -1994,7 +1994,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 								ID:         toolCall.ID,
 								Name:       toolCall.Name,
 								Output:     nil,
-								Error:      fmt.Sprintf("🚫 SECURITY BLOCK: Tool '%s' is not allowed in subchat context. Subchats cannot create subchats or call coordinator functions. Use only allowed tools: read_file, write_file, apply_patch, bash, coordinator_update_todo_status, coordinator_upsert_knowledge", toolCall.Name),
+								Error:      fmt.Sprintf("🚫 SECURITY BLOCK: Tool '%s' is not allowed in subchat context. Subchats cannot create subchats or call coordinator functions. Use only allowed tools: read_file, write_file, apply_patch, bash, coordinator_update_todo_status, coordinator_upsert_knowledge, discover_tools", toolCall.Name),
 								DurationMs: 0,
 							}
 							log.Printf("[SECURITY] Blocked attempt to call '%s' in filtered context - Tool not in allowlist", toolCall.Name)
@@ -2356,29 +2356,29 @@ func getMessagePriority(msg Message) MessagePriority {
 func getToolResultPriority(toolName string) MessagePriority {
 	// HIGH PRIORITY: Critical for workflow - preserve strongly
 	highPriorityTools := map[string]bool{
-		"code_index_search":           true, // File discovery results - critical for agent tasks
-		"create_agent_task":           true, // Agent task creation - core workflow
+		"code_index_search":             true, // File discovery results - critical for agent tasks
+		"create_agent_task":             true, // Agent task creation - core workflow
 		"coordinator_create_human_task": true, // Human task creation - core workflow
-		"execute_subagent":            true, // Subagent execution - core workflow
+		"execute_subagent":              true, // Subagent execution - core workflow
 	}
 
 	// MEDIUM PRIORITY: Important but can be re-retrieved if needed
 	mediumPriorityTools := map[string]bool{
-		"read_file":                   true,
-		"write_file":                  true,
-		"apply_patch":                 true,
+		"read_file":                      true,
+		"write_file":                     true,
+		"apply_patch":                    true,
 		"coordinator_update_todo_status": true,
 		"coordinator_update_task_status": true,
-		"coordinator_get_agent_task":  true,
-		"bash":                        true,
+		"coordinator_get_agent_task":     true,
+		"bash":                           true,
 	}
 
 	// LOW PRIORITY: Informational - can be trimmed
 	lowPriorityTools := map[string]bool{
-		"list_directory":              true,
-		"code_index_status":           true,
+		"list_directory":                      true,
+		"code_index_status":                   true,
 		"coordinator_get_popular_collections": true,
-		"coordinator_find_similar_tasks": true,
+		"coordinator_find_similar_tasks":      true,
 	}
 
 	if highPriorityTools[toolName] {
@@ -2609,10 +2609,10 @@ var (
 	// Phase 2 - Task Creation: Create and manage tasks
 	workflowPhase2Tools = []string{
 		"coordinator_create_human_task",
-		"create_agent_task",   // FIXED: No coordinator_ prefix
-		"list_agent_tasks",    // FIXED: No coordinator_ prefix
-		"execute_subagent",    // FIXED: No coordinator_ prefix
-		"list_subagents",      // FIXED: No coordinator_ prefix
+		"create_agent_task", // FIXED: No coordinator_ prefix
+		"list_agent_tasks",  // FIXED: No coordinator_ prefix
+		"execute_subagent",  // FIXED: No coordinator_ prefix
+		"list_subagents",    // FIXED: No coordinator_ prefix
 		"coordinator_update_task_status",
 		"coordinator_update_todo_status",
 	}
@@ -2644,6 +2644,7 @@ var (
 		"coordinator_update_task_prompt_notes",
 		"coordinator_add_todo_prompt_notes",
 		"coordinator_update_todo_prompt_notes",
+		"discover_tools",
 	}
 )
 
