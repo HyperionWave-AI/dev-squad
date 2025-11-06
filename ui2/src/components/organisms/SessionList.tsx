@@ -215,11 +215,6 @@ export const SessionList: React.FC<SessionListProps> = ({
     setDropdownSessionId(null);
   };
 
-  // Handler for the blue placeholder button
-  const handlePlaceholderClick = () => {
-    console.log('Blue placeholder button clicked!');
-  };
-
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = () => {
@@ -254,16 +249,6 @@ export const SessionList: React.FC<SessionListProps> = ({
           >
             <Plus className="w-4 h-4 mr-2" />
             New Chat
-          </Button>
-          
-          {/* Blue Placeholder Button */}
-          <Button
-            onClick={handlePlaceholderClick}
-            className="w-full justify-center bg-blue-600 hover:bg-blue-700 text-white border-blue-600 hover:border-blue-700 focus:ring-blue-500"
-            disabled={isLoading}
-          >
-            <MessageSquare className="w-4 h-4 mr-2" />
-            Placeholder Action
           </Button>
           
           {sessions.length > 0 && (
