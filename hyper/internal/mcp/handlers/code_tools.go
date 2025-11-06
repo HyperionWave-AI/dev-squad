@@ -683,6 +683,21 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		results = append(results, result)
 	}
 
+	// Filter out deprecated ui/ directory (but keep ui2/)
+	// This prevents confusion between old UI (ui/) and new UI (ui2/)
+	filteredByPath := make([]storage.SearchResult, 0, len(results))
+	for _, result := range results {
+		// Check if the file is in deprecated ui/ directory
+		// We want to exclude paths like "/ui/" or "/ui/src/" but keep "/ui2/"
+		if strings.Contains(result.FilePath, "/ui/") && !strings.Contains(result.FilePath, "/ui2/") {
+			h.logger.Debug("Filtering deprecated UI file from search results",
+				zap.String("filePath", result.FilePath))
+			continue
+		}
+		filteredByPath = append(filteredByPath, result)
+	}
+	results = filteredByPath
+
 	// Filter results by minScore threshold (if specified)
 	originalCount := len(results)
 	if minScore > 0.0 {

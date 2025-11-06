@@ -15,7 +15,7 @@ import {
 import { PageLayout } from '@templates/PageLayout';
 import { initializeTheme, applyTheme, setStoredTheme, watchSystemTheme } from '@/utils/theme';
 import { ConversationModeProvider } from '@/contexts/ConversationModeContext';
-import { CodeChatPage } from '@/pages/CodeChatPage';
+import CodeChatPage from '@/pages/CodeChatPage';
 import { KnowledgeBasePage } from '@/pages/KnowledgeBasePage';
 import KanbanBoard from '@/pages/KanbanBoard';
 import { ReflectionPage } from '@/pages/ReflectionPage';
