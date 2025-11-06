@@ -1621,9 +1621,27 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 			}
 		}
 
-		// Max iterations reached
-		log.Printf("[ChatService] Max tool calls reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
+		// Max iterations reached - send user-friendly error notification
+		log.Printf("[ChatService] Max iterations reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
 			requestID, iterationCount, toolCallCount)
+
+		// Send error notification to user via WebSocket
+		eventChan <- StreamEvent{
+			Type: StreamEventError,
+			Error: fmt.Sprintf(
+				"⚠️ Maximum iteration limit reached (%d iterations).\n\n"+
+					"The AI needs more steps to complete this task than currently allowed.\n\n"+
+					"**What happened:**\n"+
+					"- The AI made %d tool calls across %d reasoning iterations\n"+
+					"- This usually indicates a complex task or a retry loop\n\n"+
+					"**What you can do:**\n"+
+					"1. **Break the task into smaller steps** - Ask for one thing at a time\n"+
+					"2. **Provide more specific instructions** - Reduce ambiguity\n"+
+					"3. **Check for errors** - Review any error messages above\n"+
+					"4. **Increase the limit** - Set MAX_ITERATIONS higher in .env (current: %d)\n\n"+
+					"The conversation has been saved. You can continue by sending a new message.",
+				iterationCount, toolCallCount, iterationCount, s.config.MaxIterations),
+		}
 	}()
 
 	return eventChan, nil
@@ -2191,9 +2209,27 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 			}
 		}
 
-		// Max iterations reached
-		log.Printf("[ChatService - Filtered] Max tool calls reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
+		// Max iterations reached - send user-friendly error notification
+		log.Printf("[ChatService - Filtered] Max iterations reached - RequestID: %s - Total iterations: %d, Tool calls: %d",
 			requestID, iterationCount, toolCallCount)
+
+		// Send error notification to user via WebSocket
+		eventChan <- StreamEvent{
+			Type: StreamEventError,
+			Error: fmt.Sprintf(
+				"⚠️ Maximum iteration limit reached (%d iterations).\n\n"+
+					"The AI needs more steps to complete this task than currently allowed.\n\n"+
+					"**What happened:**\n"+
+					"- The AI made %d tool calls across %d reasoning iterations\n"+
+					"- This usually indicates a complex task or a retry loop\n\n"+
+					"**What you can do:**\n"+
+					"1. **Break the task into smaller steps** - Ask for one thing at a time\n"+
+					"2. **Provide more specific instructions** - Reduce ambiguity\n"+
+					"3. **Check for errors** - Review any error messages above\n"+
+					"4. **Increase the limit** - Set MAX_ITERATIONS higher in .env (current: %d)\n\n"+
+					"The conversation has been saved. You can continue by sending a new message.",
+				iterationCount, toolCallCount, iterationCount, s.config.MaxIterations),
+		}
 	}()
 
 	return eventChan, nil
