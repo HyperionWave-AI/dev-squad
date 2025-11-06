@@ -19,6 +19,8 @@ export interface Session {
   messages: Message[];
   createdAt: string;
   updatedAt: string;
+  parentSessionId?: string;
+  isSubchat?: boolean;
   subchats?: Session[];
   metadata?: {
     [key: string]: any;
