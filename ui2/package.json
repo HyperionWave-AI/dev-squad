@@ -38,9 +38,11 @@
     "@radix-ui/react-tooltip": "^1.1.7",
     "@types/react-router-dom": "^5.3.3",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@types/uuid": "^10.0.0",
     "ansi_up": "^6.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
     "framer-motion": "^12.23.24",
     "lucide-react": "^0.552.0",
     "react": "^19.1.1",
@@ -50,7 +52,8 @@
     "react-router-dom": "^7.9.4",
     "react-syntax-highlighter": "^15.6.6",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^2.5.5"
+    "tailwind-merge": "^2.5.5",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",

@@ -7,15 +7,18 @@
  * - WebSocket real-time streaming
  * - Tool calls display with Radix Accordion
  * - Session management (create, rename, delete)
- * - Subchat support with read-only indicator
+ * - Subchat support with intelligent interrupt categorization (STOP, MODIFY, CLARIFY, STATUS, CONTINUE)
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, BarChart3, X } from 'lucide-react';
 import { SessionList } from '@/components/organisms/SessionList';
 import { ChatMessage } from '@/components/organisms/ChatMessage';
 import { ChatInput } from '@/components/organisms/ChatInput';
 import { PerformanceMonitor } from '@/components/organisms/PerformanceMonitor';
+import { ProgressTracker, type ProgressEvent } from '@/components/organisms/ProgressTracker';
+import { MetricsDashboard } from '@/components/organisms/MetricsDashboard';
+import { ConversationModeToggle } from '@/components/molecules/ConversationModeToggle';
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
 import {
   createSession,
@@ -24,16 +27,25 @@ import {
   deleteSession,
   updateSession,
   connectChatStream,
-  type ChatSession,
   type ChatMessage as ChatMessageType,
   type ChatStreamConnection,
   type ToolCall,
   type ToolResult,
 } from '@/services/chatService';
 
+// Local interface for session display (matches SessionList expectations)
+interface SessionItem {
+  id: string;
+  title: string;
+  timestamp: Date | string;
+  messageCount: number;
+  lastMessage?: string;
+  activeSubagentId?: string; // Indicates session is being processed by a subagent
+}
+
 export const CodeChatPage: React.FC = () => {
   // Session state
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   // Messages state
@@ -47,6 +59,12 @@ export const CodeChatPage: React.FC = () => {
   const [streamingToolResults, setStreamingToolResults] = useState<Map<string, ToolResult>>(
     new Map()
   );
+
+  // Progress tracking state
+  const [progressEvents, setProgressEvents] = useState<ProgressEvent[]>([]);
+
+  // Metrics drawer state
+  const [metricsDrawerOpen, setMetricsDrawerOpen] = useState(false);
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -66,15 +84,20 @@ export const CodeChatPage: React.FC = () => {
   // Ref to track current active session (prevents stale closure in auto-refresh)
   const activeSessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const prevMessageCountRef = useRef(0);
 
   // Keep ref in sync with state
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll to bottom ONLY when NEW messages are added (not on every poll)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Only auto-scroll if NEW messages were added (not just reloaded from polling)
+    if (messages.length > prevMessageCountRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMessageCountRef.current = messages.length;
   }, [messages, streamingContent]);
 
   // Load sessions on mount and set up auto-refresh
@@ -88,6 +111,27 @@ export const CodeChatPage: React.FC = () => {
 
     return () => clearInterval(intervalId);
   }, []);
+
+  // Auto-refresh messages for active session (Fix #2: Messages not appearing without refresh)
+  useEffect(() => {
+    if (!activeSessionId) return;
+
+    // Poll messages every 3 seconds for active session
+    const intervalId = setInterval(() => {
+      // Check WebSocket health and reconnect if needed
+      if (!wsConnectionRef.current || wsConnectionRef.current.ws.readyState !== WebSocket.OPEN) {
+        console.log('[CodeChatPage] WebSocket disconnected, reconnecting...');
+        connectWebSocket(activeSessionId);
+      }
+
+      // Only poll if not currently streaming (avoid conflicts)
+      if (!isStreaming) {
+        loadMessages(activeSessionId);
+      }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [activeSessionId, isStreaming]);
 
   // Connect WebSocket when active session changes
   useEffect(() => {
@@ -111,7 +155,16 @@ export const CodeChatPage: React.FC = () => {
   const loadSessions = async () => {
     try {
       const fetchedSessions = await getSessions();
-      setSessions(fetchedSessions);
+      // Map chatService.ChatSession to SessionList's expected format
+      const mappedSessions: SessionItem[] = fetchedSessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        timestamp: session.updatedAt || session.createdAt,
+        messageCount: 0, // Will be populated when we load messages
+        lastMessage: undefined,
+        activeSubagentId: session.activeSubagentId, // Preserve processing indicator
+      }));
+      setSessions(mappedSessions);
 
       // Auto-select first session if none active
       if (!activeSessionIdRef.current && fetchedSessions.length > 0) {
@@ -124,11 +177,32 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
+  // Deduplicate messages by ID (keeps latest version of each message)
+  const deduplicateMessages = (messages: ChatMessageType[]): ChatMessageType[] => {
+    const seen = new Set<string>();
+    const unique: ChatMessageType[] = [];
+
+    // Process in reverse to keep the LATEST version of each message
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (!seen.has(msg.id)) {
+        seen.add(msg.id);
+        unique.unshift(msg); // Add to front to maintain order
+      }
+    }
+
+    return unique;
+  };
+
   // Load messages for a session
   const loadMessages = async (sessionId: string) => {
     try {
       const fetchedMessages = await getMessages(sessionId);
-      setMessages(fetchedMessages);
+      setMessages((prev) => {
+        // Merge fetched messages with existing, deduplicate
+        const merged = [...prev, ...fetchedMessages];
+        return deduplicateMessages(merged);
+      });
     } catch (err) {
       console.error('[CodeChatPage] Error loading messages:', err);
       setError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -154,7 +228,7 @@ export const CodeChatPage: React.FC = () => {
     const connection = connectChatStream(sessionId, {
       onMessage: (content: string, done: boolean) => {
         if (done) {
-          // Stream complete - add AI message to chat
+          // Stream complete - save final AI message if there's any remaining content
           const finalContent = streamingContentRef.current;
           const tools = currentMessageToolsRef.current;
 
@@ -168,10 +242,21 @@ export const CodeChatPage: React.FC = () => {
               toolCalls: tools.toolCalls.length > 0 ? tools.toolCalls : undefined,
               toolResults: tools.toolResults.size > 0 ? tools.toolResults : undefined,
             };
-            setMessages((prev) => [...prev, newMessage]);
+            console.log('[CodeChatPage] ✅ Creating completed AI message:', {
+              id: newMessage.id,
+              hasContent: !!finalContent,
+              toolCallsCount: tools.toolCalls.length,
+              toolResultsCount: tools.toolResults.size,
+            });
+            setMessages((prev) => {
+              const updated = [...prev, newMessage];
+              console.log('[CodeChatPage] ✅ Messages array updated. New length:', updated.length);
+              return updated;
+            });
           }
 
           // Refresh sessions in case AI created subchats
+          console.log('[CodeChatPage] Refreshing sessions after AI response completion');
           loadSessions();
 
           // Clear streaming state
@@ -196,6 +281,25 @@ export const CodeChatPage: React.FC = () => {
         }
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
+        console.log('[CodeChatPage] Tool call received:', tool, id);
+
+        // If we have accumulated content before the tool call, save it as a separate message
+        if (streamingContentRef.current.trim()) {
+          const messageBeforeToolCall: ChatMessageType = {
+            id: `msg-${Date.now()}`,
+            sessionId,
+            role: 'assistant',
+            content: streamingContentRef.current,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, messageBeforeToolCall]);
+          console.log('[CodeChatPage] Saved message before tool call');
+
+          // Clear streaming content for next message
+          streamingContentRef.current = '';
+          setStreamingContent('');
+        }
+
         const toolCall: ToolCall = {
           id,
           tool,
@@ -228,6 +332,23 @@ export const CodeChatPage: React.FC = () => {
         });
         setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
       },
+      onMessageSaved: (databaseId: string) => {
+        // FIX: Reconcile optimistic message ID with database ID
+        // Find the most recent user message and update its ID
+        console.log('[CodeChatPage] Message saved with database ID:', databaseId);
+        setMessages((prev) => {
+          // Find most recent message with optimistic ID (msg-timestamp)
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].role === 'user' && updated[i].id.startsWith('msg-')) {
+              console.log('[CodeChatPage] Updating message ID:', updated[i].id, '→', databaseId);
+              updated[i] = { ...updated[i], id: databaseId };
+              break;
+            }
+          }
+          return updated;
+        });
+      },
       onError: (err: Error) => {
         setError(`Connection error: ${err.message}`);
         setIsStreaming(false);
@@ -255,7 +376,15 @@ export const CodeChatPage: React.FC = () => {
   // Session management handlers
   const handleNewChat = async () => {
     const newSession = await createSession('New Chat');
-    setSessions((prev) => [newSession, ...prev]);
+    const sessionItem: SessionItem = {
+      id: newSession.id,
+      title: newSession.title,
+      timestamp: newSession.updatedAt || newSession.createdAt,
+      messageCount: 0,
+      lastMessage: undefined,
+      activeSubagentId: newSession.activeSubagentId,
+    };
+    setSessions((prev) => [sessionItem, ...prev]);
     setActiveSessionId(newSession.id);
     setMessages([]);
     setStreamingContent('');
@@ -296,12 +425,35 @@ export const CodeChatPage: React.FC = () => {
 
   const handleRenameSession = async (sessionId: string, newTitle: string) => {
     const updatedSession = await updateSession(sessionId, newTitle);
-    setSessions((prev) => prev.map((s) => (s.id === sessionId ? updatedSession : s)));
+    const sessionItem: SessionItem = {
+      id: updatedSession.id,
+      title: updatedSession.title,
+      timestamp: updatedSession.updatedAt || updatedSession.createdAt,
+      messageCount: 0,
+      lastMessage: undefined,
+      activeSubagentId: updatedSession.activeSubagentId,
+    };
+    setSessions((prev) => prev.map((s) => (s.id === sessionId ? sessionItem : s)));
   };
 
   // Message sending handler
   const handleSendMessage = (text: string) => {
-    if (!activeSessionId || isStreaming || !wsConnectionRef.current) return;
+    if (!activeSessionId || isStreaming) return;
+
+    // Ensure WebSocket is connected before sending
+    if (!wsConnectionRef.current || wsConnectionRef.current.ws.readyState !== WebSocket.OPEN) {
+      console.log('[CodeChatPage] WebSocket not connected, reconnecting...');
+      connectWebSocket(activeSessionId);
+      // Wait briefly for connection to establish before sending
+      setTimeout(() => {
+        if (wsConnectionRef.current && wsConnectionRef.current.ws.readyState === WebSocket.OPEN) {
+          handleSendMessage(text);
+        } else {
+          setError('WebSocket connection failed. Please try again.');
+        }
+      }, 500);
+      return;
+    }
 
     // Optimistically add user message
     const userMessage: ChatMessageType = {
@@ -334,13 +486,8 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
-  // Check if active session is a subchat (read-only)
-  const isActiveSessionSubchat = (): boolean => {
-    if (!activeSessionId) return false;
-    const activeSession = sessions.find((s) => s.id === activeSessionId);
-    if (!activeSession) return false;
-    return activeSession.title.startsWith('Subchat:') || !!activeSession.parentChatId;
-  };
+  // Note: Subchats are now interruptible (supports intelligent interrupt categorization)
+  // Backend handles STOP, MODIFY, CLARIFY, STATUS, CONTINUE categories
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -348,7 +495,7 @@ export const CodeChatPage: React.FC = () => {
       <div className="w-80 shrink-0 backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border-r border-white/30 dark:border-gray-700/30">
         <SessionList
           sessions={sessions}
-          activeSessionId={activeSessionId}
+          currentSessionId={activeSessionId ?? undefined}
           onSessionSelect={handleSessionSelect}
           onNewChat={handleNewChat}
           onDeleteSession={handleDeleteSession}
@@ -358,7 +505,28 @@ export const CodeChatPage: React.FC = () => {
       </div>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Chat Header with Mode Toggle */}
+        {activeSessionId && (
+          <div className="shrink-0 px-6 py-3 border-b border-gray-200 dark:border-gray-700 bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm">
+            <div className="flex items-center justify-between">
+              <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                {sessions.find((s) => s.id === activeSessionId)?.title || 'Chat'}
+              </h1>
+              <div className="flex items-center gap-3">
+                <ConversationModeToggle showLabel={true} />
+                <button
+                  onClick={() => setMetricsDrawerOpen(!metricsDrawerOpen)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  title="Toggle metrics dashboard"
+                >
+                  <BarChart3 className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Chat Messages Area */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {!activeSessionId ? (
@@ -394,6 +562,35 @@ export const CodeChatPage: React.FC = () => {
               {messages.map((message) => (
                 <ChatMessage key={message.id} message={message} />
               ))}
+
+              {/* AI Thinking Indicator (Fix #1: Show before content arrives) */}
+              {/* Also show when session is being processed by a subagent */}
+              {(() => {
+                const activeSession = sessions.find((s) => s.id === activeSessionId);
+                const isProcessing = activeSession?.activeSubagentId != null;
+                const showIndicator = (isStreaming && !streamingContent) || isProcessing;
+
+                if (!showIndicator) return null;
+
+                return (
+                  <div className="flex items-start gap-3 p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                    <div className="flex-shrink-0 mt-1">
+                      <div className="relative flex items-center justify-center w-6 h-6">
+                        <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse z-10" />
+                        <div className="absolute inset-0 w-3 h-3 bg-blue-500 rounded-full animate-ping opacity-75" />
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+                        Assistant
+                      </div>
+                      <div className="text-sm text-gray-600 dark:text-gray-400 italic">
+                        {isProcessing ? 'Agent is processing task...' : 'AI is thinking...'}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Streaming Assistant Message */}
               {isStreaming && streamingContent && (
@@ -438,12 +635,10 @@ export const CodeChatPage: React.FC = () => {
         {/* Chat Input */}
         <ChatInput
           onSendMessage={handleSendMessage}
-          disabled={!activeSessionId || isStreaming || isActiveSessionSubchat()}
+          disabled={!activeSessionId || isStreaming}
           placeholder={
             !activeSessionId
               ? 'Create a new chat to get started'
-              : isActiveSessionSubchat()
-              ? 'This subchat is read-only. Monitor the AI agent progress here.'
               : 'Type your message...'
           }
         />
@@ -456,6 +651,45 @@ export const CodeChatPage: React.FC = () => {
         isPerformanceGood={performance.isPerformanceGood}
         isStreaming={isStreaming}
       />
+
+      {/* Progress Tracker - Fixed bottom-right (above performance monitor) */}
+      <ProgressTracker
+        progress={progressEvents}
+        onClose={() => setProgressEvents([])}
+      />
+
+      {/* Metrics Drawer - Slide in from right */}
+      {metricsDrawerOpen && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/20 dark:bg-black/40 z-40 backdrop-blur-sm"
+            onClick={() => setMetricsDrawerOpen(false)}
+          />
+
+          {/* Drawer */}
+          <div className="fixed right-0 top-0 h-full w-full max-w-4xl bg-white dark:bg-gray-900 shadow-2xl z-50 overflow-y-auto animate-in slide-in-from-right duration-300">
+            {/* Drawer Header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+                System Metrics
+              </h2>
+              <button
+                onClick={() => setMetricsDrawerOpen(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                aria-label="Close metrics drawer"
+              >
+                <X className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+              </button>
+            </div>
+
+            {/* Drawer Content */}
+            <div className="p-6">
+              <MetricsDashboard />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
