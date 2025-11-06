@@ -34,9 +34,18 @@ import {
   type ToolResult,
 } from '@/services/chatService';
 
+// Local interface for session display (matches SessionList expectations)
+interface SessionItem {
+  id: string;
+  title: string;
+  timestamp: Date | string;
+  messageCount: number;
+  lastMessage?: string;
+}
+
 export const CodeChatPage: React.FC = () => {
   // Session state
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   // Messages state
@@ -75,15 +84,20 @@ export const CodeChatPage: React.FC = () => {
   // Ref to track current active session (prevents stale closure in auto-refresh)
   const activeSessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const prevMessageCountRef = useRef(0);
 
   // Keep ref in sync with state
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll to bottom ONLY when NEW messages are added (not on every poll)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Only auto-scroll if NEW messages were added (not just reloaded from polling)
+    if (messages.length > prevMessageCountRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMessageCountRef.current = messages.length;
   }, [messages, streamingContent]);
 
   // Load sessions on mount and set up auto-refresh
@@ -104,6 +118,12 @@ export const CodeChatPage: React.FC = () => {
 
     // Poll messages every 3 seconds for active session
     const intervalId = setInterval(() => {
+      // Check WebSocket health and reconnect if needed
+      if (!wsConnectionRef.current || wsConnectionRef.current.ws.readyState !== WebSocket.OPEN) {
+        console.log('[CodeChatPage] WebSocket disconnected, reconnecting...');
+        connectWebSocket(activeSessionId);
+      }
+
       // Only poll if not currently streaming (avoid conflicts)
       if (!isStreaming) {
         loadMessages(activeSessionId);
@@ -135,7 +155,15 @@ export const CodeChatPage: React.FC = () => {
   const loadSessions = async () => {
     try {
       const fetchedSessions = await getSessions();
-      setSessions(fetchedSessions);
+      // Map chatService.ChatSession to SessionList's expected format
+      const mappedSessions: SessionItem[] = fetchedSessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        timestamp: session.updatedAt || session.createdAt,
+        messageCount: 0, // Will be populated when we load messages
+        lastMessage: undefined,
+      }));
+      setSessions(mappedSessions);
 
       // Auto-select first session if none active
       if (!activeSessionIdRef.current && fetchedSessions.length > 0) {
@@ -148,11 +176,32 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
+  // Deduplicate messages by ID (keeps latest version of each message)
+  const deduplicateMessages = (messages: ChatMessageType[]): ChatMessageType[] => {
+    const seen = new Set<string>();
+    const unique: ChatMessageType[] = [];
+
+    // Process in reverse to keep the LATEST version of each message
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (!seen.has(msg.id)) {
+        seen.add(msg.id);
+        unique.unshift(msg); // Add to front to maintain order
+      }
+    }
+
+    return unique;
+  };
+
   // Load messages for a session
   const loadMessages = async (sessionId: string) => {
     try {
       const fetchedMessages = await getMessages(sessionId);
-      setMessages(fetchedMessages);
+      setMessages((prev) => {
+        // Merge fetched messages with existing, deduplicate
+        const merged = [...prev, ...fetchedMessages];
+        return deduplicateMessages(merged);
+      });
     } catch (err) {
       console.error('[CodeChatPage] Error loading messages:', err);
       setError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -355,7 +404,22 @@ export const CodeChatPage: React.FC = () => {
 
   // Message sending handler
   const handleSendMessage = (text: string) => {
-    if (!activeSessionId || isStreaming || !wsConnectionRef.current) return;
+    if (!activeSessionId || isStreaming) return;
+
+    // Ensure WebSocket is connected before sending
+    if (!wsConnectionRef.current || wsConnectionRef.current.ws.readyState !== WebSocket.OPEN) {
+      console.log('[CodeChatPage] WebSocket not connected, reconnecting...');
+      connectWebSocket(activeSessionId);
+      // Wait briefly for connection to establish before sending
+      setTimeout(() => {
+        if (wsConnectionRef.current && wsConnectionRef.current.ws.readyState === WebSocket.OPEN) {
+          handleSendMessage(text);
+        } else {
+          setError('WebSocket connection failed. Please try again.');
+        }
+      }, 500);
+      return;
+    }
 
     // Optimistically add user message
     const userMessage: ChatMessageType = {
