@@ -19,6 +19,7 @@ export interface Session {
   messages: Message[];
   createdAt: string;
   updatedAt: string;
+  parentChatId?: string; // Alternative field name for compatibility with chatService
   parentSessionId?: string;
   isSubchat?: boolean;
   subchats?: Session[];

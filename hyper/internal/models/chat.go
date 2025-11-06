@@ -73,7 +73,7 @@ type SendMessageRequest struct {
 
 // StreamMessage represents a streaming AI response message
 type StreamMessage struct {
-	Type       string            `json:"type"` // "token", "tool_call", "tool_result", "tool_result_chunk", "done", "error"
+	Type       string            `json:"type"` // "token", "tool_call", "tool_result", "tool_result_chunk", "done", "error", "message_saved"
 	Content    string            `json:"content,omitempty"`
 	Error      string            `json:"error,omitempty"`
 	ToolCall   *ToolCallEvent    `json:"toolCall,omitempty"`

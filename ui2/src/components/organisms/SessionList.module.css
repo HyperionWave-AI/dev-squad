@@ -30,6 +30,7 @@
   padding-left: 24px;
   margin-left: 8px;
 }
+
 .sessionItem.subchat::before {
   content: '';
   position: absolute;
@@ -104,33 +105,239 @@
   color: #374151;
 }
 
-/* Depth-based indentation for deeper nesting */
-.sessionItem[data-depth="1"] {
-  padding-left: 24px;
+/* Enhanced depth-based indentation for deeper nesting */
+.depth-0 {
+  padding-left: 12px;
 }
 
-.sessionItem[data-depth="2"] {
+.depth-1 {
+  padding-left: 36px;
+  position: relative;
+}
+
+.depth-2 {
+  padding-left: 60px;
+  position: relative;
+}
+
+.depth-3 {
+  padding-left: 84px;
+  position: relative;
+}
+
+.depth-4 {
+  padding-left: 108px;
+  position: relative;
+}
+
+.depth-5 {
+  padding-left: 132px;
+  position: relative;
+}
+
+/* Alternative approach using data attributes for dynamic depth */
+.sessionItem[data-depth="0"] {
+  padding-left: 12px;
+}
+
+.sessionItem[data-depth="1"] {
   padding-left: 36px;
 }
 
-.sessionItem[data-depth="3"] {
-  padding-left: 48px;
-}
-
-.sessionItem[data-depth="4"] {
+.sessionItem[data-depth="2"] {
   padding-left: 60px;
 }
 
-/* Visual hierarchy indicators */
+.sessionItem[data-depth="3"] {
+  padding-left: 84px;
+}
+
+.sessionItem[data-depth="4"] {
+  padding-left: 108px;
+}
+
+.sessionItem[data-depth="5"] {
+  padding-left: 132px;
+}
+
+/* Visual hierarchy indicators for subchats */
 .hierarchyIndicator {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
   width: 2px;
-  background: linear-gradient(to bottom, transparent 0%, rgba(59, 130, 246, 0.3) 20%, rgba(59, 130, 246, 0.3) 80%, transparent 100%);
+  background: linear-gradient(to bottom, 
+    transparent 0%, 
+    rgba(59, 130, 246, 0.3) 20%, 
+    rgba(59, 130, 246, 0.3) 80%, 
+    transparent 100%);
+  border-radius: 1px;
 }
 
 .sessionItem.subchat .hierarchyIndicator {
-  background: linear-gradient(to bottom, transparent 0%, rgba(156, 163, 175, 0.4) 20%, rgba(156, 163, 175, 0.4) 80%, transparent 100%);
+  background: linear-gradient(to bottom, 
+    transparent 0%, 
+    rgba(156, 163, 175, 0.4) 20%, 
+    rgba(156, 163, 175, 0.4) 80%, 
+    transparent 100%);
+}
+
+/* Tree connector lines for visual hierarchy */
+.treeConnector {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.treeConnector::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 12px;
+  height: 1px;
+  background-color: rgba(156, 163, 175, 0.4);
+  transform: translateY(-50%);
+}
+
+.treeConnector::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 0;
+  bottom: 50%;
+  width: 1px;
+  background-color: rgba(156, 163, 175, 0.4);
+}
+
+/* Subchat specific styling */
+.subchatItem {
+  position: relative;
+  background-color: rgba(59, 130, 246, 0.02);
+  border-left: 2px solid rgba(59, 130, 246, 0.1);
+}
+
+.subchatItem:hover {
+  background-color: rgba(59, 130, 246, 0.05);
+}
+
+.subchatItem .sessionTitle {
+  font-weight: 400;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.subchatItem.active {
+  background-color: rgba(59, 130, 246, 0.1);
+  border-left-color: #3b82f6;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .sessionItem {
+    background-color: transparent;
+  }
+  
+  .sessionItem:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+  
+  .sessionItem.active {
+    background-color: rgba(59, 130, 246, 0.2);
+    border-left-color: #60a5fa;
+  }
+  
+  .sessionItem.subchat {
+    background-color: rgba(255, 255, 255, 0.02);
+    border-left-color: rgba(255, 255, 255, 0.1);
+  }
+  
+  .sessionItem.subchat:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+  
+  .sessionTitle {
+    color: #f9fafb;
+  }
+  
+  .sessionItem.subchat .sessionTitle {
+    color: #9ca3af;
+  }
+  
+  .hierarchyIndicator {
+    background: linear-gradient(to bottom, 
+      transparent 0%, 
+      rgba(96, 165, 250, 0.4) 20%, 
+      rgba(96, 165, 250, 0.4) 80%, 
+      transparent 100%);
+  }
+  
+  .sessionItem.subchat .hierarchyIndicator {
+    background: linear-gradient(to bottom, 
+      transparent 0%, 
+      rgba(156, 163, 175, 0.3) 20%, 
+      rgba(156, 163, 175, 0.3) 80%, 
+      transparent 100%);
+  }
+  
+  .treeConnector::before,
+  .treeConnector::after {
+    background-color: rgba(156, 163, 175, 0.3);
+  }
+  
+  .subchatItem {
+    background-color: rgba(59, 130, 246, 0.05);
+    border-left-color: rgba(59, 130, 246, 0.2);
+  }
+  
+  .subchatItem:hover {
+    background-color: rgba(59, 130, 246, 0.1);
+  }
+  
+  .subchatItem.active {
+    background-color: rgba(59, 130, 246, 0.2);
+    border-left-color: #60a5fa;
+  }
+}
+
+/* Animation for hierarchy expansion */
+@keyframes hierarchyExpand {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.subchatItem {
+  animation: hierarchyExpand 0.2s ease-out;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .depth-1, .sessionItem[data-depth="1"] {
+    padding-left: 28px;
+  }
+  
+  .depth-2, .sessionItem[data-depth="2"] {
+    padding-left: 44px;
+  }
+  
+  .depth-3, .sessionItem[data-depth="3"] {
+    padding-left: 60px;
+  }
+  
+  .depth-4, .sessionItem[data-depth="4"] {
+    padding-left: 76px;
+  }
+  
+  .depth-5, .sessionItem[data-depth="5"] {
+    padding-left: 92px;
+  }
 }

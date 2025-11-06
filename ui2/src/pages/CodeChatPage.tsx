@@ -124,7 +124,7 @@ export const CodeChatPage: React.FC = () => {
         connectWebSocket(activeSessionId);
       }
 
-      // Only poll if not currently streaming (avoid conflicts)
+      // Only poll if not streaming
       if (!isStreaming) {
         loadMessages(activeSessionId);
       }
