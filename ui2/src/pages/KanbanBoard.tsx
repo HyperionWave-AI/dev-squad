@@ -59,12 +59,30 @@ export function KanbanBoard() {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [taskTypeFilter, setTaskTypeFilter] = useState<TaskTypeFilter>('all');
 
+  // Pagination state - visible count per status column
+  const [visibleCounts, setVisibleCounts] = useState<Record<TaskStatus, number>>({
+    pending: 20,
+    in_progress: 20,
+    blocked: 20,
+    completed: 20,
+  });
+
   // Load tasks on mount and auto-refresh
   useEffect(() => {
     loadTasks();
     const interval = setInterval(loadTasks, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Reset visible counts when filters change
+  useEffect(() => {
+    setVisibleCounts({
+      pending: 20,
+      in_progress: 20,
+      blocked: 20,
+      completed: 20,
+    });
+  }, [searchQuery, timeFilter, taskTypeFilter]);
 
   const loadTasks = async () => {
     try {
@@ -334,6 +352,14 @@ export function KanbanBoard() {
     setSelectedTask(null);
   };
 
+  // Handle loading more tasks in a column
+  const handleLoadMore = (status: TaskStatus) => {
+    setVisibleCounts((prev) => ({
+      ...prev,
+      [status]: prev[status] + 20,
+    }));
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -440,17 +466,26 @@ export function KanbanBoard() {
         {/* Kanban Board */}
         <DragDropContext onDragEnd={onDragEnd}>
           <div className="flex gap-4 p-4 min-h-[calc(100vh-480px)] overflow-x-auto">
-            {columns.map((column) => (
-              <KanbanColumn
-                key={column.id}
-                id={column.id}
-                title={column.title}
-                tasks={tasksByStatus[column.id]}
-                color={column.color}
-                bgColor={column.bgColor}
-                onTaskClick={handleTaskClick}
-              />
-            ))}
+            {columns.map((column) => {
+              const allTasks = tasksByStatus[column.id];
+              const visibleTasks = allTasks.slice(0, visibleCounts[column.id]);
+              const hasMore = allTasks.length > visibleCounts[column.id];
+
+              return (
+                <KanbanColumn
+                  key={column.id}
+                  id={column.id}
+                  title={column.title}
+                  tasks={visibleTasks}
+                  totalCount={allTasks.length}
+                  hasMore={hasMore}
+                  color={column.color}
+                  bgColor={column.bgColor}
+                  onTaskClick={handleTaskClick}
+                  onLoadMore={() => handleLoadMore(column.id)}
+                />
+              );
+            })}
           </div>
         </DragDropContext>
 
