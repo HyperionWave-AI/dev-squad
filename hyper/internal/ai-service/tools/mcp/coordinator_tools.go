@@ -580,6 +580,30 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
+	// DEPRECATED FOLDER FILTER: Remove paths from deprecated /ui folder
+	// The project has migrated to /ui2, so /ui paths should be filtered out
+	if len(filesModified) > 0 {
+		var validPaths []string
+		var deprecatedPaths []string
+
+		for _, path := range filesModified {
+			// Check if path contains /ui/ but NOT /ui2/
+			if strings.Contains(path, "/ui/") && !strings.Contains(path, "/ui2/") {
+				deprecatedPaths = append(deprecatedPaths, path)
+			} else {
+				validPaths = append(validPaths, path)
+			}
+		}
+
+		if len(deprecatedPaths) > 0 {
+			zap.L().Warn("⚠️ Filtered out deprecated /ui folder paths",
+				zap.Int("filteredCount", len(deprecatedPaths)),
+				zap.Int("remainingCount", len(validPaths)),
+				zap.Strings("deprecatedPaths", deprecatedPaths))
+			filesModified = validPaths
+		}
+	}
+
 	// PATH CORRECTION: Fix invalid paths before validation (defensive programming)
 	// Only runs if paths exist but some are invalid
 	if len(filesModified) > 0 {
@@ -3512,8 +3536,8 @@ Acknowledge the message and continue your work.
 					forceScaffold := fmt.Sprintf("\n\n╔══════════════════════════════════════════════════════════════╗\n║          FORCED WRITE SCAFFOLD - COMPLETE AND SUBMIT          ║\n╚══════════════════════════════════════════════════════════════╝\n\n🚨 WRITE-ONLY MODE ENFORCEMENT 🚨\n\nYou have read %d file(s). Reading phase is COMPLETE.\n\nYour NEXT tool call MUST be either:\n1. write_file - to create or modify a file\n2. apply_patch - to apply code changes\n\nYou are BLOCKED from calling read_file again.\n\nCURRENT EXECUTION SCORE: %d points\n\nSCORING:\n- Next write_file/apply_patch: +20 points ✅\n- Another read_file: -50 points ❌ (HARD LIMIT)\n\nIMPLEMENT NOW - DO NOT READ ANOTHER FILE.", readFileCount, executionScore)
 					summarizedOutput += forceScaffold
 
-					// Save scaffold as visible message
-					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", forceScaffold, finalCompanyID)
+					// Save scaffold as internal message (not visible to end user)
+					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "system_internal", forceScaffold, finalCompanyID)
 					if err != nil {
 						t.logger.Warn("Failed to save forced scaffold message",
 							zap.String("subchatId", subchatID),
