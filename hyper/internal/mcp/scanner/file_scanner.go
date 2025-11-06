@@ -135,7 +135,7 @@ func (fs *FileScanner) shouldExcludePath(path string, basePath string) bool {
 	// If no custom exclude patterns, use defaults
 	excludePatterns := fs.excludePatterns
 	if len(excludePatterns) == 0 {
-		excludePatterns = []string{"node_modules", "dist", "build", ".git", "vendor", ".next", "coverage", "__pycache__", ".vscode", ".idea", "test-results", "out"}
+		excludePatterns = []string{"node_modules", "dist", "build", ".git", "vendor", ".next", "coverage", "__pycache__", ".vscode", ".idea", "test-results", "out", "ui"}
 	}
 
 	// Get relative path for pattern matching
