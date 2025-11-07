@@ -148,10 +148,17 @@ coordinator/
 
 | Provider | Model | Use Case |
 |----------|-------|----------|
-| **Ollama** | nomic-embed-text | Local, GPU-accelerated (default) |
+| **Ollama** (Recommended) | nomic-embed-text | Local, GPU-accelerated, privacy-first (default) |
 | **OpenAI** | text-embedding-3-small | Cloud-based, high quality |
 | **Voyage AI** | voyage-3 | Specialized embeddings |
 | **TEI** | Custom models | Self-hosted embeddings |
+
+> **Recommendation**: We strongly recommend using **Ollama** for embeddings due to:
+> - **Privacy**: All code stays on your machine
+> - **Cost**: No API fees or rate limits
+> - **Performance**: GPU-accelerated local processing
+> - **Offline**: Works without internet connection
+> - **Quality**: Nomic-embed-text provides excellent code embeddings
 
 ### Infrastructure
 
@@ -550,13 +557,28 @@ echo $QDRANT_URL
 **Problem**: Embedding generation fails
 **Solution**:
 ```bash
-# For Ollama: ensure service is running
-brew services start ollama
+# For Ollama (Recommended): ensure service is running
+brew services start ollama           # macOS
+# or
+systemctl start ollama               # Linux with systemd
+
+# Pull the model if not already available
 ollama pull nomic-embed-text
+
+# Test embedding generation
+curl http://localhost:11434/api/embeddings -d '{
+  "model": "nomic-embed-text",
+  "prompt": "test"
+}'
 
 # For OpenAI: verify API key
 echo $OPENAI_API_KEY
+
+# For Voyage AI: verify API key
+echo $VOYAGE_API_KEY
 ```
+
+**See the [Using Ollama for Embeddings](#using-ollama-for-embeddings-recommended) section for detailed setup and troubleshooting.**
 
 ---
 
@@ -630,7 +652,10 @@ make clean && make native
 ## Support & Resources
 
 ### Documentation
-- **README**: This file
+- **README**: This file (comprehensive overview)
+- **OLLAMA_SETUP_GUIDE.md**: Ollama installation and embedding model selection
+- **CLEAN_INSTALL_GUIDE.md**: Clean installation guide
+- **CLEAN_INSTALL_COMPLETE.md**: Clean install implementation details
 - **CLEANUP_COMPLETE.md**: Build system details
 - **MAKEFILE_CLEANUP_SUMMARY.md**: Makefile reference
 
@@ -679,6 +704,266 @@ make native
 - **Web UI**: http://localhost:7095
 - **API**: http://localhost:7095/api
 - **Claude Code**: Configure with `make configure-native`
+
+---
+
+## Using Ollama for Embeddings (Recommended)
+
+### Why Ollama?
+
+Ollama is our **recommended embedding provider** for Hyperion because it offers:
+
+- **🔒 Privacy-First**: Your code never leaves your machine
+- **💰 Zero Cost**: No API fees or rate limits
+- **⚡ Fast**: GPU-accelerated local processing
+- **📴 Offline**: Works without internet connection
+- **🎯 High Quality**: Nomic-embed-text model is optimized for code embeddings
+- **🚀 Easy Setup**: Simple installation and configuration
+
+### Installation
+
+#### macOS
+```bash
+# Install via Homebrew
+brew install ollama
+
+# Start Ollama service
+brew services start ollama
+
+# Verify installation
+ollama --version
+```
+
+#### Linux
+```bash
+# Install via curl
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Start Ollama service
+ollama serve &
+
+# Verify installation
+ollama --version
+```
+
+#### Windows
+```powershell
+# Download installer from https://ollama.com/download
+# Run the installer and follow instructions
+# Ollama will start automatically
+```
+
+### Setup for Hyperion
+
+#### 1. Pull the Embedding Model
+```bash
+# Pull the recommended nomic-embed-text model
+ollama pull nomic-embed-text
+
+# Verify model is available
+ollama list
+```
+
+Expected output:
+```
+NAME                    ID              SIZE    MODIFIED
+nomic-embed-text:latest a80c4f17acd5    274MB   2 minutes ago
+```
+
+#### 2. Configure Hyperion
+Edit your `.env.hyper` file:
+
+```bash
+# Embedding Provider Configuration
+EMBEDDING=ollama
+
+# Ollama Configuration
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=nomic-embed-text
+
+# Embedding Dimensions (must match model)
+EMBEDDING_DIMENSION=768
+```
+
+#### 3. Verify Ollama is Running
+```bash
+# Test Ollama API
+curl http://localhost:11434/api/tags
+
+# Test embedding generation
+curl http://localhost:11434/api/embeddings -d '{
+  "model": "nomic-embed-text",
+  "prompt": "test code snippet"
+}'
+```
+
+#### 4. Start Hyperion
+```bash
+# Build and run
+make native
+./bin/hyper --mode=http
+
+# Or with hot reload
+make dev-hot
+```
+
+### Usage Examples
+
+#### Example 1: Index Your Codebase
+```bash
+# Start Hyperion with Ollama
+./bin/hyper --mode=http
+
+# Open browser to http://localhost:7095
+# Navigate to Code Search
+# Click "Add Folder" and select your project directory
+# Ollama will generate embeddings locally
+```
+
+#### Example 2: Semantic Search
+```bash
+# Search for authentication code
+curl -X POST http://localhost:7095/api/search/semantic \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "user authentication with JWT tokens",
+    "limit": 10
+  }'
+```
+
+#### Example 3: Programmatic Usage
+```go
+package main
+
+import (
+    "github.com/ollama/ollama/api"
+)
+
+func main() {
+    client, _ := api.ClientFromEnvironment()
+
+    // Generate embeddings for code
+    req := &api.EmbeddingRequest{
+        Model: "nomic-embed-text",
+        Prompt: "function calculateTotal(items) { return items.reduce((a,b) => a+b, 0); }",
+    }
+
+    resp, _ := client.Embeddings(context.Background(), req)
+    // resp.Embedding contains 768-dimensional vector
+}
+```
+
+### Advanced Ollama Configuration
+
+#### Using Different Models
+```bash
+# Try other embedding models
+ollama pull mxbai-embed-large      # 335M params, 1024 dimensions
+ollama pull all-minilm             # 22M params, 384 dimensions
+
+# Update .env.hyper
+OLLAMA_MODEL=mxbai-embed-large
+EMBEDDING_DIMENSION=1024
+```
+
+#### GPU Acceleration
+Ollama automatically uses GPU if available:
+```bash
+# Check GPU usage
+nvidia-smi  # NVIDIA GPUs
+# or
+metal-smi   # Apple Silicon
+```
+
+#### Performance Tuning
+```bash
+# Adjust Ollama settings for performance
+# In ~/.ollama/config.json
+{
+  "num_gpu": 1,              # Number of GPUs to use
+  "num_thread": 8,           # CPU threads
+  "num_parallel": 4          # Parallel requests
+}
+```
+
+### Troubleshooting Ollama
+
+#### Ollama Service Not Running
+```bash
+# macOS
+brew services restart ollama
+
+# Linux
+killall ollama && ollama serve &
+
+# Check status
+curl http://localhost:11434/api/tags
+```
+
+#### Model Not Found
+```bash
+# Re-pull the model
+ollama pull nomic-embed-text
+
+# Verify it's available
+ollama list
+```
+
+#### Dimension Mismatch Error
+```bash
+# Hyperion will detect dimension mismatch and offer to recreate collection
+# Or manually set auto-recreate:
+export CODE_INDEX_AUTO_RECREATE=true
+./bin/hyper --mode=http
+```
+
+#### Slow Embedding Generation
+```bash
+# Ensure GPU is being used
+ollama ps  # Should show GPU memory usage
+
+# If CPU-only, check GPU drivers
+nvidia-smi  # NVIDIA
+system_profiler SPDisplaysDataType  # macOS
+```
+
+### Migrating from Other Providers
+
+#### From OpenAI to Ollama
+```bash
+# 1. Install and configure Ollama (see above)
+
+# 2. Update .env.hyper
+EMBEDDING=ollama
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=nomic-embed-text
+EMBEDDING_DIMENSION=768
+
+# 3. Recreate code index (dimensions changed from 1536 to 768)
+export CODE_INDEX_AUTO_RECREATE=true
+./bin/hyper --mode=http
+
+# 4. Re-index your code
+# The system will automatically use Ollama for new embeddings
+```
+
+#### From Voyage to Ollama
+```bash
+# Similar process, just update EMBEDDING variable
+EMBEDDING=ollama
+# Rest of the steps are the same
+```
+
+### Cost Comparison
+
+| Provider | Cost per 1M tokens | Notes |
+|----------|-------------------|-------|
+| **Ollama** | **FREE** | Unlimited local usage |
+| OpenAI | ~$0.13 | text-embedding-3-small |
+| Voyage AI | ~$0.12 | voyage-3 |
+| TEI | Infrastructure costs | Self-hosted |
+
+For a typical medium-sized codebase (10K files), you might generate 50M tokens of embeddings, which would cost ~$6.50 with cloud providers but is **completely free** with Ollama.
 
 ---
 
