@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Folder, Plus, Trash2, Power, PowerOff, RefreshCw, X } from 'lucide-react';
+import { Folder, Plus, Trash2, Power, PowerOff, RefreshCw, X, AlertTriangle } from 'lucide-react';
 import { Button } from '../atoms/Button';
 import { Input } from '../atoms/Input';
 import { Badge } from '../atoms/Badge';
 import type { IndexedFolder, IndexStatus, FolderConfig } from '../../types/codeSearch';
+import { codeIndexService } from '../../services/codeIndexService';
 
 interface FolderManagerProps {
   folders: IndexedFolder[];
@@ -12,6 +13,7 @@ interface FolderManagerProps {
   onRemove: (folderId: string) => void;
   onWatcherToggle: (folderId: string, enabled: boolean) => void;
   onReindex: () => void;
+  onRefreshStatus: () => void;
 }
 
 const DEFAULT_FILE_PATTERNS = ['.ts', '.tsx', '.js', '.jsx', '.go', '.py'];
@@ -31,6 +33,7 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
   onRemove,
   onWatcherToggle,
   onReindex,
+  onRefreshStatus,
 }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newFolderPath, setNewFolderPath] = useState('');
@@ -39,6 +42,10 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
   const [excludePatterns, setExcludePatterns] = useState<string[]>(DEFAULT_EXCLUDE_PATTERNS);
   const [customPattern, setCustomPattern] = useState('');
   const [customExclude, setCustomExclude] = useState('');
+  const [showClearAllModal, setShowClearAllModal] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [isClearing, setIsClearing] = useState(false);
+  const [clearErrors, setClearErrors] = useState<string[]>([]);
 
   const handleAddFolder = () => {
     if (!newFolderPath.trim()) return;
@@ -78,6 +85,29 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
 
   const removeExclude = (pattern: string) => {
     setExcludePatterns(prev => prev.filter(p => p !== pattern));
+  };
+
+  const handleClearAll = async () => {
+    if (confirmText !== 'CLEAR ALL') return;
+
+    setIsClearing(true);
+    setClearErrors([]);
+
+    try {
+      const result = await codeIndexService.clearAllIndexData();
+
+      if (result.success) {
+        setShowClearAllModal(false);
+        setConfirmText('');
+        onRefreshStatus();
+      } else if (result.errors && result.errors.length > 0) {
+        setClearErrors(result.errors);
+      }
+    } catch (error) {
+      setClearErrors([error instanceof Error ? error.message : 'Failed to clear index data']);
+    } finally {
+      setIsClearing(false);
+    }
   };
 
   return (
@@ -157,9 +187,9 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
           )}
         </div>
 
-        {/* Reindex All Button */}
+        {/* Reindex All and Clear All Buttons */}
         {folders.length > 0 && (
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+          <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
             <Button
               variant="outline"
               className="w-full"
@@ -168,6 +198,15 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
             >
               <RefreshCw className={`h-4 w-4 mr-2 ${status.isRunning ? 'animate-spin' : ''}`} />
               {status.isRunning ? 'Reindexing...' : 'Reindex All'}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+              onClick={() => setShowClearAllModal(true)}
+              disabled={status.isRunning}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Clear All Index Data
             </Button>
           </div>
         )}
@@ -316,6 +355,104 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
                 disabled={!newFolderPath.trim()}
               >
                 Add Folder
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear All Confirmation Modal */}
+      {showClearAllModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-full">
+                  <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                </div>
+                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                  Clear All Index Data
+                </h3>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                <p className="text-sm text-red-800 dark:text-red-200 font-medium mb-2">
+                  ⚠️ Warning: This is a destructive operation!
+                </p>
+                <p className="text-sm text-red-700 dark:text-red-300">
+                  This will permanently delete ALL indexed data including:
+                </p>
+                <ul className="list-disc list-inside text-sm text-red-700 dark:text-red-300 mt-2 space-y-1">
+                  <li>{folders.length} folder configuration{folders.length !== 1 ? 's' : ''}</li>
+                  <li>{status.totalFiles || 0} indexed file{status.totalFiles !== 1 ? 's' : ''}</li>
+                  <li>All file chunks and embeddings</li>
+                  <li>All Qdrant vector collections</li>
+                </ul>
+              </div>
+
+              {clearErrors.length > 0 && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                  <p className="text-sm font-medium text-red-800 dark:text-red-200 mb-2">
+                    Errors occurred:
+                  </p>
+                  <ul className="list-disc list-inside text-sm text-red-700 dark:text-red-300 space-y-1">
+                    {clearErrors.map((error, index) => (
+                      <li key={index}>{error}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Type <span className="font-mono font-bold">CLEAR ALL</span> to confirm:
+                </label>
+                <Input
+                  type="text"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder="CLEAR ALL"
+                  className="font-mono"
+                  disabled={isClearing}
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowClearAllModal(false);
+                  setConfirmText('');
+                  setClearErrors([]);
+                }}
+                disabled={isClearing}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                className="border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                onClick={handleClearAll}
+                disabled={confirmText !== 'CLEAR ALL' || isClearing}
+              >
+                {isClearing ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600 mr-2" />
+                    Clearing...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Clear All Data
+                  </>
+                )}
               </Button>
             </div>
           </div>

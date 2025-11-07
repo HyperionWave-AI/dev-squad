@@ -14,6 +14,7 @@ export interface SearchRequest {
   limit?: number;
   minScore?: number;
   retrieve?: 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
+  fileTypes?: string[];
 }
 
 export interface FolderInfo {
