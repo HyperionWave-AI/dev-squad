@@ -1644,13 +1644,11 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 	for _, folder := range folders {
 		h.logger.Info("Reindexing folder", zap.String("path", folder.Path))
 
-		// Get collection name
-		mapping, err := h.codeIndexStorage.GetPathMapping(folder.Path)
-		if err != nil {
-			h.logger.Warn("Failed to get collection mapping for folder",
-				zap.String("path", folder.Path),
-				zap.Error(err))
-			continue
+		// Get collection name (with fallback to default)
+		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+		collectionName := storage.CodeIndexCollection // fallback to default if mapping not found
+		if mapping != nil {
+			collectionName = mapping.QdrantCollection
 		}
 
 		// Update folder status to scanning
@@ -1745,7 +1743,6 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 
 			// Upload vectors to Qdrant
 			if len(qdrantPoints) > 0 {
-				collectionName := mapping.QdrantCollection
 				if err := h.qdrantClient.UpsertCodeIndexPoints(collectionName, qdrantPoints); err != nil {
 					h.logger.Warn("Failed to upsert vectors", zap.String("file", scannedFile.Path), zap.Error(err))
 				}
@@ -2050,25 +2047,24 @@ func (h *RESTAPIHandler) HandleToggleWatcher(c *gin.Context) {
 	})
 }
 
-// ClearAllIndexData removes ALL code index data - MongoDB + Qdrant
+// ClearAllIndexData removes ALL indexed data but preserves folder configurations
 // DELETE /api/v1/code-index/clear-all
 func (h *RESTAPIHandler) ClearAllIndexData(c *gin.Context) {
-	h.logger.Info("Clearing all code index data")
+	h.logger.Info("Clearing all code index data (preserving folder configs)")
 
 	var errors []string
-	foldersRemoved := 0
 	filesRemoved := 0
 	chunksRemoved := 0
 	qdrantCollectionsRemoved := 0
 
-	// 1. Get all folders
+	// 1. Get all folders to stop watchers
 	folders, err := h.codeIndexStorage.ListFolders()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list folders: " + err.Error()})
 		return
 	}
 
-	// 2. Stop file watcher for all folders
+	// 2. Stop file watcher for all folders (will be restarted on reindex)
 	if h.fileWatcher != nil {
 		for _, folder := range folders {
 			if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
@@ -2095,24 +2091,23 @@ func (h *RESTAPIHandler) ClearAllIndexData(c *gin.Context) {
 	// 5. Count before delete
 	filesRemoved, _ = h.codeIndexStorage.CountAllFiles()
 	chunksRemoved, _ = h.codeIndexStorage.CountAllChunks()
-	foldersRemoved = len(folders)
 
-	// 6. Clear MongoDB collections
+	// 6. Clear MongoDB collections (preserves folder configs)
 	if err := h.codeIndexStorage.ClearAllIndexData(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear index data: " + err.Error()})
 		return
 	}
 
 	h.logger.Info("Cleared all code index data",
-		zap.Int("foldersRemoved", foldersRemoved),
+		zap.Int("foldersPreserved", len(folders)),
 		zap.Int("filesRemoved", filesRemoved),
 		zap.Int("chunksRemoved", chunksRemoved),
 		zap.Int("qdrantCollectionsRemoved", qdrantCollectionsRemoved))
 
 	c.JSON(http.StatusOK, ClearAllIndexResponse{
 		Success:                  true,
-		Message:                  "All code index data cleared successfully",
-		FoldersRemoved:           foldersRemoved,
+		Message:                  fmt.Sprintf("All indexed data cleared. %d folder configuration(s) preserved for reindexing.", len(folders)),
+		FoldersRemoved:           0, // Folders are preserved
 		FilesRemoved:             filesRemoved,
 		ChunksRemoved:            chunksRemoved,
 		QdrantCollectionsRemoved: qdrantCollectionsRemoved,

@@ -381,17 +381,24 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
             <div className="p-6 space-y-4">
               <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
                 <p className="text-sm text-red-800 dark:text-red-200 font-medium mb-2">
-                  ⚠️ Warning: This is a destructive operation!
+                  ⚠️ Warning: This will clear all indexed data!
                 </p>
-                <p className="text-sm text-red-700 dark:text-red-300">
-                  This will permanently delete ALL indexed data including:
+                <p className="text-sm text-red-700 dark:text-red-300 mb-2">
+                  This will permanently delete:
                 </p>
-                <ul className="list-disc list-inside text-sm text-red-700 dark:text-red-300 mt-2 space-y-1">
-                  <li>{folders.length} folder configuration{folders.length !== 1 ? 's' : ''}</li>
+                <ul className="list-disc list-inside text-sm text-red-700 dark:text-red-300 space-y-1">
                   <li>{status.totalFiles || 0} indexed file{status.totalFiles !== 1 ? 's' : ''}</li>
                   <li>All file chunks and embeddings</li>
                   <li>All Qdrant vector collections</li>
                 </ul>
+                <div className="mt-3 pt-3 border-t border-red-200 dark:border-red-800">
+                  <p className="text-sm text-green-700 dark:text-green-300 font-medium">
+                    ✓ Your {folders.length} folder configuration{folders.length !== 1 ? 's' : ''} will be preserved
+                  </p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                    You can click "Reindex All" after clearing to rebuild the index
+                  </p>
+                </div>
               </div>
 
               {clearErrors.length > 0 && (

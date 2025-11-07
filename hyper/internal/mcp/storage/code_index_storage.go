@@ -734,21 +734,19 @@ func (s *CodeIndexStorage) CountAllChunks() (int, error) {
 	return int(count), err
 }
 
-// ClearAllIndexData removes all documents from all collections
+// ClearAllIndexData removes all indexed data but preserves folder configurations
+// This allows users to reindex after clearing without needing to re-add folders
 func (s *CodeIndexStorage) ClearAllIndexData() error {
 	ctx := context.Background()
 
-	// Delete in order: chunks -> files -> folders -> mappings
+	// Delete in order: chunks -> files -> mappings
+	// NOTE: We preserve folder configurations so users can reindex
 	if _, err := s.chunksCol.DeleteMany(ctx, bson.M{}); err != nil {
 		return fmt.Errorf("failed to clear chunks: %w", err)
 	}
 
 	if _, err := s.filesCol.DeleteMany(ctx, bson.M{}); err != nil {
 		return fmt.Errorf("failed to clear files: %w", err)
-	}
-
-	if _, err := s.foldersCol.DeleteMany(ctx, bson.M{}); err != nil {
-		return fmt.Errorf("failed to clear folders: %w", err)
 	}
 
 	if _, err := s.pathMappingsCol.DeleteMany(ctx, bson.M{}); err != nil {
