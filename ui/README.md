@@ -1,116 +1,73 @@
-# ⚠️ DEPRECATED - Hyperion Coordinator UI (Old)
+# React + TypeScript + Vite
 
-> **DEPRECATION NOTICE**: This UI has been deprecated and replaced by **UI2** (`/ui2`).
-> **Please use `/ui2` for all new development.**
-> **Removal planned**: May 2026
-> **See**: [DEPRECATED.md](./DEPRECATED.md) for migration guide and details.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
----
+Currently, two official plugins are available:
 
-Frontend UI for the Hyperion Task Coordinator - Task and Knowledge Management for the Parallel Squad System.
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
 
-## Overview
+## React Compiler
 
-This React + TypeScript UI provides visual access to:
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-- **Task Dashboard**: View human tasks and their child agent tasks with real-time status updates
-- **Knowledge Browser**: Search and explore knowledge base collections
-- **Task Details**: Deep dive into individual tasks with status management
+## Expanding the ESLint configuration
 
-## Technology Stack
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
 
-- **React 18** with TypeScript
-- **Vite** for fast development and building
-- **Tailwind CSS** for styling
-- **MCP SDK** for connecting to coordinator MCP server
+```js
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
 
-## Getting Started
+      // Remove tseslint.configs.recommended and replace with this
+      tseslint.configs.recommendedTypeChecked,
+      // Alternatively, use this for stricter rules
+      tseslint.configs.strictTypeChecked,
+      // Optionally, add this for stylistic rules
+      tseslint.configs.stylisticTypeChecked,
 
-### Installation
-
-```bash
-npm install
+      // Other configs...
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
 ```
 
-### Development
+You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
 
-```bash
-npm run dev
+```js
+// eslint.config.js
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+      // Enable lint rules for React
+      reactX.configs['recommended-typescript'],
+      // Enable lint rules for React DOM
+      reactDom.configs.recommended,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
 ```
-
-The UI will start at `http://localhost:5173`
-
-### Building for Production
-
-```bash
-npm run build
-```
-
-## Project Structure
-
-```
-ui/
-├── src/
-│   ├── components/          # React components
-│   │   ├── TaskDashboard.tsx
-│   │   ├── TaskCard.tsx
-│   │   ├── AgentTaskCard.tsx
-│   │   ├── TaskDetail.tsx
-│   │   └── KnowledgeBrowser.tsx
-│   ├── services/
-│   │   └── mcpClient.ts     # MCP client
-│   ├── types/
-│   │   └── coordinator.ts   # Type definitions
-│   ├── App.tsx
-│   └── index.css
-```
-
-## Features
-
-### Task Dashboard
-
-- Human tasks with nested agent tasks
-- Color-coded status (pending, in_progress, completed, blocked)
-- Priority indicators (low, medium, high, urgent)
-- Real-time updates (3-second polling)
-- Click-to-detail view
-
-### Knowledge Browser
-
-- Collection filtering (task, adr, data-contracts, etc.)
-- Full-text search
-- Metadata display
-- Tag-based categorization
-
-### Task Detail Modal
-
-- Full task information
-- Status management
-- Timeline view
-- Dependencies and blockers
-
-## Current Implementation
-
-**MVP Status**: Using mock data for development
-
-- HTTP polling simulation (no real MCP connection yet)
-- Hardcoded sample tasks
-- Local dev only (no authentication)
-
-## Next Steps
-
-- [ ] Connect to real coordinator-mcp server
-- [ ] Add task creation forms
-- [ ] Display and manage task TODOs
-- [ ] Add agent role management UI
-- [ ] Implement WebSocket for real-time updates
-
-## Related Documentation
-
-- [Coordinator MCP Server](../coordinator-mcp/CLAUDE.md)
-- [Hyperion Parallel Squad System](/CLAUDE.md)
-
----
-
-**Status**: MVP Complete - Mock Data Mode
-**Maintainer**: AI & Experience Squad
