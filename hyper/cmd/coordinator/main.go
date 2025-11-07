@@ -631,8 +631,8 @@ func main() {
 		logger.Fatal("Failed to initialize knowledge storage", zap.Error(err))
 	}
 
-	// Initialize reflection storage (metacognitive layer)
-	reflectionStorage, err := storage.NewReflectionStorage(db, logger)
+	// Initialize reflection storage (metacognitive layer) with Qdrant for semantic search
+	reflectionStorage, err := storage.NewReflectionStorage(db, qdrantClient, logger)
 	if err != nil {
 		logger.Fatal("Failed to initialize reflection storage", zap.Error(err))
 	}
