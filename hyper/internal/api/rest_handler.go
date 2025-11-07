@@ -12,6 +12,7 @@ import (
 	"hyper/internal/mcp/scanner"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
+	"hyper/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -179,8 +180,11 @@ type RebuildCollectionCountsResponse struct {
 
 // Code Index DTOs
 type AddFolderRequest struct {
-	FolderPath  string `json:"folderPath" binding:"required"`
-	Description string `json:"description,omitempty"`
+	FolderPath       string   `json:"folderPath" binding:"required"`
+	Description      string   `json:"description,omitempty"`
+	IncludePatterns  []string `json:"includePatterns,omitempty"`
+	ExcludePatterns  []string `json:"excludePatterns,omitempty"`
+	ChunkSize        string   `json:"chunkSize,omitempty"` // T-shirt size: s|m|l|xl
 }
 
 type FileDetailsDTO struct {
@@ -198,6 +202,7 @@ type FileChunkDetailsDTO struct {
 	ChunkNum  int    `json:"chunkNum"`
 	StartLine int    `json:"startLine"`
 	EndLine   int    `json:"endLine"`
+	Content   string `json:"content"`
 	ChunkType string `json:"chunkType"` // "ast" or "line-based"
 	NodeType  string `json:"nodeType,omitempty"`
 	NodeName  string `json:"nodeName,omitempty"`
@@ -260,6 +265,7 @@ type SearchResultDTO struct {
 	FolderID          string  `json:"folderId"`
 	FolderPath        string  `json:"folderPath"`
 	FullFileRetrieved bool    `json:"fullFileRetrieved"`
+	ChunkSize         string  `json:"chunkSize,omitempty"` // T-shirt size: s, m, l, xl
 	// AST metadata
 	ChunkType    string `json:"chunkType,omitempty"`
 	NodeType     string `json:"nodeType,omitempty"`
@@ -287,6 +293,16 @@ type IndexStatusResponse struct {
 	TotalSize     int64       `json:"totalSize"`
 	WatcherStatus string      `json:"watcherStatus"` // "running" or "stopped"
 	Folders       []FolderDTO `json:"folders"`
+}
+
+type ClearAllIndexResponse struct {
+	Success                  bool     `json:"success"`
+	Message                  string   `json:"message"`
+	FoldersRemoved           int      `json:"foldersRemoved"`
+	FilesRemoved             int      `json:"filesRemoved"`
+	ChunksRemoved            int      `json:"chunksRemoved"`
+	QdrantCollectionsRemoved int      `json:"qdrantCollectionsRemoved"`
+	Errors                   []string `json:"errors,omitempty"`
 }
 
 // RESTAPIHandler wraps TaskStorage for HTTP REST API
@@ -862,6 +878,18 @@ func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 		return
 	}
 
+	// Validate and set default chunk size
+	chunkSize := req.ChunkSize
+	if chunkSize == "" {
+		chunkSize = "m" // Default to medium
+	} else {
+		// Validate chunk size is one of: s, m, l, xl
+		if chunkSize != "s" && chunkSize != "m" && chunkSize != "l" && chunkSize != "xl" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chunk size. Must be one of: s, m, l, xl"})
+			return
+		}
+	}
+
 	// Check if folder already exists
 	existing, err := h.codeIndexStorage.GetFolderByPath(absPath)
 	if err != nil {
@@ -877,8 +905,8 @@ func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 		return
 	}
 
-	// Add folder to storage
-	folder, err := h.codeIndexStorage.AddFolder(absPath, req.Description)
+	// Add folder to storage with configuration
+	folder, err := h.codeIndexStorage.AddFolderWithConfig(absPath, req.Description, req.IncludePatterns, req.ExcludePatterns, chunkSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add folder: " + err.Error()})
 		return
@@ -895,7 +923,10 @@ func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 
 	h.logger.Info("Added folder to code index",
 		zap.String("folderID", folder.ID),
-		zap.String("path", absPath))
+		zap.String("path", absPath),
+		zap.String("chunkSize", chunkSize),
+		zap.Strings("includePatterns", req.IncludePatterns),
+		zap.Strings("excludePatterns", req.ExcludePatterns))
 
 	c.JSON(http.StatusCreated, AddFolderResponse{
 		Success: true,
@@ -923,19 +954,41 @@ func (h *RESTAPIHandler) RemoveFolder(c *gin.Context) {
 		return
 	}
 
+	// Get path mapping before deletions
+	mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+
 	// Delete vectors from Qdrant - lookup collection from path mapping
-	if len(files) > 0 {
-		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
-		if mapping != nil {
-			err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
-				"must": []map[string]interface{}{
-					{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
-				},
-			})
-			if err != nil {
-				h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
-			}
+	if len(files) > 0 && mapping != nil {
+		err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
+			"must": []map[string]interface{}{
+				{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
+			},
+		})
+		if err != nil {
+			h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
 		}
+	}
+
+	// Delete the Qdrant collection
+	if mapping != nil {
+		if err := h.qdrantClient.DeleteCollection(mapping.QdrantCollection); err != nil {
+			h.logger.Warn("Failed to delete Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Deleted Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection))
+		}
+	}
+
+	// Delete path mapping from MongoDB
+	if err := h.codeIndexStorage.RemovePathMapping(folder.Path); err != nil {
+		h.logger.Warn("Failed to remove path mapping",
+			zap.String("path", folder.Path),
+			zap.Error(err))
+	} else {
+		h.logger.Info("Removed path mapping",
+			zap.String("path", folder.Path))
 	}
 
 	// Remove folder from file watcher
@@ -1222,13 +1275,21 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		limit = 50
 	}
 
-	retrieveMode := req.Retrieve
-	if retrieveMode == "" {
-		retrieveMode = "chunk"
+	retrieveModeParam := req.Retrieve
+	if retrieveModeParam == "" {
+		retrieveModeParam = "chunk"
 	}
-	if retrieveMode != "chunk" && retrieveMode != "full" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "retrieve must be 'chunk' or 'full'"})
+	if !utils.IsValidRetrieveMode(retrieveModeParam) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "retrieve must be one of: 'chunk', 'chunk-s', 'chunk-m', 'chunk-l', 'chunk-xl', or 'full'"})
 		return
+	}
+
+	// Parse retrieve mode to get chunk size parameters
+	retrieveType, chunkLines, tshirtSize := utils.ParseRetrieveMode(retrieveModeParam)
+
+	// Limit full file retrieval to top 1 result to conserve bandwidth
+	if retrieveType == "full" {
+		limit = 1
 	}
 
 	// Generate embedding for query
@@ -1308,12 +1369,67 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		}
 
 		// Handle content based on retrieve mode
-		if retrieveMode == "chunk" {
-			// Default: return just the matching chunk content from Qdrant
-			if content, ok := hit.Payload["content"].(string); ok {
-				result.Content = content
+		if retrieveType == "chunk" {
+			// Sized chunk retrieval: fetch N lines around the match
+			if result.FileID != "" && chunkLines > 0 {
+				// Calculate target line range centered around the match
+				matchMidpoint := (result.StartLine + result.EndLine) / 2
+				targetStart := matchMidpoint - (chunkLines / 2)
+				targetEnd := targetStart + chunkLines - 1
+				if targetStart < 1 {
+					targetStart = 1
+					targetEnd = targetStart + chunkLines - 1
+				}
+
+				// Fetch overlapping chunks from storage
+				overlappingChunks, err := h.codeIndexStorage.GetChunksByFileIDAndLineRange(result.FileID, targetStart, targetEnd)
+				if err != nil {
+					h.logger.Warn("Failed to fetch sized chunk",
+						zap.String("fileID", result.FileID),
+						zap.Int("targetStart", targetStart),
+						zap.Int("targetEnd", targetEnd),
+						zap.Error(err))
+					// Fallback to Qdrant chunk content
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				} else if len(overlappingChunks) > 0 {
+					// Concatenate overlapping chunks and extract exact line range
+					var fullContent strings.Builder
+					minLine := overlappingChunks[0].StartLine
+					for _, chunk := range overlappingChunks {
+						fullContent.WriteString(chunk.Content)
+					}
+
+					// Extract exactly chunkLines from the concatenated content
+					allLines := strings.Split(fullContent.String(), "\n")
+					startIdx := targetStart - minLine
+					endIdx := targetEnd - minLine + 1
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if endIdx > len(allLines) {
+						endIdx = len(allLines)
+					}
+
+					extractedLines := allLines[startIdx:endIdx]
+					result.Content = strings.Join(extractedLines, "\n")
+					result.StartLine = targetStart
+					result.EndLine = targetStart + len(extractedLines) - 1
+					result.ChunkSize = tshirtSize
+				} else {
+					// Fallback to Qdrant chunk if no chunks found
+					if content, ok := hit.Payload["content"].(string); ok {
+						result.Content = content
+					}
+				}
+			} else {
+				// No sizing requested or invalid chunkLines, use Qdrant chunk
+				if content, ok := hit.Payload["content"].(string); ok {
+					result.Content = content
+				}
 			}
-		} else if retrieveMode == "full" {
+		} else if retrieveType == "full" {
 			// Fetch entire file content from MongoDB
 			if result.FileID != "" {
 				allChunks, err := h.codeIndexStorage.GetChunksByFileID(result.FileID)
@@ -1353,13 +1469,13 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 
 	h.logger.Info("Code search completed",
 		zap.String("query", req.Query),
-		zap.String("retrieveMode", retrieveMode),
+		zap.String("retrieveMode", retrieveModeParam),
 		zap.Int("results", len(results)))
 
 	c.JSON(http.StatusOK, SearchResponse{
 		Success:      true,
 		Query:        req.Query,
-		RetrieveMode: retrieveMode,
+		RetrieveMode: retrieveModeParam,
 		Results:      results,
 		Count:        len(results),
 	})
@@ -1528,13 +1644,11 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 	for _, folder := range folders {
 		h.logger.Info("Reindexing folder", zap.String("path", folder.Path))
 
-		// Get collection name
-		mapping, err := h.codeIndexStorage.GetPathMapping(folder.Path)
-		if err != nil {
-			h.logger.Warn("Failed to get collection mapping for folder",
-				zap.String("path", folder.Path),
-				zap.Error(err))
-			continue
+		// Get collection name (with fallback to default)
+		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+		collectionName := storage.CodeIndexCollection // fallback to default if mapping not found
+		if mapping != nil {
+			collectionName = mapping.QdrantCollection
 		}
 
 		// Update folder status to scanning
@@ -1629,7 +1743,6 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 
 			// Upload vectors to Qdrant
 			if len(qdrantPoints) > 0 {
-				collectionName := mapping.QdrantCollection
 				if err := h.qdrantClient.UpsertCodeIndexPoints(collectionName, qdrantPoints); err != nil {
 					h.logger.Warn("Failed to upsert vectors", zap.String("file", scannedFile.Path), zap.Error(err))
 				}
@@ -1728,7 +1841,7 @@ func (h *RESTAPIHandler) HandleGetFile(c *gin.Context) {
 	// Convert to DTO
 	dto := FileDetailsDTO{
 		ID:           file.ID,
-		FolderPath:   file.FolderID,
+		FolderPath:   file.Path,
 		RelativePath: file.RelativePath,
 		Language:     file.Language,
 		Size:         file.Size,
@@ -1758,13 +1871,14 @@ func (h *RESTAPIHandler) HandleGetFileChunks(c *gin.Context) {
 		return
 	}
 
-	// Convert to DTOs (exclude content field for list view)
+	// Convert to DTOs (include content field for UI display)
 	dtos := make([]FileChunkDetailsDTO, len(chunks))
 	for i, chunk := range chunks {
 		dtos[i] = FileChunkDetailsDTO{
 			ChunkNum:  chunk.ChunkNum,
 			StartLine: chunk.StartLine,
 			EndLine:   chunk.EndLine,
+			Content:   chunk.Content,
 			ChunkType: chunk.ChunkType,
 			NodeType:  chunk.NodeType,
 			NodeName:  chunk.NodeName,
@@ -1801,19 +1915,41 @@ func (h *RESTAPIHandler) HandleRemoveFolderByID(c *gin.Context) {
 		return
 	}
 
+	// Get path mapping before deletions
+	mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+
 	// Delete vectors from Qdrant - lookup collection from path mapping
-	if len(files) > 0 {
-		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
-		if mapping != nil {
-			err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
-				"must": []map[string]interface{}{
-					{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
-				},
-			})
-			if err != nil {
-				h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
-			}
+	if len(files) > 0 && mapping != nil {
+		err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
+			"must": []map[string]interface{}{
+				{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
+			},
+		})
+		if err != nil {
+			h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
 		}
+	}
+
+	// Delete the Qdrant collection
+	if mapping != nil {
+		if err := h.qdrantClient.DeleteCollection(mapping.QdrantCollection); err != nil {
+			h.logger.Warn("Failed to delete Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Deleted Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection))
+		}
+	}
+
+	// Delete path mapping from MongoDB
+	if err := h.codeIndexStorage.RemovePathMapping(folder.Path); err != nil {
+		h.logger.Warn("Failed to remove path mapping",
+			zap.String("path", folder.Path),
+			zap.Error(err))
+	} else {
+		h.logger.Info("Removed path mapping",
+			zap.String("path", folder.Path))
 	}
 
 	// Remove folder from file watcher
@@ -1911,6 +2047,74 @@ func (h *RESTAPIHandler) HandleToggleWatcher(c *gin.Context) {
 	})
 }
 
+// ClearAllIndexData removes ALL indexed data but preserves folder configurations
+// DELETE /api/v1/code-index/clear-all
+func (h *RESTAPIHandler) ClearAllIndexData(c *gin.Context) {
+	h.logger.Info("Clearing all code index data (preserving folder configs)")
+
+	var errors []string
+	filesRemoved := 0
+	chunksRemoved := 0
+	qdrantCollectionsRemoved := 0
+
+	// 1. Get all folders to stop watchers
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list folders: " + err.Error()})
+		return
+	}
+
+	// 2. Stop file watcher for all folders (will be restarted on reindex)
+	if h.fileWatcher != nil {
+		for _, folder := range folders {
+			if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
+				h.logger.Warn("Failed to remove folder from watcher", zap.String("path", folder.Path), zap.Error(err))
+			}
+		}
+	}
+
+	// 3. Get all path mappings (for Qdrant collections)
+	mappings, err := h.codeIndexStorage.ListAllPathMappings()
+	if err != nil {
+		errors = append(errors, "Failed to list path mappings: "+err.Error())
+	} else {
+		// 4. Delete all Qdrant collections
+		for _, mapping := range mappings {
+			if err := h.qdrantClient.DeleteCollection(mapping.QdrantCollection); err != nil {
+				errors = append(errors, fmt.Sprintf("Failed to delete Qdrant collection %s: %v", mapping.QdrantCollection, err))
+			} else {
+				qdrantCollectionsRemoved++
+			}
+		}
+	}
+
+	// 5. Count before delete
+	filesRemoved, _ = h.codeIndexStorage.CountAllFiles()
+	chunksRemoved, _ = h.codeIndexStorage.CountAllChunks()
+
+	// 6. Clear MongoDB collections (preserves folder configs)
+	if err := h.codeIndexStorage.ClearAllIndexData(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear index data: " + err.Error()})
+		return
+	}
+
+	h.logger.Info("Cleared all code index data",
+		zap.Int("foldersPreserved", len(folders)),
+		zap.Int("filesRemoved", filesRemoved),
+		zap.Int("chunksRemoved", chunksRemoved),
+		zap.Int("qdrantCollectionsRemoved", qdrantCollectionsRemoved))
+
+	c.JSON(http.StatusOK, ClearAllIndexResponse{
+		Success:                  true,
+		Message:                  fmt.Sprintf("All indexed data cleared. %d folder configuration(s) preserved for reindexing.", len(folders)),
+		FoldersRemoved:           0, // Folders are preserved
+		FilesRemoved:             filesRemoved,
+		ChunksRemoved:            chunksRemoved,
+		QdrantCollectionsRemoved: qdrantCollectionsRemoved,
+		Errors:                   errors,
+	})
+}
+
 // GetFileWithContentResponse includes full file content
 type GetFileWithContentResponse struct {
 	FileID      string `json:"fileId"`
@@ -2005,5 +2209,6 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		codeIndex.GET("/file/:fileId/content", h.HandleGetFileWithContent)
 		codeIndex.GET("/file/:fileId", h.HandleGetFile)
 		codeIndex.GET("/file/:fileId/chunks", h.HandleGetFileChunks)
+		codeIndex.DELETE("/clear-all", h.ClearAllIndexData)
 	}
 }
