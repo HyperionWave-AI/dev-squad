@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Folder, Plus, Trash2, Power, PowerOff, RefreshCw, X } from 'lucide-react';
+import { Folder, Plus, Trash2, Power, PowerOff, RefreshCw, X, AlertTriangle } from 'lucide-react';
 import { Button } from '../atoms/Button';
 import { Input } from '../atoms/Input';
 import { Badge } from '../atoms/Badge';
 import type { IndexedFolder, IndexStatus, FolderConfig } from '../../types/codeSearch';
+import { codeIndexService } from '../../services/codeIndexService';
 
 interface FolderManagerProps {
   folders: IndexedFolder[];
@@ -12,10 +13,18 @@ interface FolderManagerProps {
   onRemove: (folderId: string) => void;
   onWatcherToggle: (folderId: string, enabled: boolean) => void;
   onReindex: () => void;
+  onRefreshStatus: () => void;
 }
 
 const DEFAULT_FILE_PATTERNS = ['.ts', '.tsx', '.js', '.jsx', '.go', '.py'];
 const DEFAULT_EXCLUDE_PATTERNS = ['node_modules', 'dist', 'build', '.git'];
+
+const CHUNK_SIZES = [
+  { value: 's', label: 'S', description: '50 lines' },
+  { value: 'm', label: 'M', description: '100 lines' },
+  { value: 'l', label: 'L', description: '200 lines' },
+  { value: 'xl', label: 'XL', description: '400 lines' },
+];
 
 export const FolderManager: React.FC<FolderManagerProps> = ({
   folders,
@@ -24,14 +33,19 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
   onRemove,
   onWatcherToggle,
   onReindex,
+  onRefreshStatus,
 }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newFolderPath, setNewFolderPath] = useState('');
   const [selectedPatterns, setSelectedPatterns] = useState<string[]>(DEFAULT_FILE_PATTERNS);
-  const [chunkSize, setChunkSize] = useState(200);
+  const [chunkSize, setChunkSize] = useState('m');
   const [excludePatterns, setExcludePatterns] = useState<string[]>(DEFAULT_EXCLUDE_PATTERNS);
   const [customPattern, setCustomPattern] = useState('');
   const [customExclude, setCustomExclude] = useState('');
+  const [showClearAllModal, setShowClearAllModal] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [isClearing, setIsClearing] = useState(false);
+  const [clearErrors, setClearErrors] = useState<string[]>([]);
 
   const handleAddFolder = () => {
     if (!newFolderPath.trim()) return;
@@ -47,7 +61,7 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
     setShowAddModal(false);
     setNewFolderPath('');
     setSelectedPatterns(DEFAULT_FILE_PATTERNS);
-    setChunkSize(200);
+    setChunkSize('m');
     setExcludePatterns(DEFAULT_EXCLUDE_PATTERNS);
   };
 
@@ -71,6 +85,29 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
 
   const removeExclude = (pattern: string) => {
     setExcludePatterns(prev => prev.filter(p => p !== pattern));
+  };
+
+  const handleClearAll = async () => {
+    if (confirmText !== 'CLEAR ALL') return;
+
+    setIsClearing(true);
+    setClearErrors([]);
+
+    try {
+      const result = await codeIndexService.clearAllIndexData();
+
+      if (result.success) {
+        setShowClearAllModal(false);
+        setConfirmText('');
+        onRefreshStatus();
+      } else if (result.errors && result.errors.length > 0) {
+        setClearErrors(result.errors);
+      }
+    } catch (error) {
+      setClearErrors([error instanceof Error ? error.message : 'Failed to clear index data']);
+    } finally {
+      setIsClearing(false);
+    }
   };
 
   return (
@@ -150,9 +187,9 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
           )}
         </div>
 
-        {/* Reindex All Button */}
+        {/* Reindex All and Clear All Buttons */}
         {folders.length > 0 && (
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+          <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
             <Button
               variant="outline"
               className="w-full"
@@ -161,6 +198,15 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
             >
               <RefreshCw className={`h-4 w-4 mr-2 ${status.isRunning ? 'animate-spin' : ''}`} />
               {status.isRunning ? 'Reindexing...' : 'Reindex All'}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+              onClick={() => setShowClearAllModal(true)}
+              disabled={status.isRunning}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Clear All Index Data
             </Button>
           </div>
         )}
@@ -240,21 +286,23 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
               {/* Chunk Size */}
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Chunk Size: {chunkSize} lines
+                  Chunk Size
                 </label>
-                <input
-                  type="range"
-                  min="50"
-                  max="500"
-                  step="50"
-                  value={chunkSize}
-                  onChange={(e) => setChunkSize(parseInt(e.target.value))}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-primary-500"
-                />
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                  <span>50</span>
-                  <span>500</span>
+                <div className="flex flex-wrap gap-2">
+                  {CHUNK_SIZES.map((size) => (
+                    <Badge
+                      key={size.value}
+                      variant={chunkSize === size.value ? 'primary' : 'secondary'}
+                      className="cursor-pointer px-4 py-2"
+                      onClick={() => setChunkSize(size.value)}
+                    >
+                      {size.label} - {size.description}
+                    </Badge>
+                  ))}
                 </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Select the chunk size for code indexing
+                </p>
               </div>
 
               {/* Exclude Patterns */}
@@ -307,6 +355,111 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
                 disabled={!newFolderPath.trim()}
               >
                 Add Folder
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear All Confirmation Modal */}
+      {showClearAllModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-full">
+                  <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                </div>
+                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                  Clear All Index Data
+                </h3>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                <p className="text-sm text-red-800 dark:text-red-200 font-medium mb-2">
+                  ⚠️ Warning: This will clear all indexed data!
+                </p>
+                <p className="text-sm text-red-700 dark:text-red-300 mb-2">
+                  This will permanently delete:
+                </p>
+                <ul className="list-disc list-inside text-sm text-red-700 dark:text-red-300 space-y-1">
+                  <li>{status.totalFiles || 0} indexed file{status.totalFiles !== 1 ? 's' : ''}</li>
+                  <li>All file chunks and embeddings</li>
+                  <li>All Qdrant vector collections</li>
+                </ul>
+                <div className="mt-3 pt-3 border-t border-red-200 dark:border-red-800">
+                  <p className="text-sm text-green-700 dark:text-green-300 font-medium">
+                    ✓ Your {folders.length} folder configuration{folders.length !== 1 ? 's' : ''} will be preserved
+                  </p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                    You can click "Reindex All" after clearing to rebuild the index
+                  </p>
+                </div>
+              </div>
+
+              {clearErrors.length > 0 && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                  <p className="text-sm font-medium text-red-800 dark:text-red-200 mb-2">
+                    Errors occurred:
+                  </p>
+                  <ul className="list-disc list-inside text-sm text-red-700 dark:text-red-300 space-y-1">
+                    {clearErrors.map((error, index) => (
+                      <li key={index}>{error}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Type <span className="font-mono font-bold">CLEAR ALL</span> to confirm:
+                </label>
+                <Input
+                  type="text"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder="CLEAR ALL"
+                  className="font-mono"
+                  disabled={isClearing}
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowClearAllModal(false);
+                  setConfirmText('');
+                  setClearErrors([]);
+                }}
+                disabled={isClearing}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                className="border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                onClick={handleClearAll}
+                disabled={confirmText !== 'CLEAR ALL' || isClearing}
+              >
+                {isClearing ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600 mr-2" />
+                    Clearing...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Clear All Data
+                  </>
+                )}
               </Button>
             </div>
           </div>

@@ -1,4 +1,5 @@
 export interface SearchResult {
+  fileId: string;
   filePath: string;
   content: string;
   lineStart: number;
@@ -12,7 +13,8 @@ export interface SearchRequest {
   folderPath?: string;
   limit?: number;
   minScore?: number;
-  retrieve?: 'chunk' | 'full';
+  retrieve?: 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
+  fileTypes?: string[];
 }
 
 export interface SearchOptions {
@@ -22,7 +24,7 @@ export interface SearchOptions {
   maxResults?: number;
   limit?: number;
   folderPath?: string;
-  retrieve?: 'chunk' | 'full';
+  retrieve?: 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
 }
 
 export interface FolderInfo {
