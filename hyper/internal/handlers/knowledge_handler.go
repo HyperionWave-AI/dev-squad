@@ -1083,6 +1083,49 @@ func (h *KnowledgeHandler) RebuildCollectionCountsHandler(c *gin.Context) {
 	})
 }
 
+// ResyncToUnifiedHandler rebuilds the unified Qdrant collection from MongoDB
+// POST /api/v1/knowledge/resync-to-unified
+func (h *KnowledgeHandler) ResyncToUnifiedHandler(c *gin.Context) {
+	h.logger.Info("Starting resync to unified collection")
+
+	// Type assertion to get MongoKnowledgeStorage
+	mongoStorage, ok := h.knowledgeStorage.(*storage.MongoKnowledgeStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Resync only supported with MongoDB storage"})
+		return
+	}
+
+	// Start resync in background
+	go func() {
+		ctx := context.Background()
+		if err := mongoStorage.ResyncToUnifiedCollection(ctx); err != nil {
+			h.logger.Error("Resync to unified collection failed", zap.Error(err))
+		} else {
+			h.logger.Info("Resync to unified collection completed successfully")
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message": "Resync started in background",
+	})
+}
+
+// GetResyncStatusHandler returns the current status of the resync operation
+// GET /api/v1/knowledge/resync-status
+func (h *KnowledgeHandler) GetResyncStatusHandler(c *gin.Context) {
+	// Type assertion to get MongoKnowledgeStorage
+	mongoStorage, ok := h.knowledgeStorage.(*storage.MongoKnowledgeStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Resync status only available with MongoDB storage"})
+		return
+	}
+
+	// Get resync status
+	status := mongoStorage.GetResyncStatus()
+
+	c.JSON(http.StatusOK, status)
+}
+
 func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/popular-collections", h.GetPopularCollections)
 	r.GET("/collections", h.GetAllCollections)
@@ -1103,4 +1146,6 @@ func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/collections/:name/review", h.ReviewCollectionHandler)
 	r.POST("/sync-votes", h.BatchSyncVotes)
 	r.POST("/migrate", h.MigrateCollectionsHandler)
+	r.POST("/resync-to-unified", h.ResyncToUnifiedHandler)
+	r.GET("/resync-status", h.GetResyncStatusHandler)
 }
