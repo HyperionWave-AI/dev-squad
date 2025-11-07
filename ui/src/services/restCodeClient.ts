@@ -5,9 +5,6 @@ import type {
   SearchResult,
   IndexStatus,
   SearchOptions,
-  AddFolderConfig,
-  FileDetails,
-  FileChunkDetails,
 } from '../types/codeIndex';
 
 const BASE_URL = '/api/v1/code-index';
@@ -33,7 +30,10 @@ class RestCodeClient {
   /**
    * Add a folder to the code index
    */
-  async addFolder(config: AddFolderConfig): Promise<{ success: boolean; configId: string }> {
+  async addFolder(params: {
+    folderPath: string;
+    description?: string;
+  }): Promise<{ success: boolean; configId: string }> {
     const result = await this.fetchJSON<{
       success: boolean;
       message: string;
@@ -43,10 +43,8 @@ class RestCodeClient {
       {
         method: 'POST',
         body: JSON.stringify({
-          folderPath: config.folderPath,
-          includePatterns: config.includePatterns,
-          excludePatterns: config.excludePatterns,
-          chunkSize: config.chunkSize,
+          folderPath: params.folderPath,
+          description: params.description,
         }),
       }
     );
@@ -104,17 +102,6 @@ class RestCodeClient {
     query: string,
     options?: SearchOptions
   ): Promise<SearchResult[]> {
-    const requestBody = {
-      query,
-      fileTypes: options?.fileTypes,
-      minScore: options?.minScore,
-      folderPath: options?.folderPath,
-      limit: options?.limit,
-      retrieve: options?.retrieve,
-    };
-
-    console.log('🌐 API Request Body:', JSON.stringify(requestBody, null, 2));
-
     const result = await this.fetchJSON<{
       success: boolean;
       query: string;
@@ -125,11 +112,16 @@ class RestCodeClient {
       '/search',
       {
         method: 'POST',
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({
+          query,
+          fileTypes: options?.fileTypes,
+          minScore: options?.minScore,
+          folderPath: options?.folderPath,
+          limit: options?.limit,
+          retrieve: options?.retrieve,
+        }),
       }
     );
-
-    console.log('🌐 API Response:', { success: result.success, count: result.count, resultCount: result.results?.length });
 
     return result.results || [];
   }
@@ -190,41 +182,6 @@ class RestCodeClient {
     }>('/reindex-all', {
       method: 'POST',
     });
-  }
-
-  /**
-   * List files in a folder with metadata
-   */
-  async listFiles(folderId: string): Promise<FileDetails[]> {
-    const result = await this.fetchJSON<{
-      files: FileDetails[];
-      count: number;
-    }>(`/files/${encodeURIComponent(folderId)}`);
-
-    return result.files || [];
-  }
-
-  /**
-   * Get file details by ID
-   */
-  async getFile(fileId: string): Promise<FileDetails> {
-    const result = await this.fetchJSON<{
-      file: FileDetails;
-    }>(`/file/${encodeURIComponent(fileId)}`);
-
-    return result.file;
-  }
-
-  /**
-   * Get file chunks with AST metadata
-   */
-  async getFileChunks(fileId: string): Promise<FileChunkDetails[]> {
-    const result = await this.fetchJSON<{
-      chunks: FileChunkDetails[];
-      count: number;
-    }>(`/file/${encodeURIComponent(fileId)}/chunks`);
-
-    return result.chunks || [];
   }
 }
 

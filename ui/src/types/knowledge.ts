@@ -1,8 +1,9 @@
 // Knowledge Base Type Definitions
-// Simplified for immediate ui-dev implementation
+// Enhanced with complete types from ./ui implementation
 
 export interface KnowledgeEntry {
   id: string;
+  collection?: string;
   text: string;
   score?: number;
   metadata?: Record<string, any>;
@@ -10,6 +11,7 @@ export interface KnowledgeEntry {
 }
 
 export interface KnowledgeCollection {
+  id: string;
   name: string;
   count: number;
   category: string;
@@ -26,6 +28,16 @@ export interface Collection {
   tags: string[];
   count: number;
   createdAt: string;
+}
+
+// CollectionInfo interface with category field
+export interface CollectionInfo {
+  id: string;
+  name: string;
+  category: string;
+  count: number;
+  description?: string;
+  tags?: string[];
 }
 
 // Request/Response types for collection creation
@@ -47,8 +59,8 @@ export interface SearchRequest {
 }
 
 export interface SearchResponse {
-  entries: KnowledgeEntry[];
-  total?: number;
+  results: KnowledgeEntry[];
+  total: number;
 }
 
 export interface CreateRequest {
@@ -63,17 +75,80 @@ export interface CreateResponse {
   createdAt: string;
 }
 
-// ERROR HANDLING ANALYSIS - TODO 1: Analyze error handling patterns
-// FINDINGS:
-// 1. No explicit error types defined for knowledge operations
-// 2. Missing error response interfaces for API failures
-// 3. No validation error types for form inputs
-// 4. No loading state types for async operations
-// 5. Missing error boundary types for React components
-// 
-// RECOMMENDATIONS:
-// - Add KnowledgeError interface with error codes and messages
-// - Define ValidationError type for form validation
-// - Add ApiError interface for backend integration errors
-// - Include LoadingState and ErrorState types
-// - Define ErrorBoundaryState interface for React error boundaries
+// Response types for service methods
+export interface GetCollectionsResponse {
+  collections: CollectionInfo[];
+}
+
+export interface GetEntriesResponse {
+  entries: KnowledgeEntry[];
+}
+
+export interface UpdateEntryRequest {
+  text: string;
+  metadata?: Record<string, any>;
+}
+
+export interface UpdateEntryResponse {
+  entry: KnowledgeEntry;
+}
+
+export interface UpdateCollectionMetadataRequest {
+  description: string;
+  tags: string[];
+  category: string;
+}
+
+export interface RenameCollectionRequest {
+  newName: string;
+}
+
+export interface RenameCollectionResponse {
+  message: string;
+  oldName: string;
+  newName: string;
+  entriesUpdated: number;
+}
+
+// Review and Compaction types
+export interface ReviewResult {
+  success: boolean;
+  entryId: string;
+  scores: {
+    alignment: number;
+    freshness: number;
+    verbosity: number;
+    uniqueness: number;
+    health: number;
+  };
+  verification: {
+    totalReferences: number;
+    validReferences: number;
+    brokenReferences: Array<{type: string; value: string; error: string}>;
+  };
+  actions: Array<{type: string; description: string; applied: boolean}>;
+}
+
+export interface CollectionReviewResult {
+  success: boolean;
+  collection: string;
+  summary: {
+    totalEntries: number;
+    entriesReviewed: number;
+    averageHealth: number;
+    lowScoreCount: number;
+  };
+  entries: Array<{
+    entryId: string;
+    healthScore: number;
+    issues: string[];
+  }>;
+}
+
+export interface CompactionResult {
+  success: boolean;
+  original: {wordCount: number; text: string};
+  compacted: {wordCount: number; text: string};
+  compressionRatio: number;
+  preserved: {filePaths: number; functionNames: number};
+}
