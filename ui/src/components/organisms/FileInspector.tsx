@@ -55,7 +55,7 @@ export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose })
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileDetails.filePath.split('/').pop() || 'file.txt';
+    a.download = fileDetails.relativePath.split('/').pop() || 'file.txt';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -85,7 +85,7 @@ export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose })
               <div className="flex items-center gap-2 mb-2">
                 <FileCode className="h-5 w-5 text-gray-500 flex-shrink-0" />
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
-                  {fileDetails?.filePath || 'Loading...'}
+                  {fileDetails?.relativePath || 'Loading...'}
                 </h2>
               </div>
               {fileDetails && (
@@ -97,13 +97,13 @@ export const FileInspector: React.FC<FileInspectorProps> = ({ fileId, onClose })
                     {formatFileSize(fileDetails.size)}
                   </span>
                   <span className="text-xs text-gray-500 dark:text-gray-400">
-                    {fileDetails.lines.toLocaleString()} lines
+                    {fileDetails.lineCount.toLocaleString()} lines
                   </span>
                   <span className="text-xs text-gray-500 dark:text-gray-400">
                     {fileDetails.chunkCount} chunk{fileDetails.chunkCount !== 1 ? 's' : ''}
                   </span>
                   <span className="text-xs text-gray-500 dark:text-gray-400">
-                    Indexed: {new Date(fileDetails.indexed).toLocaleDateString()}
+                    Indexed: {new Date(fileDetails.indexedAt).toLocaleDateString()}
                   </span>
                 </div>
               )}
