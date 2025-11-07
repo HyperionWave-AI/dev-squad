@@ -83,6 +83,7 @@ export const CodeSearchPage: React.FC = () => {
         minScore: options.minRelevanceScore,
         folderPath: options.folderPath,
         retrieve: options.retrieve,
+        fileTypes: options.fileTypes,
       });
 
       // Transform results to match our interface
@@ -239,6 +240,7 @@ export const CodeSearchPage: React.FC = () => {
               onRemove={handleRemoveFolder}
               onWatcherToggle={handleWatcherToggle}
               onReindex={handleReindex}
+              onRefreshStatus={handleRefreshStatus}
             />
 
             <IndexStatusDisplay

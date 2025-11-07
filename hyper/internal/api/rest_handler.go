@@ -295,6 +295,16 @@ type IndexStatusResponse struct {
 	Folders       []FolderDTO `json:"folders"`
 }
 
+type ClearAllIndexResponse struct {
+	Success                  bool     `json:"success"`
+	Message                  string   `json:"message"`
+	FoldersRemoved           int      `json:"foldersRemoved"`
+	FilesRemoved             int      `json:"filesRemoved"`
+	ChunksRemoved            int      `json:"chunksRemoved"`
+	QdrantCollectionsRemoved int      `json:"qdrantCollectionsRemoved"`
+	Errors                   []string `json:"errors,omitempty"`
+}
+
 // RESTAPIHandler wraps TaskStorage for HTTP REST API
 type RESTAPIHandler struct {
 	taskStorage      storage.TaskStorage
@@ -944,19 +954,41 @@ func (h *RESTAPIHandler) RemoveFolder(c *gin.Context) {
 		return
 	}
 
+	// Get path mapping before deletions
+	mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+
 	// Delete vectors from Qdrant - lookup collection from path mapping
-	if len(files) > 0 {
-		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
-		if mapping != nil {
-			err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
-				"must": []map[string]interface{}{
-					{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
-				},
-			})
-			if err != nil {
-				h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
-			}
+	if len(files) > 0 && mapping != nil {
+		err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
+			"must": []map[string]interface{}{
+				{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
+			},
+		})
+		if err != nil {
+			h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
 		}
+	}
+
+	// Delete the Qdrant collection
+	if mapping != nil {
+		if err := h.qdrantClient.DeleteCollection(mapping.QdrantCollection); err != nil {
+			h.logger.Warn("Failed to delete Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Deleted Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection))
+		}
+	}
+
+	// Delete path mapping from MongoDB
+	if err := h.codeIndexStorage.RemovePathMapping(folder.Path); err != nil {
+		h.logger.Warn("Failed to remove path mapping",
+			zap.String("path", folder.Path),
+			zap.Error(err))
+	} else {
+		h.logger.Info("Removed path mapping",
+			zap.String("path", folder.Path))
 	}
 
 	// Remove folder from file watcher
@@ -1886,19 +1918,41 @@ func (h *RESTAPIHandler) HandleRemoveFolderByID(c *gin.Context) {
 		return
 	}
 
+	// Get path mapping before deletions
+	mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
+
 	// Delete vectors from Qdrant - lookup collection from path mapping
-	if len(files) > 0 {
-		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
-		if mapping != nil {
-			err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
-				"must": []map[string]interface{}{
-					{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
-				},
-			})
-			if err != nil {
-				h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
-			}
+	if len(files) > 0 && mapping != nil {
+		err = h.qdrantClient.DeleteCodeIndexByFilter(mapping.QdrantCollection, map[string]interface{}{
+			"must": []map[string]interface{}{
+				{"key": "folderId", "match": map[string]interface{}{"value": folder.ID}},
+			},
+		})
+		if err != nil {
+			h.logger.Warn("Failed to delete vectors from Qdrant", zap.Error(err))
 		}
+	}
+
+	// Delete the Qdrant collection
+	if mapping != nil {
+		if err := h.qdrantClient.DeleteCollection(mapping.QdrantCollection); err != nil {
+			h.logger.Warn("Failed to delete Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection),
+				zap.Error(err))
+		} else {
+			h.logger.Info("Deleted Qdrant collection",
+				zap.String("collection", mapping.QdrantCollection))
+		}
+	}
+
+	// Delete path mapping from MongoDB
+	if err := h.codeIndexStorage.RemovePathMapping(folder.Path); err != nil {
+		h.logger.Warn("Failed to remove path mapping",
+			zap.String("path", folder.Path),
+			zap.Error(err))
+	} else {
+		h.logger.Info("Removed path mapping",
+			zap.String("path", folder.Path))
 	}
 
 	// Remove folder from file watcher
@@ -1996,6 +2050,76 @@ func (h *RESTAPIHandler) HandleToggleWatcher(c *gin.Context) {
 	})
 }
 
+// ClearAllIndexData removes ALL code index data - MongoDB + Qdrant
+// DELETE /api/v1/code-index/clear-all
+func (h *RESTAPIHandler) ClearAllIndexData(c *gin.Context) {
+	h.logger.Info("Clearing all code index data")
+
+	var errors []string
+	foldersRemoved := 0
+	filesRemoved := 0
+	chunksRemoved := 0
+	qdrantCollectionsRemoved := 0
+
+	// 1. Get all folders
+	folders, err := h.codeIndexStorage.ListFolders()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list folders: " + err.Error()})
+		return
+	}
+
+	// 2. Stop file watcher for all folders
+	if h.fileWatcher != nil {
+		for _, folder := range folders {
+			if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
+				h.logger.Warn("Failed to remove folder from watcher", zap.String("path", folder.Path), zap.Error(err))
+			}
+		}
+	}
+
+	// 3. Get all path mappings (for Qdrant collections)
+	mappings, err := h.codeIndexStorage.ListAllPathMappings()
+	if err != nil {
+		errors = append(errors, "Failed to list path mappings: "+err.Error())
+	} else {
+		// 4. Delete all Qdrant collections
+		for _, mapping := range mappings {
+			if err := h.qdrantClient.DeleteCollection(mapping.QdrantCollection); err != nil {
+				errors = append(errors, fmt.Sprintf("Failed to delete Qdrant collection %s: %v", mapping.QdrantCollection, err))
+			} else {
+				qdrantCollectionsRemoved++
+			}
+		}
+	}
+
+	// 5. Count before delete
+	filesRemoved, _ = h.codeIndexStorage.CountAllFiles()
+	chunksRemoved, _ = h.codeIndexStorage.CountAllChunks()
+	foldersRemoved = len(folders)
+
+	// 6. Clear MongoDB collections
+	if err := h.codeIndexStorage.ClearAllIndexData(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear index data: " + err.Error()})
+		return
+	}
+
+	h.logger.Info("Cleared all code index data",
+		zap.Int("foldersRemoved", foldersRemoved),
+		zap.Int("filesRemoved", filesRemoved),
+		zap.Int("chunksRemoved", chunksRemoved),
+		zap.Int("qdrantCollectionsRemoved", qdrantCollectionsRemoved))
+
+	c.JSON(http.StatusOK, ClearAllIndexResponse{
+		Success:                  true,
+		Message:                  "All code index data cleared successfully",
+		FoldersRemoved:           foldersRemoved,
+		FilesRemoved:             filesRemoved,
+		ChunksRemoved:            chunksRemoved,
+		QdrantCollectionsRemoved: qdrantCollectionsRemoved,
+		Errors:                   errors,
+	})
+}
+
 // GetFileWithContentResponse includes full file content
 type GetFileWithContentResponse struct {
 	FileID      string `json:"fileId"`
@@ -2090,5 +2214,6 @@ func (h *RESTAPIHandler) RegisterRESTRoutes(r *gin.Engine) {
 		codeIndex.GET("/file/:fileId/content", h.HandleGetFileWithContent)
 		codeIndex.GET("/file/:fileId", h.HandleGetFile)
 		codeIndex.GET("/file/:fileId/chunks", h.HandleGetFileChunks)
+		codeIndex.DELETE("/clear-all", h.ClearAllIndexData)
 	}
 }

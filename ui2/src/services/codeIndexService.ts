@@ -123,4 +123,18 @@ export const codeIndexService = {
 
     return result.chunks || [];
   },
+
+  async clearAllIndexData(): Promise<{
+    success: boolean;
+    message: string;
+    foldersRemoved: number;
+    filesRemoved: number;
+    chunksRemoved: number;
+    qdrantCollectionsRemoved: number;
+    errors?: string[];
+  }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/code-index/clear-all`, {
+      method: 'DELETE',
+    });
+  },
 };
