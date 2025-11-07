@@ -433,3 +433,41 @@ class RestClient {
 // Export singleton instance
 export const restClient = new RestClient();
 export default restClient;
+
+/**
+ * Generic fetch helper for new services
+ * Uses the same error handling as RestClient
+ */
+export async function fetchWithAuth<T>(
+  url: string,
+  options?: RequestInit
+): Promise<T> {
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage: string;
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.error || errorData.message || `HTTP ${response.status}`;
+      } catch {
+        errorMessage = errorText || `HTTP ${response.status}`;
+      }
+      throw new Error(`API Error: ${errorMessage}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Request failed: ${String(error)}`);
+  }
+}

@@ -1,250 +1,310 @@
 /**
  * Prometheus Metrics Parser
  *
- * Parses Prometheus text format metrics into structured data
+ * Parses Prometheus text format metrics into structured data.
+ * Used by MetricsDashboard to display system metrics.
  */
 
-export interface MetricValue {
+export interface ParsedMetrics {
+  // WebSocket metrics
+  wsConnectionsActive: number;
+  wsConnectionsTotal: number;
+
+  // Message validation metrics
+  messageValidationSuccess: number;
+  messageValidationFailed: number;
+  messageValidationSuccessRate: number;
+
+  // Chat message metrics
+  chatMessagesTotal: number;
+  chatMessagesSuccess: number;
+  chatMessagesFailed: number;
+  chatMessagesSuccessRate: number;
+
+  // AI streaming metrics
+  aiStreamTokensTotal: number;
+  aiStreamDurationMs: number;
+  aiStreamChunksTotal: number;
+
+  // HTTP request metrics
+  httpRequestsTotal: number;
+  httpRequestsSuccess: number;
+  httpRequestsFailed: number;
+  httpRequestsErrorRate: number;
+
+  // MongoDB metrics
+  mongoReadsTotal: number;
+  mongoWritesTotal: number;
+  mongoErrorsTotal: number;
+
+  // Response time metrics (percentiles in ms)
+  responseTimeP50: number;
+  responseTimeP95: number;
+  responseTimeP99: number;
+
+  // System health
+  systemHealth: 'healthy' | 'degraded' | 'unhealthy';
+}
+
+interface MetricLine {
   name: string;
   value: number;
   labels?: Record<string, string>;
-  timestamp?: number;
-}
-
-export interface HistogramData {
-  count: number;
-  sum: number;
-  buckets: Array<{ le: string; count: number }>;
-  p95?: number;
-  p99?: number;
-  avg?: number;
-}
-
-export interface ParsedMetrics {
-  gauges: Map<string, MetricValue>;
-  counters: Map<string, MetricValue>;
-  histograms: Map<string, HistogramData>;
-}
-
-/**
- * Parse a single Prometheus metric line
- */
-function parseMetricLine(line: string): MetricValue | null {
-  // Skip comments and empty lines
-  if (line.startsWith('#') || !line.trim()) {
-    return null;
-  }
-
-  // Parse metric line: metric_name{label1="value1",label2="value2"} value timestamp
-  // Or simple: metric_name value timestamp
-
-  const match = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*?)(?:\{([^}]+)\})?\s+([\d.eE+-]+)(?:\s+(\d+))?$/);
-
-  if (!match) {
-    return null;
-  }
-
-  const [, name, labelsStr, valueStr, timestampStr] = match;
-
-  const labels: Record<string, string> = {};
-  if (labelsStr) {
-    // Parse labels: label1="value1",label2="value2"
-    const labelPairs = labelsStr.match(/([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g);
-    if (labelPairs) {
-      labelPairs.forEach(pair => {
-        const [key, value] = pair.split('=');
-        labels[key] = value.replace(/"/g, '');
-      });
-    }
-  }
-
-  return {
-    name,
-    value: parseFloat(valueStr),
-    labels: Object.keys(labels).length > 0 ? labels : undefined,
-    timestamp: timestampStr ? parseInt(timestampStr, 10) : undefined,
-  };
-}
-
-/**
- * Determine metric type from Prometheus TYPE comment
- */
-function getMetricType(lines: string[], currentIndex: number): 'counter' | 'gauge' | 'histogram' | 'summary' | 'unknown' {
-  // Look backwards for TYPE comment
-  for (let i = currentIndex - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-
-    if (!line.startsWith('#')) {
-      break; // Stop at first non-comment line
-    }
-
-    if (line.startsWith('# TYPE')) {
-      const typeMatch = line.match(/# TYPE\s+([a-zA-Z_:][a-zA-Z0-9_:]*)\s+(counter|gauge|histogram|summary)/);
-      if (typeMatch) {
-        return typeMatch[2] as 'counter' | 'gauge' | 'histogram' | 'summary';
-      }
-    }
-  }
-
-  return 'unknown';
-}
-
-/**
- * Calculate percentiles from histogram buckets
- */
-function calculatePercentile(buckets: Array<{ le: string; count: number }>, percentile: number, totalCount: number): number {
-  const targetCount = (percentile / 100) * totalCount;
-
-  for (let i = 0; i < buckets.length; i++) {
-    if (buckets[i].count >= targetCount) {
-      const le = buckets[i].le;
-      if (le === '+Inf') {
-        // Use previous bucket's upper bound
-        return i > 0 ? parseFloat(buckets[i - 1].le) : 0;
-      }
-      return parseFloat(le);
-    }
-  }
-
-  return 0;
 }
 
 /**
  * Parse Prometheus text format metrics
+ * @param text Raw Prometheus metrics text
+ * @returns Structured metrics object
  */
 export function parsePrometheusMetrics(text: string): ParsedMetrics {
   const lines = text.split('\n');
-  const gauges = new Map<string, MetricValue>();
-  const counters = new Map<string, MetricValue>();
-  const histograms = new Map<string, HistogramData>();
+  const metrics = new Map<string, MetricLine[]>();
 
-  const histogramBuilders = new Map<string, {
-    buckets: Array<{ le: string; count: number }>;
-    sum?: number;
-    count?: number;
-  }>();
+  // Parse each line
+  for (const line of lines) {
+    // Skip comments and empty lines
+    if (line.startsWith('#') || line.trim() === '') {
+      continue;
+    }
 
-  lines.forEach((line, index) => {
-    const metric = parseMetricLine(line);
-    if (!metric) return;
-
-    const type = getMetricType(lines, index);
-
-    // Handle histogram buckets
-    if (metric.name.endsWith('_bucket') && type === 'histogram') {
-      const baseName = metric.name.replace(/_bucket$/, '');
-      const le = metric.labels?.le || '';
-
-      if (!histogramBuilders.has(baseName)) {
-        histogramBuilders.set(baseName, { buckets: [] });
+    // Parse metric line: metric_name{label="value"} value
+    const parsed = parseMetricLine(line);
+    if (parsed) {
+      if (!metrics.has(parsed.name)) {
+        metrics.set(parsed.name, []);
       }
-
-      histogramBuilders.get(baseName)!.buckets.push({ le, count: metric.value });
-      return;
+      metrics.get(parsed.name)!.push(parsed);
     }
+  }
 
-    // Handle histogram sum
-    if (metric.name.endsWith('_sum') && type === 'histogram') {
-      const baseName = metric.name.replace(/_sum$/, '');
+  // Extract specific metrics
+  const wsActive = getMetricValue(metrics, 'hyperion_ws_connections_active', {}) || 0;
+  const wsTotal = getMetricValue(metrics, 'hyperion_ws_connections_total', {}) || 0;
 
-      if (!histogramBuilders.has(baseName)) {
-        histogramBuilders.set(baseName, { buckets: [] });
-      }
+  const validationSuccess = getMetricValue(metrics, 'hyperion_message_validation_total', { status: 'success' }) || 0;
+  const validationFailed = getMetricValue(metrics, 'hyperion_message_validation_total', { status: 'failed' }) || 0;
+  const validationTotal = validationSuccess + validationFailed;
+  const validationSuccessRate = validationTotal > 0 ? validationSuccess / validationTotal : 1;
 
-      histogramBuilders.get(baseName)!.sum = metric.value;
-      return;
-    }
+  const chatSuccess = getMetricValue(metrics, 'hyperion_chat_messages_total', { status: 'success' }) || 0;
+  const chatFailed = getMetricValue(metrics, 'hyperion_chat_messages_total', { status: 'failed' }) || 0;
+  const chatTotal = chatSuccess + chatFailed;
+  const chatSuccessRate = chatTotal > 0 ? chatSuccess / chatTotal : 1;
 
-    // Handle histogram count
-    if (metric.name.endsWith('_count') && type === 'histogram') {
-      const baseName = metric.name.replace(/_count$/, '');
+  const aiTokens = getMetricValue(metrics, 'hyperion_ai_stream_tokens_total', {}) || 0;
+  const aiDuration = getMetricValue(metrics, 'hyperion_ai_stream_duration_ms', {}) || 0;
+  const aiChunks = getMetricValue(metrics, 'hyperion_ai_stream_chunks_total', {}) || 0;
 
-      if (!histogramBuilders.has(baseName)) {
-        histogramBuilders.set(baseName, { buckets: [] });
-      }
+  const httpSuccess = getMetricValue(metrics, 'hyperion_http_requests_total', { status: '2xx' }) || 0;
+  const httpClientError = getMetricValue(metrics, 'hyperion_http_requests_total', { status: '4xx' }) || 0;
+  const httpServerError = getMetricValue(metrics, 'hyperion_http_requests_total', { status: '5xx' }) || 0;
+  const httpTotal = httpSuccess + httpClientError + httpServerError;
+  const httpFailed = httpClientError + httpServerError;
+  const httpErrorRate = httpTotal > 0 ? httpFailed / httpTotal : 0;
 
-      histogramBuilders.get(baseName)!.count = metric.value;
-      return;
-    }
+  const mongoReads = getMetricValue(metrics, 'hyperion_mongo_operations_total', { operation: 'read' }) || 0;
+  const mongoWrites = getMetricValue(metrics, 'hyperion_mongo_operations_total', { operation: 'write' }) || 0;
+  const mongoErrors = getMetricValue(metrics, 'hyperion_mongo_operations_total', { status: 'error' }) || 0;
 
-    // Handle regular metrics
-    if (type === 'gauge') {
-      gauges.set(metric.name, metric);
-    } else if (type === 'counter') {
-      counters.set(metric.name, metric);
-    }
-  });
+  const p50 = getMetricValue(metrics, 'hyperion_response_time_ms', { quantile: '0.5' }) || 0;
+  const p95 = getMetricValue(metrics, 'hyperion_response_time_ms', { quantile: '0.95' }) || 0;
+  const p99 = getMetricValue(metrics, 'hyperion_response_time_ms', { quantile: '0.99' }) || 0;
 
-  // Build complete histogram data
-  histogramBuilders.forEach((builder, name) => {
-    const count = builder.count || 0;
-    const sum = builder.sum || 0;
-    const buckets = builder.buckets.sort((a, b) => {
-      const aVal = a.le === '+Inf' ? Infinity : parseFloat(a.le);
-      const bVal = b.le === '+Inf' ? Infinity : parseFloat(b.le);
-      return aVal - bVal;
-    });
+  // Calculate system health
+  let systemHealth: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+  if (chatSuccessRate < 0.95 || httpErrorRate > 0.05 || mongoErrors > 10) {
+    systemHealth = 'degraded';
+  }
+  if (chatSuccessRate < 0.8 || httpErrorRate > 0.2 || mongoErrors > 50) {
+    systemHealth = 'unhealthy';
+  }
 
-    const histogramData: HistogramData = {
-      count,
-      sum,
-      buckets,
-      avg: count > 0 ? sum / count : 0,
-      p95: count > 0 ? calculatePercentile(buckets, 95, count) : 0,
-      p99: count > 0 ? calculatePercentile(buckets, 99, count) : 0,
-    };
-
-    histograms.set(name, histogramData);
-  });
-
-  return { gauges, counters, histograms };
+  return {
+    wsConnectionsActive: wsActive,
+    wsConnectionsTotal: wsTotal,
+    messageValidationSuccess: validationSuccess,
+    messageValidationFailed: validationFailed,
+    messageValidationSuccessRate: validationSuccessRate,
+    chatMessagesTotal: chatTotal,
+    chatMessagesSuccess: chatSuccess,
+    chatMessagesFailed: chatFailed,
+    chatMessagesSuccessRate: chatSuccessRate,
+    aiStreamTokensTotal: aiTokens,
+    aiStreamDurationMs: aiDuration,
+    aiStreamChunksTotal: aiChunks,
+    httpRequestsTotal: httpTotal,
+    httpRequestsSuccess: httpSuccess,
+    httpRequestsFailed: httpFailed,
+    httpRequestsErrorRate: httpErrorRate,
+    mongoReadsTotal: mongoReads,
+    mongoWritesTotal: mongoWrites,
+    mongoErrorsTotal: mongoErrors,
+    responseTimeP50: p50,
+    responseTimeP95: p95,
+    responseTimeP99: p99,
+    systemHealth,
+  };
 }
 
 /**
- * Format metric value with appropriate units
+ * Parse a single metric line
+ * @param line Metric line from Prometheus format
+ * @returns Parsed metric or null if invalid
  */
-export function formatMetricValue(value: number, unit?: 'bytes' | 'seconds' | 'ms' | 'rate'): string {
-  if (unit === 'bytes') {
-    if (value >= 1024 * 1024 * 1024) {
-      return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+function parseMetricLine(line: string): MetricLine | null {
+  try {
+    // Match: metric_name{label="value",label2="value2"} 123.45
+    const match = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\{([^}]*)\}\s+([0-9.]+)$/);
+    if (match) {
+      const name = match[1];
+      const labelsStr = match[2];
+      const value = parseFloat(match[3]);
+
+      // Parse labels
+      const labels: Record<string, string> = {};
+      if (labelsStr) {
+        const labelMatches = labelsStr.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g);
+        for (const labelMatch of labelMatches) {
+          labels[labelMatch[1]] = labelMatch[2];
+        }
+      }
+
+      return { name, value, labels };
     }
-    if (value >= 1024 * 1024) {
-      return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+
+    // Match: metric_name 123.45 (no labels)
+    const simpleMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s+([0-9.]+)$/);
+    if (simpleMatch) {
+      return {
+        name: simpleMatch[1],
+        value: parseFloat(simpleMatch[2]),
+        labels: {},
+      };
     }
-    if (value >= 1024) {
-      return `${(value / 1024).toFixed(2)} KB`;
-    }
-    return `${value.toFixed(0)} B`;
-  }
 
-  if (unit === 'seconds') {
-    if (value >= 60) {
-      return `${(value / 60).toFixed(1)}m`;
-    }
-    return `${value.toFixed(2)}s`;
+    return null;
+  } catch (err) {
+    console.error('Failed to parse metric line:', line, err);
+    return null;
   }
-
-  if (unit === 'ms') {
-    return `${value.toFixed(2)}ms`;
-  }
-
-  if (unit === 'rate') {
-    return `${value.toFixed(1)}/min`;
-  }
-
-  // Default: format with appropriate decimal places
-  if (value >= 1000) {
-    return value.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  }
-
-  return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 /**
- * Calculate rate from counter (per minute)
+ * Get metric value by name and labels
+ * @param metrics Parsed metrics map
+ * @param name Metric name
+ * @param matchLabels Labels to match
+ * @returns Metric value or null
  */
-export function calculateRate(currentValue: number, previousValue: number, intervalSeconds: number): number {
-  const delta = currentValue - previousValue;
-  const ratePerSecond = delta / intervalSeconds;
-  return ratePerSecond * 60; // Convert to per-minute rate
+function getMetricValue(
+  metrics: Map<string, MetricLine[]>,
+  name: string,
+  matchLabels: Record<string, string>
+): number | null {
+  const metricLines = metrics.get(name);
+  if (!metricLines) {
+    return null;
+  }
+
+  // Find metric with matching labels
+  for (const line of metricLines) {
+    const labels = line.labels || {};
+    const matches = Object.entries(matchLabels).every(
+      ([key, value]) => labels[key] === value
+    );
+    if (matches) {
+      return line.value;
+    }
+  }
+
+  // If no specific match, return first metric (for metrics without labels)
+  if (Object.keys(matchLabels).length === 0 && metricLines.length > 0) {
+    return metricLines[0].value;
+  }
+
+  return null;
+}
+
+/**
+ * Format metric value for display
+ * @param value Raw numeric value
+ * @param type Value type (number, duration, percentage, bytes)
+ * @returns Formatted string
+ */
+export function formatMetricValue(value: number, type: 'number' | 'duration' | 'percentage' | 'bytes'): string {
+  switch (type) {
+    case 'number':
+      if (value >= 1_000_000) {
+        return `${(value / 1_000_000).toFixed(2)}M`;
+      }
+      if (value >= 1_000) {
+        return `${(value / 1_000).toFixed(2)}k`;
+      }
+      return value.toFixed(0);
+
+    case 'duration':
+      if (value >= 1000) {
+        return `${(value / 1000).toFixed(2)}s`;
+      }
+      return `${value.toFixed(0)}ms`;
+
+    case 'percentage':
+      return `${(value * 100).toFixed(1)}%`;
+
+    case 'bytes':
+      if (value >= 1_073_741_824) {
+        return `${(value / 1_073_741_824).toFixed(2)}GB`;
+      }
+      if (value >= 1_048_576) {
+        return `${(value / 1_048_576).toFixed(2)}MB`;
+      }
+      if (value >= 1_024) {
+        return `${(value / 1_024).toFixed(2)}KB`;
+      }
+      return `${value}B`;
+
+    default:
+      return value.toString();
+  }
+}
+
+/**
+ * Calculate rate between two values over time
+ * @param current Current value
+ * @param previous Previous value
+ * @param timeDeltaMs Time delta in milliseconds
+ * @returns Rate per second
+ */
+export function calculateRate(
+  current: number,
+  previous: number,
+  timeDeltaMs: number
+): number {
+  if (timeDeltaMs <= 0) {
+    return 0;
+  }
+  const delta = current - previous;
+  const timeSeconds = timeDeltaMs / 1000;
+  return delta / timeSeconds;
+}
+
+/**
+ * Get trend indicator for metric
+ * @param current Current value
+ * @param previous Previous value
+ * @returns Trend direction
+ */
+export function getMetricTrend(
+  current: number,
+  previous: number
+): 'up' | 'down' | 'neutral' {
+  const threshold = 0.05; // 5% change threshold
+  const percentChange = previous > 0 ? (current - previous) / previous : 0;
+
+  if (Math.abs(percentChange) < threshold) {
+    return 'neutral';
+  }
+
+  return percentChange > 0 ? 'up' : 'down';
 }

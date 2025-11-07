@@ -267,10 +267,11 @@ func TestChatServiceWithTools(t *testing.T) {
 
 	t.Run("Tool call and result flow", func(t *testing.T) {
 		config := &AIConfig{
-			Provider:    "openai",
-			Model:       "gpt-4",
-			APIKey:      "test-key",
-			Temperature: 0.7,
+			Provider:      "openai",
+			Model:         "gpt-4",
+			APIKey:        "test-key",
+			Temperature:   0.7,
+			MaxIterations: 10, // Required: allows up to 10 iterations
 		}
 
 		registry := NewToolRegistry()
@@ -336,10 +337,11 @@ func TestChatServiceWithTools(t *testing.T) {
 
 	t.Run("Max tool calls limit", func(t *testing.T) {
 		config := &AIConfig{
-			Provider:    "openai",
-			Model:       "gpt-4",
-			APIKey:      "test-key",
-			Temperature: 0.7,
+			Provider:      "openai",
+			Model:         "gpt-4",
+			APIKey:        "test-key",
+			Temperature:   0.7,
+			MaxIterations: 10, // Required: allows up to 10 iterations
 		}
 
 		registry := NewToolRegistry()
