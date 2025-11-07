@@ -18,6 +18,7 @@ import (
 	"hyper/internal/mcp/embeddings"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // QdrantClientInterface defines the interface for Qdrant operations
@@ -253,6 +254,77 @@ func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) e
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to create collection: status %d, body: %s", resp.StatusCode, string(body))
 	}
+
+	return nil
+}
+
+// EnsureCollectionWithMigration ensures a Qdrant collection exists and handles dimension mismatches automatically.
+// If a dimension mismatch is detected, it fetches all data using the provided function, recreates the collection
+// with new dimensions, and re-embeds all entries.
+// This is a convenience method that wraps EnsureCollection with automatic migration logic.
+//
+// Parameters:
+//   - collectionName: Name of the Qdrant collection
+//   - vectorSize: Expected vector dimension
+//   - fetchDataFunc: Function to fetch all entries from MongoDB for migration (called only on mismatch)
+//   - logger: Logger for migration progress and errors
+//
+// Returns error only if the collection cannot be ensured (connection issues, etc.)
+// Dimension mismatch is handled automatically via migration.
+func (c *QdrantClient) EnsureCollectionWithMigration(
+	collectionName string,
+	vectorSize int,
+	fetchDataFunc func() ([]*KnowledgeEntry, error),
+	logger *zap.Logger,
+) error {
+	// Try to ensure collection exists
+	err := c.EnsureCollection(collectionName, vectorSize)
+	if err == nil {
+		// Collection exists with correct dimensions
+		return nil
+	}
+
+	// Check if this is a dimension mismatch error
+	dimErr, ok := err.(*DimensionMismatchError)
+	if !ok {
+		// Not a dimension mismatch - return original error
+		return err
+	}
+
+	// Dimension mismatch detected - trigger automatic migration
+	logger.Warn("Dimension mismatch detected - triggering automatic migration",
+		zap.String("collection", collectionName),
+		zap.Int("expectedDim", dimErr.ExpectedDim),
+		zap.Int("gotDim", dimErr.GotDim))
+
+	// Fetch all entries for migration
+	entries, fetchErr := fetchDataFunc()
+	if fetchErr != nil {
+		logger.Error("Failed to fetch entries for migration",
+			zap.String("collection", collectionName),
+			zap.Error(fetchErr))
+		return fmt.Errorf("failed to fetch entries for migration: %w", fetchErr)
+	}
+
+	// Recreate collection with new dimensions and re-embed all data
+	reindexedCount, migrateErr := c.RecreateCollectionWithReindex(
+		collectionName,
+		entries,
+		vectorSize,
+	)
+	if migrateErr != nil {
+		logger.Error("Failed to migrate collection",
+			zap.String("collection", collectionName),
+			zap.Error(migrateErr))
+		return fmt.Errorf("failed to migrate collection: %w", migrateErr)
+	}
+
+	logger.Info("Successfully migrated collection to new dimensions",
+		zap.String("collection", collectionName),
+		zap.Int("oldDim", dimErr.ExpectedDim),
+		zap.Int("newDim", dimErr.GotDim),
+		zap.Int("entriesMigrated", reindexedCount),
+		zap.Int("totalEntries", len(entries)))
 
 	return nil
 }
