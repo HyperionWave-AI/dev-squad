@@ -1,96 +1,48 @@
-// Reflection API Service - Metacognitive self-awareness system
-import type {
-  Decision,
-  Outcome,
-  Lesson,
-  ListResponse,
-  CreateDecisionRequest,
-  CreateOutcomeRequest,
-  CreateLessonRequest
-} from '../types/reflection';
+import type { Decision, Lesson, Outcome } from '@/types/reflection';
+import { fetchWithAuth } from './restClient';
 
 const API_BASE = '';
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  const token = localStorage.getItem('authToken');
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
-  }
-
-  return response.json();
-}
-
 export const reflectionService = {
-  // GET endpoints
-  async listDecisions(params?: {
-    chatId?: string;
-    taskId?: string;
-    limit?: number;
-  }): Promise<ListResponse<Decision>> {
-    const searchParams = new URLSearchParams();
-    if (params?.chatId) searchParams.set('chatId', params.chatId);
-    if (params?.taskId) searchParams.set('taskId', params.taskId);
-    if (params?.limit) searchParams.set('limit', String(params.limit));
-
-    const queryString = searchParams.toString();
-    return fetchWithAuth(`${API_BASE}/api/v1/reflection/decisions${queryString ? `?${queryString}` : ''}`);
+  async listDecisions(limit: number = 50): Promise<{ decisions: Decision[] }> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    return fetchWithAuth(`${API_BASE}/api/v1/reflection/decisions?${params}`);
   },
 
-  async listOutcomes(params?: {
-    decisionId?: string;
-    limit?: number;
-  }): Promise<ListResponse<Outcome>> {
-    const searchParams = new URLSearchParams();
-    if (params?.decisionId) searchParams.set('decisionId', params.decisionId);
-    if (params?.limit) searchParams.set('limit', String(params.limit));
-
-    const queryString = searchParams.toString();
-    return fetchWithAuth(`${API_BASE}/api/v1/reflection/outcomes${queryString ? `?${queryString}` : ''}`);
+  async listLessons(limit: number = 50): Promise<{ lessons: Lesson[] }> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    return fetchWithAuth(`${API_BASE}/api/v1/reflection/lessons?${params}`);
   },
 
-  async listLessons(params?: {
-    pattern?: string;
-    tag?: string;
-    limit?: number;
-  }): Promise<ListResponse<Lesson>> {
-    const searchParams = new URLSearchParams();
-    if (params?.pattern) searchParams.set('pattern', params.pattern);
-    if (params?.tag) searchParams.set('tag', params.tag);
-    if (params?.limit) searchParams.set('limit', String(params.limit));
-
-    const queryString = searchParams.toString();
-    return fetchWithAuth(`${API_BASE}/api/v1/reflection/lessons${queryString ? `?${queryString}` : ''}`);
-  },
-
-  // POST endpoints
-  async createDecision(request: CreateDecisionRequest): Promise<{ decisionId: string; stored: boolean }> {
-    return fetchWithAuth(`${API_BASE}/api/v1/reflection/decision`, {
+  async recordDecision(decision: Omit<Decision, 'id' | 'timestamp'>): Promise<{ id: string }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/reflection/decisions`, {
       method: 'POST',
-      body: JSON.stringify(request)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(decision),
     });
   },
 
-  async createOutcome(request: CreateOutcomeRequest): Promise<{ outcomeId: string; linked: boolean; calibration: string }> {
-    return fetchWithAuth(`${API_BASE}/api/v1/reflection/outcome`, {
+  async recordOutcome(outcome: Omit<Outcome, 'id' | 'timestamp'>): Promise<{ id: string }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/reflection/outcomes`, {
       method: 'POST',
-      body: JSON.stringify(request)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(outcome),
     });
   },
 
-  async createLesson(request: CreateLessonRequest): Promise<{ lessonId: string; indexed: boolean; pattern: string }> {
-    return fetchWithAuth(`${API_BASE}/api/v1/reflection/lesson`, {
+  async extractLesson(lesson: Omit<Lesson, 'id' | 'timestamp'>): Promise<{ id: string }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/reflection/lessons`, {
       method: 'POST',
-      body: JSON.stringify(request)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lesson),
     });
-  }
+  },
+
+  async queryLessons(query: string, limit: number = 10): Promise<{ lessons: Lesson[]; count: number }> {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit)
+    });
+    return fetchWithAuth(`${API_BASE}/api/v1/reflection/search?${params}`);
+  },
 };
