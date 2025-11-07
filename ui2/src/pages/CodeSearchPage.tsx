@@ -98,7 +98,7 @@ export const CodeSearchPage: React.FC = () => {
         };
 
         return {
-          id: `${result.filePath}-${result.lineStart}-${index}`,
+          id: result.fileId,
           filePath: result.filePath,
           fileName: result.filePath.split('/').pop() || '',
           language: languageMap[fileExtension] || 'text',
