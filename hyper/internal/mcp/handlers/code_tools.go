@@ -12,6 +12,7 @@ import (
 	"hyper/internal/mcp/scanner"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
+	"hyper/internal/utils"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
@@ -458,28 +459,6 @@ func buildFileTypeFilter(fileTypes []interface{}) map[string]interface{} {
 	}
 }
 
-// parseRetrieveMode parses the retrieve mode parameter and returns the retrieve type, chunk size in lines, and t-shirt size
-// Maps: chunk-s→50/s, chunk-m→100/m, chunk-l→200/l, chunk-xl→400/xl, chunk→200/l (backward compat), full→0/empty
-func parseRetrieveMode(mode string) (retrieveType string, chunkLines int, tshirtSize string) {
-	switch mode {
-	case "chunk-s":
-		return "chunk", 50, "s"
-	case "chunk-m":
-		return "chunk", 100, "m"
-	case "chunk-l":
-		return "chunk", 200, "l"
-	case "chunk-xl":
-		return "chunk", 400, "xl"
-	case "chunk":
-		// Backward compatibility: chunk defaults to chunk-l (200 lines)
-		return "chunk", 200, "l"
-	case "full":
-		return "full", 0, ""
-	default:
-		// Default to chunk-l for unknown values
-		return "chunk", 200, "l"
-	}
-}
 
 // handleSearch handles the code_index_search tool
 func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -517,7 +496,7 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 	if mode, ok := args["retrieve"].(string); ok {
 		retrieveModeParam = mode
 	}
-	retrieveType, chunkLines, tshirtSize := parseRetrieveMode(retrieveModeParam)
+	retrieveType, chunkLines, tshirtSize := utils.ParseRetrieveMode(retrieveModeParam)
 
 	// MCP Best Practice: Limit full file retrieval to top 1 result to conserve context
 	// Full mode returns entire file content which can be very large

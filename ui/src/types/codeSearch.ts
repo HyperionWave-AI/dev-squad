@@ -28,7 +28,7 @@ export interface IndexStatus {
 export interface FolderConfig {
   path: string;
   filePatterns: string[];
-  chunkSize: number;
+  chunkSize: string; // T-shirt sizes: 's', 'm', 'l', 'xl'
   excludePatterns: string[];
 }
 
@@ -37,5 +37,5 @@ export interface SearchOptions {
   minRelevanceScore?: number;
   maxResults?: number;
   folderPath?: string;
-  retrieve?: 'chunk' | 'full';
+  retrieve?: 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
 }
