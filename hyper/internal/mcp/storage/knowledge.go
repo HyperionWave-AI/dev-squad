@@ -1099,9 +1099,9 @@ func (s *MongoKnowledgeStorage) GetPopularCollections(limit int) ([]*CollectionS
 }
 
 // GetCollectionStatsWithMetadata returns all collections with stats and category metadata
-// Now simplified: reads directly from Collection objects which contain all metadata
+// Returns ALL collections from MongoDB with their entryCount (which can be 0)
 func (s *MongoKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*CollectionWithMetadata, error) {
-	// Get all Collection objects (already contains name, category, description, tags, entryCount)
+	// Get all collections from MongoDB
 	collections, err := s.ListCollectionsObjects()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list collections: %w", err)
@@ -1110,14 +1110,15 @@ func (s *MongoKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*CollectionW
 	// Convert Collection objects to CollectionWithMetadata
 	results := make([]*CollectionWithMetadata, 0, len(collections))
 	for _, col := range collections {
-		results = append(results, &CollectionWithMetadata{
+		metadata := &CollectionWithMetadata{
 			ID:          col.ID.Hex(),
 			Name:        col.Name,
 			Category:    col.Category,
-			Count:       col.EntryCount,
 			Description: col.Description,
 			Tags:        col.Tags,
-		})
+			Count:       col.EntryCount,
+		}
+		results = append(results, metadata)
 	}
 
 	return results, nil

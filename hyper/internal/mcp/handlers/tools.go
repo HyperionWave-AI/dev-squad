@@ -156,13 +156,13 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 func (h *ToolHandler) registerUpsertKnowledge(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "coordinator_upsert_knowledge",
-		Description: "Store knowledge in the coordinator knowledge base. Use for storing task context, ADRs, data contracts, and coordination information. Optionally filter by taskId for task-scoped knowledge.",
+		Description: "Store knowledge in the coordinator knowledge base. Use for storing task context, ADRs, data contracts, and coordination information. When taskId is provided without a collection, automatically uses 'tasks' collection for task-scoped knowledge.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
 				"collection": {
 					Type:        "string",
-					Description: "Collection name (e.g., 'task:taskURI', 'adr', 'data-contracts')",
+					Description: "Collection name (e.g., 'adr', 'data-contracts'). Optional when taskId is provided - will auto-use 'tasks' collection.",
 				},
 				"text": {
 					Type:        "string",
@@ -174,10 +174,10 @@ func (h *ToolHandler) registerUpsertKnowledge(server *mcp.Server) error {
 				},
 				"taskId": {
 					Type:        "string",
-					Description: "Optional task ID for task-scoped filtering (UUID format)",
+					Description: "Optional task ID for task-scoped filtering (UUID format). When provided without collection, automatically uses 'tasks' collection.",
 				},
 			},
-			Required: []string{"collection", "text"},
+			Required: []string{"text"},
 		},
 	}
 
@@ -397,11 +397,13 @@ func (h *ToolHandler) registerUpdateTaskStatus(server *mcp.Server) error {
 
 // handleUpsertKnowledge handles the coordinator_upsert_knowledge tool call
 func (h *ToolHandler) handleUpsertKnowledge(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
-	collection, ok := args["collection"].(string)
-	if !ok || collection == "" {
-		return createErrorResult("collection parameter is required and must be a non-empty string"), nil, nil
+	// Extract collection (optional)
+	collection := ""
+	if col, ok := args["collection"].(string); ok && col != "" {
+		collection = col
 	}
 
+	// Extract text (required)
 	text, ok := args["text"].(string)
 	if !ok || text == "" {
 		return createErrorResult("text parameter is required and must be a non-empty string"), nil, nil
@@ -416,6 +418,13 @@ func (h *ToolHandler) handleUpsertKnowledge(ctx context.Context, args map[string
 	var taskId *string
 	if tid, ok := args["taskId"].(string); ok && tid != "" {
 		taskId = &tid
+	}
+
+	// Auto-select "tasks" collection when taskId provided without collection
+	if collection == "" && taskId != nil {
+		collection = "tasks"
+	} else if collection == "" {
+		return createErrorResult("must provide either collection or taskId parameter"), nil, nil
 	}
 
 	entry, err := h.knowledgeStorage.Upsert(collection, text, metadata, taskId)
