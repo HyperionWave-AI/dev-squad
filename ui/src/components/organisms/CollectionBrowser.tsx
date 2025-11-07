@@ -45,6 +45,7 @@ export function CollectionBrowser({
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [collectionToDelete, setCollectionToDelete] = useState<KnowledgeCollection | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [reviewResult, setReviewResult] = useState<CollectionReviewResult | null>(null);
   const [reviewingCollection, setReviewingCollection] = useState<string | null>(null);
@@ -96,6 +97,26 @@ export function CollectionBrowser({
       console.error('Failed to review collection:', err);
     } finally {
       setReviewingCollection(null);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!collectionToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      await knowledgeService.deleteCollection(collectionToDelete.id);
+      // Close dialog
+      setDeleteDialogOpen(false);
+      setCollectionToDelete(null);
+      // Reload collections list
+      onCollectionCreated();
+    } catch (err) {
+      console.error('Failed to delete collection:', err);
+      // Show error to user
+      alert(`Failed to delete collection: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -362,14 +383,11 @@ export function CollectionBrowser({
                 </button>
               </Dialog.Close>
               <button
-                onClick={() => {
-                  // TODO: Implement actual delete
-                  console.log('Delete collection:', collectionToDelete?.name);
-                  setDeleteDialogOpen(false);
-                  setCollectionToDelete(null);
-                }}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
+                {isDeleting && <Loader2 className="h-4 w-4 animate-spin" />}
                 Delete
               </button>
             </div>

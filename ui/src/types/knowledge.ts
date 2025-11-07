@@ -11,6 +11,7 @@ export interface KnowledgeEntry {
 }
 
 export interface KnowledgeCollection {
+  id: string;
   name: string;
   count: number;
   category: string;
