@@ -7,34 +7,29 @@ export interface AddFolderConfig {
   folderPath: string;
   includePatterns?: string[];
   excludePatterns?: string[];
-  chunkSize?: number;
+  chunkSize?: string; // T-shirt sizes: 's', 'm', 'l', 'xl'
 }
 
 export interface FileDetails {
   id: string;
-  filePath: string;
+  folderPath: string;
+  relativePath: string;
   language: string;
   size: number;
-  lines: number;
+  lineCount: number;
   chunkCount: number;
-  indexed: string;
-}
-
-export interface ASTNode {
-  type: string; // function, class, interface, struct, etc.
-  name: string;
-  signature?: string;
-  startLine: number;
-  endLine: number;
+  indexedAt: string;
 }
 
 export interface FileChunkDetails {
-  chunkId: string;
+  chunkNum: number;
   content: string;
   startLine: number;
   endLine: number;
   chunkType: 'ast' | 'line-based';
-  astNodes?: ASTNode[];
+  nodeType?: string;
+  nodeName?: string;
+  signature?: string;
 }
 
 export const codeIndexService = {
@@ -127,5 +122,19 @@ export const codeIndexService = {
     }>(`${API_BASE}/api/v1/code-index/file/${encodeURIComponent(fileId)}/chunks`);
 
     return result.chunks || [];
+  },
+
+  async clearAllIndexData(): Promise<{
+    success: boolean;
+    message: string;
+    foldersRemoved: number;
+    filesRemoved: number;
+    chunksRemoved: number;
+    qdrantCollectionsRemoved: number;
+    errors?: string[];
+  }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/code-index/clear-all`, {
+      method: 'DELETE',
+    });
   },
 };
