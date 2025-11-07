@@ -111,7 +111,7 @@ func getToolResultPriority(toolName string) MessagePriority {
 	lowPriorityTools := map[string]bool{
 		"list_directory":              true,
 		"code_index_status":           true,
-		"coordinator_get_popular_collections": true,
+		"knowledge_list_collections": true,
 		"coordinator_find_similar_tasks": true,
 	}
 

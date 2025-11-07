@@ -1016,20 +1016,20 @@ func (t *UpsertKnowledgeTool) Execute(ctx context.Context, input map[string]inte
 	}, nil
 }
 
-// GetPopularCollectionsTool implements the ToolExecutor interface
-type GetPopularCollectionsTool struct {
+// ListCollectionsTool implements the ToolExecutor interface
+type ListCollectionsTool struct {
 	storage storage.KnowledgeStorage
 }
 
-func (t *GetPopularCollectionsTool) Name() string {
-	return "coordinator_get_popular_collections"
+func (t *ListCollectionsTool) Name() string {
+	return "knowledge_list_collections"
 }
 
-func (t *GetPopularCollectionsTool) Description() string {
-	return "Get top N knowledge collections by entry count. Use for discovering which collections contain the most knowledge. Returns collection names with entry counts."
+func (t *ListCollectionsTool) Description() string {
+	return "List available knowledge collections with entry counts. Use this to discover which collections exist before calling knowledge_find or knowledge_store. Returns collection names with entry counts sorted by popularity."
 }
 
-func (t *GetPopularCollectionsTool) InputSchema() map[string]interface{} {
+func (t *ListCollectionsTool) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -1041,7 +1041,7 @@ func (t *GetPopularCollectionsTool) InputSchema() map[string]interface{} {
 	}
 }
 
-func (t *GetPopularCollectionsTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+func (t *ListCollectionsTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	limit := 5
 	if l, ok := input["limit"].(float64); ok && l > 0 {
 		limit = int(l)
@@ -4401,7 +4401,7 @@ func RegisterCoordinatorTools(
 
 		// New tools
 		&UpsertKnowledgeTool{storage: knowledgeStorage},
-		&GetPopularCollectionsTool{storage: knowledgeStorage},
+		&ListCollectionsTool{storage: knowledgeStorage},
 		&CreateHumanTaskTool{storage: taskStorage},
 		&UpdateTaskStatusTool{storage: taskStorage},
 		&UpdateTodoStatusTool{storage: taskStorage},

@@ -64,9 +64,9 @@ func (h *ToolHandler) RegisterToolHandlers(server *mcp.Server) error {
 		return fmt.Errorf("failed to register query_knowledge tool: %w", err)
 	}
 
-	// Register coordinator_get_popular_collections
-	if err := h.registerGetPopularCollections(server); err != nil {
-		return fmt.Errorf("failed to register get_popular_collections tool: %w", err)
+	// Register knowledge_list_collections
+	if err := h.registerListCollections(server); err != nil {
+		return fmt.Errorf("failed to register knowledge_list_collections tool: %w", err)
 	}
 
 	// Register coordinator_create_human_task
@@ -1566,11 +1566,11 @@ func (h *ToolHandler) handleClearTodoPromptNotes(ctx context.Context, args map[s
 		},
 	}, nil, nil
 }
-// registerGetPopularCollections registers the coordinator_get_popular_collections tool
-func (h *ToolHandler) registerGetPopularCollections(server *mcp.Server) error {
+// registerListCollections registers the knowledge_list_collections tool
+func (h *ToolHandler) registerListCollections(server *mcp.Server) error {
 	tool := &mcp.Tool{
-		Name:        "coordinator_get_popular_collections",
-		Description: "Get top N knowledge collections by entry count for Quick Start suggestions",
+		Name:        "knowledge_list_collections",
+		Description: "List available knowledge collections with entry counts. Use this to discover which collections exist before calling knowledge_find or knowledge_store.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -1587,15 +1587,15 @@ func (h *ToolHandler) registerGetPopularCollections(server *mcp.Server) error {
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
 		}
-		result, _, err := h.handleGetPopularCollections(ctx, args)
+		result, _, err := h.handleListCollections(ctx, args)
 		return result, err
 	})
 
 	return nil
 }
 
-// handleGetPopularCollections handles the coordinator_get_popular_collections tool call
-func (h *ToolHandler) handleGetPopularCollections(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+// handleListCollections handles the knowledge_list_collections tool call
+func (h *ToolHandler) handleListCollections(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
 	limit := 5
 	if l, ok := args["limit"].(float64); ok {
 		limit = int(l)
