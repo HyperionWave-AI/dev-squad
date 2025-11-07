@@ -38,7 +38,10 @@ export const ConversationModeProvider: React.FC<ConversationModeProviderProps> =
         setError(null);
         const settings = await userSettingsService.getSettings();
         setModeState(settings.conversationMode);
-        console.log('[ConversationMode] Loaded user settings:', settings.conversationMode);
+        console.log('[ConversationMode] Loaded user settings:', {
+          mode: settings.conversationMode,
+          timestamp: new Date().toISOString()
+        });
       } catch (err) {
         console.error('[ConversationMode] Failed to load settings:', err);
         setError(err instanceof Error ? err.message : 'Failed to load settings');
@@ -56,14 +59,21 @@ export const ConversationModeProvider: React.FC<ConversationModeProviderProps> =
   const setMode = useCallback(async (newMode: ConversationMode) => {
     try {
       setError(null);
-      console.log('[ConversationMode] Updating mode to:', newMode);
+      console.log('[ConversationMode] Toggling mode:', {
+        from: mode,
+        to: newMode,
+        timestamp: new Date().toISOString()
+      });
 
       // Optimistically update UI
       setModeState(newMode);
 
       // Persist to backend
       await userSettingsService.updateConversationMode(newMode);
-      console.log('[ConversationMode] Mode updated successfully');
+      console.log('[ConversationMode] Mode updated successfully:', {
+        mode: newMode,
+        timestamp: new Date().toISOString()
+      });
     } catch (err) {
       console.error('[ConversationMode] Failed to update mode:', err);
       setError(err instanceof Error ? err.message : 'Failed to update mode');
@@ -103,5 +113,3 @@ export const useConversationMode = (): ConversationModeContextValue => {
   }
   return context;
 };
-
-export default ConversationModeContext;

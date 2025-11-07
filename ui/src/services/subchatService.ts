@@ -120,15 +120,6 @@ class SubchatService {
     );
     return data.subchats || [];
   }
-
-  /**
-   * Delete a subchat by ID
-   */
-  async deleteSubchat(id: string): Promise<void> {
-    await this.fetchJSON<void>(`/subchats/${id}`, {
-      method: 'DELETE',
-    });
-  }
 }
 
 // Export singleton instance
