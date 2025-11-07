@@ -19,7 +19,7 @@ func (t *KnowledgeFindTool) Name() string {
 }
 
 func (t *KnowledgeFindTool) Description() string {
-	return "Search for knowledge by semantic similarity. Returns top matches with scores and metadata. Use for discovering patterns, solutions, and related knowledge. Limit: 5 results default (max: 20). If embedding service is down, use query_knowledge tool as fallback."
+	return "Search for knowledge by semantic similarity. Returns top matches with scores and metadata. Use for discovering patterns, solutions, and related knowledge. Limit: 5 results default (max: 20). IMPORTANT: Use coordinator_get_popular_collections first to discover available collections and avoid 'collection not found' errors. If embedding service is down, use query_knowledge tool as fallback."
 }
 
 func (t *KnowledgeFindTool) InputSchema() map[string]interface{} {
@@ -115,7 +115,7 @@ func (t *KnowledgeStoreTool) Name() string {
 }
 
 func (t *KnowledgeStoreTool) Description() string {
-	return "Store knowledge with automatic embedding generation. Returns storage confirmation. Use to persist reusable patterns, solutions, and learnings for semantic search. If embedding service is down, use coordinator upsert_knowledge tool for MongoDB storage (no semantic search)."
+	return "Store knowledge with automatic embedding generation. Returns storage confirmation. Use to persist reusable patterns, solutions, and learnings for semantic search. PREREQUISITE: Use coordinator_get_popular_collections first to verify the collection exists. If collection not found, create it via the UI or API before storing knowledge. If embedding service is down, use coordinator upsert_knowledge tool for MongoDB storage (no semantic search)."
 }
 
 func (t *KnowledgeStoreTool) InputSchema() map[string]interface{} {
