@@ -59,7 +59,7 @@ var (
 		"knowledge_find",
 		"coordinator_upsert_knowledge",
 		"knowledge_store",
-		"coordinator_get_popular_collections",
+		"knowledge_list_collections",
 	}
 
 	// Core tools - always included in every request
