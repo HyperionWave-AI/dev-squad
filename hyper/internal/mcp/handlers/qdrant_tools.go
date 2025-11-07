@@ -60,7 +60,7 @@ func (h *QdrantToolHandler) RegisterQdrantTools(server *mcp.Server) error {
 func (h *QdrantToolHandler) registerKnowledgeFind(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "knowledge_find",
-		Description: "Search for knowledge by semantic similarity. Returns top N results with scores and metadata. Supports pagination and smart token limiting to prevent response overflow. Use offset for pagination (e.g., offset=10 for second page of results).",
+		Description: "Search for knowledge by semantic similarity. Returns top N results with scores and metadata. Supports pagination and smart token limiting to prevent response overflow. Use offset for pagination (e.g., offset=10 for second page of results). IMPORTANT: Use coordinator_get_popular_collections first to discover available collections and avoid 'collection not found' errors.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -128,7 +128,7 @@ func (h *QdrantToolHandler) registerKnowledgeFind(server *mcp.Server) error {
 func (h *QdrantToolHandler) registerKnowledgeStore(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "knowledge_store",
-		Description: "Store knowledge with automatic embedding generation. IMPORTANT: MAX 1000 tokens (~750 words, ~4000 characters) per entry. This knowledge base is designed for AI retrieval - keep entries focused and granular. Each entry should contain ONE specific concept, pattern, or procedure. For large documents, split into multiple focused entries. Returns storage confirmation with ID and collection.",
+		Description: "Store knowledge with automatic embedding generation. IMPORTANT: MAX 1000 tokens (~750 words, ~4000 characters) per entry. This knowledge base is designed for AI retrieval - keep entries focused and granular. Each entry should contain ONE specific concept, pattern, or procedure. For large documents, split into multiple focused entries. Returns storage confirmation with ID and collection. PREREQUISITE: Use coordinator_get_popular_collections first to verify the collection exists. If collection not found, create it via the UI or API before storing knowledge.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
