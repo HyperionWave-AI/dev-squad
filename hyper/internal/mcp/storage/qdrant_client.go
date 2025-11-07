@@ -164,7 +164,8 @@ func (c *QdrantClient) addAuthHeader(req *http.Request) {
 	}
 }
 
-// EnsureCollection ensures a Qdrant collection exists
+// EnsureCollection ensures a Qdrant collection exists with correct dimensions
+// If collection exists but has different dimensions, returns DimensionMismatchError for caller to handle
 func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) error {
 	// Check if collection exists
 	checkURL := fmt.Sprintf("%s/collections/%s", c.baseURL, collectionName)
@@ -180,12 +181,48 @@ func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) e
 	}
 	defer resp.Body.Close()
 
-	// If collection exists (200), return
+	// If collection exists (200), verify dimensions match
 	if resp.StatusCode == http.StatusOK {
+		// Read response body to check dimensions
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read collection info: %w", err)
+		}
+
+		var collectionInfo struct {
+			Result struct {
+				Config struct {
+					Params struct {
+						Vectors struct {
+							Size int `json:"size"`
+						} `json:"vectors"`
+					} `json:"params"`
+				} `json:"config"`
+			} `json:"result"`
+		}
+
+		if err := json.Unmarshal(body, &collectionInfo); err != nil {
+			return fmt.Errorf("failed to parse collection info: %w", err)
+		}
+
+		actualDim := collectionInfo.Result.Config.Params.Vectors.Size
+
+		// Check for dimension mismatch
+		if actualDim != vectorSize {
+			// Return special error type that callers can detect and handle
+			return &DimensionMismatchError{
+				ExpectedDim: actualDim,
+				GotDim:      vectorSize,
+				Collection:  collectionName,
+				OriginalErr: fmt.Errorf("collection exists with dimension %d but requested %d", actualDim, vectorSize),
+			}
+		}
+
+		// Dimensions match, collection is ready
 		return nil
 	}
 
-	// Create collection
+	// Collection doesn't exist - create it
 	createPayload := map[string]interface{}{
 		"vectors": map[string]interface{}{
 			"size":     vectorSize,
