@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Library } from 'lucide-react';
+import { Library, Plus } from 'lucide-react';
 import {
   CollectionBrowser,
   ArticleList,
@@ -20,6 +20,7 @@ export function KnowledgeBasePage() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<KnowledgeEntry | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [loading, setLoading] = useState(false);
   const [collectionsLoading, setCollectionsLoading] = useState(true);
   const [entriesLoading, setEntriesLoading] = useState(false);
@@ -103,36 +104,91 @@ export function KnowledgeBasePage() {
   };
 
   const handleCancelEdit = () => {
+    if (isCreating) {
+      // If canceling a new entry creation, clear selection
+      setSelectedEntry(null);
+      setIsCreating(false);
+    }
     setIsEditing(false);
   };
 
-  const handleSave = async (text: string, metadata: Record<string, any>) => {
+  const handleCreateNew = () => {
+    // Create a temporary new entry
+    const newEntry: KnowledgeEntry = {
+      id: 'new-' + Date.now(),
+      text: '',
+      metadata: {},
+      createdAt: new Date().toISOString()
+    };
+    setSelectedEntry(newEntry);
+    setIsCreating(true);
+    setIsEditing(true);
+  };
+
+  const handleSave = async (text: string, metadata: Record<string, any>, collectionName?: string) => {
     if (!selectedEntry) return;
 
+    const isNewEntry = selectedEntry.id.startsWith('new-');
+
     try {
-      const response = await knowledgeApi.updateEntry(selectedEntry.id, {
-        text,
-        metadata,
-      });
+      if (isNewEntry) {
+        // Creating a new entry
+        const targetCollection = collectionName || selectedCollection;
+        if (!targetCollection) {
+          throw new Error('No collection selected');
+        }
 
-      // Update the entry in the list
-      const updatedEntry = {
-        id: response.entry.id || selectedEntry.id,
-        text: response.entry.text || text,
-        metadata: response.entry.metadata || metadata,
-        createdAt: response.entry.createdAt || selectedEntry.createdAt,
-      };
+        const response = await knowledgeApi.createKnowledge({
+          collection: targetCollection,
+          text,
+          metadata
+        });
 
-      setEntries(entries.map(e =>
-        e.id === selectedEntry.id ? updatedEntry : e
-      ));
+        // Create new entry from response
+        const newEntry: KnowledgeEntry = {
+          id: response.id || `${targetCollection}:${Date.now()}`,
+          text: text,
+          metadata: metadata,
+          createdAt: response.createdAt || new Date().toISOString(),
+          collection: response.collection || targetCollection,
+        };
 
-      // Update selected entry
-      setSelectedEntry(updatedEntry);
+        // Add new entry to the list
+        setEntries([newEntry, ...entries]);
+        setSelectedEntry(newEntry);
+        setIsCreating(false);
+        setIsEditing(false);
+        setSuccessMessage('Entry created successfully');
+        setError(null);
 
-      setIsEditing(false);
-      setSuccessMessage('Entry updated successfully');
-      setError(null);
+        // Reload collections to update counts
+        loadCollections();
+      } else {
+        // Updating existing entry
+        const response = await knowledgeApi.updateEntry(selectedEntry.id, {
+          text,
+          metadata,
+        });
+
+        // Update the entry in the list
+        const updatedEntry = {
+          id: response.entry.id || selectedEntry.id,
+          text: response.entry.text || text,
+          metadata: response.entry.metadata || metadata,
+          createdAt: response.entry.createdAt || selectedEntry.createdAt,
+        };
+
+        setEntries(entries.map(e =>
+          e.id === selectedEntry.id ? updatedEntry : e
+        ));
+
+        // Update selected entry
+        setSelectedEntry(updatedEntry);
+
+        setIsEditing(false);
+        setSuccessMessage('Entry updated successfully');
+        setError(null);
+      }
     } catch (err) {
       throw err; // Let the editor handle the error
     }
@@ -375,6 +431,19 @@ export function KnowledgeBasePage() {
         {/* Middle Column: Article List (25%) */}
         <div className="col-span-3">
           <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm min-h-[calc(100vh-200px)] h-full transition-all duration-200">
+            {/* Create New Article Button - Show when collection is selected */}
+            {selectedCollection && !isUniversalSearchMode && (
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={handleCreateNew}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg transform hover:scale-[1.02]"
+                >
+                  <Plus className="h-5 w-5" />
+                  New Article
+                </button>
+              </div>
+            )}
+
             {!selectedCollection && !isUniversalSearchMode ? (
               <div className="flex flex-col items-center justify-center h-full text-center p-8">
                 <div className="relative">
@@ -431,6 +500,8 @@ export function KnowledgeBasePage() {
                 entry={selectedEntry}
                 onSave={handleSave}
                 onCancel={handleCancelEdit}
+                collections={collections}
+                selectedCollection={selectedCollection}
               />
             ) : (
               <ArticleViewer
