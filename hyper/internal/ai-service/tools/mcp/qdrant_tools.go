@@ -64,8 +64,8 @@ func (t *KnowledgeFindTool) Execute(ctx context.Context, input map[string]interf
 		}
 	}
 
-	// Ensure collection exists (768 dimensions for default embedding model)
-	if err := t.qdrantClient.EnsureCollection(collection, 768); err != nil {
+	// Ensure collection exists (use client's configured dimensions)
+	if err := t.qdrantClient.EnsureCollection(collection, t.qdrantClient.GetDimensions()); err != nil {
 		// Check if embedding service is unavailable
 		errMsg := err.Error()
 		if containsAny(errMsg, []string{"connection", "dial", "lookup"}) {
@@ -154,8 +154,8 @@ func (t *KnowledgeStoreTool) Execute(ctx context.Context, input map[string]inter
 	// Extract optional metadata
 	metadata, _ := input["metadata"].(map[string]interface{})
 
-	// Ensure collection exists (768 dimensions for default embedding model)
-	if err := t.qdrantClient.EnsureCollection(collection, 768); err != nil {
+	// Ensure collection exists (use client's configured dimensions)
+	if err := t.qdrantClient.EnsureCollection(collection, t.qdrantClient.GetDimensions()); err != nil {
 		// Check if embedding service is unavailable
 		errMsg := err.Error()
 		if containsAny(errMsg, []string{"connection", "dial", "lookup"}) {
