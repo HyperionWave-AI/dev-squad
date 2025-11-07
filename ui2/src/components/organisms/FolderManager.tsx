@@ -17,6 +17,13 @@ interface FolderManagerProps {
 const DEFAULT_FILE_PATTERNS = ['.ts', '.tsx', '.js', '.jsx', '.go', '.py'];
 const DEFAULT_EXCLUDE_PATTERNS = ['node_modules', 'dist', 'build', '.git'];
 
+const CHUNK_SIZES = [
+  { value: 's', label: 'S', description: '50 lines' },
+  { value: 'm', label: 'M', description: '100 lines' },
+  { value: 'l', label: 'L', description: '200 lines' },
+  { value: 'xl', label: 'XL', description: '400 lines' },
+];
+
 export const FolderManager: React.FC<FolderManagerProps> = ({
   folders,
   status,
@@ -28,7 +35,7 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
   const [showAddModal, setShowAddModal] = useState(false);
   const [newFolderPath, setNewFolderPath] = useState('');
   const [selectedPatterns, setSelectedPatterns] = useState<string[]>(DEFAULT_FILE_PATTERNS);
-  const [chunkSize, setChunkSize] = useState(200);
+  const [chunkSize, setChunkSize] = useState('m');
   const [excludePatterns, setExcludePatterns] = useState<string[]>(DEFAULT_EXCLUDE_PATTERNS);
   const [customPattern, setCustomPattern] = useState('');
   const [customExclude, setCustomExclude] = useState('');
@@ -47,7 +54,7 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
     setShowAddModal(false);
     setNewFolderPath('');
     setSelectedPatterns(DEFAULT_FILE_PATTERNS);
-    setChunkSize(200);
+    setChunkSize('m');
     setExcludePatterns(DEFAULT_EXCLUDE_PATTERNS);
   };
 
@@ -240,21 +247,23 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
               {/* Chunk Size */}
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Chunk Size: {chunkSize} lines
+                  Chunk Size
                 </label>
-                <input
-                  type="range"
-                  min="50"
-                  max="500"
-                  step="50"
-                  value={chunkSize}
-                  onChange={(e) => setChunkSize(parseInt(e.target.value))}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-primary-500"
-                />
-                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                  <span>50</span>
-                  <span>500</span>
+                <div className="flex flex-wrap gap-2">
+                  {CHUNK_SIZES.map((size) => (
+                    <Badge
+                      key={size.value}
+                      variant={chunkSize === size.value ? 'primary' : 'secondary'}
+                      className="cursor-pointer px-4 py-2"
+                      onClick={() => setChunkSize(size.value)}
+                    >
+                      {size.label} - {size.description}
+                    </Badge>
+                  ))}
                 </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Select the chunk size for code indexing
+                </p>
               </div>
 
               {/* Exclude Patterns */}
