@@ -1,5 +1,4 @@
-// Reflection types for metacognitive self-awareness system
-
+// Base reflection type
 export interface Reflection {
   id: string;
   type: 'decision' | 'outcome' | 'lesson';
@@ -31,6 +30,23 @@ export interface Decision extends Reflection {
       timeEstimate?: string;
       risks?: string[];
     };
+  };
+  // Convenience accessors for backwards compatibility
+  context?: {
+    userRequest: string;
+    availableInfo: string;
+    uncertainty?: string;
+  };
+  decision?: {
+    action: string;
+    reasoning: string;
+    alternatives?: string[];
+    confidence: number;
+  };
+  predictions?: {
+    successProbability?: number;
+    timeEstimate?: string;
+    risks?: string[];
   };
 }
 
@@ -64,6 +80,12 @@ export interface Lesson extends Reflection {
   };
 }
 
+export interface QueryResult {
+  lesson: Lesson;
+  score: number;
+  relevance: string;
+}
+
 export interface ListResponse<T> {
   count: number;
   decisions?: T[];
@@ -71,26 +93,6 @@ export interface ListResponse<T> {
   lessons?: T[];
 }
 
-export interface CreateDecisionRequest {
-  chatId: string;
-  taskId?: string;
-  context: Decision['data']['context'];
-  decision: Decision['data']['decision'];
-  predictions?: Decision['data']['predictions'];
-}
-
-export interface CreateOutcomeRequest {
-  decisionId: string;
-  outcome: Outcome['data']['outcome'];
-  analysis: Outcome['data']['analysis'];
-}
-
-export interface CreateLessonRequest {
-  patternName: string;
-  context?: string;
-  problem: string;
-  solution: string;
-  antipattern?: string;
-  applicableTo?: string[];
-  confidence?: number;
+export interface DecisionWithOutcome extends Decision {
+  outcome?: Outcome;
 }
