@@ -19,17 +19,21 @@ const FILE_TYPES = [
 ];
 
 const RETRIEVE_MODES = [
-  { value: 'chunk', label: 'Chunk (default)', description: 'Single matching chunk' },
+  { value: 'chunk-s', label: 'S (50 lines)', description: 'Small chunk' },
+  { value: 'chunk-m', label: 'M (100 lines)', description: 'Medium chunk' },
+  { value: 'chunk-l', label: 'L (200 lines)', description: 'Large chunk' },
+  { value: 'chunk-xl', label: 'XL (400 lines)', description: 'Extra large chunk' },
   { value: 'full', label: 'Full File', description: 'Entire file content' },
 ];
 
 export const CodeSearchForm: React.FC<CodeSearchFormProps> = ({ onSearch, loading }) => {
   const [query, setQuery] = useState('');
   const [selectedFileTypes, setSelectedFileTypes] = useState<string[]>([]);
+  const [customFileType, setCustomFileType] = useState('');
   const [minRelevance, setMinRelevance] = useState(0);
   const [maxResults, setMaxResults] = useState(10);
   const [folderPath, setFolderPath] = useState('');
-  const [retrieveMode, setRetrieveMode] = useState<'chunk' | 'full'>('chunk');
+  const [retrieveMode, setRetrieveMode] = useState<'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full'>('chunk-m');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,6 +56,17 @@ export const CodeSearchForm: React.FC<CodeSearchFormProps> = ({ onSearch, loadin
         ? prev.filter(t => t !== typeId)
         : [...prev, typeId]
     );
+  };
+
+  const addCustomFileType = () => {
+    if (customFileType.trim() && !selectedFileTypes.includes(customFileType.trim())) {
+      setSelectedFileTypes(prev => [...prev, customFileType.trim()]);
+      setCustomFileType('');
+    }
+  };
+
+  const removeFileType = (typeId: string) => {
+    setSelectedFileTypes(prev => prev.filter(t => t !== typeId));
   };
 
   return (
@@ -79,26 +94,80 @@ export const CodeSearchForm: React.FC<CodeSearchFormProps> = ({ onSearch, loadin
         </div>
 
         {/* File Type Filters */}
-        <div className="space-y-2">
+        <div className="space-y-3">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
             File Types
           </label>
-          <div className="flex flex-wrap gap-2">
-            {FILE_TYPES.map((type) => (
-              <Badge
-                key={type.id}
-                variant={selectedFileTypes.includes(type.id) ? 'primary' : 'outline'}
-                className="cursor-pointer hover:opacity-80 transition-opacity"
-                onClick={() => toggleFileType(type.id)}
-              >
-                {type.label}
-              </Badge>
-            ))}
+
+          {/* Predefined Quick Select */}
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500 dark:text-gray-400">Quick select:</p>
+            <div className="flex flex-wrap gap-2">
+              {FILE_TYPES.map((type) => (
+                <Badge
+                  key={type.id}
+                  variant={selectedFileTypes.includes(type.id) ? 'primary' : 'outline'}
+                  className="cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => toggleFileType(type.id)}
+                >
+                  {type.label}
+                </Badge>
+              ))}
+            </div>
           </div>
+
+          {/* Selected File Types - With Remove */}
+          {selectedFileTypes.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">Selected file types:</p>
+              <div className="flex flex-wrap gap-2">
+                {selectedFileTypes.map((type) => (
+                  <Badge
+                    key={type}
+                    variant="primary"
+                    className="cursor-pointer hover:opacity-80 transition-opacity flex items-center gap-1"
+                    onClick={() => removeFileType(type)}
+                  >
+                    {type}
+                    <X className="h-3 w-3" />
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Custom Input */}
+          <div className="space-y-2">
+            <p className="text-xs text-gray-500 dark:text-gray-400">Add custom file type:</p>
+            <div className="flex gap-2">
+              <Input
+                type="text"
+                value={customFileType}
+                onChange={(e) => setCustomFileType(e.target.value)}
+                placeholder="e.g., .rs, .kt, .swift"
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addCustomFileType();
+                  }
+                }}
+                disabled={loading}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addCustomFileType}
+                disabled={loading || !customFileType.trim()}
+              >
+                Add
+              </Button>
+            </div>
+          </div>
+
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {selectedFileTypes.length === 0
-              ? 'All file types'
-              : `${selectedFileTypes.length} type${selectedFileTypes.length > 1 ? 's' : ''} selected`}
+              ? 'All file types will be searched'
+              : `Searching ${selectedFileTypes.length} file type${selectedFileTypes.length > 1 ? 's' : ''}`}
           </p>
         </div>
 
