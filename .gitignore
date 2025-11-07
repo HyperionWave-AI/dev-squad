@@ -5,11 +5,13 @@
 .env
 .env.*
 
-
-
-
+node_modules
+ui-old/
+ui/tests/
+ui/test-report
 coordinator/mcp-http-bridge/hyperion-coordinator-bridge
 /.playwright-mcp
+ui-old/dist/
 
 # Local Hyperion configuration
 .hyper
@@ -37,5 +39,5 @@ third_party
 
 # Build artifacts
 hyper/coordinator
-/ui2/test-results
+/ui/test-results
 /hyper/embed

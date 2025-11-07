@@ -343,6 +343,25 @@ class KnowledgeService {
   }
 
   /**
+   * Verify a knowledge article by creating a chat session
+   */
+  async verifyKnowledgeArticle(id: string): Promise<{ sessionId: string }> {
+    const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(id)}/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to verify knowledge article');
+    }
+
+    return response.json();
+  }
+
+  /**
    * Universal search across all collections
    * Returns entries from all collections that match the query, limited to top 100 results
    */
@@ -384,6 +403,72 @@ class KnowledgeService {
       entries: allEntries,
       collectionsWithData
     };
+  }
+
+  /**
+   * Generate a new blog entry from recent task progress
+   * Calls the backend endpoint to create a progress article
+   */
+  async generateBlogEntry(): Promise<{ entry: KnowledgeEntry }> {
+    const response = await fetch('/api/v1/blog/generate-entry', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to generate blog entry');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Start resync to unified collection
+   * Rebuilds the knowledge base from MongoDB to Qdrant unified collection
+   */
+  async startResync(): Promise<void> {
+    const response = await fetch('/api/v1/knowledge/resync-to-unified', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to start resync');
+    }
+  }
+
+  /**
+   * Get resync status
+   * Returns current progress of the resync operation
+   */
+  async getResyncStatus(): Promise<{
+    inProgress: boolean;
+    totalEntries: number;
+    processedEntries: number;
+    percentage: number;
+    estimatedTimeRemaining?: string;
+    errorMessage?: string;
+    completedTime?: string;
+  }> {
+    const response = await fetch('/api/v1/knowledge/resync-status', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get resync status');
+    }
+
+    return response.json();
   }
 }
 

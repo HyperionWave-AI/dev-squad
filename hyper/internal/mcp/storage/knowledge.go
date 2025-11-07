@@ -111,6 +111,18 @@ type KnowledgeStorage interface {
 	BatchSyncVotesToQdrant(collectionName string) (int, error)
 }
 
+// ResyncStatus represents the current status of a resync operation
+type ResyncStatus struct {
+	InProgress              bool      `json:"inProgress"`
+	TotalEntries            int       `json:"totalEntries"`
+	ProcessedEntries        int       `json:"processedEntries"`
+	Percentage              float64   `json:"percentage"`
+	EstimatedTimeRemaining  string    `json:"estimatedTimeRemaining,omitempty"`
+	ErrorMessage            string    `json:"errorMessage,omitempty"`
+	CompletedTime           string    `json:"completedTime,omitempty"`
+	StartTime               time.Time `json:"-"`
+}
+
 // MongoKnowledgeStorage implements KnowledgeStorage using MongoDB + Qdrant
 type MongoKnowledgeStorage struct {
 	knowledgeCollection   *mongo.Collection
@@ -120,6 +132,7 @@ type MongoKnowledgeStorage struct {
 	qdrantClient          QdrantClientInterface
 	vectorDimension       int
 	logger                *zap.Logger
+	resyncStatus          *ResyncStatus // Track resync progress
 }
 
 // NewMongoKnowledgeStorage creates a new MongoDB + Qdrant knowledge storage
@@ -132,6 +145,9 @@ func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInter
 		qdrantClient:          qdrantClient,
 		vectorDimension:       qdrantClient.GetDimensions(), // Get dimensions from shared embedding client
 		logger:                logger,
+		resyncStatus: &ResyncStatus{
+			InProgress: false,
+		},
 	}
 
 	// Create indexes
@@ -1099,9 +1115,9 @@ func (s *MongoKnowledgeStorage) GetPopularCollections(limit int) ([]*CollectionS
 }
 
 // GetCollectionStatsWithMetadata returns all collections with stats and category metadata
-// Now simplified: reads directly from Collection objects which contain all metadata
+// Returns ALL collections from MongoDB with their entryCount (which can be 0)
 func (s *MongoKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*CollectionWithMetadata, error) {
-	// Get all Collection objects (already contains name, category, description, tags, entryCount)
+	// Get all collections from MongoDB
 	collections, err := s.ListCollectionsObjects()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list collections: %w", err)
@@ -1110,14 +1126,15 @@ func (s *MongoKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*CollectionW
 	// Convert Collection objects to CollectionWithMetadata
 	results := make([]*CollectionWithMetadata, 0, len(collections))
 	for _, col := range collections {
-		results = append(results, &CollectionWithMetadata{
+		metadata := &CollectionWithMetadata{
 			ID:          col.ID.Hex(),
 			Name:        col.Name,
 			Category:    col.Category,
-			Count:       col.EntryCount,
 			Description: col.Description,
 			Tags:        col.Tags,
-		})
+			Count:       col.EntryCount,
+		}
+		results = append(results, metadata)
 	}
 
 	return results, nil
@@ -1534,4 +1551,234 @@ func (s *MongoKnowledgeStorage) BatchSyncVotesToQdrant(collectionName string) (i
 	}
 
 	return syncedCount, nil
+}
+
+// ResyncToUnifiedCollection rebuilds the unified Qdrant collection from MongoDB
+// This method runs in the background and updates resyncStatus
+func (s *MongoKnowledgeStorage) ResyncToUnifiedCollection(ctx context.Context) error {
+	s.logger.Info("Starting resync to unified collection")
+
+	// Reset and initialize status
+	s.resyncStatus = &ResyncStatus{
+		InProgress:       true,
+		TotalEntries:     0,
+		ProcessedEntries: 0,
+		Percentage:       0.0,
+		StartTime:        time.Now(),
+	}
+
+	// Count total entries
+	totalEntries, err := s.knowledgeCollection.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Failed to count entries: %v", err)
+		s.logger.Error("Failed to count entries for resync", zap.Error(err))
+		return err
+	}
+
+	s.resyncStatus.TotalEntries = int(totalEntries)
+	s.logger.Info("Total entries to resync", zap.Int("count", int(totalEntries)))
+
+	// If no entries, complete immediately
+	if totalEntries == 0 {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.Percentage = 100.0
+		s.resyncStatus.ProcessedEntries = 0
+		s.resyncStatus.CompletedTime = "0s"
+		return nil
+	}
+
+	// Delete and recreate unified collection to start fresh
+	unifiedCollectionName := "unified_knowledge"
+	s.logger.Info("Deleting existing unified collection (if exists)")
+	if err := s.qdrantClient.DeleteCollection(unifiedCollectionName); err != nil {
+		s.logger.Info("Unified collection does not exist yet, will create new",
+			zap.String("collection", unifiedCollectionName),
+			zap.Error(err))
+	} else {
+		s.logger.Info("Deleted existing unified collection",
+			zap.String("collection", unifiedCollectionName))
+	}
+
+	// Create fresh unified collection
+	s.logger.Info("Creating unified collection",
+		zap.String("collection", unifiedCollectionName),
+		zap.Int("vectorDimension", s.vectorDimension))
+
+	if err := s.qdrantClient.EnsureCollection(unifiedCollectionName, s.vectorDimension); err != nil {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Failed to create unified collection: %v", err)
+		s.logger.Error("Failed to create unified collection",
+			zap.String("collection", unifiedCollectionName),
+			zap.Int("vectorDimension", s.vectorDimension),
+			zap.Error(err))
+		return err
+	}
+
+	s.logger.Info("Unified collection created successfully",
+		zap.String("collection", unifiedCollectionName))
+
+	// Stream all entries from MongoDB
+	cursor, err := s.knowledgeCollection.Find(ctx, bson.M{})
+	if err != nil {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Failed to query entries: %v", err)
+		s.logger.Error("Failed to query entries for resync", zap.Error(err))
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	processedCount := 0
+	errorCount := 0
+	batchSize := 100
+	var batch []*KnowledgeEntry
+
+	for cursor.Next(ctx) {
+		var entry KnowledgeEntry
+		if err := cursor.Decode(&entry); err != nil {
+			s.logger.Warn("Failed to decode entry", zap.Error(err))
+			errorCount++
+			continue
+		}
+
+		batch = append(batch, &entry)
+
+		// Process batch when full
+		if len(batch) >= batchSize {
+			successes, errors := s.processBatch(unifiedCollectionName, batch)
+			processedCount += successes
+			errorCount += errors
+
+			// Update status with actual progress
+			s.updateResyncProgress(processedCount, int(totalEntries))
+
+			s.logger.Debug("Processed batch",
+				zap.Int("batchSize", len(batch)),
+				zap.Int("successes", successes),
+				zap.Int("errors", errors),
+				zap.Int("totalProcessed", processedCount))
+
+			// Clear batch
+			batch = []*KnowledgeEntry{}
+		}
+	}
+
+	// Process remaining entries
+	if len(batch) > 0 {
+		successes, errors := s.processBatch(unifiedCollectionName, batch)
+		processedCount += successes
+		errorCount += errors
+
+		s.logger.Debug("Processed final batch",
+			zap.Int("batchSize", len(batch)),
+			zap.Int("successes", successes),
+			zap.Int("errors", errors),
+			zap.Int("totalProcessed", processedCount))
+	}
+
+	// Check for cursor errors
+	if err := cursor.Err(); err != nil {
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Cursor error: %v", err)
+		s.logger.Error("Cursor error during resync", zap.Error(err))
+	}
+
+	// Mark as complete
+	s.resyncStatus.InProgress = false
+	s.resyncStatus.ProcessedEntries = processedCount
+	s.resyncStatus.Percentage = 100.0
+	elapsed := time.Since(s.resyncStatus.StartTime)
+	s.resyncStatus.CompletedTime = fmt.Sprintf("%.1fs", elapsed.Seconds())
+
+	totalAttempted := processedCount + errorCount
+
+	if errorCount > 0 {
+		successRate := float64(processedCount) / float64(totalAttempted) * 100
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Completed with %d errors (%d/%d succeeded, %.1f%% success rate)",
+			errorCount, processedCount, totalAttempted, successRate)
+		s.logger.Warn("Resync completed with errors",
+			zap.Int("processed", processedCount),
+			zap.Int("errors", errorCount),
+			zap.Int("totalAttempted", totalAttempted),
+			zap.Float64("successRate", successRate),
+			zap.Duration("elapsed", elapsed))
+
+		// If no entries succeeded, return an error
+		if processedCount == 0 {
+			return fmt.Errorf("resync failed: all %d entries failed to sync", errorCount)
+		}
+	} else {
+		s.logger.Info("Resync completed successfully",
+			zap.Int("processed", processedCount),
+			zap.Int("total", totalAttempted),
+			zap.Duration("elapsed", elapsed))
+	}
+
+	return nil
+}
+
+// processBatch processes a batch of entries for resync
+// Returns the number of successfully processed entries and number of errors
+func (s *MongoKnowledgeStorage) processBatch(collectionName string, entries []*KnowledgeEntry) (int, int) {
+	successCount := 0
+	errorCount := 0
+
+	for _, entry := range entries {
+		// Validate entry has required fields
+		if entry.ID == "" {
+			s.logger.Warn("Skipping entry with empty ID")
+			errorCount++
+			continue
+		}
+		if entry.Text == "" {
+			s.logger.Warn("Skipping entry with empty text", zap.String("entryId", entry.ID))
+			errorCount++
+			continue
+		}
+
+		// Store point to Qdrant unified collection
+		if err := s.qdrantClient.StorePoint(collectionName, entry.ID, entry.Text, entry.Metadata); err != nil {
+			s.logger.Warn("Failed to store entry to unified collection",
+				zap.String("entryId", entry.ID),
+				zap.String("collection", entry.Collection),
+				zap.Error(err))
+			errorCount++
+			continue // Continue processing remaining entries instead of failing entire batch
+		}
+		successCount++
+	}
+
+	return successCount, errorCount
+}
+
+// updateResyncProgress updates the resync status with progress information
+func (s *MongoKnowledgeStorage) updateResyncProgress(processed, total int) {
+	s.resyncStatus.ProcessedEntries = processed
+
+	if total > 0 {
+		s.resyncStatus.Percentage = float64(processed) / float64(total) * 100.0
+	}
+
+	// Estimate time remaining
+	if processed > 0 {
+		elapsed := time.Since(s.resyncStatus.StartTime)
+		avgTimePerEntry := elapsed / time.Duration(processed)
+		remaining := total - processed
+		estimatedRemaining := avgTimePerEntry * time.Duration(remaining)
+
+		if estimatedRemaining < time.Minute {
+			s.resyncStatus.EstimatedTimeRemaining = fmt.Sprintf("%.0fs", estimatedRemaining.Seconds())
+		} else {
+			s.resyncStatus.EstimatedTimeRemaining = fmt.Sprintf("%.1fm", estimatedRemaining.Minutes())
+		}
+	}
+}
+
+// GetResyncStatus returns the current resync status
+func (s *MongoKnowledgeStorage) GetResyncStatus() ResyncStatus {
+	if s.resyncStatus == nil {
+		return ResyncStatus{
+			InProgress: false,
+		}
+	}
+	return *s.resyncStatus
 }
