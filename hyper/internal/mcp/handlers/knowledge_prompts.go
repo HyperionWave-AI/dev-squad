@@ -176,7 +176,6 @@ Consider which collection(s) are most likely to contain relevant knowledge.
 ## Standard Qdrant Collections
 
 **Task Collections:**
-- task:hyperion://task/human/{taskId} - Task-specific knowledge
 - team-coordination - Cross-squad coordination
 - agent-coordination - Agent handoffs
 
@@ -549,11 +548,6 @@ await mcp__hyper__knowledge_store({
 - Squad-specific patterns
 - Component libraries
 - Domain conventions
-
-**task:hyperion://task/human/{taskId}** ← Task-specific only
-- One-off solutions
-- Task-specific context
-- Handoff information
 
 **Recommendation for your learning:** [collection-name]
 **Reason:** [Why this collection is best]

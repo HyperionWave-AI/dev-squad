@@ -14,6 +14,7 @@ import (
 
 	"hyper/embed"
 	"hyper/internal/ai-service/tools"
+	hyperinit "hyper/internal/init"
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/indexer"
@@ -186,6 +187,39 @@ func main() {
 	// Initialize AST parsers for code indexing
 	parser.InitializeParsers()
 	logger.Info("AST parsers initialized for Go, JavaScript/TypeScript, and Python")
+
+	// Check for init command before parsing flags
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		// Parse init-specific flags
+		initFlags := flag.NewFlagSet("init", flag.ExitOnError)
+		provider := initFlags.String("provider", "", "AI provider (openai, anthropic, voyage, ollama)")
+		model := initFlags.String("model", "", "AI model name (e.g., gpt-4, claude-sonnet-4, voyage-3)")
+		token := initFlags.String("token", "", "API token/key (required for cloud providers)")
+		apiURL := initFlags.String("api-url", "", "Custom API URL (optional)")
+
+		// Parse remaining args (skip "init")
+		if err := initFlags.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Create provider config
+		var config *hyperinit.ProviderConfig
+		if *provider != "" {
+			config = &hyperinit.ProviderConfig{
+				Provider: *provider,
+				Model:    *model,
+				Token:    *token,
+				APIURL:   *apiURL,
+			}
+		}
+
+		if err := hyperinit.Init(config); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	// Parse command-line flags
 	mode := flag.String("mode", "both", "Server mode: http, mcp, or both")

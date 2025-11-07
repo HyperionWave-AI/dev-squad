@@ -343,6 +343,11 @@ func StartHTTPServer(
 	// Enable with ENABLE_JWT=true environment variable
 	r.Use(middleware.OptionalJWTMiddleware())
 
+	// Redirect root path to UI
+	r.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/ui")
+	})
+
 	// Health check endpoint
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
