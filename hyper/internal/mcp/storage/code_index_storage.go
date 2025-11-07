@@ -615,6 +615,15 @@ func (s *CodeIndexStorage) ListPathMappings() ([]*CodeIndexMapping, error) {
 	return mappings, nil
 }
 
+// RemovePathMapping deletes a path-to-collection mapping
+func (s *CodeIndexStorage) RemovePathMapping(path string) error {
+	_, err := s.pathMappingsCol.DeleteOne(context.Background(), bson.M{"path": path})
+	if err != nil {
+		return fmt.Errorf("failed to remove path mapping: %w", err)
+	}
+	return nil
+}
+
 // StructuralFilter represents structural search criteria for code chunks
 type StructuralFilter struct {
 	FunctionName string   // Function name pattern (supports regex)
@@ -695,4 +704,56 @@ func (s *CodeIndexStorage) FindChunksWithFilters(filter StructuralFilter) ([]str
 	}
 
 	return chunkIDs, nil
+}
+
+// ListAllPathMappings returns all path->collection mappings
+func (s *CodeIndexStorage) ListAllPathMappings() ([]*CodeIndexMapping, error) {
+	ctx := context.Background()
+	cursor, err := s.pathMappingsCol.Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var mappings []*CodeIndexMapping
+	if err := cursor.All(ctx, &mappings); err != nil {
+		return nil, err
+	}
+	return mappings, nil
+}
+
+// CountAllFiles returns total file count
+func (s *CodeIndexStorage) CountAllFiles() (int, error) {
+	count, err := s.filesCol.CountDocuments(context.Background(), bson.M{})
+	return int(count), err
+}
+
+// CountAllChunks returns total chunk count
+func (s *CodeIndexStorage) CountAllChunks() (int, error) {
+	count, err := s.chunksCol.CountDocuments(context.Background(), bson.M{})
+	return int(count), err
+}
+
+// ClearAllIndexData removes all documents from all collections
+func (s *CodeIndexStorage) ClearAllIndexData() error {
+	ctx := context.Background()
+
+	// Delete in order: chunks -> files -> folders -> mappings
+	if _, err := s.chunksCol.DeleteMany(ctx, bson.M{}); err != nil {
+		return fmt.Errorf("failed to clear chunks: %w", err)
+	}
+
+	if _, err := s.filesCol.DeleteMany(ctx, bson.M{}); err != nil {
+		return fmt.Errorf("failed to clear files: %w", err)
+	}
+
+	if _, err := s.foldersCol.DeleteMany(ctx, bson.M{}); err != nil {
+		return fmt.Errorf("failed to clear folders: %w", err)
+	}
+
+	if _, err := s.pathMappingsCol.DeleteMany(ctx, bson.M{}); err != nil {
+		return fmt.Errorf("failed to clear path mappings: %w", err)
+	}
+
+	return nil
 }
