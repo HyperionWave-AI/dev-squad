@@ -1,98 +1,62 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright Configuration for Kanban Board Testing
- *
- * Test Scope:
- * - Kanban board rendering and layout
- * - Drag-and-drop functionality
- * - MUI component verification
- * - Responsive design (mobile, tablet, desktop)
- * - Accessibility (WCAG 2.1 AA)
- * - Visual regression testing
+ * Playwright configuration for ui2 e2e and accessibility testing
+ * Supports chromium, webkit, mobile, tablet, and desktop viewports
  */
-
 export default defineConfig({
-  testDir: './tests',
-
-  // Maximum time one test can run
-  timeout: 30 * 1000,
-
-  // Test execution settings
+  testDir: './tests/e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-
-  // Reporter configuration
   reporter: [
-    ['html', { outputFolder: 'test-results/html' }],
-    ['json', { outputFile: 'test-results/results.json' }],
+    ['html', { outputFolder: 'test-reports/playwright-html' }],
+    ['json', { outputFile: 'test-reports/playwright-results.json' }],
     ['list']
   ],
 
-  // Shared settings for all projects
   use: {
-    baseURL: 'http://localhost:7095',
+    baseURL: 'http://localhost:4588/ui',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
 
-  // Web server configuration (expects backend running on 7095)
-  // Note: Start the backend separately with `make dev` or `make dev-hot`
-  // before running tests, or configure webServer to start it
-  webServer: process.env.SKIP_WEB_SERVER ? undefined : {
-    command: 'echo "Please start backend with: make dev or make dev-hot"',
-    url: 'http://localhost:7095',
-    reuseExistingServer: true,
-    timeout: 5 * 1000,
-  },
-
-  // Test projects for different browsers and viewports
   projects: [
-    // Desktop testing
     {
-      name: 'chromium-desktop',
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1920, height: 1080 }
-      },
-    },
-    {
-      name: 'webkit-desktop',
-      use: {
-        ...devices['Desktop Safari'],
-        viewport: { width: 1920, height: 1080 }
-      },
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
     },
 
-    // Tablet testing
     {
-      name: 'tablet',
-      use: {
-        ...devices['iPad Pro'],
-        viewport: { width: 768, height: 1024 }
-      },
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
     },
 
-    // Mobile testing
     {
       name: 'mobile',
-      use: {
-        ...devices['iPhone 13'],
-        viewport: { width: 375, height: 812 }
-      },
+      use: { ...devices['iPhone 13'] },
     },
 
-    // Accessibility testing (Chromium only for axe-core)
     {
-      name: 'accessibility',
+      name: 'tablet',
+      use: { ...devices['iPad Pro'] },
+    },
+
+    {
+      name: 'desktop',
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1920, height: 1080 }
       },
-      grep: /@accessibility/,
     },
   ],
+
+  webServer: {
+    command: 'cd /Users/maxmednikov/MaxSpace/hyper/ui2 && npm run dev',
+    url: 'http://localhost:4588/ui',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120000,
+  },
 });
