@@ -63,15 +63,36 @@ type ReflectionStorage struct {
 	reflectionsCollection     *mongo.Collection
 	experienceIndexCollection *mongo.Collection
 	errorPatternsCollection   *mongo.Collection
+	qdrantClient              QdrantClientInterface
+	vectorDimension           int
+	lessonsCollectionName     string
 	logger                    *zap.Logger
 }
 
-// NewReflectionStorage creates a new reflection storage instance
-func NewReflectionStorage(db *mongo.Database, logger *zap.Logger) (*ReflectionStorage, error) {
+// NewReflectionStorage creates a new reflection storage instance with optional Qdrant support
+func NewReflectionStorage(db *mongo.Database, qdrantClient QdrantClientInterface, logger *zap.Logger) (*ReflectionStorage, error) {
+	// Determine vector dimension and collection name
+	vectorDim := 768 // Default dimension
+	lessonsCollection := "reflection_lessons"
+
+	if qdrantClient != nil {
+		vectorDim = qdrantClient.GetDimensions()
+		// Create dimension-specific collection name to avoid conflicts
+		lessonsCollection = fmt.Sprintf("reflection_lessons_%d", vectorDim)
+		logger.Info("Reflection storage using Qdrant for semantic search",
+			zap.String("collection", lessonsCollection),
+			zap.Int("dimensions", vectorDim))
+	} else {
+		logger.Warn("Reflection storage initialized without Qdrant - semantic search will use MongoDB regex only")
+	}
+
 	storage := &ReflectionStorage{
 		reflectionsCollection:     db.Collection("reflections"),
 		experienceIndexCollection: db.Collection("experience_index"),
 		errorPatternsCollection:   db.Collection("error_patterns"),
+		qdrantClient:              qdrantClient,
+		vectorDimension:           vectorDim,
+		lessonsCollectionName:     lessonsCollection,
 		logger:                    logger,
 	}
 
@@ -126,7 +147,7 @@ func NewReflectionStorage(db *mongo.Database, logger *zap.Logger) (*ReflectionSt
 	return storage, nil
 }
 
-// StoreReflection stores a reflection in MongoDB
+// StoreReflection stores a reflection in MongoDB and optionally in Qdrant (for lessons)
 func (rs *ReflectionStorage) StoreReflection(reflection *Reflection) (string, error) {
 	ctx := context.Background()
 
@@ -138,6 +159,7 @@ func (rs *ReflectionStorage) StoreReflection(reflection *Reflection) (string, er
 		reflection.Timestamp = time.Now().UTC()
 	}
 
+	// Store in MongoDB (source of truth)
 	_, err := rs.reflectionsCollection.InsertOne(ctx, reflection)
 	if err != nil {
 		return "", fmt.Errorf("failed to store reflection: %w", err)
@@ -148,7 +170,102 @@ func (rs *ReflectionStorage) StoreReflection(reflection *Reflection) (string, er
 		zap.String("type", reflection.Type),
 		zap.String("chatId", reflection.ChatID))
 
+	// If this is a lesson and we have Qdrant, store for semantic search
+	if reflection.Type == "lesson" && rs.qdrantClient != nil {
+		// Build searchable text from lesson data
+		lessonText := rs.buildLessonSearchText(reflection)
+
+		// Ensure Qdrant collection exists with dimension checking
+		if err := rs.qdrantClient.EnsureCollection(rs.lessonsCollectionName, rs.vectorDimension); err != nil {
+			// Check for dimension mismatch
+			if dimErr, ok := err.(*DimensionMismatchError); ok {
+				rs.logger.Warn("Dimension mismatch detected for lessons - triggering migration",
+					zap.String("collection", rs.lessonsCollectionName),
+					zap.Int("expectedDim", dimErr.ExpectedDim),
+					zap.Int("gotDim", dimErr.GotDim))
+
+				// Fetch all lessons from MongoDB
+				lessons, fetchErr := rs.GetReflectionsByType("lesson")
+				if fetchErr != nil {
+					rs.logger.Error("Failed to fetch lessons for migration", zap.Error(fetchErr))
+				} else {
+					// Convert to format needed for re-indexing
+					entries := make([]*KnowledgeEntry, len(lessons))
+					for i, lesson := range lessons {
+						entries[i] = &KnowledgeEntry{
+							ID:       lesson.ID,
+							Text:     rs.buildLessonSearchText(lesson),
+							Metadata: map[string]interface{}{
+								"type":      "lesson",
+								"timestamp": lesson.Timestamp,
+								"tags":      lesson.Tags,
+							},
+						}
+					}
+
+					// Recreate collection with new dimensions
+					reindexedCount, migrateErr := rs.qdrantClient.RecreateCollectionWithReindex(
+						rs.lessonsCollectionName,
+						entries,
+						rs.vectorDimension,
+					)
+					if migrateErr != nil {
+						rs.logger.Error("Failed to migrate lessons collection", zap.Error(migrateErr))
+					} else {
+						rs.logger.Info("Successfully migrated lessons to new dimensions",
+							zap.String("collection", rs.lessonsCollectionName),
+							zap.Int("oldDim", dimErr.ExpectedDim),
+							zap.Int("newDim", dimErr.GotDim),
+							zap.Int("entriesMigrated", reindexedCount))
+					}
+				}
+			} else {
+				rs.logger.Warn("Failed to ensure Qdrant collection for lessons", zap.Error(err))
+			}
+		}
+
+		// Store lesson in Qdrant
+		metadata := map[string]interface{}{
+			"type":      "lesson",
+			"timestamp": reflection.Timestamp,
+			"tags":      reflection.Tags,
+		}
+		if err := rs.qdrantClient.StorePoint(rs.lessonsCollectionName, reflection.ID, lessonText, metadata); err != nil {
+			rs.logger.Warn("Failed to store lesson in Qdrant (MongoDB has it)",
+				zap.String("lessonId", reflection.ID),
+				zap.Error(err))
+		} else {
+			rs.logger.Debug("Stored lesson in Qdrant for semantic search",
+				zap.String("lessonId", reflection.ID))
+		}
+	}
+
 	return reflection.ID, nil
+}
+
+// buildLessonSearchText builds searchable text from lesson data for semantic search
+func (rs *ReflectionStorage) buildLessonSearchText(reflection *Reflection) string {
+	if reflection.Type != "lesson" {
+		return ""
+	}
+
+	data := reflection.Data
+	patternName, _ := data["patternName"].(string)
+	problem, _ := data["problem"].(string)
+	solution, _ := data["solution"].(string)
+	context, _ := data["context"].(string)
+	antipattern, _ := data["antipattern"].(string)
+
+	// Build comprehensive searchable text
+	text := fmt.Sprintf("Pattern: %s\nProblem: %s\nSolution: %s", patternName, problem, solution)
+	if context != "" {
+		text += fmt.Sprintf("\nContext: %s", context)
+	}
+	if antipattern != "" {
+		text += fmt.Sprintf("\nAntipattern: %s", antipattern)
+	}
+
+	return text
 }
 
 // GetReflectionsByType retrieves all reflections of a specific type
@@ -307,13 +424,53 @@ func (rs *ReflectionStorage) UpsertExperienceIndex(pattern string, contextStr st
 	return nil
 }
 
-// SearchLessonsBy Text performs text-based search across lesson content
+// SearchLessonsByText performs semantic search across lesson content using Qdrant (if available)
+// Falls back to MongoDB regex search if Qdrant is not configured
 func (rs *ReflectionStorage) SearchLessonsByText(query string, limit int) ([]*Reflection, error) {
 	ctx := context.Background()
 
-	// Create a regex pattern for case-insensitive search across multiple fields
-	regexPattern := fmt.Sprintf("(?i)%s", query)
+	// If Qdrant is available, use semantic search
+	if rs.qdrantClient != nil {
+		rs.logger.Debug("Using Qdrant semantic search for lessons",
+			zap.String("query", query),
+			zap.Int("limit", limit))
 
+		// Search in Qdrant using semantic similarity
+		results, err := rs.qdrantClient.SearchSimilar(rs.lessonsCollectionName, query, limit)
+		if err != nil {
+			// Log warning but fall back to MongoDB regex search
+			rs.logger.Warn("Qdrant search failed, falling back to MongoDB regex",
+				zap.Error(err))
+		} else if len(results) > 0 {
+			// Convert Qdrant results to Reflection objects
+			lessons := make([]*Reflection, 0, len(results))
+			for _, result := range results {
+				// Fetch full reflection from MongoDB by ID
+				var lesson Reflection
+				err := rs.reflectionsCollection.FindOne(ctx, bson.M{"id": result.Entry.ID}).Decode(&lesson)
+				if err != nil {
+					rs.logger.Warn("Failed to fetch lesson from MongoDB",
+						zap.String("lessonId", result.Entry.ID),
+						zap.Error(err))
+					continue
+				}
+				lessons = append(lessons, &lesson)
+			}
+
+			rs.logger.Info("Semantic search completed",
+				zap.String("query", query),
+				zap.Int("results", len(lessons)))
+
+			return lessons, nil
+		}
+	}
+
+	// Fallback: MongoDB regex search
+	rs.logger.Debug("Using MongoDB regex search for lessons",
+		zap.String("query", query),
+		zap.Int("limit", limit))
+
+	regexPattern := fmt.Sprintf("(?i)%s", query)
 	filter := bson.M{
 		"type": "lesson",
 		"$or": []bson.M{
@@ -337,7 +494,7 @@ func (rs *ReflectionStorage) SearchLessonsByText(query string, limit int) ([]*Re
 		return nil, fmt.Errorf("failed to decode lessons: %w", err)
 	}
 
-	rs.logger.Info("Text search completed",
+	rs.logger.Info("Regex search completed",
 		zap.String("query", query),
 		zap.Int("results", len(lessons)))
 
