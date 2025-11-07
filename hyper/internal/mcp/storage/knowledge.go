@@ -280,7 +280,30 @@ func (s *MongoKnowledgeStorage) CreateCollection(name, category, description str
 	// Create Qdrant collection
 	if s.qdrantClient != nil {
 		if err := s.qdrantClient.EnsureCollection(collection.QdrantName, s.vectorDimension); err != nil {
-			return nil, fmt.Errorf("failed to create Qdrant collection: %w", err)
+			// Check if this is a dimension mismatch error
+			if dimErr, ok := err.(*DimensionMismatchError); ok {
+				s.logger.Warn("Dimension mismatch detected on collection creation - recreating",
+					zap.String("qdrantName", collection.QdrantName),
+					zap.Int("expectedDim", dimErr.ExpectedDim),
+					zap.Int("newDim", dimErr.GotDim))
+
+				// Delete and recreate with correct dimensions (no data to migrate yet)
+				if delErr := s.qdrantClient.DeleteCollection(collection.QdrantName); delErr != nil {
+					s.logger.Error("Failed to delete mismatched collection", zap.Error(delErr))
+					return nil, fmt.Errorf("failed to delete mismatched Qdrant collection: %w", delErr)
+				}
+
+				// Retry creation with new dimensions
+				if retryErr := s.qdrantClient.EnsureCollection(collection.QdrantName, s.vectorDimension); retryErr != nil {
+					return nil, fmt.Errorf("failed to recreate Qdrant collection: %w", retryErr)
+				}
+
+				s.logger.Info("Successfully recreated collection with new dimensions",
+					zap.String("qdrantName", collection.QdrantName),
+					zap.Int("dimensions", s.vectorDimension))
+			} else {
+				return nil, fmt.Errorf("failed to create Qdrant collection: %w", err)
+			}
 		}
 	}
 
@@ -633,28 +656,64 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 	if s.qdrantClient != nil {
 		// Ensure collection exists using immutable QdrantName
 		if err := s.qdrantClient.EnsureCollection(collectionObj.QdrantName, s.vectorDimension); err != nil {
-			// Log error but don't fail - MongoDB has the data
-			s.logger.Warn("Failed to ensure Qdrant collection",
-				zap.String("qdrantName", collectionObj.QdrantName),
-				zap.Error(err))
-		} else {
-			// Prepare Qdrant payload with taskId if provided
-			qdrantPayload := metadata
-			if qdrantPayload == nil {
-				qdrantPayload = make(map[string]interface{})
-			}
-			if taskId != nil && *taskId != "" {
-				qdrantPayload["taskId"] = *taskId
-			}
-
-			// Store vector point using QdrantName
-			if err := s.qdrantClient.StorePoint(collectionObj.QdrantName, entry.ID, text, qdrantPayload); err != nil {
-				// Log error but don't fail - MongoDB has the data
-				s.logger.Warn("Failed to store point in Qdrant",
+			// Check if this is a dimension mismatch error
+			if dimErr, ok := err.(*DimensionMismatchError); ok {
+				s.logger.Warn("Dimension mismatch detected - triggering automatic migration",
 					zap.String("qdrantName", collectionObj.QdrantName),
-					zap.String("entryId", entry.ID),
+					zap.Int("expectedDim", dimErr.ExpectedDim),
+					zap.Int("gotDim", dimErr.GotDim))
+
+				// Fetch all entries for this collection from MongoDB
+				entries, fetchErr := s.GetEntriesByCollection(collection)
+				if fetchErr != nil {
+					s.logger.Error("Failed to fetch entries for migration",
+						zap.String("collection", collection),
+						zap.Error(fetchErr))
+				} else {
+					// Recreate collection with new dimensions and re-embed all data
+					reindexedCount, migrateErr := s.qdrantClient.RecreateCollectionWithReindex(
+						collectionObj.QdrantName,
+						entries,
+						s.vectorDimension,
+					)
+					if migrateErr != nil {
+						s.logger.Error("Failed to migrate collection",
+							zap.String("qdrantName", collectionObj.QdrantName),
+							zap.Error(migrateErr))
+					} else {
+						s.logger.Info("Successfully migrated collection to new dimensions",
+							zap.String("qdrantName", collectionObj.QdrantName),
+							zap.Int("oldDim", dimErr.ExpectedDim),
+							zap.Int("newDim", dimErr.GotDim),
+							zap.Int("entriesMigrated", reindexedCount),
+							zap.Int("totalEntries", len(entries)))
+					}
+				}
+			} else {
+				// Log error but don't fail - MongoDB has the data
+				s.logger.Warn("Failed to ensure Qdrant collection",
+					zap.String("qdrantName", collectionObj.QdrantName),
 					zap.Error(err))
 			}
+		}
+
+		// Always attempt to store the point (collection should exist now after migration)
+		// Prepare Qdrant payload with taskId if provided
+		qdrantPayload := metadata
+		if qdrantPayload == nil {
+			qdrantPayload = make(map[string]interface{})
+		}
+		if taskId != nil && *taskId != "" {
+			qdrantPayload["taskId"] = *taskId
+		}
+
+		// Store vector point using QdrantName
+		if err := s.qdrantClient.StorePoint(collectionObj.QdrantName, entry.ID, text, qdrantPayload); err != nil {
+			// Log error but don't fail - MongoDB has the data
+			s.logger.Warn("Failed to store point in Qdrant",
+				zap.String("qdrantName", collectionObj.QdrantName),
+				zap.String("entryId", entry.ID),
+				zap.Error(err))
 		}
 	}
 
