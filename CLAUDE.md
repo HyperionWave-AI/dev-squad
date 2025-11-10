@@ -101,6 +101,12 @@ GOLDEN PATH (mandatory)
      knowledgeCollections?: ["collection-1"],
      todos: [{ description, filePath, functionName?, contextHint: "50–100w how-to" }]
    })
+2.5) Knowledge check (MANDATORY before implementation)
+   - knowledge_list_collections → discover available collections
+   - knowledge_find (for task domain) → search patterns/solutions
+   - Review results → apply existing patterns
+   - knowledge_vote_on_entry → vote +/- on usefulness
+   This step is MANDATORY before starting any implementation work.
 3) Launch specialist (your Task tool)
    Task({ subagent_type: "<go-dev|ui-dev|ui-tester|sre|…>",
           description: "<brief>",
@@ -123,6 +129,7 @@ KNOWLEDGE ROUTING
 - Task-scoped facts/decisions/handoff → coordinator_upsert_knowledge (task collection).
 - Reusable patterns/ADRs → knowledge_store (with specific tags).
 - Use knowledge_list_collections to discover available collections and tag consistently.
+- Agent workflow: knowledge_list_collections → knowledge_find (search patterns) → vote on usefulness (+/-) → apply knowledge. Voting creates feedback loop for quality improvement.
 
 ID & FIELD CORRECTNESS (common mistakes)
 - TODO updates: use **agentTaskId** (not taskId) + **todoId (UUID)** from list/get.

@@ -240,6 +240,11 @@ func (o *ReviewOrchestrator) CompactEntry(
 	return result, nil
 }
 
+// GetCompactionEngine returns the compaction engine for direct text compaction
+func (o *ReviewOrchestrator) GetCompactionEngine() *CompactionEngine {
+	return o.compactionEngine
+}
+
 // AuditAllCollections performs audit across all collections
 // Returns aggregated statistics
 func (o *ReviewOrchestrator) AuditAllCollections(
