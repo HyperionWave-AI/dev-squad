@@ -9,6 +9,7 @@ import type { KnowledgeCollection, CollectionReviewResult } from '@/types/knowle
 import { knowledgeService } from '@/services/knowledgeService';
 import { CreateCollectionModal } from './CreateCollectionModal';
 import { CollectionReviewDialog } from './CollectionReviewDialog';
+import { CollectionSettingsDialog } from './CollectionSettingsDialog';
 
 export interface CollectionBrowserProps {
   collections: KnowledgeCollection[];
@@ -49,6 +50,8 @@ export function CollectionBrowser({
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [reviewResult, setReviewResult] = useState<CollectionReviewResult | null>(null);
   const [reviewingCollection, setReviewingCollection] = useState<string | null>(null);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const [selectedCollectionForSettings, setSelectedCollectionForSettings] = useState<KnowledgeCollection | null>(null);
 
   // Filter collections by search query
   const filteredCollections = collections.filter((col) =>
@@ -82,8 +85,14 @@ export function CollectionBrowser({
 
   const handleSettingsClick = (collection: KnowledgeCollection, e: React.MouseEvent) => {
     e.stopPropagation();
-    // TODO: Implement settings dialog
-    console.log('Settings for:', collection.name);
+    setSelectedCollectionForSettings(collection);
+    setSettingsDialogOpen(true);
+  };
+
+  const handleSettingsSuccess = () => {
+    setSettingsDialogOpen(false);
+    setSelectedCollectionForSettings(null);
+    onCollectionCreated(); // Refresh collections list
   };
 
   const handleReviewCollection = async (collection: KnowledgeCollection, e: React.MouseEvent) => {
@@ -187,7 +196,7 @@ export function CollectionBrowser({
       </div>
 
       {/* Collections Accordion */}
-      <div className="overflow-y-auto max-h-[calc(100vh-350px)]">
+      <div>
         {filteredCollections.length === 0 ? (
           <div className="text-center py-8 text-gray-500 dark:text-gray-400 px-4">
             <p className="text-sm">
@@ -408,6 +417,14 @@ export function CollectionBrowser({
         open={reviewDialogOpen}
         onClose={() => setReviewDialogOpen(false)}
         result={reviewResult}
+      />
+
+      {/* Collection Settings Dialog */}
+      <CollectionSettingsDialog
+        open={settingsDialogOpen}
+        onOpenChange={setSettingsDialogOpen}
+        collection={selectedCollectionForSettings}
+        onSuccess={handleSettingsSuccess}
       />
     </div>
   );

@@ -87,7 +87,7 @@ export const CodeSearchPage: React.FC = () => {
       });
 
       // Transform results to match our interface
-      const transformedResults: CodeResult[] = response.results.map((result, index) => {
+      const transformedResults: CodeResult[] = response.results.map((result) => {
         const fileExtension = result.filePath.split('.').pop()?.toLowerCase() || '';
         const languageMap: Record<string, string> = {
           'ts': 'typescript',
