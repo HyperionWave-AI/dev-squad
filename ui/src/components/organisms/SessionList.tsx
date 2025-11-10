@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '../atoms/Button';
-import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2 } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2, Users } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
+import { subagentsService } from '@/services/subagentsService';
+import type { Subagent } from '@/types/subagent';
 
 interface ChatSession {
   id: string;
@@ -30,7 +32,7 @@ interface SessionListProps {
 const organizeSessionsHierarchy = (sessions: ChatSession[]) => {
   const mainSessions: ChatSession[] = [];
   const subchatsMap = new Map<string, ChatSession[]>();
-  
+
   // Separate main sessions and subchats
   sessions.forEach(session => {
     if (session.isSubchat && session.parentSessionId) {
@@ -42,10 +44,10 @@ const organizeSessionsHierarchy = (sessions: ChatSession[]) => {
       mainSessions.push(session);
     }
   });
-  
+
   // Sort subchats by timestamp for each parent
   subchatsMap.forEach(subchats => subchats.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
-  
+
   return { mainSessions, subchatsMap };
 };
 
@@ -64,6 +66,11 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [dropdownSessionId, setDropdownSessionId] = useState<string | null>(null);
+
+  // State for the subagents modal
+  const [isAgentsModalOpen, setIsAgentsModalOpen] = useState(false);
+  const [subagents, setSubagents] = useState<Subagent[]>([]);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(false);
 
   // Organize sessions into hierarchy
   const { mainSessions, subchatsMap } = organizeSessionsHierarchy(sessions);
@@ -215,10 +222,21 @@ export const SessionList: React.FC<SessionListProps> = ({
     setDropdownSessionId(null);
   };
 
-  // Handler for the blue placeholder button
-  const handlePlaceholderClick = () => {
-    console.log('Blue placeholder button clicked!');
+  // Handler for the new "View Agents" button
+  const handleViewAgentsClick = async () => {
+    setIsAgentsModalOpen(true);
+    setIsLoadingAgents(true);
+    try {
+      const { subagents } = await subagentsService.listSubagents();
+      setSubagents(subagents);
+    } catch (error) {
+      console.error('Failed to fetch subagents:', error);
+      // Optionally set an error state here to show in the modal
+    } finally {
+      setIsLoadingAgents(false);
+    }
   };
+
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -256,14 +274,15 @@ export const SessionList: React.FC<SessionListProps> = ({
             New Chat
           </Button>
           
-          {/* Blue Placeholder Button */}
+          {/* Replaced Placeholder Button */}
           <Button
-            onClick={handlePlaceholderClick}
-            className="w-full justify-center bg-blue-600 hover:bg-blue-700 text-white border-blue-600 hover:border-blue-700 focus:ring-blue-500"
+            onClick={handleViewAgentsClick}
+            variant="secondary"
+            className="w-full justify-center"
             disabled={isLoading}
           >
-            <MessageSquare className="w-4 h-4 mr-2" />
-            Placeholder Action
+            <Users className="w-4 h-4 mr-2" />
+            View Agents
           </Button>
           
           {sessions.length > 0 && (
@@ -311,6 +330,7 @@ export const SessionList: React.FC<SessionListProps> = ({
         )}
       </div>
 
+
       {/* New Chat Dialog */}
       <Dialog.Root open={isNewDialogOpen} onOpenChange={setIsNewDialogOpen}>
         <Dialog.Portal>
@@ -357,6 +377,47 @@ export const SessionList: React.FC<SessionListProps> = ({
                   {isLoading ? 'Deleting...' : 'Delete All'}
                 </Button>
               </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+          {/* Agents List Dialog */}
+      <Dialog.Root open={isAgentsModalOpen} onOpenChange={setIsAgentsModalOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <Dialog.Title className="text-xl font-semibold text-gray-900 dark:text-white">
+                Available Agents
+              </Dialog.Title>
+              <Dialog.Description className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                These are the specialized agents available for use.
+              </Dialog.Description>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {isLoadingAgents ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
+              ) : subagents.length > 0 ? (
+                <ul className="space-y-4">
+                  {subagents.map((agent) => (
+                    <li key={agent.name} className="p-4 bg-gray-50 dark:bg-gray-900/60 rounded-lg border border-gray-200 dark:border-gray-700">
+                      <h3 className="font-semibold text-md text-gray-900 dark:text-white">{agent.name}</h3>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{agent.description}</p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-center text-gray-500 dark:text-gray-400 py-8">
+                    <p>No agents found or failed to load.</p>
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end bg-white dark:bg-gray-800">
+              <Button onClick={() => setIsAgentsModalOpen(false)} variant="ghost">
+                Close
+              </Button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
