@@ -387,39 +387,39 @@ func estimateTokens(text string) int {
 // This matches the language metadata stored during indexing
 func fileExtensionToLanguage(extension string) string {
 	extensionMap := map[string]string{
-		".go":      "go",
-		".js":      "javascript",
-		".ts":      "typescript",
-		".jsx":     "javascript",
-		".tsx":     "typescript",
-		".py":      "python",
-		".java":    "java",
-		".c":       "c",
-		".cpp":     "cpp",
-		".h":       "c",
-		".hpp":     "cpp",
-		".cs":      "csharp",
-		".rb":      "ruby",
-		".php":     "php",
-		".rs":      "rust",
-		".swift":   "swift",
-		".kt":      "kotlin",
-		".m":       "objective-c",
-		".scala":   "scala",
-		".r":       "r",
-		".sql":     "sql",
-		".sh":      "shell",
-		".bash":    "shell",
-		".yaml":    "yaml",
-		".yml":     "yaml",
-		".json":    "json",
-		".xml":     "xml",
-		".html":    "html",
-		".css":     "css",
-		".scss":    "scss",
-		".less":    "less",
-		".vue":     "vue",
-		".md":      "markdown",
+		".go":    "go",
+		".js":    "javascript",
+		".ts":    "typescript",
+		".jsx":   "javascript",
+		".tsx":   "typescript",
+		".py":    "python",
+		".java":  "java",
+		".c":     "c",
+		".cpp":   "cpp",
+		".h":     "c",
+		".hpp":   "cpp",
+		".cs":    "csharp",
+		".rb":    "ruby",
+		".php":   "php",
+		".rs":    "rust",
+		".swift": "swift",
+		".kt":    "kotlin",
+		".m":     "objective-c",
+		".scala": "scala",
+		".r":     "r",
+		".sql":   "sql",
+		".sh":    "shell",
+		".bash":  "shell",
+		".yaml":  "yaml",
+		".yml":   "yaml",
+		".json":  "json",
+		".xml":   "xml",
+		".html":  "html",
+		".css":   "css",
+		".scss":  "scss",
+		".less":  "less",
+		".vue":   "vue",
+		".md":    "markdown",
 	}
 
 	// Normalize extension to lowercase with leading dot
@@ -471,7 +471,6 @@ func buildFileTypeFilter(fileTypes []interface{}) map[string]interface{} {
 		"should": shouldClauses,
 	}
 }
-
 
 // handleSearch handles the code_index_search tool
 func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -675,21 +674,6 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		results = append(results, result)
 	}
 
-	// Filter out deprecated ui/ directory (but keep ui2/)
-	// This prevents confusion between old UI (ui/) and new UI (ui2/)
-	filteredByPath := make([]storage.SearchResult, 0, len(results))
-	for _, result := range results {
-		// Check if the file is in deprecated ui/ directory
-		// We want to exclude paths like "/ui/" or "/ui/src/" but keep "/ui2/"
-		if strings.Contains(result.FilePath, "/ui/") && !strings.Contains(result.FilePath, "/ui2/") {
-			h.logger.Debug("Filtering deprecated UI file from search results",
-				zap.String("filePath", result.FilePath))
-			continue
-		}
-		filteredByPath = append(filteredByPath, result)
-	}
-	results = filteredByPath
-
 	// Filter results by minScore threshold (if specified)
 	originalCount := len(results)
 	if minScore > 0.0 {
@@ -885,7 +869,7 @@ func validateSafeIndexPath(path string) error {
 			return fmt.Errorf("cannot index system directory '%s'", cleanPath)
 		}
 		if strings.HasPrefix(cleanPath, dangerous+"/") &&
-		   dangerous != "/opt" && dangerous != "/tmp" {
+			dangerous != "/opt" && dangerous != "/tmp" {
 			return fmt.Errorf("cannot index system subdirectory '%s' under '%s'", cleanPath, dangerous)
 		}
 	}
