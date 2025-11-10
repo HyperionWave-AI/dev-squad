@@ -370,6 +370,19 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 	}, nil
 }
 
+// estimateTokens estimates the number of tokens in text
+// Uses conservative estimate: 1 token ≈ 4 characters for code
+// Includes overhead for JSON structure
+func estimateTokens(text string) int {
+	// Base character count / 4 for token estimation
+	baseTokens := len(text) / 4
+
+	// Add ~10% overhead for JSON structure (keys, braces, quotes)
+	overhead := baseTokens / 10
+
+	return baseTokens + overhead
+}
+
 // fileExtensionToLanguage maps file extensions to language names
 // This matches the language metadata stored during indexing
 func fileExtensionToLanguage(extension string) string {
@@ -690,6 +703,34 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		results = filteredResults
 	}
 
+	// Smart token limiting: estimate tokens and truncate results if needed
+	// Token budget: 20k tokens (with 5k safety margin from 25k MCP limit)
+	const maxTokenBudget = 20000
+	var cumulativeTokens int
+	var truncatedResults []storage.SearchResult
+	var truncated bool
+
+	for i, result := range results {
+		// Estimate tokens for this result
+		// Include: content + metadata (filePath, language, score, etc.)
+		resultJSON, _ := json.Marshal(result)
+		resultTokens := estimateTokens(string(resultJSON))
+
+		// Check if adding this result would exceed budget
+		if cumulativeTokens+resultTokens > maxTokenBudget && i > 0 {
+			// Stop adding results, but keep at least 1 result
+			truncated = true
+			break
+		}
+
+		truncatedResults = append(truncatedResults, result)
+		cumulativeTokens += resultTokens
+	}
+
+	// Track original vs returned counts
+	returnedCount := len(truncatedResults)
+	results = truncatedResults
+
 	h.logger.Info("Code search completed",
 		zap.String("query", query),
 		zap.String("retrieveMode", retrieveModeParam),
@@ -697,7 +738,9 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		zap.Int("chunkLines", chunkLines),
 		zap.Float64("minScore", minScore),
 		zap.Int("originalResults", originalCount),
-		zap.Int("filteredResults", len(results)))
+		zap.Int("filteredResults", len(results)),
+		zap.Int("estimatedTokens", cumulativeTokens),
+		zap.Bool("truncated", truncated))
 
 	// Build response with filtering metadata
 	response := map[string]interface{}{
@@ -708,17 +751,34 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		"count":        len(results),
 	}
 
+	// Add token limiting metadata if truncation occurred
+	if truncated {
+		response["truncated"] = true
+		response["originalCount"] = originalCount
+		response["returnedCount"] = returnedCount
+		response["message"] = fmt.Sprintf("Results truncated to fit 20k token budget. Returned %d of %d results. Use smaller chunk sizes (chunk-s, chunk-m) or add filters (fileTypes, minScore) to get more results within budget.", returnedCount, originalCount)
+	} else {
+		response["truncated"] = false
+	}
+
 	// Add guidance message when full mode is used
 	if retrieveType == "full" {
-		response["message"] = "Returning top 1 result with full file content to conserve context. For multi-result exploration, use chunk-based retrieval modes: chunk-s (50 lines), chunk-m (100 lines), chunk-l (200 lines), or chunk-xl (400 lines)."
+		if truncated {
+			response["message"] = fmt.Sprintf("%s Using full file mode with large files. Consider chunk-based modes for more results.", response["message"])
+		} else {
+			response["message"] = "Returning top 1 result with full file content to conserve context. For multi-result exploration, use chunk-based retrieval modes: chunk-s (50 lines), chunk-m (100 lines), chunk-l (200 lines), or chunk-xl (400 lines)."
+		}
 	}
 
 	// Add score filtering metadata if filtering was applied
 	if minScore > 0.0 {
 		response["minScore"] = minScore
 		response["resultsFiltered"] = true
-		response["originalCount"] = originalCount
-		response["filteredCount"] = len(results)
+		if !truncated {
+			// Only set originalCount if not already set by truncation
+			response["originalCount"] = originalCount
+			response["filteredCount"] = len(results)
+		}
 	} else {
 		response["resultsFiltered"] = false
 	}

@@ -416,9 +416,9 @@ export function KnowledgeBasePage() {
       </div>
 
       {/* Three-Column Layout: 25% - 25% - 50% */}
-      <div className="grid grid-cols-12 gap-4">
+      <div className="grid grid-cols-12 gap-4 h-[calc(100vh-280px)]">
         {/* Left Column: Collections Browser (25%) */}
-        <div className="col-span-3">
+        <div className="col-span-3 overflow-y-auto">
           <CollectionBrowser
             collections={collections}
             selectedCollection={selectedCollection}
@@ -429,8 +429,8 @@ export function KnowledgeBasePage() {
         </div>
 
         {/* Middle Column: Article List (25%) */}
-        <div className="col-span-3">
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm min-h-[calc(100vh-200px)] h-full transition-all duration-200">
+        <div className="col-span-3 overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm h-full transition-all duration-200">
             {/* Create New Article Button - Show when collection is selected */}
             {selectedCollection && !isUniversalSearchMode && (
               <div className="p-4 border-b border-gray-200 dark:border-gray-700">
@@ -493,8 +493,8 @@ export function KnowledgeBasePage() {
         </div>
 
         {/* Right Column: Article Viewer/Editor (50%) */}
-        <div className="col-span-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 min-h-[calc(100vh-200px)] h-full">
+        <div className="col-span-6 overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 h-full">
             {isEditing && selectedEntry ? (
               <ArticleEditor
                 entry={selectedEntry}

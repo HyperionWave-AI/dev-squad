@@ -173,7 +173,7 @@ export const ArticleViewer: React.FC<ArticleViewerProps> = ({
   };
 
   return (
-    <div className="h-full overflow-auto p-6">
+    <div className="p-6">
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm p-6">
         {/* Header with actions */}
         <div className="flex justify-between items-center mb-4">

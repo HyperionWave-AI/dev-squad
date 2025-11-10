@@ -1177,6 +1177,50 @@ func (c *QdrantClient) EnsureCodeIndexCollection(expectedDimensions ...int) erro
 		return fmt.Errorf("failed to create collection (status %d): %s", resp.StatusCode, string(body))
 	}
 
+	// Create payload indexes for filtering
+	// This enables efficient filtering by language field
+	if err := c.createCodeIndexPayloadIndexes(CodeIndexCollection); err != nil {
+		// Log warning but don't fail - collection is created, indexes can be added later
+		fmt.Printf("Warning: failed to create payload indexes: %v\n", err)
+	}
+
+	return nil
+}
+
+// createCodeIndexPayloadIndexes creates payload field indexes for code index collection
+// This enables efficient filtering by language and other metadata fields
+func (c *QdrantClient) createCodeIndexPayloadIndexes(collectionName string) error {
+	// Create index for 'language' field to enable fileTypes filtering
+	indexConfig := map[string]interface{}{
+		"field_name": "language",
+		"field_schema": "keyword",
+	}
+
+	jsonBody, err := json.Marshal(indexConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal index config: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/index", c.baseURL, collectionName)
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create payload index: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create payload index (status %d): %s", resp.StatusCode, string(body))
+	}
+
 	return nil
 }
 
