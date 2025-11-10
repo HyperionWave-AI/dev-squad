@@ -473,3 +473,447 @@ func TestKnowledgeFind_ResponseFormat(t *testing.T) {
 	// Verify truncation (first 200 chars + "...")
 	assert.Contains(t, textContent.Text, "...")
 }
+
+// MockVotingStorage implements a mock storage for testing voting functionality
+type MockVotingStorage struct {
+	votes      map[string]*storage.Vote // key: entryID+userID
+	voteCounts map[string]*storage.VoteSummary
+	entries    map[string]*storage.KnowledgeEntry
+}
+
+func NewMockVotingStorage() *MockVotingStorage {
+	return &MockVotingStorage{
+		votes:      make(map[string]*storage.Vote),
+		voteCounts: make(map[string]*storage.VoteSummary),
+		entries:    make(map[string]*storage.KnowledgeEntry),
+	}
+}
+
+func (m *MockVotingStorage) VoteOnEntry(entryID, userID, vote, reason string) (*storage.Vote, error) {
+	// Check if entry exists
+	if _, exists := m.entries[entryID]; !exists {
+		return nil, &mockError{msg: "entry not found"}
+	}
+
+	key := entryID + userID
+	voteRecord := &storage.Vote{
+		EntryID: entryID,
+		UserID:  userID,
+		Vote:    vote,
+		Reason:  reason,
+	}
+	m.votes[key] = voteRecord
+
+	// Update vote counts
+	if m.voteCounts[entryID] == nil {
+		m.voteCounts[entryID] = &storage.VoteSummary{}
+	}
+	summary := m.voteCounts[entryID]
+
+	// Recalculate counts
+	upvotes := 0
+	downvotes := 0
+	for k, v := range m.votes {
+		if v.EntryID == entryID {
+			if v.Vote == "+" {
+				upvotes++
+			} else if v.Vote == "-" {
+				downvotes++
+			}
+		}
+		if k == key {
+			summary.UserVote = vote
+		}
+	}
+	summary.Upvotes = upvotes
+	summary.Downvotes = downvotes
+	summary.NetScore = upvotes - downvotes
+
+	return voteRecord, nil
+}
+
+func (m *MockVotingStorage) GetEntryVotes(entryID, userID string) (*storage.VoteSummary, error) {
+	// Check if entry exists
+	if _, exists := m.entries[entryID]; !exists {
+		return nil, &mockError{msg: "entry not found"}
+	}
+
+	summary := m.voteCounts[entryID]
+	if summary == nil {
+		summary = &storage.VoteSummary{}
+	}
+
+	// Get user's vote
+	key := entryID + userID
+	if vote, exists := m.votes[key]; exists {
+		summary.UserVote = vote.Vote
+	}
+
+	return summary, nil
+}
+
+// Test knowledge_vote_on_entry with successful upvote
+func TestKnowledgeVoteOnEntry_SuccessfulUpvote(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	// Add test entry
+	mockStorage.entries["test-entry-1"] = &storage.KnowledgeEntry{
+		ID:         "test-entry-1",
+		Collection: "test-collection",
+		Text:       "Test knowledge entry",
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+		"vote":    "+",
+		"reason":  "This is very helpful information",
+	}
+
+	result, data, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.IsError)
+	assert.NotNil(t, data)
+
+	// Verify result contains expected information
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "✓ Vote recorded successfully")
+	assert.Contains(t, textContent.Text, "upvote")
+	assert.Contains(t, textContent.Text, "This is very helpful information")
+	assert.Contains(t, textContent.Text, "Upvotes: 1")
+	assert.Contains(t, textContent.Text, "Net Score: 1")
+
+	// Verify data structure
+	dataMap, ok := data.(map[string]interface{})
+	require.True(t, ok)
+	assert.Contains(t, dataMap, "vote")
+	assert.Contains(t, dataMap, "summary")
+}
+
+// Test knowledge_vote_on_entry with successful downvote
+func TestKnowledgeVoteOnEntry_SuccessfulDownvote(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	// Add test entry
+	mockStorage.entries["test-entry-1"] = &storage.KnowledgeEntry{
+		ID:         "test-entry-1",
+		Collection: "test-collection",
+		Text:       "Test knowledge entry",
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+		"vote":    "-",
+		"reason":  "Information is outdated",
+	}
+
+	result, data, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.IsError)
+	assert.NotNil(t, data)
+
+	// Verify result contains downvote information
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "✓ Vote recorded successfully")
+	assert.Contains(t, textContent.Text, "downvote")
+	assert.Contains(t, textContent.Text, "Information is outdated")
+	assert.Contains(t, textContent.Text, "Downvotes: 1")
+	assert.Contains(t, textContent.Text, "Net Score: -1")
+}
+
+// Test knowledge_vote_on_entry with invalid vote type
+func TestKnowledgeVoteOnEntry_InvalidVoteType(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+		"vote":    "invalid",
+		"reason":  "test reason",
+	}
+
+	result, _, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "vote must be '+' or '-'")
+	assert.Contains(t, textContent.Text, "invalid")
+}
+
+// Test knowledge_vote_on_entry with missing entryId
+func TestKnowledgeVoteOnEntry_MissingEntryId(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	args := map[string]interface{}{
+		"vote":   "+",
+		"reason": "test reason",
+	}
+
+	result, _, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "entryId parameter is required")
+}
+
+// Test knowledge_vote_on_entry with missing vote
+func TestKnowledgeVoteOnEntry_MissingVote(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+		"reason":  "test reason",
+	}
+
+	result, _, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "vote parameter is required")
+}
+
+// Test knowledge_vote_on_entry with missing reason
+func TestKnowledgeVoteOnEntry_MissingReason(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+		"vote":    "+",
+	}
+
+	result, _, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "reason parameter is required")
+}
+
+// Test knowledge_vote_on_entry with entry not found
+func TestKnowledgeVoteOnEntry_EntryNotFound(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	args := map[string]interface{}{
+		"entryId": "nonexistent-entry",
+		"vote":    "+",
+		"reason":  "test reason",
+	}
+
+	result, _, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "Entry with ID 'nonexistent-entry' not found")
+	assert.Contains(t, textContent.Text, "Use knowledge_find or knowledge_get_by_id")
+}
+
+// Test knowledge_vote_on_entry without knowledge storage
+func TestKnowledgeVoteOnEntry_NoStorage(t *testing.T) {
+	handler := &QdrantToolHandler{
+		knowledgeStorage: nil,
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+		"vote":    "+",
+		"reason":  "test reason",
+	}
+
+	result, _, err := handler.handleKnowledgeVoteOnEntry(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "Knowledge storage not initialized")
+}
+
+// Test knowledge_get_entry_votes with successful retrieval
+func TestKnowledgeGetEntryVotes_Success(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	// Add test entry and votes
+	mockStorage.entries["test-entry-1"] = &storage.KnowledgeEntry{
+		ID:         "test-entry-1",
+		Collection: "test-collection",
+		Text:       "Test knowledge entry",
+	}
+
+	// Add multiple votes
+	mockStorage.VoteOnEntry("test-entry-1", "user1", "+", "helpful")
+	mockStorage.VoteOnEntry("test-entry-1", "user2", "+", "useful")
+	mockStorage.VoteOnEntry("test-entry-1", "user3", "-", "not accurate")
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+	}
+
+	result, data, err := handler.handleKnowledgeGetEntryVotes(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.IsError)
+	assert.NotNil(t, data)
+
+	// Verify result contains vote summary
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "Vote Summary for Entry: test-entry-1")
+	assert.Contains(t, textContent.Text, "Upvotes: 2")
+	assert.Contains(t, textContent.Text, "Downvotes: 1")
+	assert.Contains(t, textContent.Text, "Net Score: 1")
+
+	// Verify data structure
+	summary, ok := data.(*storage.VoteSummary)
+	require.True(t, ok)
+	assert.Equal(t, 2, summary.Upvotes)
+	assert.Equal(t, 1, summary.Downvotes)
+	assert.Equal(t, 1, summary.NetScore)
+}
+
+// Test knowledge_get_entry_votes with no votes
+func TestKnowledgeGetEntryVotes_NoVotes(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	// Add test entry but no votes
+	mockStorage.entries["test-entry-1"] = &storage.KnowledgeEntry{
+		ID:         "test-entry-1",
+		Collection: "test-collection",
+		Text:       "Test knowledge entry",
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+	}
+
+	result, data, err := handler.handleKnowledgeGetEntryVotes(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.IsError)
+	assert.NotNil(t, data)
+
+	// Verify result shows zero votes
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "Upvotes: 0")
+	assert.Contains(t, textContent.Text, "Downvotes: 0")
+	assert.Contains(t, textContent.Text, "Net Score: 0")
+	assert.Contains(t, textContent.Text, "Your vote: None")
+}
+
+// Test knowledge_get_entry_votes with missing entryId
+func TestKnowledgeGetEntryVotes_MissingEntryId(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	args := map[string]interface{}{}
+
+	result, _, err := handler.handleKnowledgeGetEntryVotes(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "entryId parameter is required")
+}
+
+// Test knowledge_get_entry_votes with entry not found
+func TestKnowledgeGetEntryVotes_EntryNotFound(t *testing.T) {
+	mockStorage := NewMockVotingStorage()
+	handler := &QdrantToolHandler{
+		knowledgeStorage: mockStorage,
+	}
+
+	args := map[string]interface{}{
+		"entryId": "nonexistent-entry",
+	}
+
+	result, _, err := handler.handleKnowledgeGetEntryVotes(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "Entry with ID 'nonexistent-entry' not found")
+	assert.Contains(t, textContent.Text, "Use knowledge_find or knowledge_get_by_id")
+}
+
+// Test knowledge_get_entry_votes without knowledge storage
+func TestKnowledgeGetEntryVotes_NoStorage(t *testing.T) {
+	handler := &QdrantToolHandler{
+		knowledgeStorage: nil,
+	}
+
+	args := map[string]interface{}{
+		"entryId": "test-entry-1",
+	}
+
+	result, _, err := handler.handleKnowledgeGetEntryVotes(args)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.True(t, result.IsError)
+
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "Knowledge storage not initialized")
+}

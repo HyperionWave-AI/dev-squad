@@ -69,7 +69,7 @@ func main() {
 	logger.Info("This will:")
 	logger.Info("  1. Create Collection objects from existing collection strings")
 	logger.Info("  2. Update knowledge entries with collectionId references")
-	logger.Info("  3. Preserve existing Qdrant collections (QdrantName = old collection string)")
+	logger.Info("  3. Migrate data to unified Qdrant collection with collectionId filtering")
 	logger.Info("  4. Migrate metadata from collection_metadata")
 	logger.Info("")
 
