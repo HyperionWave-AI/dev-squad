@@ -90,5 +90,38 @@ export const knowledgeApi = {
     await fetchWithAuth(`${API_BASE}/api/v1/knowledge/entries/${encodeURIComponent(id)}`, {
       method: 'DELETE'
     });
+  },
+
+  async compactEntry(id: string, targetTokenCount?: number, dryRun: boolean = false): Promise<{
+    success: boolean;
+    original: { text: string; wordCount: number };
+    compacted: { text: string; wordCount: number };
+    compressionRatio: number;
+    preserved: { filePaths: number; functionNames: number };
+  }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/entries/${encodeURIComponent(id)}/compact`, {
+      method: 'POST',
+      body: JSON.stringify({
+        targetWordCount: targetTokenCount || 750,
+        dryRun
+      })
+    });
+  },
+
+  async compactText(text: string, targetTokenCount?: number, dryRun: boolean = false): Promise<{
+    success: boolean;
+    original: { text: string; wordCount: number };
+    compacted: { text: string; wordCount: number };
+    compressionRatio: number;
+    preserved: { filePaths: number; functionNames: number };
+  }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/compact-text`, {
+      method: 'POST',
+      body: JSON.stringify({
+        text,
+        targetWordCount: targetTokenCount || 750,
+        dryRun
+      })
+    });
   }
 };

@@ -53,6 +53,16 @@ func (h *QdrantToolHandler) RegisterQdrantTools(server *mcp.Server) error {
 		return fmt.Errorf("failed to register knowledge_get_by_id tool: %w", err)
 	}
 
+	// Register knowledge_vote_on_entry tool
+	if err := h.registerKnowledgeVoteOnEntry(server); err != nil {
+		return fmt.Errorf("failed to register knowledge_vote_on_entry tool: %w", err)
+	}
+
+	// Register knowledge_get_entry_votes tool
+	if err := h.registerKnowledgeGetEntryVotes(server); err != nil {
+		return fmt.Errorf("failed to register knowledge_get_entry_votes tool: %w", err)
+	}
+
 	return nil
 }
 
@@ -60,7 +70,7 @@ func (h *QdrantToolHandler) RegisterQdrantTools(server *mcp.Server) error {
 func (h *QdrantToolHandler) registerKnowledgeFind(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "knowledge_find",
-		Description: "Search for knowledge by semantic similarity. Returns top N results with scores and metadata. Supports pagination and smart token limiting to prevent response overflow. Use offset for pagination (e.g., offset=10 for second page of results). IMPORTANT: Use knowledge_list_collections first to discover available collections and avoid 'collection not found' errors.",
+		Description: "Search for knowledge by semantic similarity. Returns top N results with scores and metadata. Supports pagination and smart token limiting to prevent response overflow. Use offset for pagination (e.g., offset=10 for second page of results). MANDATORY WORKFLOW: Before implementing any feature/fix, search relevant collections for existing patterns and solutions. After reading results, vote on usefulness using knowledge_vote_on_entry. Example queries: 'golang error handling patterns', 'React state management best practices', 'MongoDB indexing strategies'. IMPORTANT: Use knowledge_list_collections first to discover available collections and avoid 'collection not found' errors.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -128,7 +138,7 @@ func (h *QdrantToolHandler) registerKnowledgeFind(server *mcp.Server) error {
 func (h *QdrantToolHandler) registerKnowledgeStore(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "knowledge_store",
-		Description: "Store knowledge with automatic embedding generation. IMPORTANT: MAX 1000 tokens (~750 words, ~4000 characters) per entry. This knowledge base is designed for AI retrieval - keep entries focused and granular. Each entry should contain ONE specific concept, pattern, or procedure. For large documents, split into multiple focused entries. Returns storage confirmation with ID and collection. PREREQUISITE: Use knowledge_list_collections first to verify the collection exists. If collection not found, create it via the UI or API before storing knowledge.",
+		Description: "Store knowledge with automatic embedding generation. Collections are auto-created if they don't exist. IMPORTANT: MAX 1000 tokens (~750 words, ~4000 characters) per entry. Write concise, AI-optimized entries. ONE concept per entry - split large documents into focused entries. Use knowledge_list_collections first to find the right collection. This knowledge base is designed for AI retrieval - keep entries focused and granular. Each entry should contain ONE specific concept, pattern, or procedure. For large documents, split into multiple focused entries. Returns storage confirmation with ID and collection.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -248,7 +258,7 @@ func (h *QdrantToolHandler) handleQdrantFind(args map[string]interface{}) (*mcp.
 	}
 
 	// Fetch more results than needed to handle offset
-	// Use knowledgeStorage.Query() which properly resolves collection name to QdrantName
+	// Use knowledgeStorage.Query() which uses unified collection with collectionId filtering
 	fetchLimit := limit + offset
 	if fetchLimit > 50 {
 		fetchLimit = 50 // Cap total fetch to prevent excessive queries
@@ -565,6 +575,228 @@ func (h *QdrantToolHandler) handleQdrantStore(args map[string]interface{}) (*mcp
 		"id":         entry.ID,
 		"collection": collectionName,
 	}, nil
+}
+
+// registerKnowledgeVoteOnEntry registers the knowledge_vote_on_entry tool
+func (h *QdrantToolHandler) registerKnowledgeVoteOnEntry(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "knowledge_vote_on_entry",
+		Description: "Record or update a vote on a knowledge entry. IMPORTANT: Vote on every article you read. Vote + if it helped solve your problem or provided useful context. Vote - if it was outdated, incorrect, or unhelpful. Your votes improve search ranking and help other agents find quality knowledge. Votes are used to improve search ranking and identify high-quality content.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"entryId": {
+					Type:        "string",
+					Description: "Knowledge entry ID to vote on (from knowledge_find or knowledge_get_by_id)",
+				},
+				"vote": {
+					Type:        "string",
+					Description: "Vote type: '+' for upvote or '-' for downvote",
+					Enum:        []interface{}{"+", "-"},
+				},
+				"reason": {
+					Type:        "string",
+					Description: "Reason for the vote (required, helps improve content quality)",
+				},
+			},
+			Required: []string{"entryId", "vote", "reason"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleKnowledgeVoteOnEntry(args)
+		return result, err
+	})
+
+	// Report tool to metadata registry for indexing
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+				"category":    "knowledge",
+				"tags":        []string{"voting", "feedback"},
+			},
+		)
+	}
+
+	return nil
+}
+
+// handleKnowledgeVoteOnEntry handles the knowledge_vote_on_entry tool call
+func (h *QdrantToolHandler) handleKnowledgeVoteOnEntry(args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	// Check if knowledge storage is available
+	if h.knowledgeStorage == nil {
+		return createErrorResult("Knowledge storage not initialized. Cannot record vote."), nil, nil
+	}
+
+	// Extract entryId (required)
+	entryID, ok := args["entryId"].(string)
+	if !ok || entryID == "" {
+		return createErrorResult("entryId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Extract vote (required)
+	vote, ok := args["vote"].(string)
+	if !ok || vote == "" {
+		return createErrorResult("vote parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Validate vote value
+	if vote != "+" && vote != "-" {
+		return createErrorResult(fmt.Sprintf("vote must be '+' or '-', got: '%s'", vote)), nil, nil
+	}
+
+	// Extract reason (required)
+	reason, ok := args["reason"].(string)
+	if !ok || reason == "" {
+		return createErrorResult("reason parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Get userID from context, fallback to "system" like HTTP handler
+	userID := "system"
+	// TODO: Extract userID from context when MCP authentication is implemented
+
+	// Record vote
+	voteRecord, err := h.knowledgeStorage.VoteOnEntry(entryID, userID, vote, reason)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") {
+			return createErrorResult(fmt.Sprintf("Entry with ID '%s' not found. Use knowledge_find or knowledge_get_by_id to verify the entry exists.", entryID)), nil, nil
+		}
+		return createErrorResult(fmt.Sprintf("Failed to record vote: %s", errMsg)), nil, nil
+	}
+
+	// Get updated vote summary
+	summary, err := h.knowledgeStorage.GetEntryVotes(entryID, userID)
+	if err != nil {
+		// Vote was recorded but failed to get summary - still return success
+		resultText := fmt.Sprintf("✓ Vote recorded successfully\n\nEntry ID: %s\nVote: %s\nReason: %s\n\n⚠️ Could not retrieve vote summary: %s",
+			entryID, vote, reason, err.Error())
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: resultText},
+			},
+		}, voteRecord, nil
+	}
+
+	// Format success response with vote summary
+	voteType := "upvote"
+	if vote == "-" {
+		voteType = "downvote"
+	}
+	resultText := fmt.Sprintf("✓ Vote recorded successfully\n\nEntry ID: %s\nYour vote: %s (%s)\nReason: %s\n\nVote Summary:\n• Upvotes: %d\n• Downvotes: %d\n• Net Score: %d",
+		entryID, voteType, vote, reason, summary.Upvotes, summary.Downvotes, summary.NetScore)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultText},
+		},
+	}, map[string]interface{}{
+		"vote":    voteRecord,
+		"summary": summary,
+	}, nil
+}
+
+// registerKnowledgeGetEntryVotes registers the knowledge_get_entry_votes tool
+func (h *QdrantToolHandler) registerKnowledgeGetEntryVotes(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "knowledge_get_entry_votes",
+		Description: "Retrieve voting statistics for a knowledge entry. Returns upvote/downvote counts, net score, and the user's current vote if any. Use this to check article quality before relying on it. Articles with high net scores are more trusted by the community. Consider voting after reading.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"entryId": {
+					Type:        "string",
+					Description: "Knowledge entry ID to get votes for (from knowledge_find or knowledge_get_by_id)",
+				},
+			},
+			Required: []string{"entryId"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleKnowledgeGetEntryVotes(args)
+		return result, err
+	})
+
+	// Report tool to metadata registry for indexing
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+				"category":    "knowledge",
+				"tags":        []string{"voting", "stats"},
+			},
+		)
+	}
+
+	return nil
+}
+
+// handleKnowledgeGetEntryVotes handles the knowledge_get_entry_votes tool call
+func (h *QdrantToolHandler) handleKnowledgeGetEntryVotes(args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	// Check if knowledge storage is available
+	if h.knowledgeStorage == nil {
+		return createErrorResult("Knowledge storage not initialized. Cannot retrieve votes."), nil, nil
+	}
+
+	// Extract entryId (required)
+	entryID, ok := args["entryId"].(string)
+	if !ok || entryID == "" {
+		return createErrorResult("entryId parameter is required and must be a non-empty string"), nil, nil
+	}
+
+	// Get userID from context, fallback to "system" like HTTP handler
+	userID := "system"
+	// TODO: Extract userID from context when MCP authentication is implemented
+
+	// Get vote summary
+	summary, err := h.knowledgeStorage.GetEntryVotes(entryID, userID)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") {
+			return createErrorResult(fmt.Sprintf("Entry with ID '%s' not found. Use knowledge_find or knowledge_get_by_id to verify the entry exists.", entryID)), nil, nil
+		}
+		return createErrorResult(fmt.Sprintf("Failed to retrieve votes: %s", errMsg)), nil, nil
+	}
+
+	// Format response
+	resultText := fmt.Sprintf("Vote Summary for Entry: %s\n\n• Upvotes: %d\n• Downvotes: %d\n• Net Score: %d",
+		entryID, summary.Upvotes, summary.Downvotes, summary.NetScore)
+
+	if summary.UserVote != "" {
+		voteType := "upvote"
+		if summary.UserVote == "-" {
+			voteType = "downvote"
+		}
+		resultText += fmt.Sprintf("\n• Your vote: %s (%s)", voteType, summary.UserVote)
+	} else {
+		resultText += "\n• Your vote: None"
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultText},
+		},
+	}, summary, nil
 }
 
 // extractArguments safely extracts arguments from CallToolRequest
