@@ -1570,7 +1570,7 @@ func (h *ToolHandler) handleClearTodoPromptNotes(ctx context.Context, args map[s
 func (h *ToolHandler) registerListCollections(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "knowledge_list_collections",
-		Description: "List available knowledge collections with entry counts. Use this to discover which collections exist before calling knowledge_find or knowledge_store.",
+		Description: "List available knowledge collections with entry counts. IMPORTANT: Use this tool FIRST to discover available collections before knowledge_find or knowledge_store. Prevents 'collection not found' errors and helps select the right collection by description/category.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
