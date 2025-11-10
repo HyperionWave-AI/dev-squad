@@ -53,8 +53,10 @@ func NewCompactionEngine(aiConfig *aiservice.AIConfig) (*CompactionEngine, error
 		return nil, fmt.Errorf("failed to create LLM client: %w", err)
 	}
 
-	targetWords := 300
-	if tw := os.Getenv("COMPACTION_TARGET_WORDS"); tw != "" {
+	// Target 750 tokens (3000 characters) to stay under 1000 token limit
+	// Using token-based calculation: 1 token ≈ 4 characters
+	targetWords := 750 // Now represents target tokens, not words
+	if tw := os.Getenv("COMPACTION_TARGET_TOKENS"); tw != "" {
 		if parsed, err := strconv.Atoi(tw); err == nil {
 			targetWords = parsed
 		}
@@ -173,28 +175,41 @@ func (ce *CompactionEngine) buildCompactionPrompt(text string, targetWords int) 
 		preservationNote = fmt.Sprintf("\n\nCritical elements detected (MUST preserve exactly):\n%s", strings.Join(preservationList, "\n"))
 	}
 
-	prompt := fmt.Sprintf(`You are a technical knowledge compaction expert. Your task is to compress the following technical knowledge entry into EXACTLY %d words (±10 words acceptable) while preserving ALL critical information.
+	prompt := fmt.Sprintf(`You are an AI-optimized knowledge compaction expert. Your task is to compress the following technical knowledge entry into EXACTLY %d tokens (±50 tokens acceptable, ~%d characters) while preserving ALL critical information. This entry will be used by AI systems for retrieval and reference.
 
-MANDATORY STRUCTURE (use these exact headings):
-1. PROBLEM (50 words): What issue/question was being addressed?
-2. SOLUTION (100 words): How was it solved? Key implementation details.
-3. KEY FILES (50 words): Which files/functions were modified? Be specific.
-4. GOTCHAS (50 words): Edge cases, errors encountered, important warnings.
-5. TESTING (50 words): How to verify/test this? Commands, expected results.
+TARGET: %d tokens (~3000 characters) - must fit under 1000 token limit
 
-PRESERVATION RULES (CRITICAL):
+MANDATORY STRUCTURE (use these exact markdown headings):
+## Problem
+What issue/question was being addressed? (100 tokens)
+
+## Solution
+How was it solved? Key implementation details. (250 tokens)
+
+## Key Files
+Which files/functions were modified? Be specific with paths and line numbers. (150 tokens)
+
+## Gotchas
+Edge cases, errors encountered, important warnings. (150 tokens)
+
+## Testing
+How to verify/test this? Commands, expected results. (100 tokens)
+
+PRESERVATION RULES (CRITICAL - AI systems need these for retrieval):
 - Preserve ALL file paths exactly (e.g., "hyper/internal/mcp/storage/knowledge.go")
 - Preserve ALL function names exactly (e.g., "CompactEntry()", "extractCriticalElements")
 - Preserve ALL line references exactly (e.g., "line 123", "file.go:456")
 - Preserve ALL error messages exactly (in quotes)
 - Preserve ALL commands exactly (e.g., "make test", "kubectl apply")
 - Preserve ALL git commit hashes exactly
-- Use technical terminology precisely%s
+- Use technical terminology precisely - AI needs exact matches
+- Use bullet points for better AI parsing
+- Keep sentences concise and factual%s
 
 ORIGINAL TEXT:
 %s
 
-Provide ONLY the compacted text following the 5-section structure. No preamble, no meta-commentary.`, targetWords, preservationNote, text)
+Provide ONLY the compacted markdown text following the 5-section structure. No preamble, no meta-commentary, no explanations.`, targetWords, targetWords*4, targetWords, preservationNote, text)
 
 	return prompt
 }
@@ -296,11 +311,12 @@ func (ce *CompactionEngine) CompactEntry(ctx context.Context, entryText string, 
 	result.CompactedText = strings.TrimSpace(compactedText)
 	result.CompactedWords = ce.countWords(result.CompactedText)
 
-	// Validate word count (250-350 words acceptable for 300 target)
-	minWords := ce.targetWords - 50
-	maxWords := ce.targetWords + 50
-	if result.CompactedWords < minWords || result.CompactedWords > maxWords {
-		return nil, fmt.Errorf("compacted text has %d words, expected %d±50", result.CompactedWords, ce.targetWords)
+	// Validate token count (using character-based approximation: 1 token ≈ 4 chars)
+	estimatedTokens := len(result.CompactedText) / 4
+	minTokens := ce.targetWords - 100  // Allow ±100 tokens flexibility
+	maxTokens := ce.targetWords + 100
+	if estimatedTokens < minTokens || estimatedTokens > maxTokens {
+		return nil, fmt.Errorf("compacted text has ~%d tokens (%d chars), expected %d±100 tokens", estimatedTokens, len(result.CompactedText), ce.targetWords)
 	}
 
 	// Verify critical elements preserved
