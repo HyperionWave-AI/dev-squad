@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
-import { Save, X } from 'lucide-react';
+import { Save, X, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { KnowledgeEntry } from '@/types/knowledge';
+import { knowledgeApi } from '@/services/knowledgeApi';
 
 interface ArticleEditorProps {
   entry: KnowledgeEntry;
@@ -30,8 +31,10 @@ export const ArticleEditor: React.FC<ArticleEditorProps> = ({
   );
   const [activeTab, setActiveTab] = useState('edit');
   const [saving, setSaving] = useState(false);
+  const [compacting, setCompacting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [compactSuccess, setCompactSuccess] = useState<string | null>(null);
 
   // Token estimation (1 token ≈ 4 characters)
   const estimatedTokens = Math.ceil(text.length / 4);
@@ -90,6 +93,35 @@ export const ArticleEditor: React.FC<ArticleEditorProps> = ({
     }
   };
 
+  const handleCompact = async () => {
+    setCompacting(true);
+    setError(null);
+    setCompactSuccess(null);
+
+    try {
+      // For new unsaved entries, use compactText endpoint with current text
+      // For existing entries, use compactEntry endpoint with entry ID
+      const isNewEntry = entry.id.startsWith('new-');
+      const result = isNewEntry
+        ? await knowledgeApi.compactText(text, 750, false)
+        : await knowledgeApi.compactEntry(entry.id, 750, false);
+
+      if (result.success && result.compacted.text) {
+        setText(result.compacted.text);
+        const compressionPercent = Math.round((1 - result.compressionRatio) * 100);
+        setCompactSuccess(
+          `✨ Compacted successfully! Reduced by ${compressionPercent}% (${result.original.wordCount} → ${result.compacted.wordCount} words). Preserved ${result.preserved.filePaths} file paths and ${result.preserved.functionNames} functions.`
+        );
+        setError(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to compact entry');
+      setCompactSuccess(null);
+    } finally {
+      setCompacting(false);
+    }
+  };
+
   return (
     <div className="h-full overflow-auto p-6">
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm p-6">
@@ -128,6 +160,19 @@ export const ArticleEditor: React.FC<ArticleEditorProps> = ({
 
         <div className="border-t border-gray-200 dark:border-gray-700 my-4" />
 
+        {/* Success message */}
+        {compactSuccess && (
+          <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg flex items-start justify-between">
+            <p className="text-sm text-green-800 dark:text-green-200">{compactSuccess}</p>
+            <button
+              onClick={() => setCompactSuccess(null)}
+              className="text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-200"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {/* Error display */}
         {error && (
           <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start justify-between">
@@ -147,16 +192,29 @@ export const ArticleEditor: React.FC<ArticleEditorProps> = ({
             <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">
               Content
             </h3>
-            <div className={`text-xs font-medium px-3 py-1 rounded-full ${
-              isOverLimit
-                ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-700'
-                : estimatedTokens > 800
-                ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-700'
-                : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-700'
-            }`}>
-              {isOverLimit ? '⚠️ ' : ''}
-              ~{estimatedTokens} / {maxTokens} tokens
-              {isOverLimit && ' (over limit!)'}
+            <div className="flex items-center gap-2">
+              {isOverLimit && (
+                <button
+                  onClick={handleCompact}
+                  disabled={compacting}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/30 border border-purple-300 dark:border-purple-700 rounded-full hover:bg-purple-100 dark:hover:bg-purple-900/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Use AI to compress content to fit under 1000 tokens"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {compacting ? 'Compacting...' : 'Compact with AI'}
+                </button>
+              )}
+              <div className={`text-xs font-medium px-3 py-1 rounded-full ${
+                isOverLimit
+                  ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-700'
+                  : estimatedTokens > 800
+                  ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-700'
+                  : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-700'
+              }`}>
+                {isOverLimit ? '⚠️ ' : ''}
+                ~{estimatedTokens} / {maxTokens} tokens
+                {isOverLimit && ' (over limit!)'}
+              </div>
             </div>
           </div>
 

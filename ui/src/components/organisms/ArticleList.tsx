@@ -59,7 +59,7 @@ export const ArticleList: React.FC<ArticleListProps> = ({
   }
 
   return (
-    <div className="p-4 h-full overflow-auto">
+    <div className="p-4">
       <div className="mb-4 pb-3 border-b border-gray-200 dark:border-gray-700">
         <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
           <span className="px-3 py-1 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-sm font-bold rounded-lg shadow-md">
