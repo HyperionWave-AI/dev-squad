@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '../atoms/Button';
-import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2, Users } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2, Users, Bot } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
 import { subagentsService } from '@/services/subagentsService';
@@ -15,6 +15,7 @@ interface ChatSession {
   timestamp: Date | string;
   messageCount: number;
   activeSubagentId?: string;
+  activeSubagentName?: string;
 }
 
 interface SessionListProps {
@@ -77,18 +78,26 @@ export const SessionList: React.FC<SessionListProps> = ({
   const { mainSessions, subchatsMap } = organizeSessionsHierarchy(sessions);
 
   // Function to render a single session
-  const renderSession = (session: ChatSession, isSubchat = false) => (
-    <div
-      key={session.id}
-      className={`relative group rounded-lg p-3 mb-2 cursor-pointer transition-colors ${
-        isSubchat ? 'ml-6' : ''
-      } ${
-        currentSessionId === session.id
-          ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700'
-          : 'hover:bg-gray-50 dark:hover:bg-gray-800'
-      }`}
-      onClick={() => onSessionSelect(session.id)}
-    >
+  const renderSession = (session: ChatSession, isSubchat = false) => {
+    // Check if this is a direct subagent chat session
+    const isSubagentChat = !!(session.activeSubagentId || session.activeSubagentName);
+
+    return (
+      <div
+        key={session.id}
+        className={`relative group rounded-lg p-3 mb-2 cursor-pointer transition-all duration-200 ${
+          isSubchat ? 'ml-6' : ''
+        } ${
+          currentSessionId === session.id
+            ? isSubagentChat
+              ? 'bg-pink-50/80 dark:bg-pink-950/20 border border-pink-300/60 dark:border-pink-500/40 shadow-sm shadow-pink-200/50 dark:shadow-pink-900/30'
+              : 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700'
+            : isSubagentChat
+              ? 'border border-pink-200/50 dark:border-pink-800/40 hover:bg-pink-50/40 dark:hover:bg-pink-950/10 hover:border-pink-300/60 dark:hover:border-pink-600/40 hover:shadow-sm hover:shadow-pink-200/30 dark:hover:shadow-pink-900/20'
+              : 'hover:bg-gray-50 dark:hover:bg-gray-800'
+        }`}
+        onClick={() => onSessionSelect(session.id)}
+      >
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           {editingSessionId === session.id ? (
@@ -112,7 +121,10 @@ export const SessionList: React.FC<SessionListProps> = ({
           ) : (
             <>
               <h3 className="font-medium text-gray-900 dark:text-white truncate">
-                {session.title}
+                <div className="flex items-center gap-2">
+                  <Bot className="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                  <span className="truncate">{session.title}</span>
+                </div>
               </h3>
               {session.lastMessage && (
                 <p className="text-sm text-gray-500 dark:text-gray-400 truncate mt-1">
@@ -187,7 +199,8 @@ export const SessionList: React.FC<SessionListProps> = ({
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   const handleNewChat = () => {
     setIsNewDialogOpen(false);
