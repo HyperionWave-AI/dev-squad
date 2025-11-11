@@ -40,7 +40,8 @@ interface SessionItem {
   timestamp: Date | string;
   messageCount: number;
   lastMessage?: string;
-  activeSubagentId?: string; // Indicates session is being processed by a subagent
+  activeSubagentId?: string; // Indicates session is being processed by a user-created subagent
+  activeSubagentName?: string; // Indicates session is with a system subagent (go-dev, ui-dev, etc.)
   parentSessionId?: string; // For subchats - links to parent session
   isSubchat?: boolean; // Indicates if this is a subchat
 }
@@ -164,7 +165,8 @@ export const CodeChatPage: React.FC = () => {
         timestamp: session.updatedAt || session.createdAt,
         messageCount: 0, // Will be populated when we load messages
         lastMessage: undefined,
-        activeSubagentId: session.activeSubagentId, // Preserve processing indicator
+        activeSubagentId: session.activeSubagentId, // User-created subagent
+        activeSubagentName: (session as any).activeSubagentName, // System subagent
         parentSessionId: session.parentChatId, // Map parentChatId to parentSessionId
         isSubchat: !!session.parentChatId, // Session is a subchat if it has a parent
       }));
@@ -387,6 +389,7 @@ export const CodeChatPage: React.FC = () => {
       messageCount: 0,
       lastMessage: undefined,
       activeSubagentId: newSession.activeSubagentId,
+      activeSubagentName: (newSession as any).activeSubagentName,
       parentSessionId: newSession.parentChatId,
       isSubchat: !!newSession.parentChatId,
     };
@@ -443,6 +446,7 @@ export const CodeChatPage: React.FC = () => {
       messageCount: 0,
       lastMessage: undefined,
       activeSubagentId: updatedSession.activeSubagentId,
+      activeSubagentName: (updatedSession as any).activeSubagentName,
       parentSessionId: updatedSession.parentChatId,
       isSubchat: !!updatedSession.parentChatId,
     };
