@@ -817,6 +817,7 @@ type AIServiceInterface interface {
 	StreamChatWithTools(ctx context.Context, messages []aiservice.Message, maxToolCalls int) (<-chan aiservice.StreamEvent, error)
 	StreamChatWithToolsFiltered(ctx context.Context, messages []aiservice.Message, maxToolCalls int, allowedToolNames []string) (<-chan aiservice.StreamEvent, error)
 	GetConfig() *aiservice.AIConfig
+	GetAllowedToolsForDirectSubagent() []string
 }
 
 // AISettingsServiceInterface defines the interface for AI settings service operations
@@ -1325,8 +1326,61 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 
 	// ALWAYS append critical system guidance (filesystem context + anti-loop rules + session context)
 	// This is appended regardless of custom prompts to ensure consistent behavior
+	// Note: For direct subagent chats, we provide autonomous execution guidance instead of delegation instructions
 	projectRoot := tools.GetProjectRoot()
-	criticalGuidance := fmt.Sprintf(`
+	isDirectSubagentChat := (session.ActiveSubagentName != nil && *session.ActiveSubagentName != "") || session.ActiveSubagentID != nil
+
+	var criticalGuidance string
+	if isDirectSubagentChat {
+		// Direct subagent mode: Autonomous execution without delegation
+		criticalGuidance = fmt.Sprintf(`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL SYSTEM BEHAVIOR (NON-OVERRIDABLE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DIRECT SUBAGENT MODE - AUTONOMOUS EXECUTION:
+- **You are communicating directly with the user** - work autonomously
+- **DO NOT delegate tasks or create subchats** - execute work yourself
+- **If a task is outside your capability**, inform the user and ask if they want you to delegate
+- **Only after user confirmation** should you suggest bringing in another specialist
+- **USER is the orchestrator** in this mode, not you
+
+SESSION CONTEXT:
+- **CURRENT CHAT SESSION ID**: %s
+- DO NOT ask the user for the session ID - it is provided above
+
+FILESYSTEM CONTEXT:
+- **PROJECT ROOT**: %s
+- **PATH FORMAT**: ALWAYS use Unix/Mac forward slashes (/) - NEVER backslashes (\)
+- **CORRECT**: %s/ui/src/file.tsx OR ./ui/src/file.tsx
+- **FORBIDDEN**: C:\Users\... OR C:\\Users\... (Windows paths)
+- Prefer relative paths from project root: ./ui/src/main.tsx
+- Bash working directory: %s (automatically set)
+- System directories BLOCKED: /etc, /var, /sys, /usr
+
+TOOL USAGE RULES - PREVENT INFINITE LOOPS:
+1. **NEVER call the same tool with identical arguments consecutively**
+2. **If a tool returns a result, USE it** - don't re-call expecting different output
+3. **If stuck, change approach** - try different tool or different arguments
+4. **Circuit breaker**: System stops you after 3 identical calls in 5 attempts
+
+❌ BAD PATTERN (causes circuit breaker):
+  list_directory(./components) → list_directory(./components) → list_directory(./components)
+
+✅ GOOD PATTERN (smart exploration):
+  list_directory(./components) → find what you need → read_file(specific_file)
+
+✅ If stuck, try different approach:
+  list_directory fails → try bash("find . -name pattern") OR code_index_search
+
+**When user gives you an explicit file path, just read it - don't explore directories!**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`, sessionID.Hex(), projectRoot, projectRoot, projectRoot)
+	} else {
+		// Coordinator mode: Standard delegation workflow
+		criticalGuidance = fmt.Sprintf(`
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CRITICAL SYSTEM BEHAVIOR (NON-OVERRIDABLE)
@@ -1366,6 +1420,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 `, sessionID.Hex(), sessionID.Hex(), projectRoot, projectRoot, projectRoot)
+	}
 	systemPromptText += criticalGuidance
 
 	// Step 3: Get conversation history for context
@@ -1406,7 +1461,31 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	// Track AI streaming start time for metrics
 	streamStart := time.Now()
 
-	aiStream, err := h.aiService.StreamChatWithTools(ctxWithCompany, langchainMessages, maxToolCalls)
+	// Choose appropriate streaming method based on mode
+	var aiStream <-chan aiservice.StreamEvent
+	if isDirectSubagentChat {
+		// Direct subagent mode: Use filtered tools (exclude delegation tools)
+		allowedTools := h.aiService.GetAllowedToolsForDirectSubagent()
+		h.logger.Info("Starting direct subagent chat stream with filtered tools",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("allowedToolsCount", len(allowedTools)),
+			zap.String("subagentName", func() string {
+				if session.ActiveSubagentName != nil {
+					return *session.ActiveSubagentName
+				}
+				if session.ActiveSubagentID != nil {
+					return session.ActiveSubagentID.Hex()
+				}
+				return "unknown"
+			}()))
+		aiStream, err = h.aiService.StreamChatWithToolsFiltered(ctxWithCompany, langchainMessages, maxToolCalls, allowedTools)
+	} else {
+		// Coordinator mode: Use all tools (includes delegation)
+		h.logger.Info("Starting coordinator chat stream with full tool access",
+			zap.String("sessionId", sessionID.Hex()))
+		aiStream, err = h.aiService.StreamChatWithTools(ctxWithCompany, langchainMessages, maxToolCalls)
+	}
+
 	if err != nil {
 		h.logger.Error("Failed to get AI response", zap.Error(err))
 		h.sendError(conn, "Failed to get AI response: "+err.Error())

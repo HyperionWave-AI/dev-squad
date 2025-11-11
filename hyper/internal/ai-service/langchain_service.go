@@ -485,6 +485,35 @@ func (s *ChatService) GetConfig() *AIConfig {
 	return s.config
 }
 
+// GetAllowedToolsForDirectSubagent returns the list of tools that direct subagent chats can use
+// This excludes coordinator delegation tools to prevent subchats from being created
+// Direct subagent mode is when user communicates directly with a specific agent (go-dev, ui-dev, etc.)
+// In this mode, the agent should work autonomously without delegating to other agents
+func (s *ChatService) GetAllowedToolsForDirectSubagent() []string {
+	// Get all registered tool names
+	allTools := s.toolRegistry.List()
+
+	// Define blocked tools (delegation and coordinator management tools)
+	blockedTools := map[string]bool{
+		"execute_subagent":              true, // CRITICAL: Prevent direct subagents from creating subchats
+		"coordinator_create_human_task": true, // Direct subagents cannot create human tasks
+		"coordinator_create_agent_task": true, // Direct subagents cannot create agent tasks
+		"coordinator_list_human_tasks":  true, // Direct subagents should not list human tasks
+		"coordinator_list_agent_tasks":  true, // Direct subagents should not list agent tasks
+		"create_agent_task":             true, // Direct subagents use autonomous execution only
+	}
+
+	// Filter out blocked tools
+	allowedTools := make([]string, 0, len(allTools))
+	for _, toolName := range allTools {
+		if !blockedTools[toolName] {
+			allowedTools = append(allowedTools, toolName)
+		}
+	}
+
+	return allowedTools
+}
+
 // getIdentityFromContext extracts user identity from context
 func (s *ChatService) getIdentityFromContext(ctx context.Context) *Identity {
 	identity, ok := ctx.Value(IdentityKey).(*Identity)
