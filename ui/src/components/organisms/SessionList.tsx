@@ -237,6 +237,28 @@ export const SessionList: React.FC<SessionListProps> = ({
     }
   };
 
+  // Handler for clicking on an agent - creates a dedicated session and switches to it
+  const handleAgentClick = async (agentName: string) => {
+    try {
+      setIsLoadingAgents(true);
+      const response = await subagentsService.createAgentSession(agentName);
+
+      // Close the modal
+      setIsAgentsModalOpen(false);
+
+      // Switch to the newly created session
+      onSessionSelect(response.session.id);
+
+      // Note: The parent component will handle refreshing the sessions list
+      // through its normal polling mechanism
+    } catch (error) {
+      console.error(`Failed to create session for agent ${agentName}:`, error);
+      alert(`Failed to create chat with ${agentName}. Please try again.`);
+    } finally {
+      setIsLoadingAgents(false);
+    }
+  };
+
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -402,9 +424,22 @@ export const SessionList: React.FC<SessionListProps> = ({
               ) : subagents.length > 0 ? (
                 <ul className="space-y-4">
                   {subagents.map((agent) => (
-                    <li key={agent.name} className="p-4 bg-gray-50 dark:bg-gray-900/60 rounded-lg border border-gray-200 dark:border-gray-700">
-                      <h3 className="font-semibold text-md text-gray-900 dark:text-white">{agent.name}</h3>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{agent.description}</p>
+                    <li
+                      key={agent.name}
+                      className="p-4 bg-gray-50 dark:bg-gray-900/60 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 hover:border-blue-400 dark:hover:border-blue-600 cursor-pointer transition-all duration-200 group"
+                      onClick={() => handleAgentClick(agent.name)}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-md text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                            {agent.name}
+                          </h3>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{agent.description}</p>
+                        </div>
+                        <div className="ml-4 text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                          <MessageSquare className="w-5 h-5" />
+                        </div>
+                      </div>
                     </li>
                   ))}
                 </ul>
