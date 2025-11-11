@@ -41,6 +41,8 @@ interface SessionItem {
   messageCount: number;
   lastMessage?: string;
   activeSubagentId?: string; // Indicates session is being processed by a subagent
+  parentSessionId?: string; // For subchats - links to parent session
+  isSubchat?: boolean; // Indicates if this is a subchat
 }
 
 export const CodeChatPage: React.FC = () => {
@@ -163,6 +165,8 @@ export const CodeChatPage: React.FC = () => {
         messageCount: 0, // Will be populated when we load messages
         lastMessage: undefined,
         activeSubagentId: session.activeSubagentId, // Preserve processing indicator
+        parentSessionId: session.parentChatId, // Map parentChatId to parentSessionId
+        isSubchat: !!session.parentChatId, // Session is a subchat if it has a parent
       }));
       setSessions(mappedSessions);
 
@@ -383,6 +387,8 @@ export const CodeChatPage: React.FC = () => {
       messageCount: 0,
       lastMessage: undefined,
       activeSubagentId: newSession.activeSubagentId,
+      parentSessionId: newSession.parentChatId,
+      isSubchat: !!newSession.parentChatId,
     };
     setSessions((prev) => [sessionItem, ...prev]);
     setActiveSessionId(newSession.id);
@@ -437,6 +443,8 @@ export const CodeChatPage: React.FC = () => {
       messageCount: 0,
       lastMessage: undefined,
       activeSubagentId: updatedSession.activeSubagentId,
+      parentSessionId: updatedSession.parentChatId,
+      isSubchat: !!updatedSession.parentChatId,
     };
     setSessions((prev) => prev.map((s) => (s.id === sessionId ? sessionItem : s)));
   };
