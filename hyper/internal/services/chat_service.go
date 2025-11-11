@@ -560,3 +560,38 @@ func (s *ChatService) SetSessionSubagent(ctx context.Context, sessionID primitiv
 
 	return nil
 }
+
+// SetSessionSubagentName sets or clears the active system subagent name for a chat session
+func (s *ChatService) SetSessionSubagentName(ctx context.Context, sessionID primitive.ObjectID, subagentName *string, companyID string) error {
+	filter := bson.M{
+		"_id":       sessionID,
+		"companyId": companyID,
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"activeSubagentName": subagentName,
+			"updatedAt":          time.Now().UTC(),
+		},
+	}
+
+	result, err := s.sessionsCollection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update session subagent name: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("session not found or access denied")
+	}
+
+	if subagentName != nil {
+		s.logger.Info("Session system subagent set",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("subagentName", *subagentName))
+	} else {
+		s.logger.Info("Session system subagent cleared",
+			zap.String("sessionId", sessionID.Hex()))
+	}
+
+	return nil
+}
