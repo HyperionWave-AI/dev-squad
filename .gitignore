@@ -41,4 +41,3 @@ third_party
 hyper/coordinator
 /ui/test-results
 /hyper/embed
-.env
