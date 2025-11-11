@@ -71,6 +71,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [isAgentsModalOpen, setIsAgentsModalOpen] = useState(false);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
+  const [activatingAgent, setActivatingAgent] = useState<string | null>(null);
 
   // Organize sessions into hierarchy
   const { mainSessions, subchatsMap } = organizeSessionsHierarchy(sessions);
@@ -240,6 +241,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   // Handler for clicking on an agent - creates a dedicated session and switches to it
   const handleAgentClick = async (agentName: string) => {
     try {
+      setActivatingAgent(agentName);
       setIsLoadingAgents(true);
       const response = await subagentsService.createAgentSession(agentName);
 
@@ -256,6 +258,7 @@ export const SessionList: React.FC<SessionListProps> = ({
       alert(`Failed to create chat with ${agentName}. Please try again.`);
     } finally {
       setIsLoadingAgents(false);
+      setActivatingAgent(null);
     }
   };
 
@@ -416,8 +419,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                 These are the specialized agents available for use.
               </Dialog.Description>
             </div>
-            <div className="flex-1 overflow-y-auto p-6">
-              {isLoadingAgents ? (
+            <div className="flex-1 overflow-y-auto p-6 relative">
+              {isLoadingAgents && !activatingAgent ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                 </div>
@@ -446,6 +449,46 @@ export const SessionList: React.FC<SessionListProps> = ({
               ) : (
                 <div className="text-center text-gray-500 dark:text-gray-400 py-8">
                     <p>No agents found or failed to load.</p>
+                </div>
+              )}
+
+              {/* Creative Loading Overlay for Agent Activation */}
+              {activatingAgent && (
+                <div className="absolute inset-0 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm flex items-center justify-center z-10">
+                  <div className="text-center">
+                    {/* Animated robot icon */}
+                    <div className="mb-6 flex justify-center">
+                      <div className="relative">
+                        {/* Pulsing circles */}
+                        <div className="absolute inset-0 animate-ping">
+                          <div className="w-20 h-20 rounded-full bg-blue-400/30"></div>
+                        </div>
+                        <div className="absolute inset-0 animate-pulse" style={{ animationDelay: '75ms' }}>
+                          <div className="w-20 h-20 rounded-full bg-blue-500/20"></div>
+                        </div>
+
+                        {/* Central icon */}
+                        <div className="relative w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center animate-bounce shadow-lg shadow-blue-500/50">
+                          <MessageSquare className="w-10 h-10 text-white" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Animated text */}
+                    <div className="space-y-2">
+                      <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent animate-pulse">
+                        Activating {activatingAgent}
+                      </h3>
+                      <div className="flex items-center justify-center space-x-1 text-gray-600 dark:text-gray-300">
+                        <span className="animate-bounce" style={{ animationDelay: '0ms' }}>●</span>
+                        <span className="animate-bounce" style={{ animationDelay: '150ms' }}>●</span>
+                        <span className="animate-bounce" style={{ animationDelay: '300ms' }}>●</span>
+                      </div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 animate-pulse">
+                        Initializing secure connection...
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
