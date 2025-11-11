@@ -1339,12 +1339,19 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 CRITICAL SYSTEM BEHAVIOR (NON-OVERRIDABLE)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-DIRECT SUBAGENT MODE - AUTONOMOUS EXECUTION:
+DIRECT SUBAGENT MODE - AUTONOMOUS EXECUTION WITH TRACKING:
 - **You are communicating directly with the user** - work autonomously
 - **DO NOT delegate tasks or create subchats** - execute work yourself
 - **If a task is outside your capability**, inform the user and ask if they want you to delegate
 - **Only after user confirmation** should you suggest bringing in another specialist
 - **USER is the orchestrator** in this mode, not you
+
+TASK TRACKING (IMPORTANT):
+- **ALWAYS create a human task** for the user's request (coordinator_create_human_task)
+- **ALWAYS create an agent task** for yourself (coordinator_create_agent_task) with detailed context
+- **Break work into todos** with clear descriptions and file paths
+- **Update todo status** as you complete each step (coordinator_update_todo_status)
+- This provides visibility into your progress and helps track completed work
 
 SESSION CONTEXT:
 - **CURRENT CHAT SESSION ID**: %s

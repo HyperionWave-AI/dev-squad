@@ -486,21 +486,19 @@ func (s *ChatService) GetConfig() *AIConfig {
 }
 
 // GetAllowedToolsForDirectSubagent returns the list of tools that direct subagent chats can use
-// This excludes coordinator delegation tools to prevent subchats from being created
+// This blocks only the delegation tool (execute_subagent) to prevent subchats from being created
 // Direct subagent mode is when user communicates directly with a specific agent (go-dev, ui-dev, etc.)
-// In this mode, the agent should work autonomously without delegating to other agents
+// In this mode, the agent should work autonomously without delegating, but CAN use task management tools
 func (s *ChatService) GetAllowedToolsForDirectSubagent() []string {
 	// Get all registered tool names
 	allTools := s.toolRegistry.List()
 
-	// Define blocked tools (delegation and coordinator management tools)
+	// Define blocked tools (ONLY delegation tool - allow task management)
 	blockedTools := map[string]bool{
-		"execute_subagent":              true, // CRITICAL: Prevent direct subagents from creating subchats
-		"coordinator_create_human_task": true, // Direct subagents cannot create human tasks
-		"coordinator_create_agent_task": true, // Direct subagents cannot create agent tasks
-		"coordinator_list_human_tasks":  true, // Direct subagents should not list human tasks
-		"coordinator_list_agent_tasks":  true, // Direct subagents should not list agent tasks
-		"create_agent_task":             true, // Direct subagents use autonomous execution only
+		"execute_subagent": true, // CRITICAL: Prevent direct subagents from creating subchats and delegating to other agents
+		// Note: Task management tools (coordinator_create_human_task, coordinator_create_agent_task, etc.) are ALLOWED
+		// This enables direct subagents to track work via human tasks, agent tasks, and todos
+		// while still preventing delegation to other agents
 	}
 
 	// Filter out blocked tools
