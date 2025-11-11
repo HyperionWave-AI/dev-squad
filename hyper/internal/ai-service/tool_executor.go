@@ -1280,21 +1280,17 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 	// Create output channel for events
 	eventChan := make(chan StreamEvent, 100)
 
-	// SECURITY: Validate that no blocked coordinator tools are in the allowed list
-	// This prevents subchats from creating subchats or calling coordinator functions
-	blockedToolsForSubchats := []string{
-		"execute_subagent",              // CRITICAL: Prevent subchats from creating subchats
-		"coordinator_create_human_task", // Subchats cannot create human tasks
-		"coordinator_create_agent_task", // Subchats cannot create agent tasks (use create_agent_task wrapper)
-		"coordinator_list_human_tasks",  // Subchats should not list human tasks
-		"coordinator_list_agent_tasks",  // Subchats should not list agent tasks
-		"create_agent_task",             // Subchats use predefined tasks only
+	// SECURITY: Validate that delegation tool is not in the allowed list
+	// This prevents direct subagent chats from creating subchats and delegating
+	// Note: Task management tools are allowed to enable tracking (human tasks, agent tasks, todos)
+	blockedToolsForDirectSubagents := []string{
+		"execute_subagent", // CRITICAL: Prevent direct subagents from creating subchats and delegating to other agents
 	}
 
-	for _, blocked := range blockedToolsForSubchats {
+	for _, blocked := range blockedToolsForDirectSubagents {
 		for _, allowed := range allowedToolNames {
 			if allowed == blocked {
-				return nil, fmt.Errorf("SECURITY VIOLATION: Tool '%s' is blocked in subchat context. Subchats cannot create subchats or call coordinator functions", blocked)
+				return nil, fmt.Errorf("SECURITY VIOLATION: Tool '%s' is blocked in direct subagent context. Direct subagents cannot delegate to other agents", blocked)
 			}
 		}
 	}
@@ -1588,20 +1584,20 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						result.Output = newOutput
 					}
 				} else {
-					// RUNTIME SECURITY CHECK: Block coordinator tools even if AI tries to call them
+					// RUNTIME SECURITY CHECK: Block delegation tool even if AI tries to call it
 					// This is a defense-in-depth measure (should be caught earlier by filtering)
 					isBlocked := false
-					for _, blocked := range blockedToolsForSubchats {
+					for _, blocked := range blockedToolsForDirectSubagents {
 						if toolCall.Name == blocked {
 							isBlocked = true
 							result = ToolResult{
 								ID:         toolCall.ID,
 								Name:       toolCall.Name,
 								Output:     nil,
-								Error:      fmt.Sprintf("🚫 SECURITY BLOCK: Tool '%s' is not allowed in subchat context. Subchats cannot create subchats or call coordinator functions. Use only allowed tools: read_file, write_file, apply_patch, bash, coordinator_update_todo_status, coordinator_upsert_knowledge", toolCall.Name),
+								Error:      fmt.Sprintf("🚫 SECURITY BLOCK: Tool '%s' is not allowed in direct subagent context. You are working autonomously - do not delegate to other agents. Use task management tools (coordinator_create_human_task, coordinator_create_agent_task, etc.) to track your work, but execute it yourself.", toolCall.Name),
 								DurationMs: 0,
 							}
-							log.Printf("[SECURITY] Blocked attempt to call '%s' in filtered context - Tool not in allowlist", toolCall.Name)
+							log.Printf("[SECURITY] Blocked attempt to call '%s' in direct subagent context - Tool not in allowlist", toolCall.Name)
 							break
 						}
 					}
