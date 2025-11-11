@@ -393,9 +393,14 @@ export const CodeChatPage: React.FC = () => {
   const handleSessionSelect = async (sessionId: string) => {
     if (sessionId !== activeSessionId) {
       setActiveSessionId(sessionId);
-      await loadMessages(sessionId);
+      // Clear old messages and streaming state immediately before loading new session
+      setMessages([]);
       setStreamingContent('');
       setIsStreaming(false);
+      setStreamingToolCalls([]);
+      setStreamingToolResults(new Map());
+      setPendingToolCalls(new Set());
+      await loadMessages(sessionId);
     }
   };
 
