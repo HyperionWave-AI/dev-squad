@@ -26,6 +26,7 @@ interface SessionListProps {
   onDeleteSession: (sessionId: string) => void;
   onDeleteAllSessions: () => void;
   onRenameSession: (sessionId: string, newTitle: string) => void;
+  onRefreshSessions?: () => Promise<void>;
   isLoading?: boolean;
 }
 
@@ -60,6 +61,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   onDeleteSession,
   onDeleteAllSessions,
   onRenameSession,
+  onRefreshSessions,
   isLoading = false,
 }) => {
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false);
@@ -263,11 +265,13 @@ export const SessionList: React.FC<SessionListProps> = ({
       // Close the modal
       setIsAgentsModalOpen(false);
 
+      // Immediately refresh sessions to show the new session
+      if (onRefreshSessions) {
+        await onRefreshSessions();
+      }
+
       // Switch to the newly created session
       onSessionSelect(response.session.id);
-
-      // Note: The parent component will handle refreshing the sessions list
-      // through its normal polling mechanism
     } catch (error) {
       console.error(`Failed to create session for agent ${agentName}:`, error);
       alert(`Failed to create chat with ${agentName}. Please try again.`);
