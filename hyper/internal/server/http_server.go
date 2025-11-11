@@ -279,7 +279,7 @@ func StartHTTPServer(
 
 	// Create chat handlers
 	chatHandler := handlers.NewChatHandler(chatService, logger)
-	chatWebSocketHandler := handlers.NewChatWebSocketHandler(chatService, aiChatService, aiSettingsService, logger)
+	chatWebSocketHandler := handlers.NewChatWebSocketHandler(chatService, aiChatService, aiSettingsService, subchatStorage, logger)
 
 	// Create AI settings handler
 	aiSettingsHandler := handlers.NewAISettingsHandler(aiSettingsService, logger)
@@ -504,7 +504,7 @@ func StartHTTPServer(
 	}
 
 	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, chatService, logger)
-	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
+	subagentHandler := handlers.NewSubagentHandler(subchatStorage, chatService, logger)
 
 	// Initialize rate limiter for subchat creation (10 requests per minute per user)
 	subchatRateLimiter := middleware.NewRateLimiter(10, time.Minute, logger)
@@ -531,12 +531,15 @@ func StartHTTPServer(
 	{
 		subagentGroup.GET("", subagentHandler.ListSubagents)
 		subagentGroup.GET("/:name", subagentHandler.GetSubagent)
+		subagentGroup.POST("/:name/sessions", subagentHandler.CreateAgentSession)
 	}
 
 	logger.Info("Subchat and Subagent API routes registered",
 		zap.String("subchatsPath", "/api/v1/subchats"),
 		zap.String("chatSubchatsPath", "/api/v1/chats/:chatId/subchats"),
-		zap.String("subagentsPath", "/api/v1/subagents"))
+		zap.String("subagentsPath", "/api/v1/subagents"),
+		zap.String("createAgentSessionPath", "/api/v1/subagents/:name/sessions"),
+		zap.String("agentStreamPath", "/api/v1/subagents/:name/stream"))
 
 	// Register HTTP tools routes
 	httpToolsGroup := r.Group("/api/v1/tools/http")
