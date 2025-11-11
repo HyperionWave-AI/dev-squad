@@ -12,6 +12,7 @@ import (
 	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/config"
+	"hyper/internal/mcp/storage"
 	"hyper/internal/metrics"
 	"hyper/internal/middleware"
 	"hyper/internal/models"
@@ -829,16 +830,23 @@ type ChatWebSocketHandler struct {
 	chatService       ChatServiceInterface
 	aiService         AIServiceInterface
 	aiSettingsService AISettingsServiceInterface
+	subchatStorage    SubchatStorageInterface
 	logger            *zap.Logger
 	writeMutex        sync.Mutex // Protects concurrent WebSocket writes (ping + message streaming)
 }
 
+// SubchatStorageInterface defines the interface for subchat storage operations (system subagents)
+type SubchatStorageInterface interface {
+	GetSubagent(name string) (*storage.Subagent, error)
+}
+
 // NewChatWebSocketHandler creates a new WebSocket handler with ai-service integration
-func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServiceInterface, aiSettingsService AISettingsServiceInterface, logger *zap.Logger) *ChatWebSocketHandler {
+func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServiceInterface, aiSettingsService AISettingsServiceInterface, subchatStorage SubchatStorageInterface, logger *zap.Logger) *ChatWebSocketHandler {
 	return &ChatWebSocketHandler{
 		chatService:       chatService,
 		aiService:         aiService,
 		aiSettingsService: aiSettingsService,
+		subchatStorage:    subchatStorage,
 		logger:            logger,
 	}
 }
@@ -1245,16 +1253,30 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 
 	// Step 2: Determine active agent and fetch system prompt
 	var systemPromptText string
-	if session.ActiveSubagentID != nil {
-		// Using custom subagent - fetch subagent's prompt
+	// Check for system subagent first (has priority)
+	if session.ActiveSubagentName != nil && *session.ActiveSubagentName != "" {
+		// Using system subagent - fetch from SubchatStorage
+		subagent, err := h.subchatStorage.GetSubagent(*session.ActiveSubagentName)
+		if err == nil && subagent != nil {
+			systemPromptText = subagent.SystemPrompt
+			h.logger.Info("Using system subagent prompt",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.String("subagentName", *session.ActiveSubagentName))
+		} else {
+			h.logger.Warn("Failed to fetch system subagent, falling back to default prompt",
+				zap.String("subagentName", *session.ActiveSubagentName),
+				zap.Error(err))
+		}
+	} else if session.ActiveSubagentID != nil {
+		// Using user-created subagent - fetch subagent's prompt from AI settings
 		subagent, err := h.aiSettingsService.GetSubagent(ctx, *session.ActiveSubagentID, companyID)
 		if err == nil && subagent != nil {
 			systemPromptText = subagent.SystemPrompt
-			h.logger.Info("Using subagent prompt",
+			h.logger.Info("Using user subagent prompt",
 				zap.String("subagentId", session.ActiveSubagentID.Hex()),
 				zap.String("subagentName", subagent.Name))
 		} else {
-			h.logger.Warn("Failed to fetch subagent, falling back to system prompt", zap.Error(err))
+			h.logger.Warn("Failed to fetch user subagent, falling back to system prompt", zap.Error(err))
 		}
 	}
 
