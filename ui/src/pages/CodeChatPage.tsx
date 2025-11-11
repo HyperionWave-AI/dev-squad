@@ -518,6 +518,7 @@ export const CodeChatPage: React.FC = () => {
           onDeleteSession={handleDeleteSession}
           onDeleteAllSessions={handleDeleteAllSessions}
           onRenameSession={handleRenameSession}
+          onRefreshSessions={loadSessions}
         />
       </div>
 
