@@ -1621,6 +1621,22 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 				// AI is requesting a tool execution
 				toolCallCount++
 
+				// FIX: Save accumulated assistant text BEFORE the tool call (if any)
+				// This ensures text is persisted even if client refreshes mid-execution
+				if fullResponse != "" {
+					_, err := h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID)
+					if err != nil {
+						h.logger.Error("Failed to save assistant text before tool call", zap.Error(err))
+						// Continue even if save fails
+					} else {
+						h.logger.Debug("Saved assistant text before tool call",
+							zap.String("sessionId", sessionID.Hex()),
+							zap.Int("textLength", len(fullResponse)))
+					}
+					// Clear accumulated response to start fresh for text after this tool call
+					fullResponse = ""
+				}
+
 				// Save tool call to database (always, even if client disconnected)
 				_, err := h.chatService.SaveToolCall(ctx, sessionID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, companyID)
 				if err != nil {
@@ -1731,15 +1747,24 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 		}
 	}
 
-	// Step 9: Save AI response to database (ALWAYS, even if client disconnected)
-	_, err = h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID)
-	if err != nil {
-		h.logger.Error("Failed to save AI response", zap.Error(err))
-		// Only try to send error if client still connected
-		if !clientDisconnected {
-			h.sendError(conn, "Failed to save AI response")
+	// Step 9: Save remaining AI response to database (if any)
+	// Only save if there's remaining content after tool calls
+	if fullResponse != "" {
+		_, err = h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID)
+		if err != nil {
+			h.logger.Error("Failed to save final AI response", zap.Error(err))
+			// Only try to send error if client still connected
+			if !clientDisconnected {
+				h.sendError(conn, "Failed to save AI response")
+			}
+			return
 		}
-		return
+		h.logger.Debug("Saved final assistant text after tool calls",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("textLength", len(fullResponse)))
+	} else {
+		h.logger.Debug("No remaining assistant text to save (all text saved before tool calls)",
+			zap.String("sessionId", sessionID.Hex()))
 	}
 
 	// Record AI streaming metrics (tokens and duration)
