@@ -56,6 +56,7 @@ export const CodeChatPage: React.FC = () => {
 
   // Streaming state
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingSessionId, setStreamingSessionId] = useState<string | null>(null); // Track which session is streaming
   const [streamingContent, setStreamingContent] = useState('');
   const [pendingToolCalls, setPendingToolCalls] = useState<Set<string>>(new Set());
   const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCall[]>([]);
@@ -127,14 +128,15 @@ export const CodeChatPage: React.FC = () => {
         connectWebSocket(activeSessionId);
       }
 
-      // Only poll if not currently streaming (avoid conflicts)
-      if (!isStreaming) {
+      // Only poll if no active streaming session at all (not just current isStreaming flag)
+      // This prevents race conditions where isStreaming briefly becomes false between chunks
+      if (!isStreaming && !streamingSessionId) {
         loadMessages(activeSessionId);
       }
     }, 3000);
 
     return () => clearInterval(intervalId);
-  }, [activeSessionId, isStreaming]);
+  }, [activeSessionId, isStreaming, streamingSessionId]);
 
   // Connect WebSocket when active session changes
   useEffect(() => {
@@ -183,30 +185,82 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
-  // Deduplicate messages by ID (keeps latest version of each message)
+  // Enhanced deduplication with O(n) complexity and ID reconciliation
   const deduplicateMessages = (messages: ChatMessageType[]): ChatMessageType[] => {
-    const seen = new Set<string>();
-    const unique: ChatMessageType[] = [];
+    const messageMap = new Map<string, ChatMessageType>();
+    const optimisticToDatabaseMap = new Map<string, string>(); // optimistic ID → database ID
 
-    // Process in reverse to keep the LATEST version of each message
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (!seen.has(msg.id)) {
-        seen.add(msg.id);
-        unique.unshift(msg); // Add to front to maintain order
+    // First pass: identify optimistic → database ID mappings
+    for (const msg of messages) {
+      if (msg.role === 'user' && msg.id.startsWith('msg-')) {
+        // Find corresponding database version of this optimistic message
+        const dbVersion = messages.find(m =>
+          m.role === 'user' &&
+          !m.id.startsWith('msg-') &&
+          m.content === msg.content &&
+          m.sessionId === msg.sessionId &&
+          Math.abs(new Date(m.timestamp).getTime() - new Date(msg.timestamp).getTime()) < 5000
+        );
+        if (dbVersion) {
+          optimisticToDatabaseMap.set(msg.id, dbVersion.id);
+        }
       }
     }
 
-    return unique;
+    // Second pass: deduplicate with ID reconciliation (O(n))
+    for (const msg of messages) {
+      // If this is an optimistic message that has a database version, skip it
+      if (optimisticToDatabaseMap.has(msg.id)) {
+        continue; // Skip optimistic version, keep database version
+      }
+
+      const effectiveId = msg.id;
+
+      // Always prefer database messages over optimistic ones
+      if (!messageMap.has(effectiveId) || !msg.id.startsWith('msg-')) {
+        messageMap.set(effectiveId, msg);
+      }
+    }
+
+    // Return sorted by timestamp
+    return Array.from(messageMap.values()).sort((a, b) =>
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
   };
 
   // Load messages for a session
   const loadMessages = async (sessionId: string) => {
     try {
       const fetchedMessages = await getMessages(sessionId);
+
+      // Bug #7 Fix: Convert toolResults from plain objects to Maps for consistency
+      const normalizedMessages = fetchedMessages.map(msg => {
+        if (msg.toolResults && !(msg.toolResults instanceof Map)) {
+          // Convert plain object or array to Map
+          const toolResultsMap = new Map<string, ToolResult>();
+          const results: any = msg.toolResults;
+
+          if (Array.isArray(results)) {
+            // If it's an array, convert each item
+            results.forEach((result: any) => {
+              if (result.id) {
+                toolResultsMap.set(result.id, result as ToolResult);
+              }
+            });
+          } else if (typeof results === 'object') {
+            // If it's a plain object, convert entries to Map
+            Object.entries(results).forEach(([id, result]) => {
+              toolResultsMap.set(id, result as ToolResult);
+            });
+          }
+          return { ...msg, toolResults: toolResultsMap };
+        }
+        return msg;
+      });
+
       setMessages((prev) => {
         // Merge fetched messages with existing, deduplicate
-        const merged = [...prev, ...fetchedMessages];
+        const merged = [...prev, ...normalizedMessages];
         return deduplicateMessages(merged);
       });
     } catch (err) {
@@ -217,13 +271,25 @@ export const CodeChatPage: React.FC = () => {
 
   // Connect to WebSocket for streaming
   const connectWebSocket = useCallback((sessionId: string) => {
-    // Disconnect existing connection
+    // Bug #5 Fix: Proper connection cleanup before creating new connection
+    // 1. Clear any pending reconnection attempts
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    // 2. Disconnect existing connection
     if (wsConnectionRef.current) {
       wsConnectionRef.current.disconnect();
       wsConnectionRef.current = null;
     }
 
-    // Reset streaming state
+    // 3. Reset streaming state for the session being disconnected
+    if (streamingSessionId === sessionId) {
+      setStreamingSessionId(null);
+    }
+
+    // 4. Reset all streaming refs and state
     streamingContentRef.current = '';
     currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
     setPendingToolCalls(new Set());
@@ -233,6 +299,12 @@ export const CodeChatPage: React.FC = () => {
     // Connect to WebSocket
     const connection = connectChatStream(sessionId, {
       onMessage: (content: string, done: boolean) => {
+        // Validate message is for current session (Bug #6 fix)
+        if (sessionId !== activeSessionId) {
+          console.warn('[CodeChatPage] Received message for inactive session:', sessionId);
+          return;
+        }
+
         if (done) {
           // Stream complete - save final AI message if there's any remaining content
           const finalContent = streamingContentRef.current;
@@ -265,11 +337,12 @@ export const CodeChatPage: React.FC = () => {
           console.log('[CodeChatPage] Refreshing sessions after AI response completion');
           loadSessions();
 
-          // Clear streaming state
+          // Clear streaming state (Bug #2 fix: clear streamingSessionId)
           streamingContentRef.current = '';
           currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
           setStreamingContent('');
           setIsStreaming(false);
+          setStreamingSessionId(null); // Clear streaming session tracker
           setPendingToolCalls(new Set());
           setStreamingToolCalls([]);
           setStreamingToolResults(new Map());
@@ -281,6 +354,11 @@ export const CodeChatPage: React.FC = () => {
           streamingContentRef.current += content;
           setStreamingContent((prev) => prev + content);
           setIsStreaming(true);
+
+          // Mark this session as streaming (Bug #2 fix)
+          if (!streamingSessionId) {
+            setStreamingSessionId(sessionId);
+          }
 
           // Record chunk for performance monitoring
           performance.recordChunk(content);
@@ -339,19 +417,29 @@ export const CodeChatPage: React.FC = () => {
         setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
       },
       onMessageSaved: (databaseId: string) => {
-        // FIX: Reconcile optimistic message ID with database ID
-        // Find the most recent user message and update its ID
+        // Bug #3 Fix: Properly replace optimistic message ID with database ID
         console.log('[CodeChatPage] Message saved with database ID:', databaseId);
         setMessages((prev) => {
-          // Find most recent message with optimistic ID (msg-timestamp)
-          const updated = [...prev];
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === 'user' && updated[i].id.startsWith('msg-')) {
-              console.log('[CodeChatPage] Updating message ID:', updated[i].id, '→', databaseId);
-              updated[i] = { ...updated[i], id: databaseId };
-              break;
-            }
+          // Find the most recent user message with optimistic ID
+          const optimisticIndex = prev.findIndex((_msg, idx) => {
+            // Search from end to find most recent
+            const reverseIdx = prev.length - 1 - idx;
+            return prev[reverseIdx].role === 'user' && prev[reverseIdx].id.startsWith('msg-');
+          });
+
+          if (optimisticIndex === -1) {
+            console.warn('[CodeChatPage] No optimistic message found to update');
+            return prev;
           }
+
+          const actualIndex = prev.length - 1 - optimisticIndex;
+          console.log('[CodeChatPage] Updating message ID:', prev[actualIndex].id, '→', databaseId);
+
+          // Create new array with updated message (immutable update)
+          const updated = prev.map((msg, idx) =>
+            idx === actualIndex ? { ...msg, id: databaseId } : msg
+          );
+
           return updated;
         });
       },
@@ -377,7 +465,7 @@ export const CodeChatPage: React.FC = () => {
     });
 
     wsConnectionRef.current = connection;
-  }, []);
+  }, [activeSessionId, streamingSessionId, performance]);
 
   // Session management handlers
   const handleNewChat = async () => {

@@ -64,7 +64,7 @@ export interface ToolResult {
 }
 
 export interface StreamMessage {
-  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved';
+  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message';
   content?: string;
   toolCall?: {
     tool: string;
@@ -213,6 +213,7 @@ export interface StreamCallbacks {
   onToolCall?: (tool: string, args: Record<string, any>, id: string) => void;
   onToolResult?: (id: string, tool: string, result: any, error: string | null, durationMs: number) => void;
   onMessageSaved?: (databaseId: string) => void;
+  onUserMessage?: (content: string) => void; // Bug #1 fix: handle user message echo
   onError: (error: Error) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -289,6 +290,13 @@ export function connectChatStream(
           // Message saved with database ID
           if (data.content && callbacks.onMessageSaved) {
             callbacks.onMessageSaved(data.content);
+          }
+          break;
+
+        case 'user_message':
+          // User message echo from server
+          if (callbacks.onUserMessage && data.content) {
+            callbacks.onUserMessage(data.content);
           }
           break;
       }
