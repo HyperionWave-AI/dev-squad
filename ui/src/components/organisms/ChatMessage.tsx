@@ -18,6 +18,7 @@ import { ChevronDown, Wrench, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { cn } from '@/utils';
 import { Badge } from '@/components/atoms/Badge';
 import { useConversationMode } from '@/contexts/ConversationModeContext';
+import { ToolResultDisplay } from '@/components/molecules/ToolResultDisplay';
 import type { ChatMessage as ChatMessageType, ToolCall, ToolResult } from '@/services/chatService';
 
 export interface ChatMessageProps {
@@ -88,7 +89,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
   // Render tool_result message in debug mode
   if (isToolResult && message.toolResult && showToolDetails) {
-    const hasError = message.toolResult.error;
+    const hasError = !!message.toolResult.error;
     return (
       <div className="flex w-full mb-4 justify-start px-2">
         <div className="max-w-[75%] w-full">
@@ -127,19 +128,16 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               </span>
             </div>
             <div className="p-3">
-              <div className="text-xs text-gray-700 dark:text-gray-300 font-semibold mb-1">
-                {hasError ? 'Error:' : 'Result:'}
-              </div>
-              <pre className={cn(
-                "p-2 rounded text-xs overflow-x-auto",
-                hasError
-                  ? "bg-red-900/20 text-red-300"
-                  : "bg-gray-900 text-gray-100"
-              )}>
-                {hasError
-                  ? message.toolResult.error
-                  : JSON.stringify(message.toolResult.output, null, 2)}
-              </pre>
+              <ToolResultDisplay
+                toolResult={{
+                  id: message.toolResult.id,
+                  tool: message.toolResult.name,
+                  result: message.toolResult.output,
+                  error: message.toolResult.error || null,
+                  durationMs: Number(message.toolResult.durationMs)
+                }}
+                hasError={hasError}
+              />
             </div>
           </div>
         </div>
@@ -300,21 +298,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     {/* Tool Result */}
                     {toolResult && (
                       <div>
-                        <div className="font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                          {hasError ? 'Error:' : 'Result:'}
-                        </div>
-                        <pre
-                          className={cn(
-                            'p-2 rounded overflow-x-auto',
-                            hasError
-                              ? 'bg-red-900/20 text-red-300'
-                              : 'bg-gray-900 text-gray-100'
-                          )}
-                        >
-                          {hasError
-                            ? toolResult.error
-                            : JSON.stringify(toolResult.result, null, 2)}
-                        </pre>
+                        <ToolResultDisplay
+                          toolResult={toolResult}
+                          hasError={hasError}
+                        />
                       </div>
                     )}
                   </Accordion.Content>

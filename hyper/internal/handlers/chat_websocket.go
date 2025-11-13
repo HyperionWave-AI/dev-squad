@@ -1786,14 +1786,30 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 			case aiservice.StreamEventToolResult:
 				// Tool execution completed
 
-				// Convert output to string for database storage
+				// NEW: Apply size-aware processing
+				processed := h.processToolResultWithSizeLimit(
+					event.ToolResult.Name,
+					event.ToolResult.Output,
+				)
+
+				// Determine what to save to database
+				var outputToSave interface{}
+				if processed.ShouldSaveFull {
+					// Save original output (for normal or truncated tiers)
+					outputToSave = event.ToolResult.Output
+				} else {
+					// Save only the processed message (for suppressed tier)
+					outputToSave = processed.OutputStr
+				}
+
+				// Convert to string for database storage
 				outputStr := ""
-				if event.ToolResult.Output != nil {
-					if str, ok := event.ToolResult.Output.(string); ok {
+				if outputToSave != nil {
+					if str, ok := outputToSave.(string); ok {
 						outputStr = str
 					} else {
 						// Marshal non-string outputs to JSON
-						outputBytes, _ := json.Marshal(event.ToolResult.Output)
+						outputBytes, _ := json.Marshal(outputToSave)
 						outputStr = string(outputBytes)
 					}
 				}
@@ -1806,12 +1822,13 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 				}
 
 				// Send tool result to WebSocket client if still connected
-				if !clientDisconnected {
+				// Use processed output for streaming (may be truncated or suppressed message)
+				if !clientDisconnected && processed.ShouldStream {
 					streamMsg := models.StreamMessage{
 						Type: "tool_result",
 						ToolResult: &models.ToolResultEvent{
 							ID:         event.ToolResult.ID,
-							Result:     event.ToolResult.Output,
+							Result:     processed.OutputStr, // Send processed output
 							Error:      event.ToolResult.Error,
 							DurationMs: int(event.ToolResult.DurationMs),
 						},
@@ -1974,5 +1991,246 @@ func (h *ChatWebSocketHandler) sendError(conn *websocket.Conn, errorMsg string) 
 	}
 	if err := h.safeWriteJSON(conn, errMsg); err != nil {
 		h.logger.Error("Failed to send error message", zap.Error(err))
+	}
+}
+
+// extractToolResultSummary generates concise metadata for suppressed tool results
+func extractToolResultSummary(toolName string, output interface{}) string {
+	switch toolName {
+	case "read_file", "file_read", "mcp__hyper__read_file":
+		if str, ok := output.(string); ok {
+			lines := strings.Count(str, "\n")
+			words := len(strings.Fields(str))
+			return fmt.Sprintf("**File Stats:** %d lines, ~%d words", lines, words)
+		}
+
+	case "grep", "search_code", "code_index_search", "mcp__hyper__grep":
+		if str, ok := output.(string); ok {
+			matches := strings.Count(str, "\n")
+			return fmt.Sprintf("**Search Results:** %d matches found", matches)
+		}
+
+	case "bash", "execute_command", "mcp__hyper__bash":
+		if str, ok := output.(string); ok {
+			lines := strings.Count(str, "\n")
+			return fmt.Sprintf("**Command Output:** %d lines", lines)
+		}
+
+	case "list_files", "glob", "mcp__hyper__glob":
+		// Handle array output
+		if arr, ok := output.([]interface{}); ok {
+			return fmt.Sprintf("**Files Found:** %d items", len(arr))
+		}
+		// Handle string output (newline-separated)
+		if str, ok := output.(string); ok {
+			items := strings.Count(str, "\n")
+			return fmt.Sprintf("**Files Found:** %d items", items)
+		}
+	}
+
+	return "**Output:** Too large to display"
+}
+
+// generateSuppressedToolResultMessage creates Claude-style helpful message for oversized results
+func (h *ChatWebSocketHandler) generateSuppressedToolResultMessage(
+	toolName string,
+	size int,
+	output interface{},
+) string {
+	// Extract metadata/summary (tool-specific logic)
+	summary := extractToolResultSummary(toolName, output)
+
+	// Build helpful message
+	msg := fmt.Sprintf(`⚠️ Tool Result Too Large
+
+The output from '%s' is too large to display (%s).
+
+%s
+
+**Suggested Alternatives:**
+
+`, toolName, config.FormatSize(size), summary)
+
+	// Add tool-specific suggestions
+	switch {
+	case strings.Contains(toolName, "read_file") || strings.Contains(toolName, "file_read"):
+		msg += `- Use 'grep' or 'search' to find specific content instead of reading entire file
+- Read the file in smaller chunks using offset/limit parameters
+- Use 'file_info' to get metadata without content
+- Apply filters or patterns to reduce output size`
+
+	case strings.Contains(toolName, "grep") || strings.Contains(toolName, "search"):
+		msg += `- Add more specific search patterns to narrow results
+- Use file type filters (e.g., glob: "*.go")
+- Limit results with head_limit parameter
+- Search in a specific subdirectory instead of entire codebase`
+
+	case strings.Contains(toolName, "bash") || strings.Contains(toolName, "execute"):
+		msg += `- Pipe output through 'head' or 'tail' (e.g., '| head -100')
+- Use grep to filter relevant lines (e.g., '| grep ERROR')
+- Redirect large output to a file for later inspection
+- Add flags to reduce verbosity (e.g., --quiet, --summary)`
+
+	case strings.Contains(toolName, "list_files") || strings.Contains(toolName, "glob"):
+		msg += `- Use more specific glob patterns to narrow results
+- Search in subdirectories instead of root
+- Filter by file type or extension
+- Use 'find' with -maxdepth to limit recursion`
+
+	default:
+		msg += `- Use more specific parameters or filters
+- Request a subset of the data using pagination
+- Ask for a summary instead of full details
+- Consider breaking the operation into smaller steps`
+	}
+
+	msg += "\n\nPlease retry with adjusted parameters."
+
+	return msg
+}
+
+// ToolResultProcessed holds the processed tool result with metadata
+type ToolResultProcessed struct {
+	OutputStr        string // Processed output string (may be truncated or suppressed message)
+	ShouldStream     bool   // Whether to stream to WebSocket client
+	ShouldSaveFull   bool   // Whether to save full content to database
+	Tier             string // Size tier: "normal", "truncated", "suppressed", "error"
+	OriginalSize     int    // Original size in bytes
+	IsTruncated      bool   // Whether output was modified
+}
+
+// processToolResultWithSizeLimit checks tool result size and applies appropriate handling
+func (h *ChatWebSocketHandler) processToolResultWithSizeLimit(
+	toolName string,
+	output interface{},
+) ToolResultProcessed {
+	// Step 1: Calculate original size
+	var originalSize int
+	var outputStr string
+
+	if output == nil {
+		return ToolResultProcessed{
+			OutputStr:      "",
+			ShouldStream:   true,
+			ShouldSaveFull: true,
+			Tier:           "normal",
+			OriginalSize:   0,
+			IsTruncated:    false,
+		}
+	}
+
+	// Convert to string and calculate size
+	if str, ok := output.(string); ok {
+		outputStr = str
+		originalSize = len(str)
+	} else {
+		outputBytes, err := json.Marshal(output)
+		if err != nil {
+			h.logger.Error("Failed to marshal tool result for size check",
+				zap.String("tool", toolName),
+				zap.Error(err))
+			outputStr = fmt.Sprintf("Error: failed to process tool result: %v", err)
+			return ToolResultProcessed{
+				OutputStr:      outputStr,
+				ShouldStream:   true,
+				ShouldSaveFull: false,
+				Tier:           "error",
+				OriginalSize:   0,
+				IsTruncated:    false,
+			}
+		}
+		outputStr = string(outputBytes)
+		originalSize = len(outputBytes)
+	}
+
+	// Step 2: Apply tier-based logic
+	if originalSize <= config.MaxToolResultNormalBytes {
+		// Tier 1: Normal - stream and save fully
+		h.logger.Debug("Tool result within normal size limit",
+			zap.String("tool", toolName),
+			zap.Int("size", originalSize),
+			zap.String("tier", "normal"))
+
+		return ToolResultProcessed{
+			OutputStr:      outputStr,
+			ShouldStream:   true,
+			ShouldSaveFull: true,
+			Tier:           "normal",
+			OriginalSize:   originalSize,
+			IsTruncated:    false,
+		}
+
+	} else if originalSize <= config.MaxToolResultTruncatedBytes {
+		// Tier 2: Truncated - stream preview + metadata, save full
+		preview := outputStr
+		if len(outputStr) > config.ToolResultPreviewBytes {
+			preview = outputStr[:config.ToolResultPreviewBytes]
+		}
+
+		metadata := fmt.Sprintf(
+			"\n\n[Output truncated: %s / %s shown. Full result saved to database.]",
+			config.FormatSize(config.ToolResultPreviewBytes),
+			config.FormatSize(originalSize),
+		)
+
+		h.logger.Info("Tool result truncated for display",
+			zap.String("tool", toolName),
+			zap.Int("originalSize", originalSize),
+			zap.Int("previewSize", len(preview)),
+			zap.String("tier", "truncated"))
+
+		return ToolResultProcessed{
+			OutputStr:      preview + metadata,
+			ShouldStream:   true,
+			ShouldSaveFull: true, // Save full content to DB
+			Tier:           "truncated",
+			OriginalSize:   originalSize,
+			IsTruncated:    true,
+		}
+
+	} else if originalSize <= config.MaxToolResultSuppressedBytes {
+		// Tier 3: Suppressed - stream helpful message, DON'T save full content
+		suppressedMsg := h.generateSuppressedToolResultMessage(
+			toolName,
+			originalSize,
+			output,
+		)
+
+		h.logger.Warn("Tool result suppressed due to size",
+			zap.String("tool", toolName),
+			zap.Int("size", originalSize),
+			zap.String("tier", "suppressed"))
+
+		return ToolResultProcessed{
+			OutputStr:      suppressedMsg,
+			ShouldStream:   true,
+			ShouldSaveFull: false, // Save only the message, not full content
+			Tier:           "suppressed",
+			OriginalSize:   originalSize,
+			IsTruncated:    true,
+		}
+
+	} else {
+		// Beyond hard limit - error
+		errorMsg := fmt.Sprintf(
+			"Tool result size (%s) exceeds maximum allowed (%s). Tool: %s",
+			config.FormatSize(originalSize),
+			config.FormatSize(config.MaxToolResultSuppressedBytes),
+			toolName,
+		)
+
+		h.logger.Error("Tool result exceeded hard limit",
+			zap.String("tool", toolName),
+			zap.Int("size", originalSize),
+			zap.Int("maxSize", config.MaxToolResultSuppressedBytes))
+
+		return ToolResultProcessed{
+			OutputStr:      errorMsg,
+			ShouldStream:   true,
+			ShouldSaveFull: false,
+			Tier:           "error",
+			OriginalSize:   originalSize,
+			IsTruncated:    true,
+		}
 	}
 }

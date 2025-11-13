@@ -127,6 +127,9 @@ export const SessionList: React.FC<SessionListProps> = ({
                   {isSubagentChat && (
                     <Bot className="w-4 h-4 text-pink-300 dark:text-pink-500 flex-shrink-0" />
                   )}
+                  {!isSubagentChat && !isSubchat && (
+                    <Bot className="w-4 h-4 text-green-500 dark:text-green-400 flex-shrink-0" />
+                  )}
                   {isSubchat && !isSubagentChat && (
                     <Bot className="w-4 h-4 text-blue-500 dark:text-blue-400 flex-shrink-0" />
                   )}
