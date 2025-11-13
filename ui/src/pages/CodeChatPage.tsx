@@ -79,6 +79,11 @@ export const CodeChatPage: React.FC = () => {
   // Refs for WebSocket and streaming content
   const wsConnectionRef = useRef<ChatStreamConnection | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // WebSocket connection state and message queue
+  const wsConnectionStateRef = useRef<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const messageQueueRef = useRef<string[]>([]);
+  
   const streamingContentRef = useRef<string>('');
   const currentMessageToolsRef = useRef<{
     toolCalls: ToolCall[];
@@ -288,6 +293,9 @@ export const CodeChatPage: React.FC = () => {
     if (streamingSessionId === sessionId) {
       setStreamingSessionId(null);
     }
+    
+    // Reset connection state
+    wsConnectionStateRef.current = 'connecting';
 
     // 4. Reset all streaming refs and state
     streamingContentRef.current = '';
@@ -489,10 +497,22 @@ export const CodeChatPage: React.FC = () => {
       },
       onOpen: () => {
         console.log('[CodeChatPage] WebSocket connected');
+        wsConnectionStateRef.current = 'connected';
         setError(null);
+        
+        // Process any queued messages
+        if (messageQueueRef.current.length > 0) {
+          console.log(`[CodeChatPage] Processing ${messageQueueRef.current.length} queued messages`);
+          const queuedMessages = [...messageQueueRef.current];
+          messageQueueRef.current = [];
+          queuedMessages.forEach(message => {
+            sendMessageInternal(message);
+          });
+        }
       },
       onClose: () => {
         console.log('[CodeChatPage] WebSocket disconnected');
+        wsConnectionStateRef.current = 'disconnected';
       },
     });
 
@@ -573,24 +593,9 @@ export const CodeChatPage: React.FC = () => {
     setSessions((prev) => prev.map((s) => (s.id === sessionId ? sessionItem : s)));
   };
 
-  // Message sending handler
-  const handleSendMessage = (text: string) => {
-    if (!activeSessionId || isStreaming) return;
-
-    // Ensure WebSocket is connected before sending
-    if (!wsConnectionRef.current || wsConnectionRef.current.ws.readyState !== WebSocket.OPEN) {
-      console.log('[CodeChatPage] WebSocket not connected, reconnecting...');
-      connectWebSocket(activeSessionId);
-      // Wait briefly for connection to establish before sending
-      setTimeout(() => {
-        if (wsConnectionRef.current && wsConnectionRef.current.ws.readyState === WebSocket.OPEN) {
-          handleSendMessage(text);
-        } else {
-          setError('WebSocket connection failed. Please try again.');
-        }
-      }, 500);
-      return;
-    }
+  // Internal message sending function (used by queue processing)
+  const sendMessageInternal = useCallback((text: string) => {
+    if (!activeSessionId || !wsConnectionRef.current) return;
 
     // Optimistically add user message
     const userMessage: ChatMessageType = {
@@ -620,6 +625,28 @@ export const CodeChatPage: React.FC = () => {
       setStreamingContent('');
       streamingContentRef.current = '';
       performance.stopMonitoring();
+    }
+  }, [activeSessionId, performance]);
+
+  // Message sending handler
+  const handleSendMessage = (text: string) => {
+    if (!activeSessionId || isStreaming) return;
+
+    // Check connection state and handle accordingly
+    const connectionState = wsConnectionStateRef.current;
+    
+    if (connectionState === 'connected' && wsConnectionRef.current?.ws.readyState === WebSocket.OPEN) {
+      // Connection is ready, send immediately
+      sendMessageInternal(text);
+    } else if (connectionState === 'connecting') {
+      // Connection is in progress, queue the message
+      console.log('[CodeChatPage] Connection in progress, queueing message');
+      messageQueueRef.current.push(text);
+    } else {
+      // Connection is disconnected, start connecting and queue the message
+      console.log('[CodeChatPage] WebSocket disconnected, reconnecting and queueing message');
+      messageQueueRef.current.push(text);
+      connectWebSocket(activeSessionId);
     }
   };
 

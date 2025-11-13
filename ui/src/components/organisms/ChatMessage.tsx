@@ -9,7 +9,7 @@
  * - Tool results with status indicators
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -275,9 +275,19 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
         )}
 
         {/* Tool Calls Accordion - Only show in debug mode */}
-        {showToolDetails && hasToolCalls && (
-          <Accordion.Root type="multiple" className="mt-3">
-            {allToolCalls.map((toolCall) => {
+        {showToolDetails && hasToolCalls && (() => {
+          const TOOL_DISPLAY_LIMIT = 5;
+          const [showAllTools, setShowAllTools] = useState(false);
+          const hasMoreTools = allToolCalls.length > TOOL_DISPLAY_LIMIT;
+          const toolsToDisplay = showAllTools || !hasMoreTools
+            ? allToolCalls
+            : allToolCalls.slice(0, TOOL_DISPLAY_LIMIT);
+          const hiddenCount = allToolCalls.length - TOOL_DISPLAY_LIMIT;
+
+          return (
+            <div className="mt-3">
+              <Accordion.Root type="multiple">
+                {toolsToDisplay.map((toolCall) => {
               const toolResult = allToolResults.get(toolCall.id);
               const isPending = pendingToolCalls.has(toolCall.id);
               const hasError = toolResult?.error;
@@ -343,7 +353,21 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               );
             })}
           </Accordion.Root>
-        )}
+          {hasMoreTools && (
+            <button
+              onClick={() => setShowAllTools(!showAllTools)}
+              className="mt-2 px-3 py-1.5 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors w-full"
+            >
+              {showAllTools ? (
+                <>Show less</>
+              ) : (
+                <>Show {hiddenCount} more tool call{hiddenCount !== 1 ? 's' : ''}</>
+              )}
+            </button>
+          )}
+        </div>
+      );
+    })()}
       </div>
     </div>
   );
