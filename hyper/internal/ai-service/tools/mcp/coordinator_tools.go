@@ -3382,13 +3382,25 @@ Acknowledge the message and continue your work.
 			case aiservice.StreamEventToolCall:
 				toolCallCount++
 
-				// 📊 COMPREHENSIVE LOGGING: Log every tool call with timestamp and details
+				// 📊 COMPREHENSIVE LOGGING: Log every tool call (args truncated for brevity)
+				argsSummary := make(map[string]interface{})
+				for key, value := range event.ToolCall.Args {
+					if key == "content" || key == "output" {
+						// Truncate large content fields
+						if str, ok := value.(string); ok && len(str) > 100 {
+							argsSummary[key] = fmt.Sprintf("%s... (%d chars)", str[:100], len(str))
+						} else {
+							argsSummary[key] = value
+						}
+					} else {
+						argsSummary[key] = value
+					}
+				}
 				t.logger.Info("🔧 TOOL CALL",
 					zap.String("subchatId", subchatID),
 					zap.Int("callNumber", toolCallCount),
 					zap.String("toolName", event.ToolCall.Name),
-					zap.Any("args", event.ToolCall.Args),
-					zap.Time("timestamp", time.Now()))
+					zap.Any("args", argsSummary))
 
 				// Emit progress notification with plain English tool call description
 				plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)

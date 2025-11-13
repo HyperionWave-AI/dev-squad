@@ -412,7 +412,10 @@ func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.Ob
 	// Layer 3: Validate tool result output size (defense in depth)
 	// Tool results can be larger than user messages (10MB limit vs 1MB)
 	if output != nil {
-		outputBytes, err := bson.Marshal(output)
+		// Wrap output in a temporary document structure for BSON marshaling
+		// This is necessary because BSON can't marshal raw values at the top level
+		tempDoc := bson.M{"output": output}
+		outputBytes, err := bson.Marshal(tempDoc)
 		if err != nil {
 			return nil, fmt.Errorf("failed to validate tool result output: %w", err)
 		}

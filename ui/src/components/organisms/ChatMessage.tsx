@@ -58,25 +58,40 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     return (
       <div className="flex w-full mb-4 justify-start px-2">
         <div className="max-w-[75%] w-full">
-          <div className="border border-blue-200 dark:border-blue-700 rounded-lg overflow-hidden bg-blue-50 dark:bg-blue-900/20">
-            <div className="flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900/40 border-b border-blue-200 dark:border-blue-700">
-              <Wrench className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-              <span className="font-mono text-sm font-medium text-blue-900 dark:text-blue-100">
-                {message.toolCall.name}
-              </span>
-              <span className="text-xs text-blue-600 dark:text-blue-400 ml-auto">
-                {new Date(message.timestamp).toLocaleTimeString()}
-              </span>
-            </div>
-            <div className="p-3">
-              <div className="text-xs text-gray-700 dark:text-gray-300 font-semibold mb-1">
-                Arguments:
-              </div>
-              <pre className="bg-gray-900 text-gray-100 p-2 rounded text-xs overflow-x-auto">
-                {JSON.stringify(message.toolCall.args, null, 2)}
-              </pre>
-            </div>
-          </div>
+          <Accordion.Root type="multiple" defaultValue={[]}>
+            <Accordion.Item
+              value={message.toolCall.id}
+              className="border border-blue-200 dark:border-blue-700 rounded-lg overflow-hidden bg-blue-50 dark:bg-blue-900/20"
+            >
+              <Accordion.Header>
+                <Accordion.Trigger className="flex items-center justify-between w-full px-3 py-2 text-sm font-medium bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-900/60 transition-colors group">
+                  <div className="flex items-center gap-2">
+                    <Wrench className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <span className="font-mono text-blue-900 dark:text-blue-100">
+                      {message.toolCall.name}
+                    </span>
+                    <Clock className="w-4 h-4 text-blue-500 animate-pulse" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-blue-600 dark:text-blue-400">
+                      {new Date(message.timestamp).toLocaleTimeString()}
+                    </span>
+                    <ChevronDown className="w-4 h-4 text-blue-600 dark:text-blue-400 transition-transform group-data-[state=open]:rotate-180" />
+                  </div>
+                </Accordion.Trigger>
+              </Accordion.Header>
+              <Accordion.Content className="overflow-hidden data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
+                <div className="p-3">
+                  <div className="text-xs text-gray-700 dark:text-gray-300 font-semibold mb-1">
+                    Arguments:
+                  </div>
+                  <pre className="bg-gray-900 text-gray-100 p-2 rounded text-xs overflow-x-auto">
+                    {JSON.stringify(message.toolCall.args, null, 2)}
+                  </pre>
+                </div>
+              </Accordion.Content>
+            </Accordion.Item>
+          </Accordion.Root>
         </div>
       </div>
     );
@@ -93,53 +108,72 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     return (
       <div className="flex w-full mb-4 justify-start px-2">
         <div className="max-w-[75%] w-full">
-          <div className={cn(
-            "border rounded-lg overflow-hidden",
-            hasError
-              ? "border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/20"
-              : "border-green-200 dark:border-green-700 bg-green-50 dark:bg-green-900/20"
-          )}>
-            <div className={cn(
-              "flex items-center gap-2 px-3 py-2 border-b",
-              hasError
-                ? "bg-red-100 dark:bg-red-900/40 border-red-200 dark:border-red-700"
-                : "bg-green-100 dark:bg-green-900/40 border-green-200 dark:border-green-700"
-            )}>
-              {hasError ? (
-                <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
-              ) : (
-                <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+          <Accordion.Root type="multiple" defaultValue={[]}>
+            <Accordion.Item
+              value={message.toolResult.id}
+              className={cn(
+                "border rounded-lg overflow-hidden",
+                hasError
+                  ? "border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/20"
+                  : "border-green-200 dark:border-green-700 bg-green-50 dark:bg-green-900/20"
               )}
-              <span className={cn(
-                "font-mono text-sm font-medium",
-                hasError
-                  ? "text-red-900 dark:text-red-100"
-                  : "text-green-900 dark:text-green-100"
-              )}>
-                {message.toolResult.name}
-              </span>
-              <span className={cn(
-                "text-xs ml-auto",
-                hasError
-                  ? "text-red-600 dark:text-red-400"
-                  : "text-green-600 dark:text-green-400"
-              )}>
-                {message.toolResult.durationMs}ms
-              </span>
-            </div>
-            <div className="p-3">
-              <ToolResultDisplay
-                toolResult={{
-                  id: message.toolResult.id,
-                  tool: message.toolResult.name,
-                  result: message.toolResult.output,
-                  error: message.toolResult.error || null,
-                  durationMs: Number(message.toolResult.durationMs)
-                }}
-                hasError={hasError}
-              />
-            </div>
-          </div>
+            >
+              <Accordion.Header>
+                <Accordion.Trigger className={cn(
+                  "flex items-center justify-between w-full px-3 py-2 text-sm font-medium transition-colors group",
+                  hasError
+                    ? "bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60"
+                    : "bg-green-100 dark:bg-green-900/40 hover:bg-green-200 dark:hover:bg-green-900/60"
+                )}>
+                  <div className="flex items-center gap-2">
+                    {hasError ? (
+                      <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                    ) : (
+                      <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                    )}
+                    <span className={cn(
+                      "font-mono",
+                      hasError
+                        ? "text-red-900 dark:text-red-100"
+                        : "text-green-900 dark:text-green-100"
+                    )}>
+                      {message.toolResult.name}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={cn(
+                      "text-xs",
+                      hasError
+                        ? "text-red-600 dark:text-red-400"
+                        : "text-green-600 dark:text-green-400"
+                    )}>
+                      {message.toolResult.durationMs}ms
+                    </span>
+                    <ChevronDown className={cn(
+                      "w-4 h-4 transition-transform group-data-[state=open]:rotate-180",
+                      hasError
+                        ? "text-red-600 dark:text-red-400"
+                        : "text-green-600 dark:text-green-400"
+                    )} />
+                  </div>
+                </Accordion.Trigger>
+              </Accordion.Header>
+              <Accordion.Content className="overflow-hidden data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up">
+                <div className="p-3">
+                  <ToolResultDisplay
+                    toolResult={{
+                      id: message.toolResult.id,
+                      tool: message.toolResult.name,
+                      result: message.toolResult.output,
+                      error: message.toolResult.error || null,
+                      durationMs: Number(message.toolResult.durationMs)
+                    }}
+                    hasError={hasError}
+                  />
+                </div>
+              </Accordion.Content>
+            </Accordion.Item>
+          </Accordion.Root>
         </div>
       </div>
     );

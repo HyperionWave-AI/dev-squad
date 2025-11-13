@@ -299,9 +299,30 @@ export const CodeChatPage: React.FC = () => {
     // Connect to WebSocket
     const connection = connectChatStream(sessionId, {
       onMessage: (content: string, done: boolean) => {
+        // Debug: Log every message callback
+        const activeSession = sessions.find((s) => s.id === activeSessionId);
+        const targetSession = sessions.find((s) => s.id === sessionId);
+        console.log('[CodeChatPage] 🔍 onMessage callback fired:', {
+          callbackSessionId: sessionId,
+          activeSessionIdState: activeSessionId,
+          match: sessionId === activeSessionId,
+          content: content.substring(0, 50) + '...',
+          done,
+          activeSessionIsSubchat: !!activeSession?.parentSessionId,
+          targetSessionIsSubchat: !!targetSession?.parentSessionId,
+        });
+
         // Validate message is for current session (Bug #6 fix)
         if (sessionId !== activeSessionId) {
-          console.warn('[CodeChatPage] Received message for inactive session:', sessionId);
+          console.error('[CodeChatPage] ❌ MESSAGE DROPPED - Session mismatch:', {
+            callbackSessionId: sessionId,
+            activeSessionIdState: activeSessionId,
+            targetSession: targetSession ? {
+              id: targetSession.id,
+              title: targetSession.title,
+              parentSessionId: targetSession.parentSessionId
+            } : 'NOT FOUND'
+          });
           return;
         }
 
@@ -355,6 +376,9 @@ export const CodeChatPage: React.FC = () => {
           setStreamingContent((prev) => prev + content);
           setIsStreaming(true);
 
+          // Debug: Log streaming state updates
+          console.log(`[CodeChatPage] 📝 Content: ${streamingContentRef.current.length} bytes`);
+
           // Mark this session as streaming (Bug #2 fix)
           if (!streamingSessionId) {
             setStreamingSessionId(sessionId);
@@ -365,7 +389,7 @@ export const CodeChatPage: React.FC = () => {
         }
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
-        console.log('[CodeChatPage] Tool call received:', tool, id);
+        console.log(`[CodeChatPage] 🔧 Tool: ${tool}`);
 
         // If we have accumulated content before the tool call, save it as a separate message
         if (streamingContentRef.current.trim()) {
@@ -408,12 +432,20 @@ export const CodeChatPage: React.FC = () => {
           error,
           durationMs,
         };
+
+        // Debug logging to diagnose tool result flow
+        const resultSize = JSON.stringify(result).length;
+        const hasErrorFlag = !!error;
+        console.log(`[CodeChatPage] ${hasErrorFlag ? '❌' : '✅'} ${tool} (${resultSize > 1024 ? Math.round(resultSize/1024) + 'KB' : resultSize + 'B'})`);
+
         currentMessageToolsRef.current.toolResults.set(id, toolResult);
+
         setPendingToolCalls((prev) => {
           const updated = new Set(prev);
           updated.delete(id);
           return updated;
         });
+
         setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
       },
       onMessageSaved: (databaseId: string) => {
@@ -699,7 +731,7 @@ export const CodeChatPage: React.FC = () => {
               })()}
 
               {/* Streaming Assistant Message */}
-              {isStreaming && streamingContent && (
+              {isStreaming && (streamingContent || streamingToolCalls.length > 0) && (
                 <ChatMessage
                   message={{
                     id: 'streaming',
