@@ -17,10 +17,11 @@ import (
 
 // ToolsDiscoveryHandler manages MCP tools discovery operations
 type ToolsDiscoveryHandler struct {
-	toolsStorage     storage.ToolsStorageInterface
-	metadataRegistry *ToolMetadataRegistry
-	mcpServer        *mcp.Server
-	logger           *zap.Logger
+	toolsStorage        storage.ToolsStorageInterface
+	metadataRegistry    *ToolMetadataRegistry
+	mcpServer           *mcp.Server
+	internalToolRegistry *InternalToolRegistry
+	logger              *zap.Logger
 }
 
 // headerRoundTripper is a custom http.RoundTripper that adds headers to every request
@@ -338,6 +339,11 @@ func NewToolsDiscoveryHandler(toolsStorage *storage.ToolsStorage, mcpServer *mcp
 // SetMetadataRegistry sets the metadata registry for tool indexing
 func (h *ToolsDiscoveryHandler) SetMetadataRegistry(registry *ToolMetadataRegistry) {
 	h.metadataRegistry = registry
+}
+
+// SetInternalToolRegistry sets the internal tool registry for direct handler execution
+func (h *ToolsDiscoveryHandler) SetInternalToolRegistry(registry *InternalToolRegistry) {
+	h.internalToolRegistry = registry
 }
 
 // addToolWithMetadata adds a tool to the server and registers it for indexing
@@ -674,9 +680,30 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 
 	// Check if this is a built-in tool (mcp-builtin server)
 	if toolMetadata.ServerName == "mcp-builtin" {
+		// Check if this is an internal tool that can be executed directly
+		if h.internalToolRegistry != nil && h.internalToolRegistry.HasTool(toolName) {
+			h.logger.Info("executing internal built-in tool via direct handler",
+				zap.String("toolName", toolName))
+
+			// Execute the tool directly via its handler
+			result, data, err := h.internalToolRegistry.ExecuteInternalTool(ctx, toolName, toolArgs)
+			if err != nil {
+				h.logger.Error("internal tool execution failed",
+					zap.String("toolName", toolName),
+					zap.Error(err))
+				return createErrorResult(fmt.Sprintf("internal tool execution failed: %s", err.Error())), nil, nil
+			}
+
+			h.logger.Info("internal tool execution completed successfully",
+				zap.String("toolName", toolName),
+				zap.String("resultPreview", truncateJSON(result, 200)))
+
+			return result, data, nil
+		}
+
+		// Tool is built-in but not in internal registry - it's a public tool
 		return createErrorResult(fmt.Sprintf(
-			"Tool '%s' is a built-in tool and cannot be executed via execute_tool. "+
-				"Built-in tools are directly available in your MCP client.",
+			"Tool '%s' is a public built-in tool and should be called directly via your MCP client, not via execute_tool.",
 			toolName,
 		)), nil, nil
 	}

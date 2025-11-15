@@ -665,6 +665,17 @@ func main() {
 	}
 	mcpServer := mcp.NewServer(impl, &mcp.ServerOptions{})
 
+	// Create internal tool registry for tools that should NOT appear in MCP listTools
+	// but can still be discovered via discover_tools and executed via execute_tool
+	internalToolRegistry := handlers.NewInternalToolRegistry()
+	logger.Info("Internal tool registry created for tool hub architecture")
+
+	// Create metadata registry for indexing all tools in toolsStorage
+	metadataRegistry := handlers.NewToolMetadataRegistry()
+
+	// Set metadata registry for all handlers to enable tool indexing
+	codeToolsHandler.SetMetadataRegistry(metadataRegistry)
+
 	// Register code indexing tools
 	if err := codeToolsHandler.RegisterCodeIndexTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register code indexing tools", zap.Error(err))
@@ -672,13 +683,23 @@ func main() {
 
 	// Check if MCP hub tools should be registered (default: true, disable with MCP_HUB=false)
 	mcpHubEnabled := os.Getenv("MCP_HUB") != "false"
-	logger.Info("MCP hub tools registration",
-		zap.Bool("enabled", mcpHubEnabled),
-		zap.String("MCP_HUB", os.Getenv("MCP_HUB")))
+	// Check if tool hub mode is enabled (default: false, enable with TOOL_HUB_MODE=true)
+	// In tool hub mode, only discover_tools and execute_tool are public
+	toolHubMode := os.Getenv("TOOL_HUB_MODE") == "true"
+
+	logger.Info("MCP tool configuration",
+		zap.Bool("mcpHubEnabled", mcpHubEnabled),
+		zap.Bool("toolHubMode", toolHubMode),
+		zap.String("MCP_HUB", os.Getenv("MCP_HUB")),
+		zap.String("TOOL_HUB_MODE", os.Getenv("TOOL_HUB_MODE")))
 
 	// Conditionally register MCP hub tools for external MCP client discovery
+	var toolsDiscoveryHandler *handlers.ToolsDiscoveryHandler
 	if mcpHubEnabled {
-		toolsDiscoveryHandler := handlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer, logger)
+		toolsDiscoveryHandler = handlers.NewToolsDiscoveryHandler(toolsStorage, mcpServer, logger)
+		toolsDiscoveryHandler.SetMetadataRegistry(metadataRegistry)
+		toolsDiscoveryHandler.SetInternalToolRegistry(internalToolRegistry)
+
 		if err := toolsDiscoveryHandler.RegisterToolsDiscoveryTools(mcpServer); err != nil {
 			logger.Fatal("Failed to register MCP hub tools", zap.Error(err))
 		}
@@ -695,9 +716,18 @@ func main() {
 		logger.Info("MCP hub tools NOT registered (MCP_HUB=false)")
 	}
 
+	// In tool hub mode, we stop here - all other tools are internal
+	// They will be registered to internalToolRegistry and indexed for discovery
+	if toolHubMode {
+		logger.Info("Tool hub mode enabled - only discover_tools and execute_tool are public")
+		logger.Info("All other tools will be discoverable via discover_tools and executable via execute_tool")
+		// Skip normal tool registration - will be handled below
+	}
+
 	// Register coordinator tools (task management, knowledge, subagents)
 	logger.Info("Registering coordinator tools to MCP server...")
 	toolHandler := handlers.NewToolHandler(taskStorage, knowledgeStorage, db)
+	toolHandler.SetMetadataRegistry(metadataRegistry)
 	if err := toolHandler.RegisterToolHandlers(mcpServer); err != nil {
 		logger.Fatal("Failed to register coordinator tools to MCP server", zap.Error(err))
 	}
@@ -707,6 +737,7 @@ func main() {
 	logger.Info("Registering Qdrant tools to MCP server...")
 	qdrantHandler := handlers.NewQdrantToolHandler(qdrantClient)
 	qdrantHandler.SetKnowledgeStorage(knowledgeStorage) // Enable MongoDB storage for knowledge_store
+	qdrantHandler.SetMetadataRegistry(metadataRegistry)
 	if err := qdrantHandler.RegisterQdrantTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register Qdrant tools to MCP server", zap.Error(err))
 	}
@@ -715,6 +746,7 @@ func main() {
 	// Register reflection tools (metacognitive self-awareness layer)
 	logger.Info("Registering reflection tools to MCP server...")
 	reflectionToolHandler := handlers.NewReflectionToolHandler(reflectionStorage)
+	reflectionToolHandler.SetMetadataRegistry(metadataRegistry)
 	if err := reflectionToolHandler.RegisterReflectionTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register reflection tools to MCP server", zap.Error(err))
 	}
@@ -723,10 +755,25 @@ func main() {
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools to MCP server...")
 	filesystemHandler := handlers.NewFilesystemToolHandler(logger)
+	filesystemHandler.SetMetadataRegistry(metadataRegistry)
 	if err := filesystemHandler.RegisterFilesystemTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register filesystem tools to MCP server", zap.Error(err))
 	}
 	logger.Info("Filesystem tools registered to MCP server", zap.Int("count", 5))
+
+	// Index all registered tools in toolsStorage for semantic discovery
+	// This makes all tools discoverable via discover_tools MCP tool
+	if metadataRegistry != nil {
+		logger.Info("Indexing all registered tools for semantic discovery...")
+		indexed, err := handlers.IndexRegisteredTools(metadataRegistry, toolsStorage, logger)
+		if err != nil {
+			logger.Warn("Failed to index all tools", zap.Error(err))
+		} else {
+			logger.Info("Tool indexing complete",
+				zap.Int("indexed", indexed),
+				zap.Bool("toolHubMode", toolHubMode))
+		}
+	}
 
 	// Get UI filesystem
 	embeddedUI, err := embed.GetUIFileSystem()

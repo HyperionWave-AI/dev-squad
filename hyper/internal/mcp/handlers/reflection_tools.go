@@ -14,12 +14,35 @@ import (
 // ReflectionToolHandler manages MCP reflection tool operations
 type ReflectionToolHandler struct {
 	reflectionStorage *storage.ReflectionStorage
+	metadataRegistry  *ToolMetadataRegistry
 }
 
 // NewReflectionToolHandler creates a new reflection tool handler
 func NewReflectionToolHandler(storage *storage.ReflectionStorage) *ReflectionToolHandler {
 	return &ReflectionToolHandler{
 		reflectionStorage: storage,
+	}
+}
+
+// SetMetadataRegistry sets the metadata registry for tool indexing
+func (h *ReflectionToolHandler) SetMetadataRegistry(registry *ToolMetadataRegistry) {
+	h.metadataRegistry = registry
+}
+
+// addToolWithMetadata adds a tool to the server and registers it for indexing
+func (h *ReflectionToolHandler) addToolWithMetadata(server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandler) {
+	server.AddTool(tool, handler)
+	if h.metadataRegistry != nil {
+		h.metadataRegistry.RegisterTool(
+			tool.Name,
+			tool.Description,
+			map[string]interface{}{
+				"type":        "mcp-tool",
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+			},
+		)
 	}
 }
 
@@ -138,7 +161,7 @@ func (h *ReflectionToolHandler) registerRecordDecision(server *mcp.Server) error
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -210,7 +233,7 @@ func (h *ReflectionToolHandler) registerRecordOutcome(server *mcp.Server) error 
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -266,7 +289,7 @@ func (h *ReflectionToolHandler) registerExtractLesson(server *mcp.Server) error 
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -454,7 +477,7 @@ func (h *ReflectionToolHandler) registerSuggestLessonFromError(server *mcp.Serve
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
@@ -564,7 +587,7 @@ func (h *ReflectionToolHandler) registerQueryRelevantLessons(server *mcp.Server)
 		},
 	}
 
-	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.addToolWithMetadata(server, tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := extractArguments(req)
 		if err != nil {
 			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
