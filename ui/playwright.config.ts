@@ -1,11 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright configuration for ui2 e2e and accessibility testing
+ * Playwright configuration for Code Search UI e2e testing
  * Supports chromium, webkit, mobile, tablet, and desktop viewports
  */
 export default defineConfig({
-  testDir: './tests/e2e',
+  testDir: './tests',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -17,7 +17,7 @@ export default defineConfig({
   ],
 
   use: {
-    baseURL: 'http://localhost:4588/ui',
+    baseURL: 'http://localhost:5173/ui',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -54,8 +54,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'cd /Users/maxmednikov/MaxSpace/hyper/ui2 && npm run dev',
-    url: 'http://localhost:4588/ui',
+    command: 'cd /home/avshall/work/dev-squad/ui && npm run dev',
+    url: 'http://localhost:5173/ui',
     reuseExistingServer: !process.env.CI,
     timeout: 120000,
   },
