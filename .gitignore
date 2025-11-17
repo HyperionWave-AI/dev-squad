@@ -38,6 +38,7 @@ third_party
 .env.hyper.stable
 
 # Build artifacts
-hyper/coordinator
-/ui/test-results
-/hyper/embed
+ui/test-results
+hyper/embed
+
+ ui/test-reports/
