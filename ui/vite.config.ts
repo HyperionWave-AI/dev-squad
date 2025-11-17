@@ -26,7 +26,7 @@ export default defineConfig({
     proxy: {
       '/api': {
         // Proxy all API calls to the hyper backend
-        target: process.env.VITE_BACKEND_URL || 'http://localhost:7095',
+        target: process.env.VITE_BACKEND_URL || 'http://localhost:7878',
         changeOrigin: true
       }
     }
