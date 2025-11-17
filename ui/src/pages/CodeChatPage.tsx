@@ -16,7 +16,7 @@ import { SessionList } from '@/components/organisms/SessionList';
 import { ChatMessage } from '@/components/organisms/ChatMessage';
 import { ChatInput } from '@/components/organisms/ChatInput';
 import { PerformanceMonitor } from '@/components/organisms/PerformanceMonitor';
-import { ProgressTracker, type ProgressEvent } from '@/components/organisms/ProgressTracker';
+import { ProgressTracker, type TrackableEvent } from '@/components/organisms/ProgressTracker';
 import { MetricsDashboard } from '@/components/organisms/MetricsDashboard';
 import { ConversationModeToggle } from '@/components/molecules/ConversationModeToggle';
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
@@ -65,7 +65,7 @@ export const CodeChatPage: React.FC = () => {
   );
 
   // Progress tracking state
-  const [progressEvents, setProgressEvents] = useState<ProgressEvent[]>([]);
+  const [progressEvents, setProgressEvents] = useState<TrackableEvent[]>([]);
 
   // Metrics drawer state
   const [metricsDrawerOpen, setMetricsDrawerOpen] = useState(false);
@@ -109,16 +109,9 @@ export const CodeChatPage: React.FC = () => {
     prevMessageCountRef.current = messages.length;
   }, [messages, streamingContent]);
 
-  // Load sessions on mount and set up auto-refresh
+  // Load sessions on mount (no polling - use WebSocket session_created events instead)
   useEffect(() => {
     loadSessions();
-
-    // Auto-refresh sessions every 5 seconds to catch new subchats
-    const intervalId = setInterval(() => {
-      loadSessions();
-    }, 5000);
-
-    return () => clearInterval(intervalId);
   }, []);
 
   // Auto-refresh messages for active session (Fix #2: Messages not appearing without refresh)
@@ -127,16 +120,30 @@ export const CodeChatPage: React.FC = () => {
 
     // Poll messages every 3 seconds for active session
     const intervalId = setInterval(() => {
-      // Check WebSocket health and reconnect if needed
-      if (!wsConnectionRef.current || wsConnectionRef.current.ws.readyState !== WebSocket.OPEN) {
-        console.log('[CodeChatPage] WebSocket disconnected, reconnecting...');
-        connectWebSocket(activeSessionId);
-      }
+      // Fix Bug #8: Smarter WebSocket health check - only reconnect if truly CLOSED
+      if (wsConnectionRef.current) {
+        const state = wsConnectionRef.current.ws.readyState;
+        // Only reconnect if connection is CLOSED (3), not CONNECTING (0) or CLOSING (2)
+        if (state === WebSocket.CLOSED) {
+          console.log('[CodeChatPage] WebSocket closed, reconnecting...');
+          connectWebSocket(activeSessionId);
 
-      // Only poll if no active streaming session at all (not just current isStreaming flag)
-      // This prevents race conditions where isStreaming briefly becomes false between chunks
-      if (!isStreaming && !streamingSessionId) {
-        loadMessages(activeSessionId);
+          // Poll messages when WebSocket is disconnected (not streaming)
+          if (!isStreaming && !streamingSessionId) {
+            console.log('[CodeChatPage] Polling messages - WebSocket disconnected (state: CLOSED)');
+            loadMessages(activeSessionId);
+          }
+        }
+      } else {
+        // No connection at all, establish one
+        console.log('[CodeChatPage] No WebSocket connection, establishing...');
+        connectWebSocket(activeSessionId);
+
+        // Poll messages when WebSocket doesn't exist (not streaming)
+        if (!isStreaming && !streamingSessionId) {
+          console.log('[CodeChatPage] Polling messages - No WebSocket connection exists');
+          loadMessages(activeSessionId);
+        }
       }
     }, 3000);
 
@@ -276,6 +283,14 @@ export const CodeChatPage: React.FC = () => {
 
   // Connect to WebSocket for streaming
   const connectWebSocket = useCallback((sessionId: string) => {
+    // Fix Bug #8: Guard against redundant connections
+    if (wsConnectionRef.current &&
+        wsConnectionRef.current.ws.readyState === WebSocket.OPEN &&
+        activeSessionIdRef.current === sessionId) {
+      console.log('[CodeChatPage] Already connected to session, skipping reconnect');
+      return;
+    }
+
     // Bug #5 Fix: Proper connection cleanup before creating new connection
     // 1. Clear any pending reconnection attempts
     if (reconnectTimeoutRef.current) {
@@ -307,36 +322,38 @@ export const CodeChatPage: React.FC = () => {
     // Connect to WebSocket
     const connection = connectChatStream(sessionId, {
       onMessage: (content: string, done: boolean) => {
-        // Debug: Log every message callback
-        const activeSession = sessions.find((s) => s.id === activeSessionId);
-        const targetSession = sessions.find((s) => s.id === sessionId);
-        console.log('[CodeChatPage] 🔍 onMessage callback fired:', {
-          callbackSessionId: sessionId,
-          activeSessionIdState: activeSessionId,
-          match: sessionId === activeSessionId,
-          content: content.substring(0, 50) + '...',
-          done,
-          activeSessionIsSubchat: !!activeSession?.parentSessionId,
-          targetSessionIsSubchat: !!targetSession?.parentSessionId,
-        });
-
-        // Validate message is for current session (Bug #6 fix)
-        if (sessionId !== activeSessionId) {
-          console.error('[CodeChatPage] ❌ MESSAGE DROPPED - Session mismatch:', {
-            callbackSessionId: sessionId,
-            activeSessionIdState: activeSessionId,
-            targetSession: targetSession ? {
-              id: targetSession.id,
-              title: targetSession.title,
-              parentSessionId: targetSession.parentSessionId
-            } : 'NOT FOUND'
-          });
+        // Fix Bug #8: Use ref to avoid stale closure issues with React state
+        if (sessionId !== activeSessionIdRef.current) {
+          console.log('[CodeChatPage] Message for different session, ignoring');
           return;
+        }
+
+        // RACE CONDITION FIX: Verify streamingContent belongs to current session
+        // Store session ID with content to prevent stale closure bugs
+        if (!streamingContentRef.current.startsWith(`[${sessionId}]:`)) {
+          // First message for this session - prefix with session ID
+          if (!done) {
+            streamingContentRef.current = `[${sessionId}]:`;
+          }
         }
 
         if (done) {
           // Stream complete - save final AI message if there's any remaining content
-          const finalContent = streamingContentRef.current;
+          // Extract content after session ID prefix
+          const prefixedContent = streamingContentRef.current;
+          const sessionPrefix = `[${sessionId}]:`;
+
+          // Verify content belongs to this session before using it
+          if (!prefixedContent.startsWith(sessionPrefix)) {
+            console.warn('[CodeChatPage] RACE CONDITION DETECTED: Content belongs to different session, discarding');
+            streamingContentRef.current = '';
+            setStreamingContent('');
+            setIsStreaming(false);
+            setStreamingSessionId(null);
+            return;
+          }
+
+          const finalContent = prefixedContent.substring(sessionPrefix.length);
           const tools = currentMessageToolsRef.current;
 
           if (finalContent || tools.toolCalls.length > 0) {
@@ -349,12 +366,6 @@ export const CodeChatPage: React.FC = () => {
               toolCalls: tools.toolCalls.length > 0 ? tools.toolCalls : undefined,
               toolResults: tools.toolResults.size > 0 ? tools.toolResults : undefined,
             };
-            console.log('[CodeChatPage] ✅ Creating completed AI message:', {
-              id: newMessage.id,
-              hasContent: !!finalContent,
-              toolCallsCount: tools.toolCalls.length,
-              toolResultsCount: tools.toolResults.size,
-            });
             setMessages((prev) => {
               const updated = [...prev, newMessage];
               console.log('[CodeChatPage] ✅ Messages array updated. New length:', updated.length);
@@ -379,9 +390,12 @@ export const CodeChatPage: React.FC = () => {
           // Stop performance monitoring
           performance.stopMonitoring();
         } else {
-          // Accumulate streaming content
+          // Accumulate streaming content (with session ID prefix for race condition safety)
           streamingContentRef.current += content;
-          setStreamingContent((prev) => prev + content);
+          // Display content without session ID prefix
+          const sessionPrefix = `[${sessionId}]:`;
+          const displayContent = streamingContentRef.current.substring(sessionPrefix.length);
+          setStreamingContent(displayContent);
           setIsStreaming(true);
 
           // Debug: Log streaming state updates
@@ -400,19 +414,26 @@ export const CodeChatPage: React.FC = () => {
         console.log(`[CodeChatPage] 🔧 Tool: ${tool}`);
 
         // If we have accumulated content before the tool call, save it as a separate message
-        if (streamingContentRef.current.trim()) {
+        // Extract content without session ID prefix
+        const sessionPrefix = `[${sessionId}]:`;
+        const contentWithPrefix = streamingContentRef.current;
+        const content = contentWithPrefix.startsWith(sessionPrefix)
+          ? contentWithPrefix.substring(sessionPrefix.length)
+          : contentWithPrefix;
+
+        if (content.trim()) {
           const messageBeforeToolCall: ChatMessageType = {
             id: `msg-${Date.now()}`,
             sessionId,
             role: 'assistant',
-            content: streamingContentRef.current,
+            content: content,
             timestamp: new Date().toISOString(),
           };
           setMessages((prev) => [...prev, messageBeforeToolCall]);
           console.log('[CodeChatPage] Saved message before tool call');
 
-          // Clear streaming content for next message
-          streamingContentRef.current = '';
+          // Clear streaming content for next message (keep session prefix)
+          streamingContentRef.current = sessionPrefix;
           setStreamingContent('');
         }
 
@@ -513,6 +534,11 @@ export const CodeChatPage: React.FC = () => {
       onClose: () => {
         console.log('[CodeChatPage] WebSocket disconnected');
         wsConnectionStateRef.current = 'disconnected';
+      },
+      onSessionCreated: (subchatId: string) => {
+        console.log('[CodeChatPage] New subchat created, refreshing sessions list', subchatId);
+        // Refresh sessions list to show the new subchat
+        loadSessions();
       },
     });
 
@@ -819,10 +845,9 @@ export const CodeChatPage: React.FC = () => {
 
       {/* Progress Tracker - Fixed bottom-right (above performance monitor) */}
       <ProgressTracker
-        progress={progressEvents}
+        events={progressEvents}
         onClose={() => setProgressEvents([])}
       />
-
       {/* Metrics Drawer - Slide in from right */}
       {metricsDrawerOpen && (
         <>

@@ -1479,9 +1479,9 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 			// DEBUG: Log context details before LLM API call
 			contextSize = calculateContextSize(currentMessages)
-			toolResultPreview := getToolResultPreview(currentMessages, 200)
-			log.Printf("[DEBUG Context - Filtered] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
-				len(currentMessages), contextSize, toolResultPreview)
+// toolResultPreview := getToolResultPreview(currentMessages, 200)
+// 			log.Printf("[DEBUG Context - Filtered] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
+// 				len(currentMessages), contextSize, toolResultPreview)
 
 			// Call provider with FILTERED tools
 			toolProvider := s.provider.(ToolCapableProvider)

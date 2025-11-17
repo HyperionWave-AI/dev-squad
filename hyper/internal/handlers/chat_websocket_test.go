@@ -9,6 +9,7 @@ import (
 	"time"
 
 	aiservice "hyper/internal/ai-service"
+	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -56,7 +57,7 @@ func (m *MockChatService) SaveToolCall(ctx context.Context, sessionID primitive.
 	return callArgs.Get(0).(*models.ChatMessage), callArgs.Error(1)
 }
 
-func (m *MockChatService) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name, output, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error) {
+func (m *MockChatService) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error) {
 	callArgs := m.Called(ctx, sessionID, id, name, output, errorMsg, durationMs, companyID)
 	if callArgs.Get(0) == nil {
 		return nil, callArgs.Error(1)
@@ -101,6 +102,11 @@ func (m *MockAIService) StreamChatWithTools(ctx context.Context, messages []aise
 	return eventChan, nil
 }
 
+func (m *MockAIService) StreamChatWithToolsFiltered(ctx context.Context, messages []aiservice.Message, maxToolCalls int, allowedToolNames []string) (<-chan aiservice.StreamEvent, error) {
+	// For testing, just delegate to StreamChatWithTools
+	return m.StreamChatWithTools(ctx, messages, maxToolCalls)
+}
+
 func (m *MockAIService) GetConfig() *aiservice.AIConfig {
 	return &aiservice.AIConfig{
 		Provider:     "mock",
@@ -109,9 +115,26 @@ func (m *MockAIService) GetConfig() *aiservice.AIConfig {
 	}
 }
 
+func (m *MockAIService) GetAllowedToolsForDirectSubagent() []string {
+	return []string{} // Return empty list for test
+}
+
 // MockAISettingsService is a mock implementation of AISettingsService for testing
 type MockAISettingsService struct {
 	mock.Mock
+}
+
+// MockSubchatStorage is a mock implementation of SubchatStorageInterface for testing
+type MockSubchatStorage struct {
+	mock.Mock
+}
+
+func (m *MockSubchatStorage) GetSubagent(name string) (*storage.Subagent, error) {
+	args := m.Called(name)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.Subagent), args.Error(1)
 }
 
 func (m *MockAISettingsService) GetSubagent(ctx context.Context, id primitive.ObjectID, companyID string) (*models.Subagent, error) {
@@ -134,11 +157,12 @@ func setupTestServer(t *testing.T, chatService *MockChatService, aiService *Mock
 
 	logger, _ := zap.NewDevelopment()
 	aiSettingsService := new(MockAISettingsService)
+	subchatStorage := new(MockSubchatStorage)
 
 	// Mock aiSettingsService to return empty system prompt by default
 	aiSettingsService.On("GetSystemPrompt", mock.Anything, mock.Anything, mock.Anything).Return("", nil)
 
-	handler := NewChatWebSocketHandler(chatService, aiService, aiSettingsService, logger)
+	handler := NewChatWebSocketHandler(chatService, aiService, aiSettingsService, subchatStorage, logger)
 
 	// Mock JWT middleware - set userId and companyId in context
 	router.Use(func(c *gin.Context) {

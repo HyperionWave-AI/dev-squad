@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aiservice "hyper/internal/ai-service"
@@ -792,15 +794,111 @@ Agent's job: Read files → Write code → Test → Commit
 
 DO NOT DO THE AGENT'S JOB!`
 
-// WebSocket upgrader configuration
+// WebSocket upgrader configuration (Production Hardened)
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	ReadBufferSize:  8192,  // 8KB - efficient for large messages
+	WriteBufferSize: 16384, // 16KB - handles streaming AI responses well
 	CheckOrigin: func(r *http.Request) bool {
-		// Allow all origins in development
-		// TODO: Restrict in production based on allowed origins
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			// No origin header (non-browser clients like curl) - allow for dev/testing
+			return true
+		}
+
+		// Read allowed origins from environment (same as CORS config)
+		corsOriginsEnv := r.Context().Value("allowedOrigins")
+		if corsOriginsEnv != nil {
+			if allowedOrigins, ok := corsOriginsEnv.([]string); ok {
+				for _, allowed := range allowedOrigins {
+					if origin == allowed {
+						return true
+					}
+				}
+			}
+		}
+
+		// Fallback: check environment variable directly
+		allowedOriginsStr := os.Getenv("CORS_ALLOWED_ORIGINS")
+		if allowedOriginsStr != "" {
+			origins := strings.Split(allowedOriginsStr, ",")
+			for _, allowed := range origins {
+				if strings.TrimSpace(allowed) == origin {
+					return true
+				}
+			}
+		}
+
+		// Log rejected origin for security monitoring
+		// Note: This will log to stdout since we don't have logger in this context
+		fmt.Printf("[WebSocket CORS] Rejected origin: %q (allowed: %q)\n", origin, allowedOriginsStr)
+		return false
 	},
+}
+
+// Production Rate Limiting & Connection Management
+var (
+	// Global connection counter (atomic for thread-safety)
+	activeConnections int64
+	maxConnections    int64 = 1000 // Configurable via env: WS_MAX_CONNECTIONS
+
+	// Per-user connection tracking
+	userConnections     = sync.Map{} // map[userID]int
+	maxConnectionsPerUser = 2        // Max 2 concurrent connections per user
+
+	// Per-user message rate limiting
+	userMessageRates = sync.Map{} // map[userID]*messageRateLimit
+)
+
+// messageRateLimit tracks message rate per user
+type messageRateLimit struct {
+	lastMessage time.Time
+	messageCount int
+	mu           sync.Mutex
+}
+
+// checkRateLimit returns true if user is within rate limits
+func checkRateLimit(userID string) bool {
+	// Load or create rate limit entry
+	val, _ := userMessageRates.LoadOrStore(userID, &messageRateLimit{
+		lastMessage: time.Now(),
+		messageCount: 0,
+	})
+	rateLimit := val.(*messageRateLimit)
+
+	rateLimit.mu.Lock()
+	defer rateLimit.mu.Unlock()
+
+	now := time.Now()
+	// Reset counter every minute
+	if now.Sub(rateLimit.lastMessage) > time.Minute {
+		rateLimit.messageCount = 0
+		rateLimit.lastMessage = now
+	}
+
+	// Limit: 10 messages per minute per user
+	if rateLimit.messageCount >= 10 {
+		return false // Rate limit exceeded
+	}
+
+	rateLimit.messageCount++
+	return true
+}
+
+// incrementUserConnection increments connection count for user
+func incrementUserConnection(userID string) bool {
+	val, _ := userConnections.LoadOrStore(userID, new(int32))
+	count := val.(*int32)
+	newCount := atomic.AddInt32(count, 1)
+	return int(newCount) <= maxConnectionsPerUser
+}
+
+// decrementUserConnection decrements connection count for user
+func decrementUserConnection(userID string) {
+	val, exists := userConnections.Load(userID)
+	if exists {
+		count := val.(*int32)
+		atomic.AddInt32(count, -1)
+	}
 }
 
 // ChatServiceInterface defines the interface for chat service operations
@@ -936,17 +1034,50 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 		return
 	}
 
+	// Production Rate Limiting: Check global connection limit
+	currentConnections := atomic.LoadInt64(&activeConnections)
+	if currentConnections >= maxConnections {
+		h.logger.Warn("Connection rejected - global limit reached",
+			zap.Int64("activeConnections", currentConnections),
+			zap.Int64("maxConnections", maxConnections))
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Server at capacity, please try again later"})
+		return
+	}
+
+	// Production Rate Limiting: Check per-user connection limit
+	if !incrementUserConnection(userID) {
+		h.logger.Warn("Connection rejected - user limit reached",
+			zap.String("userId", userID),
+			zap.Int("maxPerUser", maxConnectionsPerUser))
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many concurrent connections"})
+		return
+	}
+
 	// Upgrade HTTP connection to WebSocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		h.logger.Error("Failed to upgrade to WebSocket", zap.Error(err))
+		decrementUserConnection(userID) // Rollback on failure
 		return
 	}
 	defer conn.Close()
 
+	// Track connection counts
+	atomic.AddInt64(&activeConnections, 1)
+	defer func() {
+		atomic.AddInt64(&activeConnections, -1)
+		decrementUserConnection(userID)
+	}()
+
 	h.logger.Info("WebSocket connection established",
 		zap.String("sessionId", sessionID.Hex()),
-		zap.String("userId", userID))
+		zap.String("userId", userID),
+		zap.Int64("totalConnections", atomic.LoadInt64(&activeConnections)))
+
+	// Register WebSocket connection for broadcasting (e.g., session_created events)
+	broadcaster := GetWebSocketBroadcaster(h.logger)
+	broadcaster.RegisterConnection(sessionID, conn, &h.writeMutex)
+	defer broadcaster.UnregisterConnection(sessionID)
 
 	// Record WebSocket connection metrics
 	connectionStart := time.Now()
@@ -1024,9 +1155,8 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 		}
 	}()
 
-	// Processing state to prevent concurrent messages during AI response
-	isProcessing := false
-	var processingMutex sync.Mutex
+	// Processing state to prevent concurrent messages during AI response (using atomic for panic safety)
+	var isProcessing atomic.Bool
 
 	// Goroutine for sending pings (tracked with WaitGroup)
 	cleanup.wg.Add(1)
@@ -1118,18 +1248,28 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				continue
 			}
 
-			// Check if already processing a message
-			processingMutex.Lock()
-			if isProcessing {
-				processingMutex.Unlock()
+			// Production Rate Limiting: Check message rate limit (10 messages/minute per user)
+			if !checkRateLimit(userID) {
+				h.logger.Warn("Message rejected - rate limit exceeded",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.String("userId", userID))
+				metrics.RecordValidationRejection("rate_limit")
+				h.sendError(conn, "Rate limit exceeded: maximum 10 messages per minute")
+				continue
+			}
+
+			// Check if already processing a message (atomic compare-and-swap)
+			if !isProcessing.CompareAndSwap(false, true) {
 				h.logger.Warn("Message rejected - AI response in progress",
 					zap.String("sessionId", sessionID.Hex()),
 					zap.String("userId", userID))
 				h.sendError(conn, "Please wait for current response to complete before sending another message")
 				continue
 			}
-			isProcessing = true
-			processingMutex.Unlock()
+
+			// Process message in anonymous function with defer to ensure cleanup even on panic
+			func() {
+				defer isProcessing.Store(false)
 
 			// Emit user message to WebSocket immediately (before database save)
 			userMsgEvent := models.StreamMessage{
@@ -1148,10 +1288,7 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			if err != nil {
 				h.logger.Error("Failed to save user message", zap.Error(err))
 				h.sendError(conn, "Failed to save message")
-				processingMutex.Lock()
-				isProcessing = false
-				processingMutex.Unlock()
-				continue
+				return // Defer will reset isProcessing
 			}
 
 			// FIX: Emit saved message with database ID for frontend reconciliation
@@ -1198,20 +1335,14 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 						zap.String("sessionId", sessionID.Hex()),
 						zap.Error(err))
 				}
-				// Reset processing state and wait for next message
-				processingMutex.Lock()
-				isProcessing = false
-				processingMutex.Unlock()
-				continue // Skip to next message, don't call streamAIResponse
+				return // Defer will reset isProcessing; skip to next message, don't call streamAIResponse
 			}
 
 			// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
 			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
 
-			// Reset processing state after response complete
-			processingMutex.Lock()
-			isProcessing = false
-			processingMutex.Unlock()
+			// Defer will reset isProcessing after response complete
+			}() // Close anonymous function with defer
 		}
 	}
 }

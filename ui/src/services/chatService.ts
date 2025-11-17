@@ -64,7 +64,7 @@ export interface ToolResult {
 }
 
 export interface StreamMessage {
-  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message';
+  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message' | 'session_created';
   content?: string;
   toolCall?: {
     tool: string;
@@ -214,6 +214,7 @@ export interface StreamCallbacks {
   onToolResult?: (id: string, tool: string, result: any, error: string | null, durationMs: number) => void;
   onMessageSaved?: (databaseId: string) => void;
   onUserMessage?: (content: string) => void; // Bug #1 fix: handle user message echo
+  onSessionCreated?: (subchatId: string) => void; // Event-driven session updates
   onError: (error: Error) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -297,6 +298,13 @@ export function connectChatStream(
           // User message echo from server
           if (callbacks.onUserMessage && data.content) {
             callbacks.onUserMessage(data.content);
+          }
+          break;
+
+        case 'session_created':
+          // New subchat session created - refresh sessions list
+          if (callbacks.onSessionCreated && data.content) {
+            callbacks.onSessionCreated(data.content);
           }
           break;
       }

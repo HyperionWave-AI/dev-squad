@@ -458,7 +458,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 
 				// Track this tool_use ID as included
 				includedToolUseIDs[toolUseID] = true
-				fmt.Printf("[DEBUG] Tracked tool_use ID: %s (name=%s)\n", toolUseID, msg.ToolCall.Name)
+				// fmt.Printf("[DEBUG] Tracked tool_use ID: %s (name=%s)\n", toolUseID, msg.ToolCall.Name)
 			}
 			continue
 		}
@@ -478,7 +478,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 					fmt.Printf("[DEBUG] Skipped tool_result ID: %s (no matching tool_use)\n", toolResultID)
 					continue
 				}
-				fmt.Printf("[DEBUG] Including tool_result ID: %s (has matching tool_use)\n", toolResultID)
+				// fmt.Printf("[DEBUG] Including tool_result ID: %s (has matching tool_use)\n", toolResultID)
 			}
 
 			// Format tool_result (user message with tool result) for Anthropic
@@ -572,7 +572,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	}
 
 	// Debug: Print the actual JSON being sent to Anthropic
-	fmt.Printf("[DEBUG Anthropic Request] JSON: %s\n", string(bodyBytes))
+	// fmt.Printf("[DEBUG Anthropic Request] JSON: %s\n", string(bodyBytes))
 
 	// Make HTTP request
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(bodyBytes))

@@ -2346,6 +2346,25 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 		zap.String("subchatId", subchat.ID),
 		zap.String("agentName", agentTask.AgentName))
 
+	// Broadcast session_created event to parent session's WebSocket connection
+	if parentSessionID, err := primitive.ObjectIDFromHex(parentChatID); err == nil {
+		broadcaster := handlers.GetWebSocketBroadcaster(t.logger)
+		sessionCreatedEvent := models.StreamMessage{
+			Type:    "session_created",
+			Content: subchat.ID, // Send subchat ID so frontend can identify the new session
+		}
+		if broadcastErr := broadcaster.BroadcastToSession(parentSessionID, sessionCreatedEvent); broadcastErr != nil {
+			t.logger.Warn("Failed to broadcast session_created event",
+				zap.String("parentSessionId", parentChatID),
+				zap.String("subchatId", subchat.ID),
+				zap.Error(broadcastErr))
+		} else {
+			t.logger.Info("Broadcasted session_created event to parent session",
+				zap.String("parentSessionId", parentChatID),
+				zap.String("subchatId", subchat.ID))
+		}
+	}
+
 	// Spawn background goroutine to execute the subagent
 	go t.executeSubagentInBackground(subchat.ID, agentTask, parentChatID, companyID)
 
