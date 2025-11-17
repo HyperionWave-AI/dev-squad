@@ -77,7 +77,7 @@ run: ## Run the native compiled binary (synchronous)
 		exit 1; \
 	fi
 	@if [ ! -f .env.native ]; then \
-		echo "Warning: .env.native not found. Please configure environment variables."; \
+		echo "Warning: .env.native nogit  t found. Please configure environment variables."; \
 		echo "Copy .env.native to your project root and update with your settings."; \
 	fi
 	./bin/hyper --mode=http --config=.env.native

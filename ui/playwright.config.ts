@@ -17,7 +17,7 @@ export default defineConfig({
   ],
 
   use: {
-    baseURL: 'http://localhost:5173/ui',
+    baseURL: 'http://localhost:4097',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -28,35 +28,15 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
-
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
-    },
-
-    {
-      name: 'mobile',
-      use: { ...devices['iPhone 13'] },
-    },
-
-    {
-      name: 'tablet',
-      use: { ...devices['iPad Pro'] },
-    },
-
-    {
-      name: 'desktop',
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1920, height: 1080 }
-      },
-    },
   ],
 
+  // Auto-start unified hyper binary before running tests
   webServer: {
-    command: 'cd /home/avshall/work/dev-squad/ui && npm run dev',
-    url: 'http://localhost:5173/ui',
+    command: 'cd .. && ./bin/hyper --mode=http --config=.env.hyper.hot',
+    url: 'http://localhost:4097',
     reuseExistingServer: !process.env.CI,
-    timeout: 120000,
+    timeout: 30000, // 30 seconds to start
+    stdout: 'pipe',
+    stderr: 'pipe',
   },
 });
