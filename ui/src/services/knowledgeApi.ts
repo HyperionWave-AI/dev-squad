@@ -35,11 +35,11 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
 export const knowledgeApi = {
   async searchKnowledge(request: SearchRequest): Promise<SearchResponse> {
     const params = new URLSearchParams({
-      collection: request.collection,
+      collectionName: request.collection,
       query: request.query,
       limit: String(request.limit || 10)
     });
-    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/browse?${params}`);
+    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/search?${params}`);
   },
 
   async queryKnowledge(request: { collection: string; query: string; limit?: number; taskId?: string }): Promise<{ entries: any[] }> {
@@ -47,16 +47,6 @@ export const knowledgeApi = {
       method: 'POST',
       body: JSON.stringify(request)
     });
-  },
-
-  async browseKnowledge(collection?: string, limit?: number): Promise<SearchResponse> {
-    const params = new URLSearchParams();
-    if (collection) params.append('collection', collection);
-    if (limit) params.append('limit', String(limit));
-
-    const queryString = params.toString();
-    const url = `${API_BASE}/api/v1/knowledge/browse${queryString ? `?${queryString}` : ''}`;
-    return fetchWithAuth(url);
   },
 
   async createKnowledge(request: CreateRequest): Promise<CreateResponse> {
@@ -78,6 +68,60 @@ export const knowledgeApi = {
     return fetchWithAuth(`${API_BASE}/api/v1/knowledge/collections`, {
       method: 'POST',
       body: JSON.stringify(request)
+    });
+  },
+
+  async getEntries(collection: string, limit: number = 50): Promise<{ entries: any[] }> {
+    const params = new URLSearchParams({
+      collection,
+      limit: String(limit)
+    });
+    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/browse?${params}`);
+  },
+
+  async updateEntry(id: string, data: { text: string; metadata?: Record<string, any> }): Promise<{ entry: any }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/entries/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  },
+
+  async deleteEntry(id: string): Promise<void> {
+    await fetchWithAuth(`${API_BASE}/api/v1/knowledge/entries/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+  },
+
+  async compactEntry(id: string, targetTokenCount?: number, dryRun: boolean = false): Promise<{
+    success: boolean;
+    original: { text: string; wordCount: number };
+    compacted: { text: string; wordCount: number };
+    compressionRatio: number;
+    preserved: { filePaths: number; functionNames: number };
+  }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/entries/${encodeURIComponent(id)}/compact`, {
+      method: 'POST',
+      body: JSON.stringify({
+        targetWordCount: targetTokenCount || 750,
+        dryRun
+      })
+    });
+  },
+
+  async compactText(text: string, targetTokenCount?: number, dryRun: boolean = false): Promise<{
+    success: boolean;
+    original: { text: string; wordCount: number };
+    compacted: { text: string; wordCount: number };
+    compressionRatio: number;
+    preserved: { filePaths: number; functionNames: number };
+  }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/knowledge/compact-text`, {
+      method: 'POST',
+      body: JSON.stringify({
+        text,
+        targetWordCount: targetTokenCount || 750,
+        dryRun
+      })
     });
   }
 };

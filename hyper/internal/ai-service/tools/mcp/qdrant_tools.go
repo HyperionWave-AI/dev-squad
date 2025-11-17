@@ -19,7 +19,7 @@ func (t *KnowledgeFindTool) Name() string {
 }
 
 func (t *KnowledgeFindTool) Description() string {
-	return "Search for knowledge by semantic similarity. Returns top matches with scores and metadata. Use for discovering patterns, solutions, and related knowledge. Limit: 5 results default (max: 20). If embedding service is down, use query_knowledge tool as fallback."
+	return "Search for knowledge by semantic similarity. Returns top matches with scores and metadata. Use for discovering patterns, solutions, and related knowledge. Limit: 5 results default (max: 20). IMPORTANT: Use knowledge_list_collections first to discover available collections and avoid 'collection not found' errors. If embedding service is down, use query_knowledge tool as fallback."
 }
 
 func (t *KnowledgeFindTool) InputSchema() map[string]interface{} {
@@ -64,8 +64,8 @@ func (t *KnowledgeFindTool) Execute(ctx context.Context, input map[string]interf
 		}
 	}
 
-	// Ensure collection exists (768 dimensions for default embedding model)
-	if err := t.qdrantClient.EnsureCollection(collection, 768); err != nil {
+	// Ensure collection exists (use client's configured dimensions)
+	if err := t.qdrantClient.EnsureCollection(collection, t.qdrantClient.GetDimensions()); err != nil {
 		// Check if embedding service is unavailable
 		errMsg := err.Error()
 		if containsAny(errMsg, []string{"connection", "dial", "lookup"}) {
@@ -115,7 +115,7 @@ func (t *KnowledgeStoreTool) Name() string {
 }
 
 func (t *KnowledgeStoreTool) Description() string {
-	return "Store knowledge with automatic embedding generation. Returns storage confirmation. Use to persist reusable patterns, solutions, and learnings for semantic search. If embedding service is down, use coordinator upsert_knowledge tool for MongoDB storage (no semantic search)."
+	return "Store knowledge with automatic embedding generation. Returns storage confirmation. Use to persist reusable patterns, solutions, and learnings for semantic search. PREREQUISITE: Use knowledge_list_collections first to verify the collection exists. If collection not found, create it via the UI or API before storing knowledge. If embedding service is down, use coordinator upsert_knowledge tool for MongoDB storage (no semantic search)."
 }
 
 func (t *KnowledgeStoreTool) InputSchema() map[string]interface{} {
@@ -154,8 +154,8 @@ func (t *KnowledgeStoreTool) Execute(ctx context.Context, input map[string]inter
 	// Extract optional metadata
 	metadata, _ := input["metadata"].(map[string]interface{})
 
-	// Ensure collection exists (768 dimensions for default embedding model)
-	if err := t.qdrantClient.EnsureCollection(collection, 768); err != nil {
+	// Ensure collection exists (use client's configured dimensions)
+	if err := t.qdrantClient.EnsureCollection(collection, t.qdrantClient.GetDimensions()); err != nil {
 		// Check if embedding service is unavailable
 		errMsg := err.Error()
 		if containsAny(errMsg, []string{"connection", "dial", "lookup"}) {

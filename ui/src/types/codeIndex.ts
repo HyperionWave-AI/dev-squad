@@ -1,85 +1,43 @@
-// Code Index Types
-export interface FolderConfig {
-  configId?: string;
-  folderPath: string;
-  filePatterns: string[];
-  excludePatterns: string[];
-  enabled: boolean;
-  fileCount?: number;
-}
-
-export interface CodeFile {
-  filePath: string;
-  fileName: string;
-  fileType: string;
-  lines: number;
-  language: string;
-}
-
 export interface SearchResult {
   fileId: string;
   filePath: string;
-  relativePath: string;
-  language: string;
-  chunkNum?: number;
-  startLine?: number;
-  endLine?: number;
   content: string;
+  lineStart: number;
+  lineEnd: number;
   score: number;
-  folderId: string;
-  folderPath: string;
-  fullFileRetrieved?: boolean;
-  // Legacy fields for backward compatibility
-  fileName?: string;
-  excerpt?: string;
-  lines?: number;
+  language?: string;
 }
 
-export interface IndexStatus {
-  totalFolders: number;
-  totalFiles: number;
-  totalSize: number;
-  watcherStatus: 'running' | 'stopped';
-  folders: Array<{
-    configId: string;
-    folderPath: string;
-    fileCount: number;
-    enabled: boolean;
-  }>;
+export interface SearchRequest {
+  query: string;
+  folderPath?: string;
+  limit?: number;
+  minScore?: number;
+  retrieve?: 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
+  fileTypes?: string[];
 }
 
 export interface SearchOptions {
   fileTypes?: string[];
+  minRelevanceScore?: number;
   minScore?: number;
+  maxResults?: number;
   limit?: number;
-  folderPath?: string;  // Optional: filter results to specific folder
-  retrieve?: 'chunk' | 'full';  // Optional: content retrieval mode
+  folderPath?: string;
+  retrieve?: 'chunk-s' | 'chunk-m' | 'chunk-l' | 'chunk-xl' | 'full';
 }
 
-export interface AddFolderConfig {
+export interface FolderInfo {
+  configId?: string;
   folderPath: string;
-  includePatterns?: string[];
-  excludePatterns?: string[];
-  chunkSize?: 'xs' | 's' | 'm' | 'l' | 'xl';
+  fileCount?: number;
+  enabled?: boolean;
 }
 
-export interface FileDetails {
-  id: string;
-  folderPath: string;
-  relativePath: string;
-  language: string;
-  size: number;
-  lineCount: number;
-  chunkCount: number;
-  indexedAt: string;
-}
-
-export interface FileChunkDetails {
-  chunkNum: number;
-  startLine: number;
-  endLine: number;
-  chunkType: string; // "ast" or "line-based"
-  nodeType?: string;
-  nodeName?: string;
-  signature?: string;
+export interface IndexStatus {
+  indexed: boolean;
+  folders: FolderInfo[];
+  totalFiles: number;
+  fileCount?: number; // Legacy field, use totalFiles instead
+  lastScan?: string;
 }

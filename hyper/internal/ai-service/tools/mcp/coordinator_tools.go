@@ -942,7 +942,7 @@ func (t *UpsertKnowledgeTool) Name() string {
 }
 
 func (t *UpsertKnowledgeTool) Description() string {
-	return "Store knowledge in the coordinator knowledge base. Use for storing task context, ADRs, data contracts, and coordination information. Returns entry ID and collection."
+	return "Store knowledge in the coordinator knowledge base. IMPORTANT: MAX 1000 tokens (~750 words, ~4000 characters) per entry. Keep entries focused and granular - ONE concept per entry. Use for storing task context, ADRs, data contracts, and coordination information. For large documents, split into multiple focused entries. Returns entry ID and collection."
 }
 
 func (t *UpsertKnowledgeTool) InputSchema() map[string]interface{} {
@@ -955,7 +955,7 @@ func (t *UpsertKnowledgeTool) InputSchema() map[string]interface{} {
 			},
 			"text": map[string]interface{}{
 				"type":        "string",
-				"description": "Content to store",
+				"description": "Content to store (MAX 1000 tokens ≈ 4000 characters)",
 			},
 			"metadata": map[string]interface{}{
 				"type":        "object",
@@ -977,6 +977,28 @@ func (t *UpsertKnowledgeTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("text is required and must be a string")
 	}
 
+	// Validate token count (approximate: 1 token ≈ 4 characters)
+	const maxTokens = 1000
+	const maxChars = maxTokens * 4 // ~4000 characters
+
+	if len(text) > maxChars {
+		estimatedTokens := len(text) / 4
+		return nil, fmt.Errorf(
+			"Entry too large: ~%d tokens (max: %d tokens ≈ %d characters).\n\n"+
+				"📝 This knowledge base is designed for AI retrieval with focused, granular entries.\n\n"+
+				"Please split your content into multiple entries, each containing:\n"+
+				"• ONE specific concept, pattern, or procedure\n"+
+				"• Clear, concise information (aim for 200-800 tokens)\n"+
+				"• Descriptive metadata for easy retrieval\n\n"+
+				"Example: Instead of storing an entire API documentation, create separate entries for:\n"+
+				"- Authentication flow\n"+
+				"- Rate limiting rules\n"+
+				"- Error handling patterns\n"+
+				"- Each endpoint specification",
+			estimatedTokens, maxTokens, maxChars,
+		)
+	}
+
 	var metadata map[string]interface{}
 	if m, ok := input["metadata"].(map[string]interface{}); ok {
 		metadata = m
@@ -994,20 +1016,20 @@ func (t *UpsertKnowledgeTool) Execute(ctx context.Context, input map[string]inte
 	}, nil
 }
 
-// GetPopularCollectionsTool implements the ToolExecutor interface
-type GetPopularCollectionsTool struct {
+// ListCollectionsTool implements the ToolExecutor interface
+type ListCollectionsTool struct {
 	storage storage.KnowledgeStorage
 }
 
-func (t *GetPopularCollectionsTool) Name() string {
-	return "coordinator_get_popular_collections"
+func (t *ListCollectionsTool) Name() string {
+	return "knowledge_list_collections"
 }
 
-func (t *GetPopularCollectionsTool) Description() string {
-	return "Get top N knowledge collections by entry count. Use for discovering which collections contain the most knowledge. Returns collection names with entry counts."
+func (t *ListCollectionsTool) Description() string {
+	return "List available knowledge collections with entry counts. Use this to discover which collections exist before calling knowledge_find or knowledge_store. Returns collection names with entry counts sorted by popularity."
 }
 
-func (t *GetPopularCollectionsTool) InputSchema() map[string]interface{} {
+func (t *ListCollectionsTool) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -1019,7 +1041,7 @@ func (t *GetPopularCollectionsTool) InputSchema() map[string]interface{} {
 	}
 }
 
-func (t *GetPopularCollectionsTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+func (t *ListCollectionsTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	limit := 5
 	if l, ok := input["limit"].(float64); ok && l > 0 {
 		limit = int(l)
@@ -4379,7 +4401,7 @@ func RegisterCoordinatorTools(
 
 		// New tools
 		&UpsertKnowledgeTool{storage: knowledgeStorage},
-		&GetPopularCollectionsTool{storage: knowledgeStorage},
+		&ListCollectionsTool{storage: knowledgeStorage},
 		&CreateHumanTaskTool{storage: taskStorage},
 		&UpdateTaskStatusTool{storage: taskStorage},
 		&UpdateTodoStatusTool{storage: taskStorage},

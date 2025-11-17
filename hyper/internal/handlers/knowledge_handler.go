@@ -588,7 +588,6 @@ func (h *KnowledgeHandler) CreateCollectionHandler(c *gin.Context) {
 		"collection": gin.H{
 			"id":          collection.ID.Hex(),
 			"name":        collection.Name,
-			"qdrantName":  collection.QdrantName,
 			"category":    collection.Category,
 			"description": collection.Description,
 			"tags":        collection.Tags,
@@ -908,6 +907,97 @@ func (h *KnowledgeHandler) CompactEntryHandler(c *gin.Context) {
 	})
 }
 
+// CompactTextHandler compacts raw text without requiring a saved entry
+// POST /api/v1/knowledge/compact-text
+func (h *KnowledgeHandler) CompactTextHandler(c *gin.Context) {
+	// Check if review orchestrator is available
+	if h.reviewOrchestrator == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Review system not initialized"})
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		Text            string `json:"text" binding:"required"`
+		TargetWordCount int    `json:"targetWordCount"`
+		DryRun          bool   `json:"dryRun"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	if req.Text == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Text is required"})
+		return
+	}
+
+	// Default target if not specified
+	if req.TargetWordCount == 0 {
+		req.TargetWordCount = 750
+	}
+
+	// Compact the text directly using the compaction engine
+	ctx := context.Background()
+	compactionEngine := h.reviewOrchestrator.GetCompactionEngine()
+	if compactionEngine == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Compaction engine not available"})
+		return
+	}
+
+	result, err := compactionEngine.CompactEntry(ctx, req.Text, req.DryRun)
+	if err != nil {
+		h.logger.Error("Failed to compact text",
+			zap.Int("textLength", len(req.Text)),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to compact text: " + err.Error()})
+		return
+	}
+
+	// Calculate compression ratio
+	compressionRatio := 0.0
+	if result.OriginalWords > 0 {
+		compressionRatio = float64(result.CompactedWords) / float64(result.OriginalWords)
+	}
+
+	// Count preserved elements
+	filePathsCount := 0
+	functionNamesCount := 0
+
+	if result.PreservedAll {
+		for _, missing := range result.MissingElements {
+			if strings.Contains(missing, "file path") {
+				filePathsCount++
+			} else if strings.Contains(missing, "function") {
+				functionNamesCount++
+			}
+		}
+		if len(result.MissingElements) == 0 {
+			filePathsCount = 1
+			functionNamesCount = 1
+		}
+	}
+
+	// Return compaction result in UI format
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"original": gin.H{
+			"text":      result.OriginalText,
+			"wordCount": result.OriginalWords,
+		},
+		"compacted": gin.H{
+			"text":      result.CompactedText,
+			"wordCount": result.CompactedWords,
+		},
+		"compressionRatio": compressionRatio,
+		"preserved": gin.H{
+			"filePaths":     filePathsCount,
+			"functionNames": functionNamesCount,
+		},
+	})
+}
+
 // DeleteCollectionHandler deletes an entire collection including all entries and Qdrant data
 // DELETE /api/v1/knowledge/collections/:id
 func (h *KnowledgeHandler) DeleteCollectionHandler(c *gin.Context) {
@@ -1083,6 +1173,49 @@ func (h *KnowledgeHandler) RebuildCollectionCountsHandler(c *gin.Context) {
 	})
 }
 
+// ResyncToUnifiedHandler rebuilds the unified Qdrant collection from MongoDB
+// POST /api/v1/knowledge/resync-to-unified
+func (h *KnowledgeHandler) ResyncToUnifiedHandler(c *gin.Context) {
+	h.logger.Info("Starting resync to unified collection")
+
+	// Type assertion to get MongoKnowledgeStorage
+	mongoStorage, ok := h.knowledgeStorage.(*storage.MongoKnowledgeStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Resync only supported with MongoDB storage"})
+		return
+	}
+
+	// Start resync in background
+	go func() {
+		ctx := context.Background()
+		if err := mongoStorage.ResyncToUnifiedCollection(ctx); err != nil {
+			h.logger.Error("Resync to unified collection failed", zap.Error(err))
+		} else {
+			h.logger.Info("Resync to unified collection completed successfully")
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message": "Resync started in background",
+	})
+}
+
+// GetResyncStatusHandler returns the current status of the resync operation
+// GET /api/v1/knowledge/resync-status
+func (h *KnowledgeHandler) GetResyncStatusHandler(c *gin.Context) {
+	// Type assertion to get MongoKnowledgeStorage
+	mongoStorage, ok := h.knowledgeStorage.(*storage.MongoKnowledgeStorage)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Resync status only available with MongoDB storage"})
+		return
+	}
+
+	// Get resync status
+	status := mongoStorage.GetResyncStatus()
+
+	c.JSON(http.StatusOK, status)
+}
+
 func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/popular-collections", h.GetPopularCollections)
 	r.GET("/collections", h.GetAllCollections)
@@ -1097,10 +1230,13 @@ func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/entries/:id/votes", h.GetKnowledgeEntryVotes)
 	r.POST("/entries/:id/review", h.ReviewEntryHandler)
 	r.POST("/entries/:id/compact", h.CompactEntryHandler)
+	r.POST("/compact-text", h.CompactTextHandler) // Compact raw text without requiring saved entry
 	r.POST("/entries/:id/verify", h.VerifyKnowledgeArticle)
 	r.PUT("/collections/:name/metadata", h.UpdateCollectionMetadataHandler)
 	r.POST("/collections/:name/rename", h.RenameCollectionHandler)
 	r.POST("/collections/:name/review", h.ReviewCollectionHandler)
 	r.POST("/sync-votes", h.BatchSyncVotes)
 	r.POST("/migrate", h.MigrateCollectionsHandler)
+	r.POST("/resync-to-unified", h.ResyncToUnifiedHandler)
+	r.GET("/resync-status", h.GetResyncStatusHandler)
 }

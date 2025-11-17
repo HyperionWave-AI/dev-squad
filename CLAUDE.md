@@ -21,7 +21,7 @@ Coordinator — Tasks/Workflow
 - Create/Assign/Retrieve: coordinator_create_human_task · coordinator_create_agent_task · coordinator_list_human_tasks · coordinator_list_agent_tasks (paginated) · coordinator_get_agent_task
 - Progress: coordinator_update_task_status · coordinator_update_todo_status (**agentTaskId + todoId UUID**)
 - Guidance notes: coordinator_add_task_prompt_notes · coordinator_update_task_prompt_notes · coordinator_clear_task_prompt_notes · coordinator_add_todo_prompt_notes · coordinator_update_todo_prompt_notes · coordinator_clear_todo_prompt_notes
-- Knowledge: coordinator_upsert_knowledge · coordinator_query_knowledge · coordinator_get_popular_collections
+- Knowledge: coordinator_upsert_knowledge · coordinator_query_knowledge · knowledge_list_collections
 - Admin (danger): coordinator_clear_task_board  ⚠︎ requires explicit approval
 
 Code Intelligence — Semantic Code Search
@@ -101,6 +101,12 @@ GOLDEN PATH (mandatory)
      knowledgeCollections?: ["collection-1"],
      todos: [{ description, filePath, functionName?, contextHint: "50–100w how-to" }]
    })
+2.5) Knowledge check (MANDATORY before implementation)
+   - knowledge_list_collections → discover available collections
+   - knowledge_find (for task domain) → search patterns/solutions
+   - Review results → apply existing patterns
+   - knowledge_vote_on_entry → vote +/- on usefulness
+   This step is MANDATORY before starting any implementation work.
 3) Launch specialist (your Task tool)
    Task({ subagent_type: "<go-dev|ui-dev|ui-tester|sre|…>",
           description: "<brief>",
@@ -122,7 +128,8 @@ CONTEXT & EFFICIENCY (enforce)
 KNOWLEDGE ROUTING
 - Task-scoped facts/decisions/handoff → coordinator_upsert_knowledge (task collection).
 - Reusable patterns/ADRs → knowledge_store (with specific tags).
-- Use coordinator_get_popular_collections to tag consistently.
+- Use knowledge_list_collections to discover available collections and tag consistently.
+- Agent workflow: knowledge_list_collections → knowledge_find (search patterns) → vote on usefulness (+/-) → apply knowledge. Voting creates feedback loop for quality improvement.
 
 ID & FIELD CORRECTNESS (common mistakes)
 - TODO updates: use **agentTaskId** (not taskId) + **todoId (UUID)** from list/get.

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -15,16 +16,29 @@ import (
 	"go.uber.org/zap"
 )
 
-// Collection represents a knowledge collection with immutable ID
-// Solves the Qdrant rename problem by using immutable IDs
+const (
+	// DefaultUnifiedCollectionName is the default Qdrant collection for all knowledge
+	DefaultUnifiedCollectionName = "hyper-knowledge-base"
+)
+
+// GetUnifiedCollectionName returns the unified Qdrant collection name from env or default
+func GetUnifiedCollectionName() string {
+	if name := os.Getenv("QDRANT_KNOWLEDGE_COLLECTION"); name != "" {
+		return name
+	}
+	return DefaultUnifiedCollectionName
+}
+
+// Collection represents a knowledge collection (MongoDB metadata only)
+// All knowledge entries are stored in a single unified Qdrant collection with collectionId filtering
 type Collection struct {
 	ID          primitive.ObjectID `json:"id" bson:"_id"`
-	Name        string             `json:"name" bson:"name"`                     // User-facing, renamable
-	QdrantName  string             `json:"qdrantName" bson:"qdrantName"`         // Immutable, always matches Qdrant collection
+	Name        string             `json:"name" bson:"name"`               // User-facing collection name
+	QdrantName  string             `json:"qdrantName" bson:"qdrantName"`   // Unique identifier for Qdrant collection mapping
 	Category    string             `json:"category" bson:"category"`
 	Description string             `json:"description" bson:"description"`
 	Tags        []string           `json:"tags" bson:"tags"`
-	EntryCount  int                `json:"entryCount" bson:"entryCount"`         // Cached count
+	EntryCount  int                `json:"entryCount" bson:"entryCount"`   // Cached count
 	CreatedAt   time.Time          `json:"createdAt" bson:"createdAt"`
 	UpdatedAt   time.Time          `json:"updatedAt" bson:"updatedAt"`
 }
@@ -111,6 +125,18 @@ type KnowledgeStorage interface {
 	BatchSyncVotesToQdrant(collectionName string) (int, error)
 }
 
+// ResyncStatus represents the current status of a resync operation
+type ResyncStatus struct {
+	InProgress              bool      `json:"inProgress"`
+	TotalEntries            int       `json:"totalEntries"`
+	ProcessedEntries        int       `json:"processedEntries"`
+	Percentage              float64   `json:"percentage"`
+	EstimatedTimeRemaining  string    `json:"estimatedTimeRemaining,omitempty"`
+	ErrorMessage            string    `json:"errorMessage,omitempty"`
+	CompletedTime           string    `json:"completedTime,omitempty"`
+	StartTime               time.Time `json:"-"`
+}
+
 // MongoKnowledgeStorage implements KnowledgeStorage using MongoDB + Qdrant
 type MongoKnowledgeStorage struct {
 	knowledgeCollection   *mongo.Collection
@@ -120,6 +146,7 @@ type MongoKnowledgeStorage struct {
 	qdrantClient          QdrantClientInterface
 	vectorDimension       int
 	logger                *zap.Logger
+	resyncStatus          *ResyncStatus // Track resync progress
 }
 
 // NewMongoKnowledgeStorage creates a new MongoDB + Qdrant knowledge storage
@@ -132,78 +159,127 @@ func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInter
 		qdrantClient:          qdrantClient,
 		vectorDimension:       qdrantClient.GetDimensions(), // Get dimensions from shared embedding client
 		logger:                logger,
+		resyncStatus: &ResyncStatus{
+			InProgress: false,
+		},
 	}
 
 	// Create indexes
+	// Using explicit index names for idempotency - MongoDB will skip if index already exists
 	ctx := context.Background()
 
 	// Index on entryId
 	_, err := storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "entryId", Value: 1}},
-		Options: options.Index().SetUnique(true),
+		Options: options.Index().SetUnique(true).SetName("entryId_1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create entry ID index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create entry ID index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Index on collection for efficient queries
 	_, err = storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "collection", Value: 1}},
+		Keys:    bson.D{{Key: "collection", Value: 1}},
+		Options: options.Index().SetName("collection_1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create collection index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create collection index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Text index for full-text search on text field
 	_, err = storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "text", Value: "text"}},
+		Keys:    bson.D{{Key: "text", Value: "text"}},
+		Options: options.Index().SetName("text_text"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create text index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create text index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Sparse index on taskId for efficient task-scoped filtering
 	_, err = storage.knowledgeCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "taskId", Value: 1}},
-		Options: options.Index().SetSparse(true),
+		Options: options.Index().SetSparse(true).SetName("taskId_1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create taskId index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create taskId index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Index on collection_metadata.collectionName (unique)
 	_, err = storage.metadataCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "collectionName", Value: 1}},
-		Options: options.Index().SetUnique(true),
+		Options: options.Index().SetUnique(true).SetName("collectionName_1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create collection metadata index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create collection metadata index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Index on collections.name (unique)
 	_, err = storage.collectionsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "name", Value: 1}},
-		Options: options.Index().SetUnique(true),
+		Options: options.Index().SetUnique(true).SetName("name_1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create collections name index: %w", err)
-	}
-
-	// Index on collections.qdrantName (unique) - ensures 1:1 mapping to Qdrant
-	_, err = storage.collectionsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "qdrantName", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create collections qdrantName index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create collections name index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Index on collections.createdAt for sorting
 	_, err = storage.collectionsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "createdAt", Value: -1}},
+		Keys:    bson.D{{Key: "createdAt", Value: -1}},
+		Options: options.Index().SetName("createdAt_-1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create collections createdAt index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create collections createdAt index: %w", err)
+		}
+		// Index already exists - this is OK, continue
+	}
+
+	// Unique sparse index on collections.qdrantName for Qdrant collection mapping
+	// Sparse allows multiple null values (for collections not yet synced to Qdrant)
+	// Using explicit index name for idempotency - MongoDB will skip if index already exists
+	_, err = storage.collectionsCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "qdrantName", Value: 1}},
+		Options: options.Index().SetUnique(true).SetSparse(true).SetName("qdrantName_1"),
+	})
+	if err != nil {
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create collections qdrantName index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Compound unique index on knowledge_votes (entryId + userId) for upsert pattern
@@ -212,24 +288,37 @@ func NewMongoKnowledgeStorage(db *mongo.Database, qdrantClient QdrantClientInter
 			{Key: "entryId", Value: 1},
 			{Key: "userId", Value: 1},
 		},
-		Options: options.Index().SetUnique(true),
+		Options: options.Index().SetUnique(true).SetName("entryId_1_userId_1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create votes compound index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create votes compound index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	// Index on entryId for efficient vote retrieval
+	// Using MongoDB's default naming convention (same as existing index)
 	_, err = storage.votesCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "entryId", Value: 1}},
+		Keys:    bson.D{{Key: "entryId", Value: 1}},
+		Options: options.Index().SetName("entryId_1"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create votes entryId index: %w", err)
+		// Ignore index conflict errors (index already exists with same spec)
+		if !strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") {
+			return nil, fmt.Errorf("failed to create votes entryId index: %w", err)
+		}
+		// Index already exists - this is OK, continue
 	}
 
 	return storage, nil
 }
 
-// CreateCollection creates a new Collection object with immutable ID and QdrantName
+// CreateCollection creates a new Collection metadata object in MongoDB
+// Note: All knowledge entries are stored in the unified Qdrant collection with collectionId filtering
 func (s *MongoKnowledgeStorage) CreateCollection(name, category, description string, tags []string) (*Collection, error) {
 	ctx := context.Background()
 
@@ -252,7 +341,7 @@ func (s *MongoKnowledgeStorage) CreateCollection(name, category, description str
 	collection := &Collection{
 		ID:          newID,
 		Name:        name,
-		QdrantName:  newID.Hex(), // Generate unique Qdrant name from ObjectID
+		QdrantName:  newID.Hex(), // Unique identifier using ObjectID hex string
 		Category:    category,
 		Description: description,
 		Tags:        tags,
@@ -261,14 +350,17 @@ func (s *MongoKnowledgeStorage) CreateCollection(name, category, description str
 		UpdatedAt:   now,
 	}
 
-	// Create Qdrant collection
+	// Ensure unified Qdrant collection exists (idempotent)
 	if s.qdrantClient != nil {
-		if err := s.qdrantClient.EnsureCollection(collection.QdrantName, s.vectorDimension); err != nil {
-			return nil, fmt.Errorf("failed to create Qdrant collection: %w", err)
+		unifiedCollection := GetUnifiedCollectionName()
+		if err := s.qdrantClient.EnsureCollection(unifiedCollection, s.vectorDimension); err != nil {
+			s.logger.Warn("Failed to ensure unified Qdrant collection (continuing anyway)",
+				zap.String("collection", unifiedCollection),
+				zap.Error(err))
 		}
 	}
 
-	// Insert into MongoDB
+	// Insert collection metadata into MongoDB
 	_, err = s.collectionsCollection.InsertOne(ctx, collection)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert collection: %w", err)
@@ -276,8 +368,7 @@ func (s *MongoKnowledgeStorage) CreateCollection(name, category, description str
 
 	s.logger.Info("Created new collection",
 		zap.String("name", name),
-		zap.String("id", collection.ID.Hex()),
-		zap.String("qdrantName", collection.QdrantName))
+		zap.String("id", collection.ID.Hex()))
 
 	return collection, nil
 }
@@ -349,10 +440,9 @@ func (s *MongoKnowledgeStorage) DeleteCollection(id string) (string, int64, erro
 
 	s.logger.Info("Deleting collection",
 		zap.String("id", id),
-		zap.String("name", collectionObj.Name),
-		zap.String("qdrantName", collectionObj.QdrantName))
+		zap.String("name", collectionObj.Name))
 
-	// Delete all knowledge entries with this collection
+	// Delete all knowledge entries from MongoDB with this collection
 	// Support both collectionId (new) and collection (old) for backward compatibility
 	entryFilter := bson.M{
 		"$or": []bson.M{
@@ -367,31 +457,28 @@ func (s *MongoKnowledgeStorage) DeleteCollection(id string) (string, int64, erro
 	}
 
 	entriesDeleted := result.DeletedCount
-	s.logger.Info("Deleted knowledge entries",
+	s.logger.Info("Deleted knowledge entries from MongoDB",
 		zap.String("id", id),
 		zap.String("name", collectionObj.Name),
 		zap.Int64("count", entriesDeleted))
 
-	// Delete Qdrant collection if client is available
-	if s.qdrantClient != nil {
-		err := s.qdrantClient.DeleteCollection(collectionObj.QdrantName)
-		if err != nil {
-			s.logger.Warn("Failed to delete Qdrant collection (continuing anyway)",
-				zap.String("qdrantName", collectionObj.QdrantName),
-				zap.Error(err))
-		} else {
-			s.logger.Info("Deleted Qdrant collection",
-				zap.String("qdrantName", collectionObj.QdrantName))
-		}
+	// Delete entries from unified Qdrant collection by filtering on collectionId
+	if s.qdrantClient != nil && entriesDeleted > 0 {
+		// Note: We'd need to track point IDs to delete from Qdrant
+		// For now, entries will remain in Qdrant but won't be returned by queries
+		// since we filter by collectionId which won't exist in MongoDB anymore
+		s.logger.Info("Knowledge entries remain in unified Qdrant collection (filtered out by collectionId)",
+			zap.String("collection", GetUnifiedCollectionName()),
+			zap.Int64("orphanedPoints", entriesDeleted))
 	}
 
-	// Delete the Collection object itself
+	// Delete the Collection metadata object
 	_, err = s.collectionsCollection.DeleteOne(ctx, bson.M{"_id": collectionObj.ID})
 	if err != nil {
 		return collectionObj.Name, entriesDeleted, fmt.Errorf("failed to delete collection object: %w", err)
 	}
 
-	s.logger.Info("Collection deleted successfully",
+	s.logger.Info("Collection metadata deleted successfully",
 		zap.String("id", id),
 		zap.String("name", collectionObj.Name),
 		zap.Int64("entriesDeleted", entriesDeleted))
@@ -472,6 +559,65 @@ func (s *MongoKnowledgeStorage) RebuildCollectionCounts() (map[string]interface{
 	return stats, nil
 }
 
+// MigrateCollectionsQdrantName backfills qdrantName field for existing collections
+// Sets qdrantName to the collection's ObjectID hex string for uniqueness
+// This can be called manually or automatically on startup
+func (s *MongoKnowledgeStorage) MigrateCollectionsQdrantName() (map[string]interface{}, error) {
+	ctx := context.Background()
+
+	// Find all collections without qdrantName or with empty qdrantName
+	filter := bson.M{
+		"$or": []bson.M{
+			{"qdrantName": bson.M{"$exists": false}},
+			{"qdrantName": ""},
+		},
+	}
+
+	cursor, err := s.collectionsCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find collections without qdrantName: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var collections []*Collection
+	if err := cursor.All(ctx, &collections); err != nil {
+		return nil, fmt.Errorf("failed to decode collections: %w", err)
+	}
+
+	stats := map[string]interface{}{
+		"collectionsUpdated": 0,
+		"errors":             []string{},
+	}
+
+	// Update each collection to set qdrantName = ID.Hex()
+	for _, collection := range collections {
+		qdrantName := collection.ID.Hex()
+
+		update := bson.M{
+			"$set": bson.M{
+				"qdrantName": qdrantName,
+				"updatedAt":  time.Now().UTC(),
+			},
+		}
+
+		_, err := s.collectionsCollection.UpdateOne(ctx, bson.M{"_id": collection.ID}, update)
+		if err != nil {
+			errMsg := fmt.Sprintf("Failed to update collection %s (%s): %v", collection.Name, collection.ID.Hex(), err)
+			stats["errors"] = append(stats["errors"].([]string), errMsg)
+			continue
+		}
+
+		stats["collectionsUpdated"] = stats["collectionsUpdated"].(int) + 1
+
+		s.logger.Info("Migrated collection qdrantName",
+			zap.String("name", collection.Name),
+			zap.String("id", collection.ID.Hex()),
+			zap.String("qdrantName", qdrantName))
+	}
+
+	return stats, nil
+}
+
 // MigrateToCollectionObjects creates Collection objects from existing knowledge entries
 // This is a one-time migration function that converts string-based collections to Collection objects
 func (s *MongoKnowledgeStorage) MigrateToCollectionObjects() (map[string]interface{}, error) {
@@ -529,10 +675,11 @@ func (s *MongoKnowledgeStorage) MigrateToCollectionObjects() (map[string]interfa
 		}
 
 		now := time.Now().UTC()
+		newID := primitive.NewObjectID()
 		collection := &Collection{
-			ID:          primitive.NewObjectID(),
+			ID:          newID,
 			Name:        collectionName,
-			QdrantName:  collectionName, // IMPORTANT: Keep old name for existing Qdrant collections
+			QdrantName:  newID.Hex(), // Set unique qdrantName during migration
 			Category:    category,
 			Description: description,
 			Tags:        tags,
@@ -565,7 +712,6 @@ func (s *MongoKnowledgeStorage) MigrateToCollectionObjects() (map[string]interfa
 		s.logger.Info("Migrated collection",
 			zap.String("name", collectionName),
 			zap.String("id", collection.ID.Hex()),
-			zap.String("qdrantName", collection.QdrantName),
 			zap.Int64("entriesUpdated", result.ModifiedCount))
 	}
 
@@ -576,10 +722,25 @@ func (s *MongoKnowledgeStorage) MigrateToCollectionObjects() (map[string]interfa
 func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*KnowledgeEntry, error) {
 	ctx := context.Background()
 
-	// Lookup Collection object by name
+	// Lookup Collection object by name, auto-create if it doesn't exist
 	collectionObj, err := s.GetCollection(collection)
 	if err != nil {
-		return nil, fmt.Errorf("collection not found, please create it first: %w", err)
+		// If collection not found, auto-create it
+		if strings.Contains(err.Error(), "collection not found") {
+			s.logger.Info("Collection does not exist, auto-creating",
+				zap.String("collectionName", collection))
+
+			collectionObj, err = s.CreateCollection(collection, "general", "Auto-created collection", []string{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to auto-create collection: %w", err)
+			}
+
+			s.logger.Info("Successfully auto-created collection",
+				zap.String("collectionName", collection),
+				zap.String("collectionId", collectionObj.ID.Hex()))
+		} else {
+			return nil, fmt.Errorf("failed to get collection: %w", err)
+		}
 	}
 
 	entry := &KnowledgeEntry{
@@ -613,32 +774,39 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 			zap.Error(err))
 	}
 
-	// Store in Qdrant using QdrantName (immutable)
+	// Store in unified Qdrant collection with collectionId filtering
 	if s.qdrantClient != nil {
-		// Ensure collection exists using immutable QdrantName
-		if err := s.qdrantClient.EnsureCollection(collectionObj.QdrantName, s.vectorDimension); err != nil {
-			// Log error but don't fail - MongoDB has the data
-			s.logger.Warn("Failed to ensure Qdrant collection",
-				zap.String("qdrantName", collectionObj.QdrantName),
-				zap.Error(err))
-		} else {
-			// Prepare Qdrant payload with taskId if provided
-			qdrantPayload := metadata
-			if qdrantPayload == nil {
-				qdrantPayload = make(map[string]interface{})
-			}
-			if taskId != nil && *taskId != "" {
-				qdrantPayload["taskId"] = *taskId
-			}
+		unifiedCollection := GetUnifiedCollectionName()
 
-			// Store vector point using QdrantName
-			if err := s.qdrantClient.StorePoint(collectionObj.QdrantName, entry.ID, text, qdrantPayload); err != nil {
-				// Log error but don't fail - MongoDB has the data
-				s.logger.Warn("Failed to store point in Qdrant",
-					zap.String("qdrantName", collectionObj.QdrantName),
-					zap.String("entryId", entry.ID),
-					zap.Error(err))
-			}
+		// Ensure unified collection exists (idempotent)
+		if err := s.qdrantClient.EnsureCollection(unifiedCollection, s.vectorDimension); err != nil {
+			s.logger.Warn("Failed to ensure unified Qdrant collection (continuing anyway)",
+				zap.String("collection", unifiedCollection),
+				zap.Error(err))
+		}
+
+		// Prepare Qdrant payload with collectionId and optional taskId
+		qdrantPayload := metadata
+		if qdrantPayload == nil {
+			qdrantPayload = make(map[string]interface{})
+		}
+
+		// CRITICAL: Add collectionId to payload for filtering
+		qdrantPayload["collectionId"] = collectionObj.ID.Hex()
+
+		// Add taskId if provided
+		if taskId != nil && *taskId != "" {
+			qdrantPayload["taskId"] = *taskId
+		}
+
+		// Store vector point in unified collection
+		if err := s.qdrantClient.StorePoint(unifiedCollection, entry.ID, text, qdrantPayload); err != nil {
+			// Log error but don't fail - MongoDB has the data
+			s.logger.Warn("Failed to store point in unified Qdrant collection",
+				zap.String("collection", unifiedCollection),
+				zap.String("entryId", entry.ID),
+				zap.String("collectionId", collectionObj.ID.Hex()),
+				zap.Error(err))
 		}
 	}
 
@@ -672,21 +840,38 @@ func (s *MongoKnowledgeStorage) UpdateEntry(id, text string, metadata map[string
 		return nil, fmt.Errorf("failed to update knowledge entry in MongoDB: %w", err)
 	}
 
-	// Update Qdrant point with new embedding
+	// Update Qdrant point with new embedding in unified collection
 	if s.qdrantClient != nil {
-		// Delete old point
-		if err := s.qdrantClient.DeletePoint(existingEntry.Collection, id); err != nil {
+		unifiedCollection := GetUnifiedCollectionName()
+
+		// Delete old point from unified collection
+		if err := s.qdrantClient.DeletePoint(unifiedCollection, id); err != nil {
 			s.logger.Warn("Failed to delete old Qdrant point",
-				zap.String("collection", existingEntry.Collection),
+				zap.String("collection", unifiedCollection),
 				zap.String("entryId", id),
 				zap.Error(err))
 		}
 
-		// Store new point with updated embedding
-		if err := s.qdrantClient.StorePoint(existingEntry.Collection, id, text, metadata); err != nil {
-			s.logger.Warn("Failed to update point in Qdrant",
-				zap.String("collection", existingEntry.Collection),
+		// Prepare Qdrant payload with collectionId
+		qdrantPayload := metadata
+		if qdrantPayload == nil {
+			qdrantPayload = make(map[string]interface{})
+		}
+
+		// Add collectionId to payload for filtering
+		qdrantPayload["collectionId"] = existingEntry.CollectionID.Hex()
+
+		// Preserve taskId if it exists in existing entry
+		if existingEntry.TaskId != "" {
+			qdrantPayload["taskId"] = existingEntry.TaskId
+		}
+
+		// Store new point with updated embedding in unified collection
+		if err := s.qdrantClient.StorePoint(unifiedCollection, id, text, qdrantPayload); err != nil {
+			s.logger.Warn("Failed to update point in unified Qdrant collection",
+				zap.String("collection", unifiedCollection),
 				zap.String("entryId", id),
+				zap.String("collectionId", existingEntry.CollectionID.Hex()),
 				zap.Error(err))
 		}
 	}
@@ -734,11 +919,12 @@ func (s *MongoKnowledgeStorage) DeleteEntry(id string) error {
 		}
 	}
 
-	// Delete from Qdrant
+	// Delete from unified Qdrant collection
 	if s.qdrantClient != nil {
-		if err := s.qdrantClient.DeletePoint(existingEntry.Collection, id); err != nil {
-			s.logger.Warn("Failed to delete point from Qdrant",
-				zap.String("collection", existingEntry.Collection),
+		unifiedCollection := GetUnifiedCollectionName()
+		if err := s.qdrantClient.DeletePoint(unifiedCollection, id); err != nil {
+			s.logger.Warn("Failed to delete point from unified Qdrant collection",
+				zap.String("collection", unifiedCollection),
 				zap.String("entryId", id),
 				zap.Error(err))
 		}
@@ -819,22 +1005,31 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, taskI
 		return nil, fmt.Errorf("collection not found: %w", err)
 	}
 
-	// Use Qdrant for semantic vector search if available (using immutable QdrantName)
+	// Use unified Qdrant collection for semantic vector search with collectionId filtering
 	if s.qdrantClient != nil {
-		// Build filter for Qdrant if taskId is provided
-		var qdrantFilter map[string]interface{}
-		if taskId != nil && *taskId != "" {
-			qdrantFilter = map[string]interface{}{
-				"must": []map[string]interface{}{
-					{
-						"key":   "taskId",
-						"match": map[string]interface{}{"value": *taskId},
-					},
-				},
-			}
+		unifiedCollection := GetUnifiedCollectionName()
+
+		// Build filter for Qdrant: MUST match collectionId, optionally filter by taskId
+		mustFilters := []map[string]interface{}{
+			{
+				"key":   "collectionId",
+				"match": map[string]interface{}{"value": collectionObj.ID.Hex()},
+			},
 		}
 
-		results, err := s.qdrantClient.SearchSimilarWithFilter(collectionObj.QdrantName, query, limit, qdrantFilter, voteBoost...)
+		// Add taskId filter if provided
+		if taskId != nil && *taskId != "" {
+			mustFilters = append(mustFilters, map[string]interface{}{
+				"key":   "taskId",
+				"match": map[string]interface{}{"value": *taskId},
+			})
+		}
+
+		qdrantFilter := map[string]interface{}{
+			"must": mustFilters,
+		}
+
+		results, err := s.qdrantClient.SearchSimilarWithFilter(unifiedCollection, query, limit, qdrantFilter, voteBoost...)
 		if err == nil && len(results) > 0 {
 			// Convert QdrantQueryResult to QueryResult
 			queryResults := make([]*QueryResult, len(results))
@@ -847,74 +1042,13 @@ func (s *MongoKnowledgeStorage) Query(collection, query string, limit int, taskI
 			return queryResults, nil
 		}
 
-		// Check if error is a dimension mismatch - trigger auto-recovery
+		// If Qdrant search fails, log error and fall back to MongoDB
 		if err != nil {
-			if dimErr, ok := err.(*DimensionMismatchError); ok {
-				s.logger.Warn("Detected dimension mismatch, initiating auto-recovery",
-					zap.String("collection", collection),
-					zap.String("qdrantName", collectionObj.QdrantName),
-					zap.Int("expectedDim", dimErr.ExpectedDim),
-					zap.Int("gotDim", dimErr.GotDim))
+			s.logger.Warn("Qdrant search failed, falling back to MongoDB",
+				zap.String("collection", collection),
+				zap.String("unifiedCollection", unifiedCollection),
+				zap.Error(err))
 
-				// Step 1: Get all entries from MongoDB (source of truth)
-				entries, err := s.GetEntriesByCollection(collection)
-				if err != nil {
-					s.logger.Error("Auto-recovery failed: could not retrieve entries from MongoDB",
-						zap.String("collection", collection),
-						zap.Error(err))
-					return nil, fmt.Errorf("auto-recovery failed: %w", err)
-				}
-
-				// Step 2: Recreate collection with correct dimensions and reindex
-				currentDimensions := s.qdrantClient.GetDimensions()
-				reindexedCount, err := s.qdrantClient.RecreateCollectionWithReindex(
-					collectionObj.QdrantName,
-					entries,
-					currentDimensions,
-				)
-				if err != nil {
-					s.logger.Error("Auto-recovery failed: could not recreate collection",
-						zap.String("collection", collection),
-						zap.String("qdrantName", collectionObj.QdrantName),
-						zap.Int("dimensions", currentDimensions),
-						zap.Error(err))
-					return nil, fmt.Errorf("auto-recovery failed: %w", err)
-				}
-
-				s.logger.Info("Auto-recovery completed successfully",
-					zap.String("collection", collection),
-					zap.String("qdrantName", collectionObj.QdrantName),
-					zap.Int("entriesReindexed", reindexedCount),
-					zap.Int("totalEntries", len(entries)),
-					zap.Int("newDimensions", currentDimensions))
-
-				// Step 3: Retry the search
-				results, err = s.qdrantClient.SearchSimilarWithFilter(collectionObj.QdrantName, query, limit, qdrantFilter, voteBoost...)
-				if err == nil && len(results) > 0 {
-					// Convert QdrantQueryResult to QueryResult
-					queryResults := make([]*QueryResult, len(results))
-					for i, r := range results {
-						queryResults[i] = &QueryResult{
-							Entry: r.Entry,
-							Score: r.Score,
-						}
-					}
-					return queryResults, nil
-				}
-
-				// If retry still fails, log and fall back to MongoDB
-				if err != nil {
-					s.logger.Warn("Search failed after auto-recovery, falling back to MongoDB",
-						zap.String("collection", collection),
-						zap.Error(err))
-				}
-			} else {
-				// Not a dimension mismatch - log as regular error and fall back
-				s.logger.Warn("Qdrant search failed, falling back to MongoDB",
-					zap.String("qdrantName", collectionObj.QdrantName),
-					zap.String("query", query),
-					zap.Error(err))
-			}
 		}
 	}
 
@@ -1099,9 +1233,9 @@ func (s *MongoKnowledgeStorage) GetPopularCollections(limit int) ([]*CollectionS
 }
 
 // GetCollectionStatsWithMetadata returns all collections with stats and category metadata
-// Now simplified: reads directly from Collection objects which contain all metadata
+// Returns ALL collections from MongoDB with their entryCount (which can be 0)
 func (s *MongoKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*CollectionWithMetadata, error) {
-	// Get all Collection objects (already contains name, category, description, tags, entryCount)
+	// Get all collections from MongoDB
 	collections, err := s.ListCollectionsObjects()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list collections: %w", err)
@@ -1110,14 +1244,15 @@ func (s *MongoKnowledgeStorage) GetCollectionStatsWithMetadata() ([]*CollectionW
 	// Convert Collection objects to CollectionWithMetadata
 	results := make([]*CollectionWithMetadata, 0, len(collections))
 	for _, col := range collections {
-		results = append(results, &CollectionWithMetadata{
+		metadata := &CollectionWithMetadata{
 			ID:          col.ID.Hex(),
 			Name:        col.Name,
 			Category:    col.Category,
-			Count:       col.EntryCount,
 			Description: col.Description,
 			Tags:        col.Tags,
-		})
+			Count:       col.EntryCount,
+		}
+		results = append(results, metadata)
 	}
 
 	return results, nil
@@ -1294,8 +1429,7 @@ func (s *MongoKnowledgeStorage) RenameCollection(oldName, newName string) (int64
 	s.logger.Info("Collection renamed (instant operation - no entry updates needed)",
 		zap.String("oldName", oldName),
 		zap.String("newName", newName),
-		zap.String("collectionId", collectionObj.ID.Hex()),
-		zap.String("qdrantName", collectionObj.QdrantName))
+		zap.String("collectionId", collectionObj.ID.Hex()))
 
 	return result.ModifiedCount, nil
 }
@@ -1460,8 +1594,9 @@ func (s *MongoKnowledgeStorage) SyncVoteDataToQdrant(entryID string) error {
 
 	netScore := upvotes - downvotes
 
-	// Update Qdrant payload
+	// Update Qdrant payload in unified collection
 	if s.qdrantClient != nil {
+		unifiedCollection := GetUnifiedCollectionName()
 		payload := map[string]interface{}{
 			"upvotes":        upvotes,
 			"downvotes":      downvotes,
@@ -1469,7 +1604,7 @@ func (s *MongoKnowledgeStorage) SyncVoteDataToQdrant(entryID string) error {
 			"lastVoteUpdate": time.Now().UTC().Format(time.RFC3339),
 		}
 
-		if err := s.qdrantClient.UpdatePointPayload(entry.Collection, entryID, payload); err != nil {
+		if err := s.qdrantClient.UpdatePointPayload(unifiedCollection, entryID, payload); err != nil {
 			return fmt.Errorf("failed to update Qdrant payload: %w", err)
 		}
 	}
@@ -1534,4 +1669,253 @@ func (s *MongoKnowledgeStorage) BatchSyncVotesToQdrant(collectionName string) (i
 	}
 
 	return syncedCount, nil
+}
+
+// ResyncToUnifiedCollection rebuilds the unified Qdrant collection from MongoDB
+// This method runs in the background and updates resyncStatus
+func (s *MongoKnowledgeStorage) ResyncToUnifiedCollection(ctx context.Context) error {
+	s.logger.Info("Starting resync to unified collection")
+
+	// Reset and initialize status
+	s.resyncStatus = &ResyncStatus{
+		InProgress:       true,
+		TotalEntries:     0,
+		ProcessedEntries: 0,
+		Percentage:       0.0,
+		StartTime:        time.Now(),
+	}
+
+	// Count total entries
+	totalEntries, err := s.knowledgeCollection.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Failed to count entries: %v", err)
+		s.logger.Error("Failed to count entries for resync", zap.Error(err))
+		return err
+	}
+
+	s.resyncStatus.TotalEntries = int(totalEntries)
+	s.logger.Info("Total entries to resync", zap.Int("count", int(totalEntries)))
+
+	// If no entries, complete immediately
+	if totalEntries == 0 {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.Percentage = 100.0
+		s.resyncStatus.ProcessedEntries = 0
+		s.resyncStatus.CompletedTime = "0s"
+		return nil
+	}
+
+	// Delete and recreate unified collection to start fresh
+	unifiedCollectionName := "unified_knowledge"
+	s.logger.Info("Deleting existing unified collection (if exists)")
+	if err := s.qdrantClient.DeleteCollection(unifiedCollectionName); err != nil {
+		s.logger.Info("Unified collection does not exist yet, will create new",
+			zap.String("collection", unifiedCollectionName),
+			zap.Error(err))
+	} else {
+		s.logger.Info("Deleted existing unified collection",
+			zap.String("collection", unifiedCollectionName))
+	}
+
+	// Create fresh unified collection
+	s.logger.Info("Creating unified collection",
+		zap.String("collection", unifiedCollectionName),
+		zap.Int("vectorDimension", s.vectorDimension))
+
+	if err := s.qdrantClient.EnsureCollection(unifiedCollectionName, s.vectorDimension); err != nil {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Failed to create unified collection: %v", err)
+		s.logger.Error("Failed to create unified collection",
+			zap.String("collection", unifiedCollectionName),
+			zap.Int("vectorDimension", s.vectorDimension),
+			zap.Error(err))
+		return err
+	}
+
+	s.logger.Info("Unified collection created successfully",
+		zap.String("collection", unifiedCollectionName))
+
+	// Stream all entries from MongoDB
+	cursor, err := s.knowledgeCollection.Find(ctx, bson.M{})
+	if err != nil {
+		s.resyncStatus.InProgress = false
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Failed to query entries: %v", err)
+		s.logger.Error("Failed to query entries for resync", zap.Error(err))
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	processedCount := 0
+	errorCount := 0
+	batchSize := 100
+	var batch []*KnowledgeEntry
+
+	for cursor.Next(ctx) {
+		var entry KnowledgeEntry
+		if err := cursor.Decode(&entry); err != nil {
+			s.logger.Warn("Failed to decode entry", zap.Error(err))
+			errorCount++
+			continue
+		}
+
+		batch = append(batch, &entry)
+
+		// Process batch when full
+		if len(batch) >= batchSize {
+			successes, errors := s.processBatch(unifiedCollectionName, batch)
+			processedCount += successes
+			errorCount += errors
+
+			// Update status with actual progress
+			s.updateResyncProgress(processedCount, int(totalEntries))
+
+			s.logger.Debug("Processed batch",
+				zap.Int("batchSize", len(batch)),
+				zap.Int("successes", successes),
+				zap.Int("errors", errors),
+				zap.Int("totalProcessed", processedCount))
+
+			// Clear batch
+			batch = []*KnowledgeEntry{}
+		}
+	}
+
+	// Process remaining entries
+	if len(batch) > 0 {
+		successes, errors := s.processBatch(unifiedCollectionName, batch)
+		processedCount += successes
+		errorCount += errors
+
+		s.logger.Debug("Processed final batch",
+			zap.Int("batchSize", len(batch)),
+			zap.Int("successes", successes),
+			zap.Int("errors", errors),
+			zap.Int("totalProcessed", processedCount))
+	}
+
+	// Check for cursor errors
+	if err := cursor.Err(); err != nil {
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Cursor error: %v", err)
+		s.logger.Error("Cursor error during resync", zap.Error(err))
+	}
+
+	// Mark as complete
+	s.resyncStatus.InProgress = false
+	s.resyncStatus.ProcessedEntries = processedCount
+	s.resyncStatus.Percentage = 100.0
+	elapsed := time.Since(s.resyncStatus.StartTime)
+	s.resyncStatus.CompletedTime = fmt.Sprintf("%.1fs", elapsed.Seconds())
+
+	totalAttempted := processedCount + errorCount
+
+	if errorCount > 0 {
+		successRate := float64(processedCount) / float64(totalAttempted) * 100
+		s.resyncStatus.ErrorMessage = fmt.Sprintf("Completed with %d errors (%d/%d succeeded, %.1f%% success rate)",
+			errorCount, processedCount, totalAttempted, successRate)
+		s.logger.Warn("Resync completed with errors",
+			zap.Int("processed", processedCount),
+			zap.Int("errors", errorCount),
+			zap.Int("totalAttempted", totalAttempted),
+			zap.Float64("successRate", successRate),
+			zap.Duration("elapsed", elapsed))
+
+		// If no entries succeeded, return an error
+		if processedCount == 0 {
+			return fmt.Errorf("resync failed: all %d entries failed to sync", errorCount)
+		}
+	} else {
+		s.logger.Info("Resync completed successfully",
+			zap.Int("processed", processedCount),
+			zap.Int("total", totalAttempted),
+			zap.Duration("elapsed", elapsed))
+	}
+
+	return nil
+}
+
+// processBatch processes a batch of entries for resync
+// Returns the number of successfully processed entries and number of errors
+func (s *MongoKnowledgeStorage) processBatch(collectionName string, entries []*KnowledgeEntry) (int, int) {
+	successCount := 0
+	errorCount := 0
+
+	for _, entry := range entries {
+		// Validate entry has required fields
+		if entry.ID == "" {
+			s.logger.Warn("Skipping entry with empty ID")
+			errorCount++
+			continue
+		}
+		if entry.Text == "" {
+			s.logger.Warn("Skipping entry with empty text", zap.String("entryId", entry.ID))
+			errorCount++
+			continue
+		}
+		if entry.CollectionID == primitive.NilObjectID {
+			s.logger.Warn("Skipping entry with nil CollectionID", zap.String("entryId", entry.ID))
+			errorCount++
+			continue
+		}
+
+		// Prepare Qdrant payload with collectionId
+		qdrantPayload := entry.Metadata
+		if qdrantPayload == nil {
+			qdrantPayload = make(map[string]interface{})
+		}
+
+		// CRITICAL: Add collectionId to payload for filtering
+		qdrantPayload["collectionId"] = entry.CollectionID.Hex()
+
+		// Add taskId if it exists
+		if entry.TaskId != "" {
+			qdrantPayload["taskId"] = entry.TaskId
+		}
+
+		// Store point to Qdrant unified collection
+		if err := s.qdrantClient.StorePoint(collectionName, entry.ID, entry.Text, qdrantPayload); err != nil {
+			s.logger.Warn("Failed to store entry to unified collection",
+				zap.String("entryId", entry.ID),
+				zap.String("collectionId", entry.CollectionID.Hex()),
+				zap.Error(err))
+			errorCount++
+			continue // Continue processing remaining entries instead of failing entire batch
+		}
+		successCount++
+	}
+
+	return successCount, errorCount
+}
+
+// updateResyncProgress updates the resync status with progress information
+func (s *MongoKnowledgeStorage) updateResyncProgress(processed, total int) {
+	s.resyncStatus.ProcessedEntries = processed
+
+	if total > 0 {
+		s.resyncStatus.Percentage = float64(processed) / float64(total) * 100.0
+	}
+
+	// Estimate time remaining
+	if processed > 0 {
+		elapsed := time.Since(s.resyncStatus.StartTime)
+		avgTimePerEntry := elapsed / time.Duration(processed)
+		remaining := total - processed
+		estimatedRemaining := avgTimePerEntry * time.Duration(remaining)
+
+		if estimatedRemaining < time.Minute {
+			s.resyncStatus.EstimatedTimeRemaining = fmt.Sprintf("%.0fs", estimatedRemaining.Seconds())
+		} else {
+			s.resyncStatus.EstimatedTimeRemaining = fmt.Sprintf("%.1fm", estimatedRemaining.Minutes())
+		}
+	}
+}
+
+// GetResyncStatus returns the current resync status
+func (s *MongoKnowledgeStorage) GetResyncStatus() ResyncStatus {
+	if s.resyncStatus == nil {
+		return ResyncStatus{
+			InProgress: false,
+		}
+	}
+	return *s.resyncStatus
 }

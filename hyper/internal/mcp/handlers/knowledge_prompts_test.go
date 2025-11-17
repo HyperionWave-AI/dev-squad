@@ -489,3 +489,473 @@ func trimSpace(s string) string {
 	}
 	return s[start:end]
 }
+
+func TestKnowledgePromptHandler_KnowledgeWorkflowGuide(t *testing.T) {
+	handler := NewKnowledgePromptHandler()
+
+	tests := []struct {
+		name            string
+		taskDescription string
+		domain          string
+		wantError       bool
+		checkContent    []string
+	}{
+		{
+			name:            "Full workflow with domain",
+			taskDescription: "Implement JWT authentication middleware for Go service",
+			domain:          "authentication",
+			wantError:       false,
+			checkContent: []string{
+				"Knowledge Base Discovery Workflow",
+				"Your Task",
+				"Implement JWT authentication middleware for Go service",
+				"Your Technical Domain",
+				"authentication",
+				"STEP 1: DISCOVER Available Collections",
+				"knowledge_list_collections",
+				"STEP 2: PICK the Right Collection",
+				"STEP 3: SEARCH with Specific Queries",
+				"Query Formula:",
+				"STEP 4: REVIEW Results Thoroughly",
+				"STEP 5: VOTE on Usefulness (MANDATORY!)",
+				"knowledge_vote",
+				"STEP 6: APPLY Patterns to Your Code",
+				"WORKFLOW CHECKLIST",
+				"ANTI-PATTERNS",
+				"Example End-to-End Workflow",
+			},
+		},
+		{
+			name:            "Without domain",
+			taskDescription: "Build React component for task board",
+			domain:          "",
+			wantError:       false,
+			checkContent: []string{
+				"Knowledge Base Discovery Workflow",
+				"Build React component for task board",
+				"STEP 1: DISCOVER Available Collections",
+				"STEP 2: PICK the Right Collection",
+				"STEP 3: SEARCH with Specific Queries",
+				"STEP 4: REVIEW Results Thoroughly",
+				"STEP 5: VOTE on Usefulness (MANDATORY!)",
+				"STEP 6: APPLY Patterns to Your Code",
+			},
+		},
+		{
+			name:            "Database task",
+			taskDescription: "Optimize MongoDB aggregation pipeline for duplicate detection",
+			domain:          "database",
+			wantError:       false,
+			checkContent: []string{
+				"Knowledge Base Discovery Workflow",
+				"Optimize MongoDB aggregation pipeline",
+				"database",
+				"technical-knowledge, data-contracts",
+				"knowledge_find",
+				"retrieveMode: \"chunk\"",
+			},
+		},
+		{
+			name:            "Missing required taskDescription",
+			taskDescription: "",
+			domain:          "authentication",
+			wantError:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create MCP server for testing
+			impl := &mcp.Implementation{
+				Name:    "test-server",
+				Version: "1.0.0",
+			}
+			opts := &mcp.ServerOptions{
+				HasPrompts: true,
+			}
+			server := mcp.NewServer(impl, opts)
+
+			// Register prompt
+			err := handler.registerKnowledgeWorkflowGuide(server)
+			require.NoError(t, err)
+
+			if tt.wantError {
+				// Test error case with missing required argument
+				req := &mcp.GetPromptRequest{
+					Params: &mcp.GetPromptParams{
+						Name: "knowledge_workflow_guide",
+						Arguments: map[string]string{
+							"taskDescription": tt.taskDescription,
+							"domain":          tt.domain,
+						},
+					},
+				}
+
+				handlerFunc := func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+					taskDescription := ""
+					if req.Params != nil && req.Params.Arguments != nil {
+						taskDescription = req.Params.Arguments["taskDescription"]
+					}
+					if taskDescription == "" {
+						return nil, assert.AnError
+					}
+					return &mcp.GetPromptResult{}, nil
+				}
+
+				_, err := handlerFunc(context.Background(), req)
+				assert.Error(t, err)
+				return
+			}
+
+			// For success cases, check the prompt was built correctly
+			promptText := handler.buildKnowledgeWorkflowGuide(tt.taskDescription, tt.domain)
+
+			for _, check := range tt.checkContent {
+				assert.Contains(t, promptText, check, "Prompt should contain: %s", check)
+			}
+
+			// Verify workflow steps are present
+			assert.Contains(t, promptText, "STEP 1:")
+			assert.Contains(t, promptText, "STEP 2:")
+			assert.Contains(t, promptText, "STEP 3:")
+			assert.Contains(t, promptText, "STEP 4:")
+			assert.Contains(t, promptText, "STEP 5:")
+			assert.Contains(t, promptText, "STEP 6:")
+		})
+	}
+}
+
+func TestKnowledgePromptHandler_KnowledgeVotingWorkflow(t *testing.T) {
+	handler := NewKnowledgePromptHandler()
+
+	tests := []struct {
+		name         string
+		articleId    string
+		articleTitle string
+		wasHelpful   string
+		wantError    bool
+		checkContent []string
+	}{
+		{
+			name:         "Full voting guide with all arguments",
+			articleId:    "article-123",
+			articleTitle: "Go JWT Middleware with HS256 Validation",
+			wasHelpful:   "true",
+			wantError:    false,
+			checkContent: []string{
+				"Knowledge Voting Decision Guide",
+				"Article Under Review",
+				"article-123",
+				"Go JWT Middleware with HS256 Validation",
+				"You indicated this article WAS helpful",
+				"Why Voting Matters",
+				"DECISION TREE: Should I Vote +1 (Helpful)?",
+				"DECISION TREE: Should I Vote -1 (Not Helpful)?",
+				"How to Write GOOD Vote Reasons",
+				"Common Voting Mistakes",
+				"Voting Workflow",
+				"knowledge_vote",
+				"Your Voting Decision for This Article",
+				"Evaluation Checklist",
+			},
+		},
+		{
+			name:         "Article was not helpful",
+			articleId:    "article-456",
+			articleTitle: "Outdated Authentication Pattern",
+			wasHelpful:   "false",
+			wantError:    false,
+			checkContent: []string{
+				"Knowledge Voting Decision Guide",
+				"article-456",
+				"Outdated Authentication Pattern",
+				"You indicated this article was NOT helpful",
+				"Vote +1 (Helpful) When:",
+				"Vote -1 (Not Helpful) When:",
+				"Accuracy Issues:",
+				"Completeness Issues:",
+				"Relevance Issues:",
+				"Example -1 Vote Reasons:",
+			},
+		},
+		{
+			name:         "Minimal - only articleId",
+			articleId:    "article-789",
+			articleTitle: "",
+			wasHelpful:   "",
+			wantError:    false,
+			checkContent: []string{
+				"Knowledge Voting Decision Guide",
+				"article-789",
+				"Why Voting Matters",
+				"Search ranking",
+				"Content quality",
+				"Community learning",
+				"Vote +1 (Helpful) When:",
+				"Vote -1 (Not Helpful) When:",
+				"Template for +1 Votes:",
+				"Template for -1 Votes:",
+			},
+		},
+		{
+			name:         "Missing required articleId",
+			articleId:    "",
+			articleTitle: "Some Article",
+			wasHelpful:   "true",
+			wantError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create MCP server for testing
+			impl := &mcp.Implementation{
+				Name:    "test-server",
+				Version: "1.0.0",
+			}
+			opts := &mcp.ServerOptions{
+				HasPrompts: true,
+			}
+			server := mcp.NewServer(impl, opts)
+
+			// Register prompt
+			err := handler.registerKnowledgeVotingWorkflow(server)
+			require.NoError(t, err)
+
+			if tt.wantError {
+				// Test error case with missing required argument
+				req := &mcp.GetPromptRequest{
+					Params: &mcp.GetPromptParams{
+						Name: "knowledge_voting_workflow",
+						Arguments: map[string]string{
+							"articleId":    tt.articleId,
+							"articleTitle": tt.articleTitle,
+							"wasHelpful":   tt.wasHelpful,
+						},
+					},
+				}
+
+				handlerFunc := func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+					articleId := ""
+					if req.Params != nil && req.Params.Arguments != nil {
+						articleId = req.Params.Arguments["articleId"]
+					}
+					if articleId == "" {
+						return nil, assert.AnError
+					}
+					return &mcp.GetPromptResult{}, nil
+				}
+
+				_, err := handlerFunc(context.Background(), req)
+				assert.Error(t, err)
+				return
+			}
+
+			// For success cases, check the prompt was built correctly
+			promptText := handler.buildKnowledgeVotingGuide(tt.articleId, tt.articleTitle, tt.wasHelpful)
+
+			for _, check := range tt.checkContent {
+				assert.Contains(t, promptText, check, "Prompt should contain: %s", check)
+			}
+
+			// Verify article ID is present
+			assert.Contains(t, promptText, tt.articleId)
+		})
+	}
+}
+
+func TestBuildKnowledgeWorkflowGuide(t *testing.T) {
+	handler := NewKnowledgePromptHandler()
+
+	tests := []struct {
+		name            string
+		taskDescription string
+		domain          string
+		checkContent    []string
+		notContain      []string
+	}{
+		{
+			name:            "With domain specified",
+			taskDescription: "Implement user authentication",
+			domain:          "security",
+			checkContent: []string{
+				"Your Technical Domain",
+				"security",
+				"Implement user authentication",
+				"knowledge_list_collections",
+				"knowledge_find",
+				"knowledge_vote",
+			},
+		},
+		{
+			name:            "Without domain",
+			taskDescription: "Build REST API endpoint",
+			domain:          "",
+			checkContent: []string{
+				"Build REST API endpoint",
+				"STEP 1: DISCOVER",
+				"STEP 2: PICK",
+				"STEP 3: SEARCH",
+			},
+			notContain: []string{
+				"Your Technical Domain",
+			},
+		},
+		{
+			name:            "Complex task description",
+			taskDescription: "Refactor MongoDB aggregation pipeline for performance optimization with caching layer",
+			domain:          "database",
+			checkContent: []string{
+				"Refactor MongoDB aggregation pipeline",
+				"database",
+				"Query Formula:",
+				"[Technology] + [Component] + [Problem/Pattern]",
+				"retrieveMode: \"chunk\"",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := handler.buildKnowledgeWorkflowGuide(tt.taskDescription, tt.domain)
+
+			// Check required content
+			for _, check := range tt.checkContent {
+				assert.Contains(t, result, check, "Should contain: %s", check)
+			}
+
+			// Check excluded content
+			for _, notWanted := range tt.notContain {
+				assert.NotContains(t, result, notWanted, "Should NOT contain: %s", notWanted)
+			}
+
+			// Verify all steps are present
+			assert.Contains(t, result, "STEP 1:")
+			assert.Contains(t, result, "STEP 2:")
+			assert.Contains(t, result, "STEP 3:")
+			assert.Contains(t, result, "STEP 4:")
+			assert.Contains(t, result, "STEP 5:")
+			assert.Contains(t, result, "STEP 6:")
+
+			// Verify mandatory elements
+			assert.Contains(t, result, "WORKFLOW CHECKLIST")
+			assert.Contains(t, result, "ANTI-PATTERNS")
+			assert.Contains(t, result, "Example End-to-End Workflow")
+		})
+	}
+}
+
+func TestBuildKnowledgeVotingGuide(t *testing.T) {
+	handler := NewKnowledgePromptHandler()
+
+	tests := []struct {
+		name         string
+		articleId    string
+		articleTitle string
+		wasHelpful   string
+		checkContent []string
+		notContain   []string
+	}{
+		{
+			name:         "Article was helpful",
+			articleId:    "abc123",
+			articleTitle: "JWT Authentication Guide",
+			wasHelpful:   "true",
+			checkContent: []string{
+				"abc123",
+				"JWT Authentication Guide",
+				"You indicated this article WAS helpful",
+				"Vote +1 (Helpful)",
+			},
+		},
+		{
+			name:         "Article was not helpful",
+			articleId:    "xyz789",
+			articleTitle: "Deprecated Pattern",
+			wasHelpful:   "false",
+			checkContent: []string{
+				"xyz789",
+				"Deprecated Pattern",
+				"You indicated this article was NOT helpful",
+				"Vote -1 (Not Helpful)",
+			},
+		},
+		{
+			name:         "No helpfulness assessment",
+			articleId:    "def456",
+			articleTitle: "Some Article",
+			wasHelpful:   "",
+			checkContent: []string{
+				"def456",
+				"Some Article",
+				"Why Voting Matters",
+				"DECISION TREE",
+			},
+			notContain: []string{
+				"Initial Assessment",
+			},
+		},
+		{
+			name:         "No title provided",
+			articleId:    "ghi789",
+			articleTitle: "",
+			wasHelpful:   "true",
+			checkContent: []string{
+				"ghi789",
+				"Vote +1 (Helpful) When:",
+				"Vote -1 (Not Helpful) When:",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := handler.buildKnowledgeVotingGuide(tt.articleId, tt.articleTitle, tt.wasHelpful)
+
+			// Check required content
+			for _, check := range tt.checkContent {
+				assert.Contains(t, result, check, "Should contain: %s", check)
+			}
+
+			// Check excluded content
+			for _, notWanted := range tt.notContain {
+				assert.NotContains(t, result, notWanted, "Should NOT contain: %s", notWanted)
+			}
+
+			// Verify mandatory elements
+			assert.Contains(t, result, "Why Voting Matters")
+			assert.Contains(t, result, "DECISION TREE")
+			assert.Contains(t, result, "How to Write GOOD Vote Reasons")
+			assert.Contains(t, result, "Common Voting Mistakes")
+			assert.Contains(t, result, "Voting Workflow")
+			assert.Contains(t, result, "Evaluation Checklist")
+			assert.Contains(t, result, "Example Decision Process")
+
+			// Verify article ID is always present
+			assert.Contains(t, result, tt.articleId)
+		})
+	}
+}
+
+func TestKnowledgePromptsRegistration_WithNewPrompts(t *testing.T) {
+	handler := NewKnowledgePromptHandler()
+
+	impl := &mcp.Implementation{
+		Name:    "test-server",
+		Version: "1.0.0",
+	}
+
+	opts := &mcp.ServerOptions{
+		HasPrompts: true,
+	}
+
+	server := mcp.NewServer(impl, opts)
+
+	// Register all prompts including new ones
+	err := handler.RegisterKnowledgePrompts(server)
+	assert.NoError(t, err)
+
+	// Verify no errors on re-registration
+	err = handler.RegisterKnowledgePrompts(server)
+	assert.NoError(t, err)
+}

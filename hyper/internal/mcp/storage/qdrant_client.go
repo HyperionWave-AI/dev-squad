@@ -18,6 +18,7 @@ import (
 	"hyper/internal/mcp/embeddings"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // QdrantClientInterface defines the interface for Qdrant operations
@@ -164,7 +165,8 @@ func (c *QdrantClient) addAuthHeader(req *http.Request) {
 	}
 }
 
-// EnsureCollection ensures a Qdrant collection exists
+// EnsureCollection ensures a Qdrant collection exists with correct dimensions
+// If collection exists but has different dimensions, returns DimensionMismatchError for caller to handle
 func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) error {
 	// Check if collection exists
 	checkURL := fmt.Sprintf("%s/collections/%s", c.baseURL, collectionName)
@@ -180,12 +182,48 @@ func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) e
 	}
 	defer resp.Body.Close()
 
-	// If collection exists (200), return
+	// If collection exists (200), verify dimensions match
 	if resp.StatusCode == http.StatusOK {
+		// Read response body to check dimensions
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read collection info: %w", err)
+		}
+
+		var collectionInfo struct {
+			Result struct {
+				Config struct {
+					Params struct {
+						Vectors struct {
+							Size int `json:"size"`
+						} `json:"vectors"`
+					} `json:"params"`
+				} `json:"config"`
+			} `json:"result"`
+		}
+
+		if err := json.Unmarshal(body, &collectionInfo); err != nil {
+			return fmt.Errorf("failed to parse collection info: %w", err)
+		}
+
+		actualDim := collectionInfo.Result.Config.Params.Vectors.Size
+
+		// Check for dimension mismatch
+		if actualDim != vectorSize {
+			// Return special error type that callers can detect and handle
+			return &DimensionMismatchError{
+				ExpectedDim: actualDim,
+				GotDim:      vectorSize,
+				Collection:  collectionName,
+				OriginalErr: fmt.Errorf("collection exists with dimension %d but requested %d", actualDim, vectorSize),
+			}
+		}
+
+		// Dimensions match, collection is ready
 		return nil
 	}
 
-	// Create collection
+	// Collection doesn't exist - create it
 	createPayload := map[string]interface{}{
 		"vectors": map[string]interface{}{
 			"size":     vectorSize,
@@ -216,6 +254,77 @@ func (c *QdrantClient) EnsureCollection(collectionName string, vectorSize int) e
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to create collection: status %d, body: %s", resp.StatusCode, string(body))
 	}
+
+	return nil
+}
+
+// EnsureCollectionWithMigration ensures a Qdrant collection exists and handles dimension mismatches automatically.
+// If a dimension mismatch is detected, it fetches all data using the provided function, recreates the collection
+// with new dimensions, and re-embeds all entries.
+// This is a convenience method that wraps EnsureCollection with automatic migration logic.
+//
+// Parameters:
+//   - collectionName: Name of the Qdrant collection
+//   - vectorSize: Expected vector dimension
+//   - fetchDataFunc: Function to fetch all entries from MongoDB for migration (called only on mismatch)
+//   - logger: Logger for migration progress and errors
+//
+// Returns error only if the collection cannot be ensured (connection issues, etc.)
+// Dimension mismatch is handled automatically via migration.
+func (c *QdrantClient) EnsureCollectionWithMigration(
+	collectionName string,
+	vectorSize int,
+	fetchDataFunc func() ([]*KnowledgeEntry, error),
+	logger *zap.Logger,
+) error {
+	// Try to ensure collection exists
+	err := c.EnsureCollection(collectionName, vectorSize)
+	if err == nil {
+		// Collection exists with correct dimensions
+		return nil
+	}
+
+	// Check if this is a dimension mismatch error
+	dimErr, ok := err.(*DimensionMismatchError)
+	if !ok {
+		// Not a dimension mismatch - return original error
+		return err
+	}
+
+	// Dimension mismatch detected - trigger automatic migration
+	logger.Warn("Dimension mismatch detected - triggering automatic migration",
+		zap.String("collection", collectionName),
+		zap.Int("expectedDim", dimErr.ExpectedDim),
+		zap.Int("gotDim", dimErr.GotDim))
+
+	// Fetch all entries for migration
+	entries, fetchErr := fetchDataFunc()
+	if fetchErr != nil {
+		logger.Error("Failed to fetch entries for migration",
+			zap.String("collection", collectionName),
+			zap.Error(fetchErr))
+		return fmt.Errorf("failed to fetch entries for migration: %w", fetchErr)
+	}
+
+	// Recreate collection with new dimensions and re-embed all data
+	reindexedCount, migrateErr := c.RecreateCollectionWithReindex(
+		collectionName,
+		entries,
+		vectorSize,
+	)
+	if migrateErr != nil {
+		logger.Error("Failed to migrate collection",
+			zap.String("collection", collectionName),
+			zap.Error(migrateErr))
+		return fmt.Errorf("failed to migrate collection: %w", migrateErr)
+	}
+
+	logger.Info("Successfully migrated collection to new dimensions",
+		zap.String("collection", collectionName),
+		zap.Int("oldDim", dimErr.ExpectedDim),
+		zap.Int("newDim", dimErr.GotDim),
+		zap.Int("entriesMigrated", reindexedCount),
+		zap.Int("totalEntries", len(entries)))
 
 	return nil
 }
@@ -1066,6 +1175,50 @@ func (c *QdrantClient) EnsureCodeIndexCollection(expectedDimensions ...int) erro
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to create collection (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Create payload indexes for filtering
+	// This enables efficient filtering by language field
+	if err := c.createCodeIndexPayloadIndexes(CodeIndexCollection); err != nil {
+		// Log warning but don't fail - collection is created, indexes can be added later
+		fmt.Printf("Warning: failed to create payload indexes: %v\n", err)
+	}
+
+	return nil
+}
+
+// createCodeIndexPayloadIndexes creates payload field indexes for code index collection
+// This enables efficient filtering by language and other metadata fields
+func (c *QdrantClient) createCodeIndexPayloadIndexes(collectionName string) error {
+	// Create index for 'language' field to enable fileTypes filtering
+	indexConfig := map[string]interface{}{
+		"field_name": "language",
+		"field_schema": "keyword",
+	}
+
+	jsonBody, err := json.Marshal(indexConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal index config: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/index", c.baseURL, collectionName)
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.addAuthHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create payload index: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create payload index (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	return nil

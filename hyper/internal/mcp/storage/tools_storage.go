@@ -280,12 +280,73 @@ func (s *ToolsStorage) StoreToolMetadata(ctx context.Context, toolName, descript
 
 		// Ensure collection exists with correct dimensions
 		if err := s.qdrantClient.EnsureCollection(s.toolsCollectionName, vectorDim); err != nil {
-			// Log error but don't fail - MongoDB has the data
-			s.logger.Warn("Failed to ensure Qdrant collection",
-				zap.String("collection", s.toolsCollectionName),
-				zap.Int("vectorDim", vectorDim),
-				zap.Error(err))
-		} else {
+			// Check if this is a dimension mismatch error
+			if dimErr, ok := err.(*DimensionMismatchError); ok {
+				s.logger.Warn("Dimension mismatch detected for tools - triggering automatic migration",
+					zap.String("collection", s.toolsCollectionName),
+					zap.Int("expectedDim", dimErr.ExpectedDim),
+					zap.Int("gotDim", dimErr.GotDim))
+
+				// Fetch all tools from MongoDB for migration
+				ctx := context.Background()
+				cursor, fetchErr := s.toolsCollection.Find(ctx, bson.M{})
+				if fetchErr != nil {
+					s.logger.Error("Failed to fetch tools for migration", zap.Error(fetchErr))
+				} else {
+					defer cursor.Close(ctx)
+
+					// Convert tools to KnowledgeEntry format for re-indexing
+					var entries []*KnowledgeEntry
+					for cursor.Next(ctx) {
+						var tool ToolMetadata
+						if err := cursor.Decode(&tool); err != nil {
+							s.logger.Warn("Failed to decode tool for migration", zap.Error(err))
+							continue
+						}
+
+						// Create searchable text combining tool name and description
+						searchableText := fmt.Sprintf("%s: %s", tool.ToolName, tool.Description)
+
+						entries = append(entries, &KnowledgeEntry{
+							ID:   tool.ID,
+							Text: searchableText,
+							Metadata: map[string]interface{}{
+								"toolName":   tool.ToolName,
+								"serverName": tool.ServerName,
+							},
+						})
+					}
+
+					// Recreate collection with new dimensions and re-embed all data
+					reindexedCount, migrateErr := s.qdrantClient.RecreateCollectionWithReindex(
+						s.toolsCollectionName,
+						entries,
+						vectorDim,
+					)
+					if migrateErr != nil {
+						s.logger.Error("Failed to migrate tools collection",
+							zap.String("collection", s.toolsCollectionName),
+							zap.Error(migrateErr))
+					} else {
+						s.logger.Info("Successfully migrated tools collection to new dimensions",
+							zap.String("collection", s.toolsCollectionName),
+							zap.Int("oldDim", dimErr.ExpectedDim),
+							zap.Int("newDim", dimErr.GotDim),
+							zap.Int("entriesMigrated", reindexedCount),
+							zap.Int("totalEntries", len(entries)))
+					}
+				}
+			} else {
+				// Log error but don't fail - MongoDB has the data
+				s.logger.Warn("Failed to ensure Qdrant collection",
+					zap.String("collection", s.toolsCollectionName),
+					zap.Int("vectorDim", vectorDim),
+					zap.Error(err))
+			}
+		}
+
+		// Only store point if collection is ready (no error or error was handled)
+		if err == nil {
 			// Create searchable text combining tool name and description
 			searchableText := fmt.Sprintf("%s: %s", toolName, description)
 
