@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -1119,10 +1120,10 @@ func (sc *StreamCleanup) Close() {
 
 // handleMessages manages the WebSocket message loop with processing state
 func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string) {
-	// Set read deadline for ping/pong
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// Set read deadline for ping/pong (5 minutes to allow users time to review responses)
+	conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 		return nil
 	})
 
@@ -1188,10 +1189,21 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			// Read message from client
 			_, messageData, err := conn.ReadMessage()
 			if err != nil {
-				// Record WebSocket error
+				// Check if this is an idle timeout (expected after task completion)
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					h.logger.Debug("WebSocket idle timeout - connection will close",
+						zap.String("sessionId", sessionID.Hex()),
+						zap.Duration("timeout", 300*time.Second),
+						zap.String("reason", "No activity from client (user reviewing response)"))
+					// done channel will be closed by defer
+					return
+				}
+
+				// Record WebSocket error (only for non-timeout errors)
 				if !websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
 					metrics.WebSocketErrors.WithLabelValues("read_error").Inc()
 				}
+
 				// Check if this is a normal disconnection
 				if websocket.IsCloseError(err,
 					websocket.CloseGoingAway,          // 1001: browser navigation
@@ -1202,10 +1214,11 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 						zap.String("sessionId", sessionID.Hex()),
 						zap.String("reason", err.Error()))
 				} else {
-					// Truly unexpected error
-					h.logger.Warn("WebSocket unexpected error",
+					// Truly unexpected network error
+					h.logger.Warn("WebSocket unexpected network error",
 						zap.String("sessionId", sessionID.Hex()),
-						zap.Error(err))
+						zap.Error(err),
+						zap.String("errorType", fmt.Sprintf("%T", err)))
 				}
 				// done channel will be closed by defer
 				return
