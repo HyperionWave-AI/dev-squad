@@ -330,7 +330,9 @@ func NewCoordinatorTools(taskStorage storage.TaskStorage, knowledgeStorage stora
 
 // CreateAgentTaskTool implements the ToolExecutor interface
 type CreateAgentTaskTool struct {
-	storage storage.TaskStorage
+	storage   storage.TaskStorage
+	aiService AIServiceInterface
+	config    *aiservice.AIConfig
 }
 
 func (t *CreateAgentTaskTool) Name() string {
@@ -395,6 +397,32 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 	// SMART AUTO-FETCH: Extract humanTaskId from input but ALWAYS validate it exists in database
 	// If invalid/missing, auto-fetch the latest pending task (don't trust the model)
 	providedTaskID, _ := input["humanTaskId"].(string)
+	
+	// Extract task details for complexity analysis
+	agentName, _ := input["agentName"].(string)
+	role, _ := input["role"].(string)
+	contextSummary, _ := input["contextSummary"].(string)
+	
+	// Extract filesModified for complexity analysis
+	var filesModified []string
+	if fm, ok := input["filesModified"].([]interface{}); ok {
+		filesModified = make([]string, len(fm))
+		for i, f := range fm {
+			if str, ok := f.(string); ok {
+				filesModified[i] = str
+			}
+		}
+	}
+	
+	// Perform complexity analysis if we have sufficient information
+	var complexityAnalysis *aiservice.ComplexityAnalysis
+	var splitSuggestions []aiservice.SuggestedSplit
+	if len(filesModified) > 0 && role != "" {
+		if analysis, suggestions, err := t.performComplexityAnalysis(ctx, role, contextSummary, filesModified); err == nil {
+			complexityAnalysis = analysis
+			splitSuggestions = suggestions
+		}
+	}
 
 	// Helper function to fetch latest pending task
 	fetchLatestTask := func() (*storage.HumanTask, error) {
@@ -476,7 +504,7 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("agentName is required and must be a string")
 	}
 
-	role, ok := input["role"].(string)
+	role, ok = input["role"].(string)
 	if !ok || role == "" {
 		return nil, fmt.Errorf("role is required and must be a string")
 	}
@@ -556,10 +584,10 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 	}
 
 	// Extract optional fields
-	contextSummary, _ := input["contextSummary"].(string)
+	contextSummary, _ = input["contextSummary"].(string)
 	priorWorkSummary, _ := input["priorWorkSummary"].(string)
 
-	var filesModified []string
+	// Reuse filesModified from earlier (line 407), no need to redeclare
 	if fm, ok := input["filesModified"].([]interface{}); ok {
 		filesModified = make([]string, len(fm))
 		for i, f := range fm {
@@ -750,7 +778,88 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		"status":     task.Status,
 		"todosCount": len(task.Todos),
 		"createdAt":  task.CreatedAt,
+		"complexityAnalysis": complexityAnalysis,
+		"splitSuggestions":   splitSuggestions,
+		"recommendsSplit":    complexityAnalysis != nil && complexityAnalysis.ShouldSplit,
 	}, nil
+}
+
+// aiServiceChatProvider wraps AIServiceInterface to implement ChatProvider for ComplexityAnalyzer
+type aiServiceChatProvider struct {
+	aiService AIServiceInterface
+}
+
+// StreamChat implements the ChatProvider interface by using the AIService
+func (p *aiServiceChatProvider) StreamChat(ctx context.Context, messages []aiservice.Message) (<-chan string, error) {
+	// Convert to the format expected by AIService and stream
+	stream, err := p.aiService.StreamChatWithTools(ctx, messages, 0) // No tool calls needed for complexity analysis
+	if err != nil {
+		return nil, err
+	}
+	
+	// Create output channel
+	outputChan := make(chan string, 100)
+	
+	// Process stream events and extract text tokens
+	go func() {
+		defer close(outputChan)
+		
+		for event := range stream {
+			switch event.Type {
+			case aiservice.StreamEventToken:
+				select {
+				case <-ctx.Done():
+					return
+				case outputChan <- event.Content:
+				}
+			case aiservice.StreamEventError:
+				select {
+				case <-ctx.Done():
+					return
+				case outputChan <- fmt.Sprintf("ERROR: %s", event.Error):
+				}
+				return
+			}
+		}
+	}()
+	
+	return outputChan, nil
+}
+
+// performComplexityAnalysis analyzes task complexity and generates split suggestions if needed
+func (t *CreateAgentTaskTool) performComplexityAnalysis(ctx context.Context, role, contextSummary string, filesModified []string) (*aiservice.ComplexityAnalysis, []aiservice.SuggestedSplit, error) {
+	if t.aiService == nil || t.config == nil {
+		// Complexity analysis not available without AI service
+		return nil, nil, nil
+	}
+
+	// Create a simple ChatProvider wrapper for the ComplexityAnalyzer
+	chatProvider := &aiServiceChatProvider{aiService: t.aiService}
+	
+	// Create complexity analyzer
+	analyzer := aiservice.NewComplexityAnalyzer(t.config, chatProvider)
+	
+	// Create task context
+	taskContext := aiservice.TaskContext{
+		Description:    role,
+		FilesModified:  filesModified,
+		Role:           role,
+		ContextSummary: contextSummary,
+	}
+	
+	// Analyze complexity
+	analysis, err := analyzer.AnalyzeComplexity(ctx, taskContext)
+	if err != nil {
+		return nil, nil, fmt.Errorf("complexity analysis failed: %w", err)
+	}
+	
+	// Generate split suggestions if complexity is high
+	var suggestions []aiservice.SuggestedSplit
+	if analysis.ShouldSplit {
+		suggestions, _ = analyzer.GenerateSplitSuggestions(ctx, taskContext, analysis)
+	}
+
+	return analysis, suggestions, nil
 }
 
 // ListAgentTasksTool implements the ToolExecutor interface
@@ -4426,7 +4535,11 @@ func RegisterCoordinatorTools(
 ) error {
 	tools := []aiservice.ToolExecutor{
 		// Existing tools
-		&CreateAgentTaskTool{storage: taskStorage},
+		&CreateAgentTaskTool{
+			storage:   taskStorage,
+			aiService: aiService,
+			config:    aiService.GetConfig(),
+		},
 		&ListAgentTasksTool{storage: taskStorage},
 		&QueryKnowledgeTool{storage: knowledgeStorage},
 

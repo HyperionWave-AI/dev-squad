@@ -71,7 +71,7 @@ func main() {
 
 	// Call Upsert
 	fmt.Println("\n2. Calling Upsert (what knowledge_store now uses)...")
-	entry, err := knowledgeStorage.Upsert(testCollection, testText, testMetadata)
+	entry, err := knowledgeStorage.Upsert(testCollection, testText, testMetadata, nil)
 	if err != nil {
 		log.Fatalf("   ✗ Upsert failed: %v", err)
 	}
