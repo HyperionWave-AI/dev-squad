@@ -199,11 +199,11 @@ func StartHTTPServer(
 		toolRegistry,
 		taskStorage,
 		knowledgeStorage,
-		toolsDiscoveryHandler,
 		subchatStorage,
-		aiChatService,  // AI service for sub-agent streaming
+		toolsDiscoveryHandler,
 		chatService,    // Chat service for message storage
 		aiSettingsService, // AI settings service for subagent prompts
+		aiChatService,  // AI service for sub-agent streaming
 		logger,         // Logger for debugging
 	); err != nil {
 		logger.Error("Failed to register coordinator tools", zap.Error(err))

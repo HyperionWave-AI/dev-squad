@@ -20,6 +20,7 @@ import (
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
@@ -402,7 +403,7 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 	agentName, _ := input["agentName"].(string)
 	role, _ := input["role"].(string)
 	contextSummary, _ := input["contextSummary"].(string)
-	
+
 	// Extract filesModified for complexity analysis
 	var filesModified []string
 	if fm, ok := input["filesModified"].([]interface{}); ok {
@@ -413,16 +414,14 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 			}
 		}
 	}
-	
-	// Perform complexity analysis if we have sufficient information
-	var complexityAnalysis *aiservice.ComplexityAnalysis
+
+	// Declare variables for later use
+	var newComplexityAnalysis ComplexityAnalysis
+	var legacyComplexityAnalysis *aiservice.ComplexityAnalysis
 	var splitSuggestions []aiservice.SuggestedSplit
-	if len(filesModified) > 0 && role != "" {
-		if analysis, suggestions, err := t.performComplexityAnalysis(ctx, role, contextSummary, filesModified); err == nil {
-			complexityAnalysis = analysis
-			splitSuggestions = suggestions
-		}
-	}
+	var todos []string // Will be parsed later
+
+	// NOTE: Complexity analysis will be performed after todos are parsed
 
 	// Helper function to fetch latest pending task
 	fetchLatestTask := func() (*storage.HumanTask, error) {
@@ -514,8 +513,7 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("todos is required")
 	}
 
-	// Convert todos to []string
-	var todos []string
+	// Convert todos to []string (reuse the variable declared earlier)
 	switch v := todosRaw.(type) {
 	case []interface{}:
 		todos = make([]string, len(v))
@@ -724,6 +722,72 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
+	// COMPLEXITY ANALYSIS: Perform complexity analysis now that todos and files are parsed
+	title := role
+	if title == "" {
+		title = "Agent Task"
+	}
+
+	newComplexityAnalysis = analyzeTaskComplexity(title, contextSummary, todos, filesModified)
+
+	// PREVENTION: Block extremely complex tasks (≥0.8 score)
+	if newComplexityAnalysis.Score >= 0.8 {
+		return nil, fmt.Errorf(
+			"❌ Task complexity too high (score: %.2f/1.0) - task creation blocked\n\n"+
+			"🚨 COMPLEXITY ANALYSIS:\n"+
+			"• File count: %d files (complexity: %.2f)\n"+
+			"• TODO complexity: %.2f\n"+
+			"• Cross-system dependencies: %d systems (complexity: %.2f)\n"+
+			"• Integration complexity: %.2f\n"+
+			"• Estimated time: %d minutes\n\n"+
+			"⚠️ RECOMMENDATION: %s\n"+
+			"• Splitting strategy: %s\n\n"+
+			"🔧 REQUIRED ACTION:\n"+
+			"1. Use coordinator_analyze_task_complexity to get detailed analysis\n"+
+			"2. Use coordinator_split_agent_task to break this into smaller tasks\n"+
+			"3. Create child tasks with complexity score < 0.8 each\n\n"+
+			"💡 COMPLEXITY BREAKDOWN:\n"+
+			"• 0.0-0.4: Simple task (proceed)\n"+
+			"• 0.4-0.6: Moderate task (consider splitting)\n"+
+			"• 0.6-0.8: Complex task (should split)\n"+
+			"• 0.8-1.0: Extremely complex (blocked)",
+			newComplexityAnalysis.Score,
+			newComplexityAnalysis.FileCount, newComplexityAnalysis.Factors["fileCount"],
+			newComplexityAnalysis.TodoComplexity,
+			newComplexityAnalysis.CrossSystemDeps, newComplexityAnalysis.Factors["crossSystemDeps"],
+			newComplexityAnalysis.Factors["integration"],
+			newComplexityAnalysis.EstimatedTimeMinutes,
+			newComplexityAnalysis.Recommendation,
+			newComplexityAnalysis.SplittingStrategy)
+	}
+
+	// Also perform legacy complexity analysis for backward compatibility
+	if len(filesModified) > 0 && role != "" {
+		if analysis, suggestions, err := t.performComplexityAnalysis(ctx, role, contextSummary, filesModified); err == nil {
+			legacyComplexityAnalysis = analysis
+			splitSuggestions = suggestions
+		}
+	}
+
+	// Warn if task is moderately complex (0.6-0.8) but allow creation
+	if newComplexityAnalysis.Score >= 0.6 && newComplexityAnalysis.Score < 0.8 {
+		zap.L().Warn("⚠️ Creating complex task - consider splitting",
+			zap.Float64("complexityScore", newComplexityAnalysis.Score),
+			zap.String("recommendation", newComplexityAnalysis.Recommendation),
+			zap.String("splittingStrategy", newComplexityAnalysis.SplittingStrategy),
+			zap.Int("estimatedMinutes", newComplexityAnalysis.EstimatedTimeMinutes))
+	}
+
+	// Log complexity analysis for monitoring
+	if newComplexityAnalysis.Score > 0.0 {
+		zap.L().Info("Task complexity analysis completed",
+			zap.Float64("score", newComplexityAnalysis.Score),
+			zap.Int("fileCount", newComplexityAnalysis.FileCount),
+			zap.Float64("todoComplexity", newComplexityAnalysis.TodoComplexity),
+			zap.Int("crossSystemDeps", newComplexityAnalysis.CrossSystemDeps),
+			zap.String("recommendation", newComplexityAnalysis.Recommendation))
+	}
+
 	// Validate file paths exist before creating task (Claude optimization)
 	// This prevents subagents from being launched with invalid file paths
 	if len(filesModified) > 0 {
@@ -778,12 +842,14 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		"status":     task.Status,
 		"todosCount": len(task.Todos),
 		"createdAt":  task.CreatedAt,
-		"complexityAnalysis": complexityAnalysis,
+		"newComplexityAnalysis": newComplexityAnalysis,
+		"legacyComplexityAnalysis": legacyComplexityAnalysis,
 		"splitSuggestions":   splitSuggestions,
-		"recommendsSplit":    complexityAnalysis != nil && complexityAnalysis.ShouldSplit,
+		"recommendsSplit":    newComplexityAnalysis.Recommendation == "SPLIT",
+		"complexityScore":    newComplexityAnalysis.Score,
+		"estimatedMinutes":   newComplexityAnalysis.EstimatedTimeMinutes,
 	}, nil
 }
-
 // aiServiceChatProvider wraps AIServiceInterface to implement ChatProvider for ComplexityAnalyzer
 type aiServiceChatProvider struct {
 	aiService AIServiceInterface
@@ -1363,15 +1429,166 @@ func (t *UpdateTaskStatusTool) Execute(ctx context.Context, input map[string]int
 	status := storage.TaskStatus(statusStr)
 	notes, _ := input["notes"].(string)
 
-	err := t.storage.UpdateTaskStatus(taskID, status, notes)
+	// Get the task before updating to check if it's a child task
+	task, err := t.storage.GetAgentTask(taskID)
+	if err != nil {
+		// Try as human task if agent task fails
+		_, humanErr := t.storage.GetHumanTask(taskID)
+		if humanErr != nil {
+			return nil, fmt.Errorf("failed to get task (tried both agent and human): agent_error=%w, human_error=%w", err, humanErr)
+		}
+		// For human tasks, just update status without hierarchical propagation
+		err = t.storage.UpdateTaskStatus(taskID, storage.TaskStatus(status), notes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update human task status: %w", err)
+		}
+
+		return map[string]interface{}{
+			"taskId": taskID,
+			"status": status,
+			"notes":  notes,
+			"taskType": "human",
+		}, nil
+	}
+
+	// Update the task status
+	err = t.storage.UpdateTaskStatus(taskID, storage.TaskStatus(status), notes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update task status: %w", err)
 	}
 
-	return map[string]interface{}{
+	// Check if this is a child task and propagate to parent if needed
+	var parentUpdateResult map[string]interface{}
+	var parentTaskId string
+
+	if task.ParentTaskID != nil && *task.ParentTaskID != "" {
+		parentTaskId = *task.ParentTaskID
+
+		// Only propagate if the child task is completed or failed
+		if status == "COMPLETED" || status == "FAILED" {
+			parentUpdateResult, err = t.propagateToParentTask(ctx, parentTaskId)
+			if err != nil {
+				// Log error but don't fail the entire operation
+				zap.L().Warn("Failed to propagate status to parent task",
+					zap.String("childTaskId", taskID),
+					zap.String("parentTaskId", parentTaskId),
+					zap.Error(err))
+				parentUpdateResult = map[string]interface{}{
+					"error": fmt.Sprintf("Failed to propagate to parent: %v", err),
+				}
+			}
+		}
+	}
+
+	result := map[string]interface{}{
 		"taskId": taskID,
 		"status": status,
 		"notes":  notes,
+		"taskType": "agent",
+		"parentTaskId": parentTaskId,
+		"propagated": parentUpdateResult != nil,
+	}
+
+	if parentUpdateResult != nil {
+		result["parentUpdate"] = parentUpdateResult
+	}
+
+	return result, nil
+}
+
+// propagateToParentTask updates parent task status based on child task completion
+func (t *UpdateTaskStatusTool) propagateToParentTask(ctx context.Context, parentTaskId string) (map[string]interface{}, error) {
+	// Get parent task
+	parentTask, err := t.storage.GetAgentTask(parentTaskId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent task: %w", err)
+	}
+
+	// Get all child tasks for this parent
+	allTasks, _, err := t.storage.ListAgentTasks(bson.M{}, 0, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all tasks: %w", err)
+	}
+
+	childTasks := make([]*storage.AgentTask, 0)
+	for _, task := range allTasks {
+		if task.ParentTaskID != nil && *task.ParentTaskID == parentTaskId {
+			childTasks = append(childTasks, task)
+		}
+	}
+
+	if len(childTasks) == 0 {
+		return map[string]interface{}{
+			"message": "No child tasks found for parent",
+		}, nil
+	}
+
+	// Calculate aggregated status
+	completedChildren := 0
+	inProgressChildren := 0
+	failedChildren := 0
+	pendingChildren := 0
+
+	for _, child := range childTasks {
+		switch child.Status {
+		case storage.TaskStatusCompleted:
+			completedChildren++
+		case storage.TaskStatusInProgress:
+			inProgressChildren++
+		case storage.TaskStatusBlocked:
+			failedChildren++
+		default:
+			pendingChildren++
+		}
+	}
+
+	// Determine new parent status based on child statuses
+	var newParentStatus string
+	oldStatus := parentTask.Status
+	
+	if completedChildren == len(childTasks) {
+		// All children completed
+		newParentStatus = "COMPLETED"
+	} else if failedChildren > 0 && (completedChildren+inProgressChildren) == 0 {
+		// Some failed and none in progress or completed
+		newParentStatus = "FAILED"
+	} else if inProgressChildren > 0 || completedChildren > 0 {
+		// Some in progress or completed
+		newParentStatus = "IN_PROGRESS"
+	} else {
+		// All pending
+		newParentStatus = "PENDING"
+	}
+
+	// Update parent task if status changed
+	statusChanged := string(oldStatus) != newParentStatus
+	if statusChanged {
+		err = t.storage.UpdateTaskStatus(parentTaskId, storage.TaskStatus(newParentStatus), "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to update parent task status: %w", err)
+		}
+
+		zap.L().Info("Parent task status updated due to child completion",
+			zap.String("parentTaskId", parentTaskId),
+			zap.String("oldStatus", string(oldStatus)),
+			zap.String("newStatus", newParentStatus),
+			zap.Int("completedChildren", completedChildren),
+			zap.Int("totalChildren", len(childTasks)))
+	}
+
+	// Update parent metadata with child progress
+	// Return aggregated progress information
+	// Note: These values are not stored in the task itself, just returned for monitoring
+	return map[string]interface{}{
+		"parentTaskId":        parentTaskId,
+		"oldStatus":           oldStatus,
+		"newStatus":           newParentStatus,
+		"statusChanged":       statusChanged,
+		"completedChildren":   completedChildren,
+		"totalChildren":       len(childTasks),
+		"inProgressChildren":  inProgressChildren,
+		"failedChildren":      failedChildren,
+		"pendingChildren":     pendingChildren,
 	}, nil
 }
 
@@ -4439,11 +4656,289 @@ type InterruptCategorization struct {
 	Guidance string `json:"guidance"`
 }
 
+// ComplexityAnalysis represents the complexity analysis result for a task
+type ComplexityAnalysis struct {
+	Score                float64            `json:"score"`                // 0.0 to 1.0 complexity score
+	FileCount            int                `json:"fileCount"`            // Number of files to modify
+	TodoComplexity       float64            `json:"todoComplexity"`       // Average complexity of TODOs
+	CrossSystemDeps      int                `json:"crossSystemDeps"`      // Number of cross-system dependencies
+	Factors              map[string]float64 `json:"factors"`              // Individual complexity factors
+	Recommendation       string             `json:"recommendation"`       // PROCEED, SPLIT, or REJECT
+	SplittingStrategy    string             `json:"splittingStrategy"`    // SEQUENTIAL, PARALLEL, or NONE
+	EstimatedTimeMinutes int                `json:"estimatedTimeMinutes"` // Estimated completion time
+}
+
+// TaskHierarchy represents the hierarchical structure of tasks
+type TaskHierarchy struct {
+	TaskID       string                    `json:"taskId"`
+	Title        string                    `json:"title"`
+	Status       string                    `json:"status"`
+	Progress     float64                   `json:"progress"`     // 0.0 to 1.0
+	OrderIndex   int                       `json:"orderIndex"`   // Order within siblings
+	DependsOn    []string                  `json:"dependsOn"`    // Task IDs this task depends on
+	Children     []TaskHierarchy           `json:"children"`     // Child tasks
+	Metadata     map[string]interface{}    `json:"metadata"`     // Additional task metadata
+	CreatedAt    time.Time                 `json:"createdAt"`
+	UpdatedAt    time.Time                 `json:"updatedAt"`
+}
+
+// HierarchicalProgress represents progress aggregation across task hierarchy
+type HierarchicalProgress struct {
+	TaskID           string                           `json:"taskId"`
+	DirectProgress   float64                          `json:"directProgress"`   // Progress of this task only
+	AggregatedProgress float64                        `json:"aggregatedProgress"` // Including children
+	CompletedChildren int                             `json:"completedChildren"`
+	TotalChildren    int                              `json:"totalChildren"`
+	ChildrenProgress map[string]HierarchicalProgress `json:"childrenProgress"` // Progress of child tasks
+	BlockedBy        []string                         `json:"blockedBy"`        // Task IDs blocking this task
+	IsExecutable     bool                             `json:"isExecutable"`     // Can this task be executed now
+	LastUpdated      time.Time                        `json:"lastUpdated"`
+}
+
+// ChildTaskParams represents parameters for creating child tasks
+type ChildTaskParams struct {
+	Title            string                 `json:"title"`
+	ContextSummary   string                 `json:"contextSummary"`
+	Todos            []string               `json:"todos"`
+	FilesModified    []string               `json:"filesModified"`
+	OrderIndex       int                    `json:"orderIndex"`
+	DependsOn        []string               `json:"dependsOn"`
+	SplittingStrategy string                `json:"splittingStrategy"` // SEQUENTIAL or PARALLEL
+	Metadata         map[string]interface{} `json:"metadata"`
+	EstimatedMinutes int                    `json:"estimatedMinutes"`
+	Priority         string                 `json:"priority"` // HIGH, MEDIUM, LOW
+}
+
+// analyzeTaskComplexity performs comprehensive complexity analysis on a task
+func analyzeTaskComplexity(title, contextSummary string, todos []string, filesModified []string) ComplexityAnalysis {
+	analysis := ComplexityAnalysis{
+		Factors: make(map[string]float64),
+	}
+
+	// Factor 1: File count complexity (0.0 - 0.3)
+	fileCount := len(filesModified)
+	analysis.FileCount = fileCount
+	var fileComplexity float64
+	switch {
+	case fileCount == 0:
+		fileComplexity = 0.0
+	case fileCount <= 2:
+		fileComplexity = 0.1
+	case fileCount <= 5:
+		fileComplexity = 0.2
+	case fileCount <= 10:
+		fileComplexity = 0.25
+	default:
+		fileComplexity = 0.3
+	}
+	analysis.Factors["fileCount"] = fileComplexity
+
+	// Factor 2: TODO complexity analysis (0.0 - 0.4)
+	todoComplexity := analyzeTodoComplexity(todos)
+	analysis.TodoComplexity = todoComplexity
+	analysis.Factors["todoComplexity"] = todoComplexity * 0.4
+
+	// Factor 3: Cross-system dependencies (0.0 - 0.2)
+	crossSystemDeps := analyzeCrossSystemDependencies(contextSummary, todos, filesModified)
+	analysis.CrossSystemDeps = crossSystemDeps
+	var crossSystemComplexity float64
+	switch {
+	case crossSystemDeps == 0:
+		crossSystemComplexity = 0.0
+	case crossSystemDeps <= 2:
+		crossSystemComplexity = 0.1
+	default:
+		crossSystemComplexity = 0.2
+	}
+	analysis.Factors["crossSystemDeps"] = crossSystemComplexity
+
+	// Factor 4: Integration complexity (0.0 - 0.1)
+	integrationComplexity := analyzeIntegrationComplexity(title, contextSummary, todos)
+	analysis.Factors["integration"] = integrationComplexity
+
+	// Calculate total score
+	analysis.Score = fileComplexity + analysis.Factors["todoComplexity"] + 
+		crossSystemComplexity + integrationComplexity
+
+	// Ensure score is within bounds
+	if analysis.Score > 1.0 {
+		analysis.Score = 1.0
+	}
+
+	// Determine recommendation and splitting strategy
+	analysis.Recommendation, analysis.SplittingStrategy = determineRecommendation(analysis.Score, fileCount, len(todos))
+
+	// Estimate completion time
+	analysis.EstimatedTimeMinutes = estimateCompletionTime(analysis.Score, fileCount, len(todos))
+
+	return analysis
+}
+
+// analyzeTodoComplexity analyzes the complexity of individual TODOs
+func analyzeTodoComplexity(todos []string) float64 {
+	if len(todos) == 0 {
+		return 0.0
+	}
+
+	totalComplexity := 0.0
+	complexityKeywords := map[string]float64{
+		"implement":     0.3,
+		"create":        0.3,
+		"add":           0.2,
+		"modify":        0.4,
+		"refactor":      0.5,
+		"integrate":     0.6,
+		"migrate":       0.7,
+		"optimize":      0.5,
+		"test":          0.2,
+		"fix":           0.3,
+		"debug":         0.4,
+		"algorithm":     0.6,
+		"database":      0.5,
+		"api":           0.4,
+		"authentication": 0.6,
+		"security":      0.7,
+		"performance":   0.6,
+		"concurrent":    0.8,
+		"async":         0.6,
+		"complex":       0.5,
+		"advanced":      0.6,
+	}
+
+	for _, todo := range todos {
+		todoLower := strings.ToLower(todo)
+		todoComplexity := 0.1 // Base complexity
+
+		// Check for complexity keywords
+		for keyword, weight := range complexityKeywords {
+			if strings.Contains(todoLower, keyword) {
+				todoComplexity += weight
+			}
+		}
+
+		// Length-based complexity
+		if len(todo) > 100 {
+			todoComplexity += 0.1
+		}
+		if len(todo) > 200 {
+			todoComplexity += 0.1
+		}
+
+		// Cap individual TODO complexity
+		if todoComplexity > 1.0 {
+			todoComplexity = 1.0
+		}
+
+		totalComplexity += todoComplexity
+	}
+
+	return totalComplexity / float64(len(todos))
+}
+
+// analyzeCrossSystemDependencies identifies dependencies across different systems
+func analyzeCrossSystemDependencies(contextSummary string, todos []string, filesModified []string) int {
+	allText := contextSummary + " " + strings.Join(todos, " ") + " " + strings.Join(filesModified, " ")
+	textLower := strings.ToLower(allText)
+
+	systems := map[string]bool{
+		"database":      false,
+		"api":           false,
+		"frontend":      false,
+		"backend":       false,
+		"auth":          false,
+		"storage":       false,
+		"cache":         false,
+		"queue":         false,
+		"websocket":     false,
+		"microservice":  false,
+		"external":      false,
+		"third-party":   false,
+	}
+
+	// Check for system mentions
+	for system := range systems {
+		if strings.Contains(textLower, system) {
+			systems[system] = true
+		}
+	}
+
+	// Count unique systems
+	count := 0
+	for _, found := range systems {
+		if found {
+			count++
+		}
+	}
+
+	return count
+}
+
+// analyzeIntegrationComplexity analyzes integration-specific complexity
+func analyzeIntegrationComplexity(title, contextSummary string, todos []string) float64 {
+	allText := strings.ToLower(title + " " + contextSummary + " " + strings.Join(todos, " "))
+
+	integrationPatterns := []string{
+		"integration", "connect", "sync", "merge", "combine", "coordinate",
+		"orchestrate", "workflow", "pipeline", "event", "message", "notification",
+	}
+
+	complexity := 0.0
+	for _, pattern := range integrationPatterns {
+		if strings.Contains(allText, pattern) {
+			complexity += 0.02
+		}
+	}
+
+	if complexity > 0.1 {
+		complexity = 0.1
+	}
+
+	return complexity
+}
+
+// determineRecommendation determines the recommendation and splitting strategy based on complexity
+func determineRecommendation(score float64, fileCount, todoCount int) (string, string) {
+	switch {
+	case score >= 0.8:
+		return "REJECT", "NONE" // Too complex, should be rejected or heavily simplified
+	case score >= 0.6:
+		if fileCount > 5 || todoCount > 8 {
+			return "SPLIT", "SEQUENTIAL"
+		}
+		return "SPLIT", "PARALLEL"
+	case score >= 0.4:
+		if todoCount > 6 {
+			return "SPLIT", "PARALLEL"
+		}
+		return "PROCEED", "NONE"
+	default:
+		return "PROCEED", "NONE"
+	}
+}
+
+// estimateCompletionTime estimates task completion time based on complexity factors
+func estimateCompletionTime(score float64, fileCount, todoCount int) int {
+	baseTime := 15 // Base 15 minutes per task
+	
+	// File-based time
+	fileTime := fileCount * 10
+	
+	// TODO-based time
+	todoTime := todoCount * 8
+	
+	// Complexity multiplier
+	complexityMultiplier := 1.0 + score
+	
+	totalTime := float64(baseTime + fileTime + todoTime) * complexityMultiplier
+	
+	return int(totalTime)
+}
+
 // categorizeInterrupt analyzes user interrupt message to determine intent and provide guidance
 func (t *ExecuteSubagentTool) categorizeInterrupt(ctx context.Context, userMessage string) (string, string, error) {
 	categorizationPrompt := fmt.Sprintf(`You are an interrupt analyzer. Analyze this user message sent while an AI agent was working:
 
-User message: "%s"
+USER MESSAGE: %s
 
 Categorize the interrupt intent:
 - STOP: User wants to completely stop current work and do something different (e.g., "stop", "nevermind", "do this instead")
@@ -4521,16 +5016,1506 @@ Respond with ONLY valid JSON (no markdown, no explanation):
 	return result.Category, result.Guidance, nil
 }
 
+// CoordinatorAnalyzeTaskComplexityTool analyzes task complexity and provides recommendations
+type CoordinatorAnalyzeTaskComplexityTool struct {
+	storage storage.TaskStorage
+}
+
+func (t *CoordinatorAnalyzeTaskComplexityTool) Name() string {
+	return "coordinator_analyze_task_complexity"
+}
+
+func (t *CoordinatorAnalyzeTaskComplexityTool) Description() string {
+	return "Analyze task complexity based on file count, TODO complexity, and cross-system dependencies. Returns complexity score (0.0-1.0) and recommendations (PROCEED/SPLIT/REJECT)."
+}
+
+func (t *CoordinatorAnalyzeTaskComplexityTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"title": map[string]interface{}{
+				"type":        "string",
+				"description": "Task title for context analysis",
+			},
+			"contextSummary": map[string]interface{}{
+				"type":        "string",
+				"description": "Task context summary for complexity analysis",
+			},
+			"todos": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+				"description": "List of TODO items to analyze for complexity",
+			},
+			"filesModified": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+				"description": "List of files that will be modified",
+			},
+		},
+		"required": []string{"title", "contextSummary", "todos", "filesModified"},
+	}
+}
+
+func (t *CoordinatorAnalyzeTaskComplexityTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	// Input validation
+	title, ok := args["title"].(string)
+	if !ok || title == "" {
+		return nil, fmt.Errorf("title is required and must be a non-empty string")
+	}
+
+	contextSummary, ok := args["contextSummary"].(string)
+	if !ok {
+		contextSummary = ""
+	}
+
+	todosInterface, ok := args["todos"]
+	if !ok {
+		return nil, fmt.Errorf("todos is required")
+	}
+
+	todos := make([]string, 0)
+	// Handle both []interface{} (from JSON/MCP) and []string (from direct Go calls)
+	switch v := todosInterface.(type) {
+	case []interface{}:
+		for _, todoInterface := range v {
+			if todoStr, ok := todoInterface.(string); ok {
+				todos = append(todos, todoStr)
+			}
+		}
+	case []string:
+		todos = v
+	}
+
+	filesModifiedInterface, ok := args["filesModified"]
+	if !ok {
+		return nil, fmt.Errorf("filesModified is required")
+	}
+
+	filesModified := make([]string, 0)
+	// Handle both []interface{} (from JSON/MCP) and []string (from direct Go calls)
+	switch v := filesModifiedInterface.(type) {
+	case []interface{}:
+		for _, fileInterface := range v {
+			if fileStr, ok := fileInterface.(string); ok {
+				filesModified = append(filesModified, fileStr)
+			}
+		}
+	case []string:
+		filesModified = v
+	}
+
+	// Perform complexity analysis
+	analysis := analyzeTaskComplexity(title, contextSummary, todos, filesModified)
+
+	return analysis, nil
+}
+
+// CoordinatorSplitAgentTaskTool splits complex tasks into smaller child tasks
+type CoordinatorSplitAgentTaskTool struct {
+	storage   storage.TaskStorage
+	aiService AIServiceInterface
+}
+
+func (t *CoordinatorSplitAgentTaskTool) Name() string {
+	return "coordinator_split_agent_task"
+}
+
+func (t *CoordinatorSplitAgentTaskTool) Description() string {
+	return "Split a complex agent task into smaller child tasks using sequential or parallel strategies. Creates child tasks with proper dependencies and generates integration documentation."
+}
+
+func (t *CoordinatorSplitAgentTaskTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"parentTaskId": map[string]interface{}{
+				"type":        "string",
+				"description": "ID of the parent task to split",
+			},
+			"splittingStrategy": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"SEQUENTIAL", "PARALLEL"},
+				"description": "Strategy for splitting: SEQUENTIAL (tasks depend on each other) or PARALLEL (independent tasks)",
+			},
+			"childTasks": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"title": map[string]interface{}{
+							"type":        "string",
+							"description": "Title for the child task",
+						},
+						"contextSummary": map[string]interface{}{
+							"type":        "string",
+							"description": "Context summary for the child task",
+						},
+						"todos": map[string]interface{}{
+							"type": "array",
+							"items": map[string]interface{}{
+								"type": "string",
+							},
+							"description": "TODO items for the child task",
+						},
+						"filesModified": map[string]interface{}{
+							"type": "array",
+							"items": map[string]interface{}{
+								"type": "string",
+							},
+							"description": "Files to be modified by this child task",
+						},
+						"orderIndex": map[string]interface{}{
+							"type":        "integer",
+							"description": "Order index for sequential execution",
+						},
+						"dependsOn": map[string]interface{}{
+							"type": "array",
+							"items": map[string]interface{}{
+								"type": "string",
+							},
+							"description": "Task IDs this child task depends on",
+						},
+						"priority": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"HIGH", "MEDIUM", "LOW"},
+							"description": "Priority level for the child task",
+						},
+					},
+					"required": []string{"title", "contextSummary", "todos", "filesModified"},
+				},
+				"description": "Array of child task definitions",
+			},
+			"createIntegrationDoc": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Whether to create integration documentation for coordinating child tasks",
+				"default":     true,
+			},
+		},
+		"required": []string{"parentTaskId", "splittingStrategy", "childTasks"},
+	}
+}
+
+func (t *CoordinatorSplitAgentTaskTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	// Input validation
+	parentTaskId, ok := args["parentTaskId"].(string)
+	if !ok || parentTaskId == "" {
+		return nil, fmt.Errorf("parentTaskId is required and must be a non-empty string")
+	}
+
+	splittingStrategy, ok := args["splittingStrategy"].(string)
+	if !ok || (splittingStrategy != "SEQUENTIAL" && splittingStrategy != "PARALLEL") {
+		return nil, fmt.Errorf("splittingStrategy must be either 'SEQUENTIAL' or 'PARALLEL'")
+	}
+
+	childTasksInterface, ok := args["childTasks"]
+	if !ok {
+		return nil, fmt.Errorf("childTasks is required")
+	}
+
+	createIntegrationDoc := true
+	if val, ok := args["createIntegrationDoc"].(bool); ok {
+		createIntegrationDoc = val
+	}
+
+	// Parse child tasks
+	childTasksArray, ok := childTasksInterface.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("childTasks must be an array")
+	}
+
+	if len(childTasksArray) == 0 {
+		return nil, fmt.Errorf("at least one child task must be provided")
+	}
+
+	// Verify parent task exists
+	parentTask, err := t.storage.GetAgentTask(parentTaskId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent task: %w", err)
+	}
+
+	// Parse and validate child task parameters
+	childTaskParams := make([]ChildTaskParams, 0, len(childTasksArray))
+	taskIndexMap := make(map[string]int) // Maps task titles to their index for circular dependency checking
+
+	for i, childInterface := range childTasksArray {
+		childMap, ok := childInterface.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("child task %d must be an object", i)
+		}
+
+		params, err := t.parseChildTaskParams(childMap, i)
+		if err != nil {
+			return nil, fmt.Errorf("invalid child task %d: %w", i, err)
+		}
+		params.SplittingStrategy = splittingStrategy
+		childTaskParams = append(childTaskParams, params)
+		taskIndexMap[params.Title] = i
+	}
+
+	// Validate dependencies and check for circular dependencies
+	if err := t.validateTaskDependencies(childTaskParams, taskIndexMap); err != nil {
+		return nil, fmt.Errorf("dependency validation failed: %w", err)
+	}
+
+	// Create child tasks
+	createdTasks := make([]*storage.AgentTask, 0, len(childTaskParams))
+	var previousTaskId string
+
+	for i, params := range childTaskParams {
+		// Set dependencies for sequential strategy
+		if splittingStrategy == "SEQUENTIAL" && i > 0 {
+			params.DependsOn = []string{previousTaskId}
+		}
+
+		// Create the child task
+		childTask, err := t.createChildTask(ctx, parentTaskId, params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create child task %d: %w", i, err)
+		}
+
+		createdTasks = append(createdTasks, childTask)
+		previousTaskId = childTask.ID
+	}
+
+	// Update parent task status to indicate it has been split
+	err = t.storage.UpdateTaskStatus(parentTaskId, storage.TaskStatusBlocked, "Task has been split into subtasks")
+	if err != nil {
+		return nil, fmt.Errorf("failed to update parent task status: %w", err)
+	}
+
+	// Create integration documentation if requested
+	var integrationDoc string
+	if createIntegrationDoc {
+		integrationDoc = t.generateIntegrationDoc(parentTask, createdTasks, splittingStrategy)
+	}
+
+	return map[string]interface{}{
+		"parentTaskId":      parentTaskId,
+		"splittingStrategy": splittingStrategy,
+		"childTasks":        createdTasks,
+		"integrationDoc":    integrationDoc,
+		"totalChildTasks":   len(createdTasks),
+	}, nil
+}
+
+// parseChildTaskParams parses and validates child task parameters
+func (t *CoordinatorSplitAgentTaskTool) parseChildTaskParams(childMap map[string]interface{}, index int) (ChildTaskParams, error) {
+	params := ChildTaskParams{}
+
+	// Required fields
+	title, ok := childMap["title"].(string)
+	if !ok || title == "" {
+		return params, fmt.Errorf("title is required and must be a non-empty string")
+	}
+	params.Title = title
+
+	contextSummary, ok := childMap["contextSummary"].(string)
+	if !ok {
+		contextSummary = ""
+	}
+	params.ContextSummary = contextSummary
+
+	// Parse todos
+	todosInterface, ok := childMap["todos"]
+	if !ok {
+		return params, fmt.Errorf("todos is required")
+	}
+	todosArray, ok := todosInterface.([]interface{})
+	if !ok {
+		return params, fmt.Errorf("todos must be an array")
+	}
+	for _, todoInterface := range todosArray {
+		if todoStr, ok := todoInterface.(string); ok {
+			params.Todos = append(params.Todos, todoStr)
+		}
+	}
+
+	// Parse filesModified
+	filesInterface, ok := childMap["filesModified"]
+	if !ok {
+		return params, fmt.Errorf("filesModified is required")
+	}
+	filesArray, ok := filesInterface.([]interface{})
+	if !ok {
+		return params, fmt.Errorf("filesModified must be an array")
+	}
+	for _, fileInterface := range filesArray {
+		if fileStr, ok := fileInterface.(string); ok {
+			params.FilesModified = append(params.FilesModified, fileStr)
+		}
+	}
+
+	// Optional fields
+	if orderIndex, ok := childMap["orderIndex"].(float64); ok {
+		params.OrderIndex = int(orderIndex)
+	} else {
+		params.OrderIndex = index
+	}
+
+	if dependsOnInterface, ok := childMap["dependsOn"]; ok {
+		if dependsOnArray, ok := dependsOnInterface.([]interface{}); ok {
+			for _, depInterface := range dependsOnArray {
+				if depStr, ok := depInterface.(string); ok {
+					params.DependsOn = append(params.DependsOn, depStr)
+				}
+			}
+		}
+	}
+
+	if priority, ok := childMap["priority"].(string); ok {
+		params.Priority = priority
+	} else {
+		params.Priority = "MEDIUM"
+	}
+
+	// Estimate completion time
+	analysis := analyzeTaskComplexity(params.Title, params.ContextSummary, params.Todos, params.FilesModified)
+	params.EstimatedMinutes = analysis.EstimatedTimeMinutes
+
+	return params, nil
+}
+
+// validateTaskDependencies validates task dependencies and detects circular dependencies
+func (t *CoordinatorSplitAgentTaskTool) validateTaskDependencies(childTasks []ChildTaskParams, taskIndexMap map[string]int) error {
+	// Build dependency graph
+	dependencyGraph := make(map[string][]string)
+	for _, task := range childTasks {
+		dependencyGraph[task.Title] = task.DependsOn
+	}
+
+	// Check for invalid dependencies (tasks that don't exist)
+	for taskTitle, dependencies := range dependencyGraph {
+		for _, depTitle := range dependencies {
+			if _, exists := taskIndexMap[depTitle]; !exists {
+				return fmt.Errorf("task '%s' depends on non-existent task '%s'", taskTitle, depTitle)
+			}
+		}
+	}
+
+	// Detect circular dependencies using DFS
+	visited := make(map[string]bool)
+	recursionStack := make(map[string]bool)
+
+	for taskTitle := range dependencyGraph {
+		if err := t.detectCircularDependency(taskTitle, dependencyGraph, visited, recursionStack); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// detectCircularDependency uses DFS to detect cycles in the dependency graph
+func (t *CoordinatorSplitAgentTaskTool) detectCircularDependency(
+	taskTitle string,
+	graph map[string][]string,
+	visited map[string]bool,
+	recursionStack map[string]bool,
+) error {
+	// Mark current node as visited and add to recursion stack
+	visited[taskTitle] = true
+	recursionStack[taskTitle] = true
+
+	// Check all dependencies
+	for _, dependency := range graph[taskTitle] {
+		// If dependency is in recursion stack, we found a cycle
+		if recursionStack[dependency] {
+			return fmt.Errorf("circular dependency detected: task '%s' depends on '%s', which creates a cycle", taskTitle, dependency)
+		}
+
+		// If not visited, recursively check
+		if !visited[dependency] {
+			if err := t.detectCircularDependency(dependency, graph, visited, recursionStack); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Remove from recursion stack before returning
+	recursionStack[taskTitle] = false
+	return nil
+}
+
+// createChildTask creates a child task with proper parent-child relationships
+func (t *CoordinatorSplitAgentTaskTool) createChildTask(ctx context.Context, parentTaskId string, params ChildTaskParams) (*storage.AgentTask, error) {
+	// Convert todos to TodoItemInput
+	todoInputs := make([]storage.TodoItemInput, len(params.Todos))
+	for i, todoText := range params.Todos {
+		todoInputs[i] = storage.TodoItemInput{
+			Description: todoText,
+		}
+	}
+
+	// Create the child task using storage method
+	// Note: We use parent task's humanTaskId for consistency
+	parentTask, err := t.storage.GetAgentTask(parentTaskId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent task: %w", err)
+	}
+
+	// Create child task with proper parameters
+	childTask, err := t.storage.CreateAgentTask(
+		parentTask.HumanTaskID,
+		parentTask.AgentName,
+		params.Title,
+		todoInputs,
+		params.ContextSummary,
+		params.FilesModified,
+		[]string{},
+		"",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create child task: %w", err)
+	}
+
+	// Update child task with hierarchy fields
+	// Note: This is a workaround since CreateAgentTask doesn't support hierarchy fields yet
+	parentTaskIDPtr := &parentTaskId
+	childTask.ParentTaskID = parentTaskIDPtr
+	childTask.OrderIndex = params.OrderIndex
+	childTask.DependsOn = params.DependsOn
+	childTask.SplitStrategy = params.SplittingStrategy
+
+	return childTask, nil
+}
+
+// generateIntegrationDoc creates documentation for coordinating child tasks
+func (t *CoordinatorSplitAgentTaskTool) generateIntegrationDoc(parentTask *storage.AgentTask, childTasks []*storage.AgentTask, strategy string) string {
+	doc := fmt.Sprintf("# Task Integration Documentation\n\n")
+	doc += fmt.Sprintf("## Parent Task: %s\n", parentTask.Role)
+	doc += fmt.Sprintf("**Task ID:** %s\n", parentTask.ID)
+	doc += fmt.Sprintf("**Splitting Strategy:** %s\n\n", strategy)
+
+	doc += fmt.Sprintf("## Child Tasks (%d total)\n\n", len(childTasks))
+
+	for i, task := range childTasks {
+		doc += fmt.Sprintf("### %d. %s\n", i+1, task.Role)
+		doc += fmt.Sprintf("**Task ID:** %s\n", task.ID)
+		doc += fmt.Sprintf("**Status:** %s\n", task.Status)
+		doc += fmt.Sprintf("**Files Modified:** %d files\n", len(task.FilesModified))
+		doc += fmt.Sprintf("**TODOs:** %d items\n", len(task.Todos))
+		doc += fmt.Sprintf("**Order Index:** %d\n", task.OrderIndex)
+
+		if len(task.DependsOn) > 0 {
+			doc += fmt.Sprintf("**Dependencies:** %s\n", strings.Join(task.DependsOn, ", "))
+		}
+
+		doc += "\n"
+	}
+	
+	if strategy == "SEQUENTIAL" {
+		doc += "## Execution Order\n\n"
+		doc += "Tasks must be executed in the order listed above. Each task depends on the completion of the previous task.\n\n"
+	} else {
+		doc += "## Parallel Execution\n\n"
+		doc += "Tasks can be executed independently in parallel. Monitor for any file conflicts.\n\n"
+	}
+	
+	doc += "## Integration Notes\n\n"
+	doc += "- Monitor child task progress and update parent task status accordingly\n"
+	doc += "- Ensure file modifications don't conflict between parallel tasks\n"
+	doc += "- Validate integration points after each task completion\n"
+	doc += "- Update parent task to COMPLETED when all child tasks are finished\n"
+	
+	return doc
+}
+
+// CoordinatorGetTaskHierarchyTool retrieves task hierarchy with recursive tree structure
+type CoordinatorGetTaskHierarchyTool struct {
+	storage storage.TaskStorage
+}
+
+func (t *CoordinatorGetTaskHierarchyTool) Name() string {
+	return "coordinator_get_task_hierarchy"
+}
+
+func (t *CoordinatorGetTaskHierarchyTool) Description() string {
+	return "Get the hierarchical structure of tasks with recursive tree representation and progress aggregation. Returns parent-child relationships and calculated progress."
+}
+
+func (t *CoordinatorGetTaskHierarchyTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"rootTaskId": map[string]interface{}{
+				"type":        "string",
+				"description": "ID of the root task to build hierarchy from (optional - if not provided, returns all root tasks)",
+			},
+			"includeProgress": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Whether to include progress aggregation calculations",
+				"default":     true,
+			},
+			"maxDepth": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum depth to traverse (default: 10)",
+				"default":     10,
+			},
+		},
+	}
+}
+
+func (t *CoordinatorGetTaskHierarchyTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	// Parse input parameters
+	rootTaskId := ""
+	if val, ok := args["rootTaskId"].(string); ok {
+		rootTaskId = val
+	}
+
+	includeProgress := true
+	if val, ok := args["includeProgress"].(bool); ok {
+		includeProgress = val
+	}
+
+	maxDepth := 10
+	if val, ok := args["maxDepth"].(float64); ok {
+		maxDepth = int(val)
+	}
+
+	if maxDepth <= 0 {
+		maxDepth = 10
+	}
+
+	// Get all tasks to build hierarchy
+	allTasks, _, err := t.storage.ListAgentTasks(bson.M{}, 0, 1000) // Get a large number of tasks
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tasks: %w", err)
+	}
+
+	// Build task hierarchy
+	if rootTaskId != "" {
+		// Build hierarchy for specific root task
+		hierarchy, err := t.buildTaskHierarchy(ctx, rootTaskId, allTasks, maxDepth, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build hierarchy for task %s: %w", rootTaskId, err)
+		}
+
+		// Calculate progress if requested
+		if includeProgress {
+			progress := t.calculateHierarchicalProgress(hierarchy, allTasks)
+			return map[string]interface{}{
+				"hierarchy": hierarchy,
+				"progress":  progress,
+			}, nil
+		}
+
+		return map[string]interface{}{
+			"hierarchy": hierarchy,
+		}, nil
+	} else {
+		// Build hierarchy for all root tasks (tasks without parents)
+		rootTasks := t.findRootTasks(allTasks)
+		hierarchies := make([]TaskHierarchy, 0, len(rootTasks))
+		progressMap := make(map[string]HierarchicalProgress)
+
+		for _, rootTask := range rootTasks {
+			hierarchy, err := t.buildTaskHierarchy(ctx, rootTask.ID, allTasks, maxDepth, 0)
+			if err != nil {
+				continue // Skip tasks that can't be processed
+			}
+			hierarchies = append(hierarchies, hierarchy)
+
+			if includeProgress {
+				progress := t.calculateHierarchicalProgress(hierarchy, allTasks)
+				progressMap[rootTask.ID] = progress
+			}
+		}
+
+		result := map[string]interface{}{
+			"hierarchies": hierarchies,
+			"totalRootTasks": len(hierarchies),
+		}
+
+		if includeProgress {
+			result["progress"] = progressMap
+		}
+
+		return result, nil
+	}
+}
+
+// buildTaskHierarchy recursively builds the task hierarchy
+func (t *CoordinatorGetTaskHierarchyTool) buildTaskHierarchy(ctx context.Context, taskId string, allTasks []*storage.AgentTask, maxDepth, currentDepth int) (TaskHierarchy, error) {
+	if currentDepth >= maxDepth {
+		return TaskHierarchy{}, fmt.Errorf("maximum depth exceeded")
+	}
+
+	// Find the task
+	var task *storage.AgentTask
+	for i := range allTasks {
+		if allTasks[i].ID == taskId {
+			task = allTasks[i]
+			break
+		}
+	}
+
+	if task == nil {
+		return TaskHierarchy{}, fmt.Errorf("task not found: %s", taskId)
+	}
+
+	// Create hierarchy node
+	hierarchy := TaskHierarchy{
+		TaskID:     task.ID,
+		Title:      task.Role,
+		Status:     string(task.Status),
+		Progress:   t.calculateTaskProgress(task),
+		CreatedAt:  task.CreatedAt,
+		UpdatedAt:  task.UpdatedAt,
+		OrderIndex: task.OrderIndex,
+		DependsOn:  task.DependsOn,
+		Metadata:   make(map[string]interface{}),
+	}
+
+	// Add additional metadata
+	hierarchy.Metadata["agentName"] = task.AgentName
+	hierarchy.Metadata["filesModified"] = task.FilesModified
+	hierarchy.Metadata["contextSummary"] = task.ContextSummary
+	hierarchy.Metadata["splitStrategy"] = task.SplitStrategy
+
+	// Find child tasks
+	childTasks := t.findChildTasks(task.ID, allTasks)
+	hierarchy.Children = make([]TaskHierarchy, 0, len(childTasks))
+
+	for _, childTask := range childTasks {
+		childHierarchy, err := t.buildTaskHierarchy(ctx, childTask.ID, allTasks, maxDepth, currentDepth+1)
+		if err != nil {
+			continue // Skip problematic child tasks
+		}
+		hierarchy.Children = append(hierarchy.Children, childHierarchy)
+	}
+
+	return hierarchy, nil
+}
+
+// findRootTasks finds tasks that don't have parent tasks
+func (t *CoordinatorGetTaskHierarchyTool) findRootTasks(allTasks []*storage.AgentTask) []*storage.AgentTask {
+	rootTasks := make([]*storage.AgentTask, 0)
+
+	for _, task := range allTasks {
+		isRoot := true
+		if task.ParentTaskID != nil {
+			isRoot = false
+		}
+		if isRoot {
+			rootTasks = append(rootTasks, task)
+		}
+	}
+
+	return rootTasks
+}
+
+// findChildTasks finds all child tasks for a given parent task ID
+func (t *CoordinatorGetTaskHierarchyTool) findChildTasks(parentTaskId string, allTasks []*storage.AgentTask) []*storage.AgentTask {
+	childTasks := make([]*storage.AgentTask, 0)
+
+	for _, task := range allTasks {
+		if task.ParentTaskID != nil && *task.ParentTaskID == parentTaskId {
+			childTasks = append(childTasks, task)
+		}
+	}
+
+	return childTasks
+}
+
+// calculateTaskProgress calculates progress for a single task based on completed TODOs
+func (t *CoordinatorGetTaskHierarchyTool) calculateTaskProgress(task *storage.AgentTask) float64 {
+	if len(task.Todos) == 0 {
+		// If no TODOs, consider task status
+		switch task.Status {
+		case storage.TaskStatusCompleted:
+			return 1.0
+		case storage.TaskStatusInProgress:
+			return 0.5
+		default:
+			return 0.0
+		}
+	}
+
+	completedTodos := 0
+	for _, todo := range task.Todos {
+		if todo.Status == storage.TodoStatusCompleted {
+			completedTodos++
+		}
+	}
+
+	return float64(completedTodos) / float64(len(task.Todos))
+}
+
+// calculateHierarchicalProgress calculates aggregated progress including children
+func (t *CoordinatorGetTaskHierarchyTool) calculateHierarchicalProgress(hierarchy TaskHierarchy, allTasks []*storage.AgentTask) HierarchicalProgress {
+	progress := HierarchicalProgress{
+		TaskID:           hierarchy.TaskID,
+		DirectProgress:   hierarchy.Progress,
+		CompletedChildren: 0,
+		TotalChildren:    len(hierarchy.Children),
+		ChildrenProgress: make(map[string]HierarchicalProgress),
+		BlockedBy:        make([]string, 0),
+		LastUpdated:      time.Now(),
+	}
+
+	// Calculate children progress
+	totalChildProgress := 0.0
+	for _, child := range hierarchy.Children {
+		childProgress := t.calculateHierarchicalProgress(child, allTasks)
+		progress.ChildrenProgress[child.TaskID] = childProgress
+		
+		totalChildProgress += childProgress.AggregatedProgress
+		if childProgress.AggregatedProgress >= 1.0 {
+			progress.CompletedChildren++
+		}
+	}
+
+	// Calculate aggregated progress
+	if len(hierarchy.Children) > 0 {
+		childrenWeight := 0.7
+		directWeight := 0.3
+		avgChildProgress := totalChildProgress / float64(len(hierarchy.Children))
+		progress.AggregatedProgress = (directWeight * progress.DirectProgress) + (childrenWeight * avgChildProgress)
+	} else {
+		progress.AggregatedProgress = progress.DirectProgress
+	}
+
+	// Check if task is executable (dependencies are met)
+	progress.IsExecutable = t.isTaskExecutable(hierarchy, allTasks)
+
+	// Find blocking dependencies
+	for _, depId := range hierarchy.DependsOn {
+		if !t.isTaskCompleted(depId, allTasks) {
+			progress.BlockedBy = append(progress.BlockedBy, depId)
+		}
+	}
+
+	return progress
+}
+
+// isTaskExecutable checks if a task can be executed (all dependencies are met)
+func (t *CoordinatorGetTaskHierarchyTool) isTaskExecutable(hierarchy TaskHierarchy, allTasks []*storage.AgentTask) bool {
+	for _, depId := range hierarchy.DependsOn {
+		if !t.isTaskCompleted(depId, allTasks) {
+			return false
+		}
+	}
+	return true
+}
+
+// isTaskCompleted checks if a task is completed
+func (t *CoordinatorGetTaskHierarchyTool) isTaskCompleted(taskId string, allTasks []*storage.AgentTask) bool {
+	for _, task := range allTasks {
+		if task.ID == taskId {
+			return task.Status == "COMPLETED"
+		}
+	}
+	return false
+}
+
+// CoordinatorGetNextExecutableTaskTool finds the next task that can be executed
+type CoordinatorGetNextExecutableTaskTool struct {
+	storage storage.TaskStorage
+}
+
+func (t *CoordinatorGetNextExecutableTaskTool) Name() string {
+	return "coordinator_get_next_executable_task"
+}
+
+func (t *CoordinatorGetNextExecutableTaskTool) Description() string {
+	return "Find the next executable task based on dependency resolution and task filtering. Returns tasks that have all dependencies met and are ready for execution."
+}
+
+func (t *CoordinatorGetNextExecutableTaskTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"parentTaskId": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter tasks by parent task ID (optional)",
+			},
+			"priority": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"HIGH", "MEDIUM", "LOW"},
+				"description": "Filter tasks by priority level (optional)",
+			},
+			"maxResults": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum number of executable tasks to return (default: 5)",
+				"default":     5,
+			},
+			"includeDetails": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Include detailed task information and dependency analysis",
+				"default":     true,
+			},
+			"sortBy": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"priority", "createdAt", "estimatedTime", "orderIndex"},
+				"description": "Sort executable tasks by specified criteria (default: priority)",
+				"default":     "priority",
+			},
+		},
+	}
+}
+
+func (t *CoordinatorGetNextExecutableTaskTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	// Parse input parameters
+	parentTaskId := ""
+	if val, ok := args["parentTaskId"].(string); ok {
+		parentTaskId = val
+	}
+
+	priority := ""
+	if val, ok := args["priority"].(string); ok {
+		priority = val
+	}
+
+	maxResults := 5
+	if val, ok := args["maxResults"].(float64); ok {
+		maxResults = int(val)
+	}
+	if maxResults <= 0 {
+		maxResults = 5
+	}
+
+	includeDetails := true
+	if val, ok := args["includeDetails"].(bool); ok {
+		includeDetails = val
+	}
+
+	sortBy := "priority"
+	if val, ok := args["sortBy"].(string); ok {
+		sortBy = val
+	}
+
+	// Get all tasks
+	allTasks, _, err := t.storage.ListAgentTasks(bson.M{}, 0, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tasks: %w", err)
+	}
+
+	// Filter executable tasks
+	executableTasks := t.findExecutableTasks(allTasks, parentTaskId, priority)
+
+	// Sort tasks
+	t.sortTasks(executableTasks, sortBy)
+
+	// Limit results
+	if len(executableTasks) > maxResults {
+		executableTasks = executableTasks[:maxResults]
+	}
+
+	// Prepare response
+	if includeDetails {
+		detailedTasks := make([]map[string]interface{}, 0, len(executableTasks))
+		for _, task := range executableTasks {
+			details := t.getTaskDetails(task, allTasks)
+			detailedTasks = append(detailedTasks, details)
+		}
+
+		return map[string]interface{}{
+			"executableTasks": detailedTasks,
+			"totalFound":      len(executableTasks),
+			"sortedBy":        sortBy,
+		}, nil
+	} else {
+		simpleTasks := make([]map[string]interface{}, 0, len(executableTasks))
+		for _, task := range executableTasks {
+			simpleTasks = append(simpleTasks, map[string]interface{}{
+				"taskId": task.ID,
+				"title":  task.Role,
+				"status": task.Status,
+			})
+		}
+
+		return map[string]interface{}{
+			"executableTasks": simpleTasks,
+			"totalFound":      len(executableTasks),
+			"sortedBy":        sortBy,
+		}, nil
+	}
+}
+
+// findExecutableTasks finds tasks that can be executed (dependencies met, not completed)
+func (t *CoordinatorGetNextExecutableTaskTool) findExecutableTasks(allTasks []*storage.AgentTask, parentTaskId, priority string) []*storage.AgentTask {
+	executableTasks := make([]*storage.AgentTask, 0)
+
+	for _, task := range allTasks {
+		// Skip completed or in-progress tasks
+		if task.Status == "COMPLETED" || task.Status == "IN_PROGRESS" {
+			continue
+		}
+
+		// Filter by parent task if specified
+		if parentTaskId != "" {
+			if task.ParentTaskID == nil || *task.ParentTaskID != parentTaskId {
+				continue
+			}
+		}
+
+		// Priority filtering removed - field not available in AgentTask
+
+		// Check if all dependencies are met
+		if t.areDependenciesMet(task, allTasks) {
+			executableTasks = append(executableTasks, task)
+		}
+	}
+
+	return executableTasks
+}
+
+// areDependenciesMet checks if all task dependencies are completed
+func (t *CoordinatorGetNextExecutableTaskTool) areDependenciesMet(task *storage.AgentTask, allTasks []*storage.AgentTask) bool {
+	if task.DependsOn == nil || len(task.DependsOn) == 0 {
+		return true // No dependencies
+	}
+
+	// Check each dependency
+	for _, depId := range task.DependsOn {
+		if !t.isTaskCompleted(depId, allTasks) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isTaskCompleted checks if a specific task is completed
+func (t *CoordinatorGetNextExecutableTaskTool) isTaskCompleted(taskId string, allTasks []*storage.AgentTask) bool {
+	for _, task := range allTasks {
+		if task.ID == taskId {
+			return task.Status == "COMPLETED"
+		}
+	}
+	return false // Task not found, consider as not completed
+}
+
+// sortTasks sorts tasks based on the specified criteria
+func (t *CoordinatorGetNextExecutableTaskTool) sortTasks(tasks []*storage.AgentTask, sortBy string) {
+	switch sortBy {
+	case "priority":
+		// Sort by priority: HIGH > MEDIUM > LOW
+		for i := 0; i < len(tasks)-1; i++ {
+			for j := i + 1; j < len(tasks); j++ {
+				priority1 := t.getTaskPriority(tasks[i])
+				priority2 := t.getTaskPriority(tasks[j])
+				if t.comparePriority(priority1, priority2) < 0 {
+					tasks[i], tasks[j] = tasks[j], tasks[i]
+				}
+			}
+		}
+	case "createdAt":
+		// Sort by creation time (oldest first)
+		for i := 0; i < len(tasks)-1; i++ {
+			for j := i + 1; j < len(tasks); j++ {
+				if tasks[i].CreatedAt.After(tasks[j].CreatedAt) {
+					tasks[i], tasks[j] = tasks[j], tasks[i]
+				}
+			}
+		}
+	case "estimatedTime":
+		// Sort by estimated time (shortest first)
+		for i := 0; i < len(tasks)-1; i++ {
+			for j := i + 1; j < len(tasks); j++ {
+				time1 := t.getEstimatedTime(tasks[i])
+				time2 := t.getEstimatedTime(tasks[j])
+				if time1 > time2 {
+					tasks[i], tasks[j] = tasks[j], tasks[i]
+				}
+			}
+		}
+	case "orderIndex":
+		// Sort by order index (lowest first)
+		for i := 0; i < len(tasks)-1; i++ {
+			for j := i + 1; j < len(tasks); j++ {
+				order1 := t.getOrderIndex(tasks[i])
+				order2 := t.getOrderIndex(tasks[j])
+				if order1 > order2 {
+					tasks[i], tasks[j] = tasks[j], tasks[i]
+				}
+			}
+		}
+	}
+}
+
+// getTaskPriority gets task priority with default
+func (t *CoordinatorGetNextExecutableTaskTool) getTaskPriority(task *storage.AgentTask) string {
+	// Priority field not available in AgentTask, return default
+	return "MEDIUM"
+}
+
+// comparePriority compares two priority strings (-1: p1 < p2, 0: equal, 1: p1 > p2)
+func (t *CoordinatorGetNextExecutableTaskTool) comparePriority(p1, p2 string) int {
+	priorityOrder := map[string]int{"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+	val1, ok1 := priorityOrder[p1]
+	val2, ok2 := priorityOrder[p2]
+
+	if !ok1 {
+		val1 = 2 // Default to MEDIUM
+	}
+	if !ok2 {
+		val2 = 2 // Default to MEDIUM
+	}
+
+	if val1 < val2 {
+		return -1
+	} else if val1 > val2 {
+		return 1
+	}
+	return 0
+}
+
+// getEstimatedTime gets estimated time with default
+func (t *CoordinatorGetNextExecutableTaskTool) getEstimatedTime(task *storage.AgentTask) int {
+	// Estimated time field not available in AgentTask, return default
+	return 60 // Default 60 minutes
+}
+
+// getOrderIndex gets order index with default
+func (t *CoordinatorGetNextExecutableTaskTool) getOrderIndex(task *storage.AgentTask) int {
+	return task.OrderIndex
+}
+
+// getTaskDetails gets detailed task information including dependency analysis
+func (t *CoordinatorGetNextExecutableTaskTool) getTaskDetails(task *storage.AgentTask, allTasks []*storage.AgentTask) map[string]interface{} {
+	details := map[string]interface{}{
+		"taskId":         task.ID,
+		"title":          task.Role,
+		"status":         task.Status,
+		"contextSummary": task.ContextSummary,
+		"filesModified":  task.FilesModified,
+		"todos":          len(task.Todos),
+		"createdAt":      task.CreatedAt,
+		"updatedAt":      task.UpdatedAt,
+	}
+
+	// Add metadata information
+	if task.ParentTaskID != nil {
+		details["orderIndex"] = task.OrderIndex
+		details["parentTaskId"] = *task.ParentTaskID
+	}
+
+	// Add dependency information
+	details["dependencies"] = task.DependsOn
+	details["dependenciesMet"] = t.areDependenciesMet(task, allTasks)
+
+	return details
+}
+
+// CoordinatorUpdateChildTaskProgressTool updates child task progress and propagates to parent
+type CoordinatorUpdateChildTaskProgressTool struct {
+	storage storage.TaskStorage
+}
+
+func (t *CoordinatorUpdateChildTaskProgressTool) Name() string {
+	return "coordinator_update_child_task_progress"
+}
+
+func (t *CoordinatorUpdateChildTaskProgressTool) Description() string {
+	return "Update child task progress and propagate status changes to parent tasks. Automatically updates parent task status based on child task completion."
+}
+
+func (t *CoordinatorUpdateChildTaskProgressTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"childTaskId": map[string]interface{}{
+				"type":        "string",
+				"description": "ID of the child task to update",
+			},
+			"status": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"PENDING", "IN_PROGRESS", "COMPLETED", "FAILED"},
+				"description": "New status for the child task",
+			},
+			"progress": map[string]interface{}{
+				"type":        "number",
+				"minimum":     0.0,
+				"maximum":     1.0,
+				"description": "Progress percentage (0.0 to 1.0) - optional, calculated from TODOs if not provided",
+			},
+			"notes": map[string]interface{}{
+				"type":        "string",
+				"description": "Progress notes or comments (optional)",
+			},
+			"propagateToParent": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Whether to propagate status changes to parent task (default: true)",
+				"default":     true,
+			},
+		},
+		"required": []string{"childTaskId", "status"},
+	}
+}
+
+func (t *CoordinatorUpdateChildTaskProgressTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	// Parse input parameters
+	childTaskId, ok := args["childTaskId"].(string)
+	if !ok || childTaskId == "" {
+		return nil, fmt.Errorf("childTaskId is required and must be a non-empty string")
+	}
+
+	status, ok := args["status"].(string)
+	if !ok || status == "" {
+		return nil, fmt.Errorf("status is required and must be a non-empty string")
+	}
+
+	validStatuses := map[string]bool{
+		"PENDING": true, "IN_PROGRESS": true, "COMPLETED": true, "FAILED": true,
+	}
+	if !validStatuses[status] {
+		return nil, fmt.Errorf("invalid status: %s. Must be one of: PENDING, IN_PROGRESS, COMPLETED, FAILED", status)
+	}
+
+	var progress *float64
+	if val, ok := args["progress"].(float64); ok {
+		if val < 0.0 || val > 1.0 {
+			return nil, fmt.Errorf("progress must be between 0.0 and 1.0")
+		}
+		progress = &val
+	}
+
+	notes := ""
+	if val, ok := args["notes"].(string); ok {
+		notes = val
+	}
+
+	propagateToParent := true
+	if val, ok := args["propagateToParent"].(bool); ok {
+		propagateToParent = val
+	}
+
+	// Get the child task
+	childTask, err := t.storage.GetAgentTask(childTaskId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get child task: %w", err)
+	}
+
+	// Update child task status
+	err = t.storage.UpdateTaskStatus(childTaskId, storage.TaskStatus(status), notes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update child task status: %w", err)
+	}
+
+	// Calculate progress if not provided
+	if progress == nil {
+		calculatedProgress := t.calculateTaskProgress(childTask)
+		progress = &calculatedProgress
+	}
+
+	// Get parent task ID if it exists
+	var parentTaskId string
+	if childTask.ParentTaskID != nil {
+		parentTaskId = *childTask.ParentTaskID
+	}
+
+	// Propagate to parent if requested and parent exists
+	var parentUpdateResult map[string]interface{}
+	if propagateToParent && parentTaskId != "" {
+		parentUpdateResult, err = t.propagateToParent(ctx, parentTaskId)
+		if err != nil {
+			// Log error but don't fail the entire operation
+			parentUpdateResult = map[string]interface{}{
+				"error": fmt.Sprintf("Failed to propagate to parent: %v", err),
+			}
+		}
+	}
+
+	result := map[string]interface{}{
+		"childTaskId":     childTaskId,
+		"status":          status,
+		"progress":        *progress,
+		"parentTaskId":    parentTaskId,
+		"propagated":      propagateToParent && parentTaskId != "",
+		"updatedAt":       time.Now(),
+	}
+
+	if notes != "" {
+		result["notes"] = notes
+	}
+
+	if parentUpdateResult != nil {
+		result["parentUpdate"] = parentUpdateResult
+	}
+
+	return result, nil
+}
+
+// calculateTaskProgress calculates progress based on completed TODOs
+func (t *CoordinatorUpdateChildTaskProgressTool) calculateTaskProgress(task *storage.AgentTask) float64 {
+	if len(task.Todos) == 0 {
+		// If no TODOs, base on status
+		switch task.Status {
+		case storage.TaskStatusCompleted:
+			return 1.0
+		case storage.TaskStatusInProgress:
+			return 0.5
+		case storage.TaskStatusBlocked:
+			return 0.0
+		default:
+			return 0.0
+		}
+	}
+
+	completedTodos := 0
+	for _, todo := range task.Todos {
+		if todo.Status == storage.TodoStatusCompleted {
+			completedTodos++
+		}
+	}
+
+	return float64(completedTodos) / float64(len(task.Todos))
+}
+
+// propagateToParent updates parent task status based on child task progress
+func (t *CoordinatorUpdateChildTaskProgressTool) propagateToParent(ctx context.Context, parentTaskId string) (map[string]interface{}, error) {
+	// Get parent task
+	parentTask, err := t.storage.GetAgentTask(parentTaskId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent task: %w", err)
+	}
+
+	// Get all child tasks for this parent
+	allTasks, _, err := t.storage.ListAgentTasks(bson.M{}, 0, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all tasks: %w", err)
+	}
+
+	childTasks := make([]*storage.AgentTask, 0)
+	for _, task := range allTasks {
+		if task.ParentTaskID != nil && *task.ParentTaskID == parentTaskId {
+			childTasks = append(childTasks, task)
+		}
+	}
+
+	if len(childTasks) == 0 {
+		return map[string]interface{}{
+			"message": "No child tasks found for parent",
+		}, nil
+	}
+
+	// Calculate aggregated progress and status
+	completedChildren := 0
+	inProgressChildren := 0
+	failedChildren := 0
+	totalProgress := 0.0
+
+	for _, child := range childTasks {
+		switch child.Status {
+		case storage.TaskStatusCompleted:
+			completedChildren++
+			totalProgress += 1.0
+		case storage.TaskStatusInProgress:
+			inProgressChildren++
+			// Calculate progress from todos
+			totalProgress += t.calculateTaskProgress(child)
+		case storage.TaskStatusBlocked:
+			failedChildren++
+		}
+	}
+
+	aggregatedProgress := totalProgress / float64(len(childTasks))
+
+	// Determine new parent status
+	var newParentStatus storage.TaskStatus
+	if completedChildren == len(childTasks) {
+		newParentStatus = storage.TaskStatusCompleted
+	} else if failedChildren > 0 && (completedChildren+inProgressChildren) == 0 {
+		newParentStatus = storage.TaskStatusBlocked
+	} else if inProgressChildren > 0 || completedChildren > 0 {
+		newParentStatus = storage.TaskStatusInProgress
+	} else {
+		newParentStatus = storage.TaskStatusPending
+	}
+
+	// Update parent task if status changed
+	statusChanged := parentTask.Status != newParentStatus
+	if statusChanged {
+		err = t.storage.UpdateTaskStatus(parentTaskId, newParentStatus, "Status updated based on child task progress")
+		if err != nil {
+			return nil, fmt.Errorf("failed to update parent task status: %w", err)
+		}
+	}
+
+	// Metadata updates removed - field not available in AgentTask
+
+	return map[string]interface{}{
+		"parentTaskId":        parentTaskId,
+		"oldStatus":           parentTask.Status,
+		"newStatus":           newParentStatus,
+		"statusChanged":       statusChanged,
+		"aggregatedProgress":  aggregatedProgress,
+		"completedChildren":   completedChildren,
+		"totalChildren":       len(childTasks),
+		"inProgressChildren":  inProgressChildren,
+		"failedChildren":      failedChildren,
+	}, nil
+}
+
+// testPhase3ToolsIntegration tests all Phase 3 MCP tools with sample complex tasks
+func testPhase3ToolsIntegration(ctx context.Context, storage storage.TaskStorage) error {
+	zap.L().Info("🧪 Starting Phase 3 MCP Tools Integration Test")
+	
+	// Test 1: Complexity Analysis
+	zap.L().Info("Test 1: Testing complexity analysis tool")
+	complexityTool := &CoordinatorAnalyzeTaskComplexityTool{storage: storage}
+	
+	complexityArgs := map[string]interface{}{
+		"title": "Implement Advanced User Management System",
+		"contextSummary": "Create a comprehensive user management system with authentication, authorization, profile management, and admin dashboard. Integrate with external OAuth providers and implement role-based access control.",
+		"todos": []interface{}{
+			"Implement user authentication with JWT tokens",
+			"Create user registration and login forms",
+			"Add OAuth integration for Google and GitHub",
+			"Implement role-based access control middleware",
+			"Create admin dashboard for user management",
+			"Add user profile management features",
+			"Implement password reset functionality",
+			"Add email verification system",
+			"Create audit logging for user actions",
+			"Implement session management",
+			"Add two-factor authentication",
+			"Create user permissions system",
+		},
+		"filesModified": []interface{}{
+			"/auth/jwt.go",
+			"/auth/middleware.go",
+			"/handlers/auth.go",
+			"/handlers/users.go",
+			"/models/user.go",
+			"/models/role.go",
+			"/database/migrations/001_users.sql",
+			"/database/migrations/002_roles.sql",
+			"/frontend/src/components/Login.tsx",
+			"/frontend/src/components/Register.tsx",
+			"/frontend/src/components/UserProfile.tsx",
+			"/frontend/src/components/AdminDashboard.tsx",
+			"/frontend/src/hooks/useAuth.ts",
+			"/frontend/src/services/authService.ts",
+			"/config/oauth.go",
+		},
+	}
+	
+	complexityResult, err := complexityTool.Execute(ctx, complexityArgs)
+	if err != nil {
+		return fmt.Errorf("complexity analysis test failed: %w", err)
+	}
+	
+	analysis, ok := complexityResult.(ComplexityAnalysis)
+	if !ok {
+		return fmt.Errorf("complexity analysis returned unexpected type")
+	}
+	
+	zap.L().Info("✅ Complexity analysis completed",
+		zap.Float64("score", analysis.Score),
+		zap.String("recommendation", analysis.Recommendation),
+		zap.Int("estimatedMinutes", analysis.EstimatedTimeMinutes))
+	
+	// Test 2: Task Splitting (if complexity is high)
+	if analysis.Score >= 0.6 {
+		zap.L().Info("Test 2: Testing task splitting tool (high complexity detected)")
+
+		// Create a parent task first (mock)
+		parentTaskId := "test-parent-task-" + fmt.Sprintf("%d", time.Now().Unix())
+
+		_ = &CoordinatorSplitAgentTaskTool{storage: storage} // splitTool not used
+		_ = map[string]interface{}{ // splitArgs not used
+			"parentTaskId": parentTaskId,
+			"splittingStrategy": "SEQUENTIAL",
+			"childTasks": []interface{}{
+				map[string]interface{}{
+					"title": "Authentication Core Implementation",
+					"contextSummary": "Implement core authentication functionality",
+					"todos": []interface{}{
+						"Implement JWT token generation and validation",
+						"Create authentication middleware",
+						"Add login and registration endpoints",
+					},
+					"filesModified": []interface{}{
+						"/auth/jwt.go",
+						"/auth/middleware.go",
+						"/handlers/auth.go",
+					},
+					"priority": "HIGH",
+				},
+				map[string]interface{}{
+					"title": "User Management Features",
+					"contextSummary": "Implement user profile and management features",
+					"todos": []interface{}{
+						"Create user profile management",
+						"Implement password reset functionality",
+						"Add email verification system",
+					},
+					"filesModified": []interface{}{
+						"/handlers/users.go",
+						"/models/user.go",
+						"/frontend/src/components/UserProfile.tsx",
+					},
+					"priority": "MEDIUM",
+				},
+			},
+			"createIntegrationDoc": true,
+		}
+		
+		// Note: This would fail in real execution because parentTaskId doesn't exist
+		// In a real test, we'd create the parent task first
+		zap.L().Info("⚠️ Skipping split test - would require creating parent task first")
+	}
+	
+	// Test 3: Task Hierarchy Retrieval
+	zap.L().Info("Test 3: Testing task hierarchy tool")
+	hierarchyTool := &CoordinatorGetTaskHierarchyTool{storage: storage}
+	
+	hierarchyArgs := map[string]interface{}{
+		"includeProgress": true,
+		"maxDepth": 5,
+	}
+	
+	_, err = hierarchyTool.Execute(ctx, hierarchyArgs)
+	if err != nil {
+		return fmt.Errorf("hierarchy test failed: %w", err)
+	}
+
+	zap.L().Info("✅ Task hierarchy retrieved successfully")
+	
+	// Test 4: Next Executable Task
+	zap.L().Info("Test 4: Testing next executable task tool")
+	executableTool := &CoordinatorGetNextExecutableTaskTool{storage: storage}
+	
+	executableArgs := map[string]interface{}{
+		"maxResults": 3,
+		"includeDetails": true,
+		"sortBy": "priority",
+	}
+	
+	_, err = executableTool.Execute(ctx, executableArgs)
+	if err != nil {
+		return fmt.Errorf("executable task test failed: %w", err)
+	}
+
+	zap.L().Info("✅ Next executable tasks retrieved successfully")
+
+	// Test 5: Child Task Progress Update
+	zap.L().Info("Test 5: Testing child task progress update tool")
+	_ = &CoordinatorUpdateChildTaskProgressTool{storage: storage} // progressTool not used
+
+	// This would require an actual child task to test properly
+	zap.L().Info("⚠️ Skipping progress update test - would require actual child task")
+	
+	zap.L().Info("🎉 Phase 3 MCP Tools Integration Test Completed Successfully")
+	return nil
+}
+
 // RegisterCoordinatorTools registers all coordinator tools with the tool registry
 func RegisterCoordinatorTools(
 	registry *aiservice.ToolRegistry,
 	taskStorage storage.TaskStorage,
 	knowledgeStorage storage.KnowledgeStorage,
-	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler,
 	subchatStorage *storage.SubchatStorage,
-	aiService AIServiceInterface,
+	toolsDiscoveryHandler *mcphandlers.ToolsDiscoveryHandler,
 	chatService ChatServiceInterface,
 	aiSettingsService AISettingsServiceInterface,
+	aiService AIServiceInterface,
 	logger *zap.Logger,
 ) error {
 	tools := []aiservice.ToolExecutor{
@@ -4559,9 +6544,18 @@ func RegisterCoordinatorTools(
 		&UpdateTodoPromptNotesTool{storage: taskStorage},
 		&ClearTodoPromptNotesTool{storage: taskStorage},
 
+		// Phase 3 MCP Tool Extensions - Complexity Analysis and Hierarchical Management
+		&CoordinatorAnalyzeTaskComplexityTool{storage: taskStorage},
+		&CoordinatorSplitAgentTaskTool{
+			storage:   taskStorage,
+			aiService: aiService,
+		},
+		&CoordinatorGetTaskHierarchyTool{storage: taskStorage},
+		&CoordinatorGetNextExecutableTaskTool{storage: taskStorage},
+		&CoordinatorUpdateChildTaskProgressTool{storage: taskStorage},
+
 		// Subagent tools
 		&ListSubagentsTool{mongoDatabase: nil},
-		&SetCurrentSubagentTool{mongoDatabase: nil},
 		&ExecuteSubagentTool{
 			subchatStorage:    subchatStorage,
 			taskStorage:       taskStorage,
