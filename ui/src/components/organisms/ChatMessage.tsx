@@ -7,6 +7,7 @@
  * - Syntax highlighting for code blocks
  * - Collapsible tool calls display using Radix Accordion
  * - Tool results with status indicators
+ * - Copy functionality with hover state and visual feedback
  */
 
 import React, { useState } from 'react';
@@ -14,7 +15,7 @@ import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import * as Accordion from '@radix-ui/react-accordion';
-import { ChevronDown, Wrench, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { ChevronDown, Wrench, CheckCircle, XCircle, Clock, Copy, Check } from 'lucide-react';
 import { cn } from '@/utils';
 import { Badge } from '@/components/atoms/Badge';
 import { useConversationMode } from '@/contexts/ConversationModeContext';
@@ -38,6 +39,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   streamingToolCalls = [],
   streamingToolResults = new Map(),
 }) => {
+  // State for copy functionality
+  const [isCopied, setIsCopied] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+
   const isUser = message.role === 'user';
   const isAssistant = message.role === 'assistant';
   const isToolCall = message.role === 'tool_call';
@@ -47,6 +52,37 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   // Get conversation mode to determine if we should show tool calls
   const { mode } = useConversationMode();
   const showToolDetails = mode === 'debug';
+
+  // Copy to clipboard functionality
+  const handleCopy = async () => {
+    try {
+      const textToCopy = content || message.content || '';
+      await navigator.clipboard.writeText(textToCopy);
+      setIsCopied(true);
+      // Show success feedback and reset after 2 seconds
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy text:', error);
+      // Fallback for older browsers or when clipboard API is not available
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = content || message.content || '';
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+      } catch (fallbackError) {
+        console.error('Fallback copy also failed:', fallbackError);
+        // Could add toast notification here for error feedback
+      }
+    }
+  };
 
   // Handle tool_call messages - only show in debug mode
   if (isToolCall && message.toolCall && !showToolDetails) {
@@ -201,14 +237,39 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
       )}
     >
       <div
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
         className={cn(
-          'max-w-[85%] rounded-lg px-4 py-3 shadow-sm',
+          'max-w-[85%] rounded-lg px-4 py-3 shadow-sm relative group',
           'overflow-x-auto',
           isUser
             ? 'bg-primary-500 text-white'
             : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
         )}
       >
+        {/* Copy Button - positioned in top-right corner */}
+        {(isHovered || isCopied) && (content || message.content) && (
+          <button
+            onClick={handleCopy}
+            className={cn(
+              'absolute top-2 right-2 p-1.5 rounded-md transition-all duration-200 z-10',
+              'hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-1',
+              isUser
+                ? 'bg-white/20 hover:bg-white/30 text-white focus:ring-white/50'
+                : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 focus:ring-gray-300 dark:focus:ring-gray-500',
+              isCopied && 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
+            )}
+            title={isCopied ? 'Copied!' : 'Copy message'}
+            aria-label={isCopied ? 'Message copied to clipboard' : 'Copy message to clipboard'}
+          >
+            {isCopied ? (
+              <Check className="w-4 h-4" />
+            ) : (
+              <Copy className="w-4 h-4" />
+            )}
+          </button>
+        )}
+
         {/* Role Badge */}
         <div className="flex items-center gap-2 mb-2">
           <Badge variant={isUser ? 'default' : 'secondary'}>
