@@ -78,6 +78,19 @@ type HumanTask struct {
 
 // AgentTask represents a task assigned to an agent
 type AgentTask struct {
+	// Hierarchy fields
+	ParentTaskID     *string  `json:"parentTaskId,omitempty" bson:"parentTaskId,omitempty"`
+	ChildTaskIDs     []string `json:"childTaskIds,omitempty" bson:"childTaskIds,omitempty"`
+	SplitReason      string   `json:"splitReason,omitempty" bson:"splitReason,omitempty"`
+	SplitStrategy    string   `json:"splitStrategy,omitempty" bson:"splitStrategy,omitempty"`
+	OrderIndex       int      `json:"orderIndex,omitempty" bson:"orderIndex,omitempty"`
+	DependsOn        []string `json:"dependsOn,omitempty" bson:"dependsOn,omitempty"`
+	
+	// Complexity tracking fields
+	EstimatedComplexity  int      `json:"estimatedComplexity,omitempty" bson:"estimatedComplexity,omitempty"`
+	ComplexityFactors    []string `json:"complexityFactors,omitempty" bson:"complexityFactors,omitempty"`
+	EstimatedLineCount   int      `json:"estimatedLineCount,omitempty" bson:"estimatedLineCount,omitempty"`
+	
 	ID                string     `json:"taskId" bson:"taskId"`
 	HumanTaskID       string     `json:"humanTaskId" bson:"humanTaskId"`
 	AgentName         string     `json:"agentName" bson:"agentName"`
@@ -104,6 +117,50 @@ type ClearResult struct {
 	ClearedAt         time.Time `json:"clearedAt"`
 }
 
+// TaskHierarchy represents the hierarchical structure of tasks
+type TaskHierarchy struct {
+	RootTask     *AgentTask       `json:"rootTask"`
+	ChildTasks   []*TaskHierarchy `json:"childTasks,omitempty"`
+	Depth        int              `json:"depth"`
+	TotalTasks   int              `json:"totalTasks"`
+	CompletedTasks int            `json:"completedTasks"`
+}
+
+// HierarchicalProgress represents progress tracking for hierarchical tasks
+type HierarchicalProgress struct {
+	RootTaskID       string                           `json:"rootTaskId"`
+	TotalTasks       int                              `json:"totalTasks"`
+	CompletedTasks   int                              `json:"completedTasks"`
+	InProgressTasks  int                              `json:"inProgressTasks"`
+	BlockedTasks     int                              `json:"blockedTasks"`
+	PendingTasks     int                              `json:"pendingTasks"`
+	ProgressPercent  float64                          `json:"progressPercent"`
+	EstimatedTotal   int                              `json:"estimatedTotal"`
+	ActualTotal      int                              `json:"actualTotal"`
+	TasksByLevel     map[int][]*AgentTask             `json:"tasksByLevel"`
+	DependencyGraph  map[string][]string              `json:"dependencyGraph"`
+	CriticalPath     []string                         `json:"criticalPath"`
+	UpdatedAt        time.Time                        `json:"updatedAt"`
+}
+
+// ChildTaskParams represents parameters for creating a child task
+type ChildTaskParams struct {
+	AgentName           string          `json:"agentName"`
+	Role                string          `json:"role"`
+	Todos               []TodoItemInput `json:"todos"`
+	ContextSummary      string          `json:"contextSummary"`
+	FilesModified       []string        `json:"filesModified,omitempty"`
+	QdrantCollections   []string        `json:"qdrantCollections,omitempty"`
+	PriorWorkSummary    string          `json:"priorWorkSummary,omitempty"`
+	SplitReason         string          `json:"splitReason"`
+	SplitStrategy       string          `json:"splitStrategy"`
+	OrderIndex          int             `json:"orderIndex"`
+	DependsOn           []string        `json:"dependsOn,omitempty"`
+	EstimatedComplexity int             `json:"estimatedComplexity,omitempty"`
+	ComplexityFactors   []string        `json:"complexityFactors,omitempty"`
+	EstimatedLineCount  int             `json:"estimatedLineCount,omitempty"`
+}
+
 // TaskStorage provides storage interface for tasks
 type TaskStorage interface {
 	CreateHumanTask(prompt string) (*HumanTask, error)
@@ -125,9 +182,18 @@ type TaskStorage interface {
 	ClearTodoPromptNotes(agentTaskID string, todoID string) error
 	ClearAllTasks() (*ClearResult, error)
 	SearchSimilarHumanTasks(prompt string, limit int, minScore float64) ([]*HumanTask, []float64, error)
+	
+	// Hierarchical task management methods
+	CreateChildAgentTask(parentTaskID string, params ChildTaskParams) (*AgentTask, error)
+	GetChildTasks(parentTaskID string) ([]*AgentTask, error)
+	GetTaskHierarchy(rootTaskID string) (*TaskHierarchy, error)
+	AddTaskDependency(taskID, dependsOnTaskID string) error
+	RemoveTaskDependency(taskID, dependsOnTaskID string) error
+	GetBlockedTasks() ([]*AgentTask, error)
+	GetDependencyChain(taskID string) ([]string, error)
+	GetHierarchicalProgress(rootTaskID string) (*HierarchicalProgress, error)
+	UpdateHierarchicalStatus(taskID string, status TaskStatus) error
 }
-
-// MongoTaskStorage implements TaskStorage using MongoDB
 type MongoTaskStorage struct {
 	humanTasksCollection *mongo.Collection
 	agentTasksCollection *mongo.Collection
@@ -189,9 +255,36 @@ func NewMongoTaskStorage(db *mongo.Database, knowledgeStorage KnowledgeStorage, 
 		return nil, fmt.Errorf("failed to create human task ID index: %w", err)
 	}
 
+	// Index on agentTasks.parentTaskId for hierarchical queries
+	_, err = storage.agentTasksCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "parentTaskId", Value: 1}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parent task ID index: %w", err)
+	}
+
+	// Index on agentTasks.dependsOn for dependency queries
+	_, err = storage.agentTasksCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "dependsOn", Value: 1}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create depends on index: %w", err)
+	}
+
+	// Compound index for hierarchical progress queries (parentTaskId + status + orderIndex)
+	_, err = storage.agentTasksCollection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "parentTaskId", Value: 1},
+			{Key: "status", Value: 1},
+			{Key: "orderIndex", Value: 1},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hierarchical progress index: %w", err)
+	}
+
 	return storage, nil
 }
-
 // CreateHumanTask creates a new human task
 func (s *MongoTaskStorage) CreateHumanTask(prompt string) (*HumanTask, error) {
 	ctx := context.Background()
@@ -892,4 +985,426 @@ func (s *MongoTaskStorage) SearchSimilarHumanTasks(prompt string, limit int, min
 	}
 
 	return tasks, scores, nil
+}
+// CreateChildAgentTask creates a new child agent task with hierarchical relationships
+func (s *MongoTaskStorage) CreateChildAgentTask(parentTaskID string, params ChildTaskParams) (*AgentTask, error) {
+	ctx := context.Background()
+
+	// Verify parent task exists
+	parentTask, err := s.GetAgentTask(parentTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("parent task not found: %w", err)
+	}
+
+	now := time.Now().UTC()
+	childTask := &AgentTask{
+		ID:                  uuid.New().String(),
+		HumanTaskID:         parentTask.HumanTaskID,
+		ParentTaskID:        &parentTaskID,
+		AgentName:           params.AgentName,
+		Role:                params.Role,
+		SplitReason:         params.SplitReason,
+		SplitStrategy:       params.SplitStrategy,
+		OrderIndex:          params.OrderIndex,
+		DependsOn:           params.DependsOn,
+		EstimatedComplexity: params.EstimatedComplexity,
+		ComplexityFactors:   params.ComplexityFactors,
+		EstimatedLineCount:  params.EstimatedLineCount,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		Status:              TaskStatusPending,
+		ContextSummary:      params.ContextSummary,
+		FilesModified:       params.FilesModified,
+		QdrantCollections:   params.QdrantCollections,
+		PriorWorkSummary:    params.PriorWorkSummary,
+	}
+
+	// Convert TodoItemInput to TodoItem
+	for _, todoInput := range params.Todos {
+		todo := TodoItem{
+			ID:           uuid.New().String(),
+			Description:  todoInput.Description,
+			Status:       TodoStatusPending,
+			CreatedAt:    now,
+			FilePath:     todoInput.FilePath,
+			FunctionName: todoInput.FunctionName,
+			ContextHint:  todoInput.ContextHint,
+			Notes:        todoInput.Notes,
+		}
+		childTask.Todos = append(childTask.Todos, todo)
+	}
+
+	// Generate summary if summarizer is available
+	if s.summarizer != nil {
+		content := fmt.Sprintf("Child task for %s: %s. Context: %s", params.AgentName, params.Role, params.ContextSummary)
+		childTask.Summary = s.summarizer.SummarizeTaskWithFallback(ctx, content, 100)
+	}
+
+	// Insert child task
+	_, err = s.agentTasksCollection.InsertOne(ctx, childTask)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create child task: %w", err)
+	}
+
+	// Update parent task to include child ID
+	update := bson.M{
+		"$push": bson.M{"childTaskIds": childTask.ID},
+		"$set":  bson.M{"updatedAt": now},
+	}
+	_, err = s.agentTasksCollection.UpdateOne(ctx, bson.M{"taskId": parentTaskID}, update)
+	if err != nil {
+		s.logger.Error("Failed to update parent task with child ID", zap.Error(err))
+	}
+
+	return childTask, nil
+}
+
+// GetChildTasks retrieves all child tasks for a given parent task
+func (s *MongoTaskStorage) GetChildTasks(parentTaskID string) ([]*AgentTask, error) {
+	ctx := context.Background()
+
+	filter := bson.M{"parentTaskId": parentTaskID}
+	cursor, err := s.agentTasksCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query child tasks: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []*AgentTask
+	if err = cursor.All(ctx, &tasks); err != nil {
+		return nil, fmt.Errorf("failed to decode child tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
+// GetTaskHierarchy retrieves the complete hierarchical structure starting from a root task
+func (s *MongoTaskStorage) GetTaskHierarchy(rootTaskID string) (*TaskHierarchy, error) {
+	rootTask, err := s.GetAgentTask(rootTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get root task: %w", err)
+	}
+
+	hierarchy := &TaskHierarchy{
+		RootTask:   rootTask,
+		Depth:      0,
+		TotalTasks: 1,
+	}
+
+	if rootTask.Status == TaskStatusCompleted {
+		hierarchy.CompletedTasks = 1
+	}
+
+	// Recursively build hierarchy
+	err = s.buildHierarchy(hierarchy, rootTaskID, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	return hierarchy, nil
+}
+
+// buildHierarchy is a helper function to recursively build task hierarchy
+func (s *MongoTaskStorage) buildHierarchy(parent *TaskHierarchy, taskID string, depth int) error {
+	childTasks, err := s.GetChildTasks(taskID)
+	if err != nil {
+		return err
+	}
+
+	for _, childTask := range childTasks {
+		childHierarchy := &TaskHierarchy{
+			RootTask:   childTask,
+			Depth:      depth,
+			TotalTasks: 1,
+		}
+
+		if childTask.Status == TaskStatusCompleted {
+			childHierarchy.CompletedTasks = 1
+		}
+
+		// Recursively build child hierarchy
+		err = s.buildHierarchy(childHierarchy, childTask.ID, depth+1)
+		if err != nil {
+			return err
+		}
+
+		parent.ChildTasks = append(parent.ChildTasks, childHierarchy)
+		parent.TotalTasks += childHierarchy.TotalTasks
+		parent.CompletedTasks += childHierarchy.CompletedTasks
+	}
+
+	return nil
+}
+
+// AddTaskDependency adds a dependency relationship between tasks
+func (s *MongoTaskStorage) AddTaskDependency(taskID, dependsOnTaskID string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Verify both tasks exist
+	_, err := s.GetAgentTask(taskID)
+	if err != nil {
+		return fmt.Errorf("task not found: %w", err)
+	}
+
+	_, err = s.GetAgentTask(dependsOnTaskID)
+	if err != nil {
+		return fmt.Errorf("dependency task not found: %w", err)
+	}
+
+	// Check for circular dependencies
+	chain, err := s.GetDependencyChain(dependsOnTaskID)
+	if err != nil {
+		return fmt.Errorf("failed to check dependency chain: %w", err)
+	}
+
+	for _, depID := range chain {
+		if depID == taskID {
+			return fmt.Errorf("circular dependency detected")
+		}
+	}
+
+	// Add dependency
+	update := bson.M{
+		"$addToSet": bson.M{"dependsOn": dependsOnTaskID},
+		"$set":      bson.M{"updatedAt": now},
+	}
+	_, err = s.agentTasksCollection.UpdateOne(ctx, bson.M{"taskId": taskID}, update)
+	if err != nil {
+		return fmt.Errorf("failed to add dependency: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveTaskDependency removes a dependency relationship between tasks
+func (s *MongoTaskStorage) RemoveTaskDependency(taskID, dependsOnTaskID string) error {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	update := bson.M{
+		"$pull": bson.M{"dependsOn": dependsOnTaskID},
+		"$set":  bson.M{"updatedAt": now},
+	}
+	_, err := s.agentTasksCollection.UpdateOne(ctx, bson.M{"taskId": taskID}, update)
+	if err != nil {
+		return fmt.Errorf("failed to remove dependency: %w", err)
+	}
+
+	return nil
+}
+
+// GetBlockedTasks retrieves all tasks that are blocked by dependencies
+func (s *MongoTaskStorage) GetBlockedTasks() ([]*AgentTask, error) {
+	ctx := context.Background()
+
+	// Find tasks that have dependencies and are not completed
+	filter := bson.M{
+		"dependsOn": bson.M{"$exists": true, "$ne": []string{}},
+		"status":    bson.M{"$ne": TaskStatusCompleted},
+	}
+
+	cursor, err := s.agentTasksCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query blocked tasks: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var allTasks []*AgentTask
+	if err = cursor.All(ctx, &allTasks); err != nil {
+		return nil, fmt.Errorf("failed to decode tasks: %w", err)
+	}
+
+	var blockedTasks []*AgentTask
+	for _, task := range allTasks {
+		isBlocked, err := s.isTaskBlocked(task)
+		if err != nil {
+			s.logger.Error("Failed to check if task is blocked", zap.String("taskId", task.ID), zap.Error(err))
+			continue
+		}
+		if isBlocked {
+			blockedTasks = append(blockedTasks, task)
+		}
+	}
+
+	return blockedTasks, nil
+}
+
+// isTaskBlocked checks if a task is blocked by incomplete dependencies
+func (s *MongoTaskStorage) isTaskBlocked(task *AgentTask) (bool, error) {
+	for _, depID := range task.DependsOn {
+		depTask, err := s.GetAgentTask(depID)
+		if err != nil {
+			return true, err // If dependency doesn't exist, task is blocked
+		}
+		if depTask.Status != TaskStatusCompleted {
+			return true, nil // If dependency is not completed, task is blocked
+		}
+	}
+	return false, nil
+}
+
+// GetDependencyChain retrieves the complete dependency chain for a task
+func (s *MongoTaskStorage) GetDependencyChain(taskID string) ([]string, error) {
+	visited := make(map[string]bool)
+	var chain []string
+
+	err := s.buildDependencyChain(taskID, visited, &chain)
+	if err != nil {
+		return nil, err
+	}
+
+	return chain, nil
+}
+
+// buildDependencyChain recursively builds the dependency chain
+func (s *MongoTaskStorage) buildDependencyChain(taskID string, visited map[string]bool, chain *[]string) error {
+	if visited[taskID] {
+		return nil // Already processed
+	}
+
+	visited[taskID] = true
+	*chain = append(*chain, taskID)
+
+	task, err := s.GetAgentTask(taskID)
+	if err != nil {
+		return err
+	}
+
+	for _, depID := range task.DependsOn {
+		err = s.buildDependencyChain(depID, visited, chain)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// GetHierarchicalProgress calculates and returns progress information for a hierarchical task structure
+func (s *MongoTaskStorage) GetHierarchicalProgress(rootTaskID string) (*HierarchicalProgress, error) {
+	hierarchy, err := s.GetTaskHierarchy(rootTaskID)
+	if err != nil {
+		return nil, err
+	}
+
+	progress := &HierarchicalProgress{
+		RootTaskID:      rootTaskID,
+		TotalTasks:      hierarchy.TotalTasks,
+		CompletedTasks:  hierarchy.CompletedTasks,
+		TasksByLevel:    make(map[int][]*AgentTask),
+		DependencyGraph: make(map[string][]string),
+		UpdatedAt:       time.Now().UTC(),
+	}
+
+	// Calculate progress statistics
+	s.calculateProgressStats(hierarchy, progress)
+
+	// Calculate progress percentage
+	if progress.TotalTasks > 0 {
+		progress.ProgressPercent = float64(progress.CompletedTasks) / float64(progress.TotalTasks) * 100
+	}
+
+	return progress, nil
+}
+
+// calculateProgressStats recursively calculates progress statistics
+func (s *MongoTaskStorage) calculateProgressStats(hierarchy *TaskHierarchy, progress *HierarchicalProgress) {
+	task := hierarchy.RootTask
+
+	// Add task to level map
+	if progress.TasksByLevel[hierarchy.Depth] == nil {
+		progress.TasksByLevel[hierarchy.Depth] = []*AgentTask{}
+	}
+	progress.TasksByLevel[hierarchy.Depth] = append(progress.TasksByLevel[hierarchy.Depth], task)
+
+	// Add to dependency graph
+	progress.DependencyGraph[task.ID] = task.DependsOn
+
+	// Count task status
+	switch task.Status {
+	case TaskStatusInProgress:
+		progress.InProgressTasks++
+	case TaskStatusBlocked:
+		progress.BlockedTasks++
+	case TaskStatusPending:
+		progress.PendingTasks++
+	}
+
+	// Process child tasks
+	for _, child := range hierarchy.ChildTasks {
+		s.calculateProgressStats(child, progress)
+	}
+}
+
+// UpdateHierarchicalStatus updates a task's status and propagates changes up the hierarchy
+func (s *MongoTaskStorage) UpdateHierarchicalStatus(taskID string, status TaskStatus) error {
+	// Update the task status
+	err := s.UpdateTaskStatus(taskID, status, "")
+	if err != nil {
+		return err
+	}
+
+	// Get the task to check for parent
+	task, err := s.GetAgentTask(taskID)
+	if err != nil {
+		return err
+	}
+
+	// If task has a parent, check if parent status needs updating
+	if task.ParentTaskID != nil {
+		err = s.updateParentStatus(*task.ParentTaskID)
+		if err != nil {
+			s.logger.Error("Failed to update parent status", zap.String("parentId", *task.ParentTaskID), zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
+// updateParentStatus checks and updates parent task status based on child task statuses
+func (s *MongoTaskStorage) updateParentStatus(parentTaskID string) error {
+	childTasks, err := s.GetChildTasks(parentTaskID)
+	if err != nil {
+		return err
+	}
+
+	if len(childTasks) == 0 {
+		return nil // No children, no update needed
+	}
+
+	// Check child statuses
+	allCompleted := true
+	anyInProgress := false
+	anyBlocked := false
+
+	for _, child := range childTasks {
+		switch child.Status {
+		case TaskStatusCompleted:
+			// Keep checking
+		case TaskStatusInProgress:
+			allCompleted = false
+			anyInProgress = true
+		case TaskStatusBlocked:
+			allCompleted = false
+			anyBlocked = true
+		case TaskStatusPending:
+			allCompleted = false
+		}
+	}
+
+	// Determine parent status
+	var newStatus TaskStatus
+	if allCompleted {
+		newStatus = TaskStatusCompleted
+	} else if anyBlocked {
+		newStatus = TaskStatusBlocked
+	} else if anyInProgress {
+		newStatus = TaskStatusInProgress
+	} else {
+		newStatus = TaskStatusPending
+	}
+
+	// Update parent status
+	return s.UpdateTaskStatus(parentTaskID, newStatus, "Status updated based on child task progress")
 }
