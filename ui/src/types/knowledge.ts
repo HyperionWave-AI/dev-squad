@@ -152,3 +152,12 @@ export interface CompactionResult {
   compressionRatio: number;
   preserved: {filePaths: number; functionNames: number};
 }
+
+// Markdown sync result
+export interface SyncReport {
+  filesProcessed: number;
+  entriesCreated: number;
+  entriesUpdated: number;
+  errors: string[];
+  collections: string[];
+}

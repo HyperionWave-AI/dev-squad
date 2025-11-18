@@ -41,4 +41,5 @@ third_party
 ui/test-results
 hyper/embed
 
- ui/test-reports/
+ui/test-reports/
+test-reports/

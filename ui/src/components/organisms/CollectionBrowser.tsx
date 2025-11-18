@@ -70,7 +70,12 @@ export function CollectionBrowser({
 
   // Category display order matching old UI
   const categoryOrder = ['Task', 'Tech', 'UI', 'Ops', 'Other'];
-  const categories = categoryOrder.filter(cat => groupedCollections[cat]);
+  const allCategories = Object.keys(groupedCollections);
+  // Show preferred categories first, then any additional categories (like "general")
+  const categories = [
+    ...categoryOrder.filter(cat => groupedCollections[cat]),
+    ...allCategories.filter(cat => !categoryOrder.includes(cat))
+  ];
 
   const handleCreateSuccess = () => {
     setModalOpen(false);

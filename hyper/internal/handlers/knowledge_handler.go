@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
+	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/review"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
@@ -1216,6 +1219,55 @@ func (h *KnowledgeHandler) GetResyncStatusHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+// SyncMarkdownKB syncs markdown files from docs/kb to knowledge base
+// POST /api/v1/knowledge/sync-markdown-kb
+func (h *KnowledgeHandler) SyncMarkdownKB(c *gin.Context) {
+	// Get KB_DOCS_PATH from environment or use default
+	docsPath := os.Getenv("KB_DOCS_PATH")
+	if docsPath == "" {
+		docsPath = "docs/kb"
+	}
+
+	// Allow override via query parameter for testing
+	if pathParam := c.Query("path"); pathParam != "" {
+		docsPath = pathParam
+	}
+
+	h.logger.Info("Starting markdown KB sync",
+		zap.String("path", docsPath))
+
+	// Create markdown sync service
+	syncService := mcphandlers.NewMarkdownSyncService(h.knowledgeStorage, h.logger)
+
+	// Perform sync
+	report, err := syncService.SyncDocsKB(c.Request.Context(), docsPath)
+	if err != nil {
+		h.logger.Error("Failed to sync markdown KB",
+			zap.String("path", docsPath),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to sync markdown KB: %v", err)})
+		return
+	}
+
+	h.logger.Info("Markdown KB sync completed",
+		zap.Int("filesProcessed", report.FilesProcessed),
+		zap.Int("entriesCreated", report.EntriesCreated),
+		zap.Int("entriesUpdated", report.EntriesUpdated),
+		zap.Int("errors", len(report.Errors)),
+		zap.Strings("collections", report.Collections))
+
+	// Return sync report
+	c.JSON(http.StatusOK, gin.H{
+		"success":         true,
+		"filesProcessed":  report.FilesProcessed,
+		"entriesCreated":  report.EntriesCreated,
+		"entriesUpdated":  report.EntriesUpdated,
+		"collections":     report.Collections,
+		"errors":          report.Errors,
+		"details":         report.Details,
+	})
+}
+
 func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/popular-collections", h.GetPopularCollections)
 	r.GET("/collections", h.GetAllCollections)
@@ -1236,6 +1288,7 @@ func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/collections/:name/rename", h.RenameCollectionHandler)
 	r.POST("/collections/:name/review", h.ReviewCollectionHandler)
 	r.POST("/sync-votes", h.BatchSyncVotes)
+	r.POST("/sync-markdown-kb", h.SyncMarkdownKB)
 	r.POST("/migrate", h.MigrateCollectionsHandler)
 	r.POST("/resync-to-unified", h.ResyncToUnifiedHandler)
 	r.GET("/resync-status", h.GetResyncStatusHandler)
