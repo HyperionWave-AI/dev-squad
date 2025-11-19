@@ -12,6 +12,26 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
+// Debug logger that writes to a specific file for investigation
+var debugLogFile *os.File
+
+func init() {
+	var err error
+	debugLogFile, err = os.OpenFile("/tmp/tool_executor_debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("Failed to open debug log file: %v", err)
+	}
+}
+
+func debugLog(format string, args ...interface{}) {
+	if debugLogFile != nil {
+		timestamp := time.Now().Format("15:04:05.000")
+		msg := fmt.Sprintf(format, args...)
+		fmt.Fprintf(debugLogFile, "[%s] %s\n", timestamp, msg)
+		debugLogFile.Sync() // Flush immediately
+	}
+}
+
 // tool_executor.go - Tool Execution Orchestration
 //
 // This file contains the core tool execution logic for the AI service, handling:
@@ -211,10 +231,13 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 	// Start tool-enabled streaming
 	go func() {
 		defer close(eventChan)
+		debugLog("========== GOROUTINE STARTED ==========")
+		debugLog("Request ID: %s, MaxToolCalls: %d", requestID, maxToolCalls)
 
 		toolCallCount := 0
 		iterationCount := 0
 		currentMessages := append([]Message{}, messages...) // Copy messages
+		debugLog("Initial message count: %d", len(currentMessages))
 
 		// Tool result cache: prevent duplicate tool executions
 		resultCache := NewToolResultCache()
@@ -333,10 +356,13 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
 			iterationCount++
+			debugLog("---------- ITERATION %d START ----------", iterationCount)
+			debugLog("Current tool call count: %d/%d", toolCallCount, maxToolCalls)
 
 			// CRITICAL: Reload full tools array at start of each iteration
 			// This prevents the filtered tools from previous iteration being reused
 			tools = s.toolRegistry.GetToolsForLangChain()
+			debugLog("Reloaded tools: %d", len(tools))
 
 			// Calculate context size BEFORE applying sliding window
 			contextSize := 0
@@ -413,6 +439,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			if true { // Enable workflow enforcement for all models (GPT, Claude, Groq, etc.)
 				step := workflowState["step"].(int)
 				originalCount := len(tools)
+				debugLog("PRESCRIPTIVE FILTER: Current workflow step = %d, tools before filter = %d", step, originalCount)
 
 				// Define allowed tools per step (WHITELIST approach)
 				var allowedTools []string
@@ -452,6 +479,8 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					tools = filteredTools
 				}
 
+				debugLog("PRESCRIPTIVE FILTER: Allowed tools for step %d = %v", step, allowedTools)
+				debugLog("PRESCRIPTIVE FILTER: After filter = %d tools", len(tools))
 				if originalCount != len(tools) {
 					log.Printf("[Phase 3 Prescriptive Filter] Step %d: Filtered %d → %d tools (allowed: %v)",
 						step, originalCount, len(tools), allowedTools)
@@ -643,14 +672,17 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				}
 			}
 
-			// Stream response tokens
+			// Collect response tokens (but don't stream yet)
 			var responseText string
 			responseTokens := 0
+			var collectedChunks []string
 			for chunk := range response.TextChannel {
-				eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
+				collectedChunks = append(collectedChunks, chunk)
 				responseText += chunk
 				responseTokens++
 			}
+
+			debugLog("AI RESPONSE: iteration=%d, tokens=%d, toolCalls=%d", iterationCount, responseTokens, len(response.ToolCalls))
 
 			// Log iteration response details
 			log.Printf("[AI Processing] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
@@ -675,18 +707,29 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 			// Check for tool calls
 			if len(response.ToolCalls) == 0 {
-				// No more tool calls, we're done
+				debugLog("EXIT: No tool calls - streaming final response (%d chunks)", len(collectedChunks))
+				// No tool calls - NOW stream the collected text (final response)
+				for _, chunk := range collectedChunks {
+					eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
+				}
 				log.Printf("[ChatService] Stream complete - RequestID: %s - Total iterations: %d, Tool calls: %d",
 					requestID, iterationCount, toolCallCount)
+				debugLog("========== GOROUTINE ENDED (no tool calls) ==========")
 				return
 			}
+
+			// Tool calls pending - suppress text output
+			log.Printf("[ChatService] Suppressing %d tokens of text - tool calls pending: %d",
+				len(collectedChunks), len(response.ToolCalls))
 
 			// Process each tool call
 			for _, toolCall := range response.ToolCalls {
 				toolCallCount++
+				debugLog("TOOL CALL #%d: name=%s", toolCallCount, toolCall.Name)
 				if toolCallCount > maxToolCalls {
 					log.Printf("[ChatService] Max tool calls reached (%d) - RequestID: %s", maxToolCalls, requestID)
 					eventChan <- StreamEvent{Type: StreamEventError, Error: fmt.Sprintf("maximum tool calls (%d) exceeded", maxToolCalls)}
+					debugLog("========== GOROUTINE ENDED (max tools reached) ==========")
 					return
 				}
 
@@ -694,6 +737,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				argsJSON, _ := json.Marshal(toolCall.Args)
 				log.Printf("[Tool Request] AI requested tool '%s' with args: %s",
 					toolCall.Name, string(argsJSON))
+				debugLog("TOOL CALL: name=%s, args=%s", toolCall.Name, string(argsJSON))
 
 				// WORKFLOW VALIDATION: Check if this tool call is allowed in current workflow state
 				var result ToolResult
@@ -1308,11 +1352,13 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution
 				// Apply to ALL models to match prescriptive filter behavior (line 714)
 				if result.Error == "" {
+					debugLog("WORKFLOW: Tool %s succeeded, checking for state update", toolCall.Name)
 					switch toolCall.Name {
 					case "coordinator_list_human_tasks":
 						if workflowState["step"].(int) == 0 {
 							workflowState["step"] = 1
 							log.Printf("[Workflow State] Step 1 complete: listed tasks")
+							debugLog("WORKFLOW: Updated state to step 1")
 						}
 
 					case "coordinator_create_human_task":
@@ -1341,6 +1387,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						workflowState["step"] = 3
 						workflowState["searchCompleted"] = true
 						log.Printf("[Workflow State] Step 3 complete: code search done")
+						debugLog("WORKFLOW: Updated state to step 3 (after code_index_search)")
 
 					case "create_agent_task":
 						if outputMap, ok := result.Output.(map[string]interface{}); ok {
@@ -1385,9 +1432,12 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						}
 						return sum
 					}())
+				debugLog("END OF TOOL CALL: currentMessages=%d, continuing to next iteration", len(currentMessages))
 			}
+			debugLog("END OF ALL TOOL CALLS IN THIS ITERATION: toolCallCount=%d, looping back", toolCallCount)
 		}
 
+		debugLog("LOOP EXITED: toolCallCount=%d/%d, iterationCount=%d/%d", toolCallCount, maxToolCalls, iterationCount, s.config.MaxIterations)
 		// Check which limit was reached
 		if toolCallCount >= maxToolCalls {
 			// Max tool calls reached
@@ -1529,10 +1579,13 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 	// Start tool-enabled streaming
 	go func() {
 		defer close(eventChan)
+		debugLog("========== GOROUTINE STARTED ==========")
+		debugLog("Request ID: %s, MaxToolCalls: %d", requestID, maxToolCalls)
 
 		toolCallCount := 0
 		iterationCount := 0
 		currentMessages := append([]Message{}, messages...) // Copy messages
+		debugLog("Initial message count: %d", len(currentMessages))
 
 		// Tool result cache: prevent duplicate tool executions
 		resultCache := NewToolResultCache()
