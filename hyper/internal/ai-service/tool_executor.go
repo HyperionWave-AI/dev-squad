@@ -567,6 +567,23 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 			log.Printf("[AI Processing] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
 				iterationCount, responseTokens, len(response.ToolCalls))
 
+			// DEBUG: Check if responseText contains tool JSON
+			if strings.Contains(responseText, `[{"id":"`) {
+				log.Printf("[DEBUG TOOL_EXECUTOR] ⚠️  WARNING: responseText contains tool JSON!")
+				preview := responseText
+				if len(preview) > 300 {
+					preview = preview[:300] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR] responseText preview: %s", preview)
+			} else {
+				log.Printf("[DEBUG TOOL_EXECUTOR] ✓ responseText is clean (no tool JSON)")
+				preview := responseText
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR] responseText preview: %s", preview)
+			}
+
 			// Check for tool calls
 			if len(response.ToolCalls) == 0 {
 				// No more tool calls, we're done
@@ -1061,28 +1078,37 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 				}
 
-				// CRITICAL FIX: Truncate tool results that are too large to prevent token limit errors
-				// Individual tool results can be HUGE (e.g., bash ls -R output = 1.98MB)
-				// Even if sliding window triggers, if one recent message is huge, it doesn't help
-				// For fallback model (Haiku), use higher limit to preserve more context
-				maxToolResultSize := 10000 // 10KB per tool result (default)
-				if s.usingFallback {
-					maxToolResultSize = 30000 // 30KB for fallback model - preserve more context
-				}
-				if len(toolResultMsg) > maxToolResultSize {
-					originalSize := len(toolResultMsg)
-					// Keep first portion and add truncation notice
-					truncatedSize := maxToolResultSize - 500
-					toolResultMsg = toolResultMsg[:truncatedSize] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars to prevent token limit. If you need more, use a more specific query or process the data in smaller chunks.] ...", originalSize, truncatedSize)
-					log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars to prevent token limit",
-						result.Name, originalSize, len(toolResultMsg))
-				}
+				// DISABLED: Tool result truncation removed per user request
+				// Full tool results will be sent to AI without size limitations
+				// Previous truncation: 10KB (default) or 30KB (fallback model)
+				// Note: This may cause token limit errors with very large tool outputs
+				// maxToolResultSize := 10000 // 10KB per tool result (default)
+				// if s.usingFallback {
+				// 	maxToolResultSize = 30000 // 30KB for fallback model - preserve more context
+				// }
+				// if len(toolResultMsg) > maxToolResultSize {
+				// 	originalSize := len(toolResultMsg)
+				// 	// Keep first portion and add truncation notice
+				// 	truncatedSize := maxToolResultSize - 500
+				// 	toolResultMsg = toolResultMsg[:truncatedSize] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars to prevent token limit. If you need more, use a more specific query or process the data in smaller chunks.] ...", originalSize, truncatedSize)
+				// 	log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars to prevent token limit",
+				// 		result.Name, originalSize, len(toolResultMsg))
+				// }
 
 				// CRITICAL FIX: Add tool_call message BEFORE tool_result (required by Anthropic API)
 				// This ensures proper conversation history tracking
+				// Strip tool call JSON from content (some models like Groq include it in text)
+				cleanContent := responseText
+				if strings.Contains(cleanContent, `[{"id":"`) {
+					// Find and remove the JSON array part
+					if idx := strings.Index(cleanContent, `[{"id":"`); idx >= 0 {
+						cleanContent = strings.TrimSpace(cleanContent[:idx])
+					}
+				}
+
 				currentMessages = append(currentMessages, Message{
 					Role:    "tool_call",
-					Content: responseText,
+					Content: cleanContent,
 					ToolCall: &ToolCall{
 						ID:   toolCall.ID,
 						Name: toolCall.Name,
@@ -1448,40 +1474,63 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				contextSize += len(msg.Content)
 			}
 
+			// SLIDING WINDOW DISABLED
 			// Apply sliding window BEFORE context exceeds model's token limit
 			// Claude: 200K tokens (≈800KB text) - use 150KB threshold
 			// GPT: 32K tokens (≈128KB text) - use 40KB threshold to be safe
-			var maxContextSize int
-			var maxMessages int
-			if isClaudeModel {
-				maxContextSize = 150000 // 150KB for Claude (≈37K tokens, leaves room for output)
-				maxMessages = 20        // Keep more messages for Claude
-			} else {
-				maxContextSize = 40000 // 40KB for GPT (≈10K tokens)
-				maxMessages = 6        // Conservative for GPT
-			}
+			// var maxContextSize int
+			// var maxMessages int
+			// if isClaudeModel {
+			// 	maxContextSize = 150000 // 150KB for Claude (≈37K tokens, leaves room for output)
+			// 	maxMessages = 20        // Keep more messages for Claude
+			// } else {
+			// 	maxContextSize = 40000 // 40KB for GPT (≈10K tokens)
+			// 	maxMessages = 6        // Conservative for GPT
+			// }
 
-			if contextSize > maxContextSize {
-				log.Printf("[Sliding Window - Filtered] Context size %d chars exceeds threshold %d chars, applying window",
-					contextSize, maxContextSize)
-				currentMessages = applySlidingWindow(currentMessages, maxMessages)
+			// if contextSize > maxContextSize {
+			// 	log.Printf("[Sliding Window - Filtered] Context size %d chars exceeds threshold %d chars, applying window",
+			// 		contextSize, maxContextSize)
+			// 	currentMessages = applySlidingWindow(currentMessages, maxMessages)
 
-				// Recalculate after trimming
-				contextSize = 0
-				for _, msg := range currentMessages {
-					contextSize += len(msg.Content)
-				}
-			}
+			// 	// Recalculate after trimming
+			// 	contextSize = 0
+			// 	for _, msg := range currentMessages {
+			// 		contextSize += len(msg.Content)
+			// 	}
+			// }
 
-			// Log iteration details
-			log.Printf("[AI Processing - Filtered Tools] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d",
-				iterationCount, contextSize, contextSize, toolCallCount)
+			// Log iteration details with more info
+			log.Printf("[AI Processing - Filtered Tools] === ITERATION %d START ===", iterationCount)
+			log.Printf("[AI Processing - Filtered Tools] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d, Max iterations: %d",
+				iterationCount, contextSize, contextSize, toolCallCount, s.config.MaxIterations)
 
 			// DEBUG: Log context details before LLM API call
 			contextSize = calculateContextSize(currentMessages)
-// toolResultPreview := getToolResultPreview(currentMessages, 200)
-// 			log.Printf("[DEBUG Context - Filtered] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
-// 				len(currentMessages), contextSize, toolResultPreview)
+
+			// LOG EXACT MESSAGES SENT TO AI
+			log.Printf("[DEBUG - AI Input] Sending %d messages to AI (iteration %d):", len(currentMessages), iterationCount)
+			for i, msg := range currentMessages {
+				contentPreview := msg.Content
+				if len(contentPreview) > 200 {
+					contentPreview = contentPreview[:200] + "..."
+				}
+
+				if msg.Role == "tool_result" && msg.ToolResult != nil {
+					outputPreview := fmt.Sprintf("%v", msg.ToolResult.Output)
+					if len(outputPreview) > 500 {
+						outputPreview = outputPreview[:500] + "..."
+					}
+					log.Printf("  [%d] Role: %s, ToolName: %s, ToolID: %s, Output: %s",
+						i, msg.Role, msg.ToolResult.Name, msg.ToolResult.ID, outputPreview)
+				} else if msg.Role == "tool_call" && msg.ToolCall != nil {
+					argsJSON, _ := json.Marshal(msg.ToolCall.Args)
+					log.Printf("  [%d] Role: %s, ToolName: %s, ToolID: %s, Args: %s",
+						i, msg.Role, msg.ToolCall.Name, msg.ToolCall.ID, string(argsJSON))
+				} else {
+					log.Printf("  [%d] Role: %s, Content: %s", i, msg.Role, contentPreview)
+				}
+			}
 
 			// Call provider with FILTERED tools
 			toolProvider := s.provider.(ToolCapableProvider)
@@ -1502,8 +1551,31 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 			}
 
 			// Log iteration response details
+			log.Printf("[AI Processing - Filtered] === ITERATION %d COMPLETE ===", iterationCount)
 			log.Printf("[AI Processing - Filtered] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
 				iterationCount, responseTokens, len(response.ToolCalls))
+
+			// DEBUG: Check if responseText contains tool JSON (FILTERED PATH)
+			if strings.Contains(responseText, `[{"id":"`) {
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] ⚠️  WARNING: responseText contains tool JSON!")
+				preview := responseText
+				if len(preview) > 300 {
+					preview = preview[:300] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] responseText preview: %s", preview)
+			} else {
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] ✓ responseText is clean (no tool JSON)")
+				preview := responseText
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] responseText preview: %s", preview)
+			}
+
+			// Log end turn if no tool calls
+			if len(response.ToolCalls) == 0 {
+				log.Printf("[AI Processing - Filtered] 🏁 AI ENDED TURN - No more tool calls requested (normal completion)")
+			}
 
 			// Check for tool calls
 			if len(response.ToolCalls) == 0 {
@@ -1727,21 +1799,24 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					}
 				}
 
-				// Truncate large tool results (apply to result.Output, not string)
-				const maxToolResultSize = 10000
-				if outputJSON, err := json.Marshal(result.Output); err == nil {
-					if len(outputJSON) > maxToolResultSize {
-						originalSize := len(outputJSON)
-						truncated := string(outputJSON[:maxToolResultSize-500])
-						result.Output = map[string]interface{}{
-							"_truncated": true,
-							"_message":   fmt.Sprintf("Result was %d chars, showing first %d chars", originalSize, maxToolResultSize-500),
-							"_preview":   truncated,
-						}
-						log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars",
-							result.Name, originalSize, len(truncated))
-					}
-				}
+				// DISABLED: Tool result truncation removed per user request
+				// Full tool results will be sent to AI without size limitations
+				// Previous truncation: 10KB with structured preview
+				// Note: This may cause token limit errors with very large tool outputs
+				// const maxToolResultSize = 10000
+				// if outputJSON, err := json.Marshal(result.Output); err == nil {
+				// 	if len(outputJSON) > maxToolResultSize {
+				// 		originalSize := len(outputJSON)
+				// 		truncated := string(outputJSON[:maxToolResultSize-500])
+				// 		result.Output = map[string]interface{}{
+				// 			"_truncated": true,
+				// 			"_message":   fmt.Sprintf("Result was %d chars, showing first %d chars", originalSize, maxToolResultSize-500),
+				// 			"_preview":   truncated,
+				// 		}
+				// 		log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars",
+				// 			result.Name, originalSize, len(truncated))
+				// 	}
+				// }
 
 				// CRITICAL FIX: Add tool_result message with proper role (user, not system)
 				// This matches Anthropic's API format and ensures conversation continuity

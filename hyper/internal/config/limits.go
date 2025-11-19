@@ -23,7 +23,7 @@ const (
 
 	// Tool result display tiers (for size-aware rendering)
 	// Tier 1: Display fully without modification
-	MaxToolResultNormalBytes = 50 * 1024 // 50KB
+	MaxToolResultNormalBytes = 120 * 1024 // 120KB
 
 	// Tier 2: Display truncated with preview + expand option
 	MaxToolResultTruncatedBytes = 500 * 1024 // 500KB
