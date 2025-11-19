@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
 )
@@ -28,6 +29,91 @@ import (
 //
 // Both methods implement sophisticated circuit breakers, caching, and validation
 // to ensure reliable tool execution and prevent infinite loops.
+
+// getErrorRecoveryGuidance provides specific recovery instructions based on error type
+func getErrorRecoveryGuidance(toolName string, errorMsg string, args map[string]interface{}) string {
+	errorLower := strings.ToLower(errorMsg)
+
+	// Validation errors - humanTaskId invalid
+	if strings.Contains(errorLower, "invalid") && strings.Contains(errorLower, "humantaskid") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Call coordinator_list_human_tasks RIGHT NOW to see all available tasks\n" +
+			"➡️  Find the correct task in the response\n" +
+			"➡️  Copy the EXACT 'taskId' field from that task\n" +
+			"➡️  Then retry create_agent_task with the correct taskId\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+			"⚠️  DO NOT generate or guess task IDs - copy them exactly from the list!"
+	}
+
+	// File path errors
+	if strings.Contains(errorLower, "path does not exist") || strings.Contains(errorLower, "file not found") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Check the FILE_PATHS_TO_USE array from your code_index_search results\n" +
+			"➡️  Use ONLY paths from that array - do not modify or type paths manually\n" +
+			"➡️  Retry the tool call RIGHT NOW with the correct path from FILE_PATHS_TO_USE\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
+	}
+
+	// Missing required parameters
+	if strings.Contains(errorLower, "required") && (strings.Contains(errorLower, "must be") || strings.Contains(errorLower, "is required")) {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  A required parameter is missing or has the wrong type\n" +
+			"➡️  Check the error message to see which parameter is missing\n" +
+			"➡️  Add the missing parameter with the correct value\n" +
+			"➡️  Retry the tool call RIGHT NOW with all required parameters\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
+	}
+
+	// TODO validation errors (discovery keywords)
+	if strings.Contains(errorLower, "todo validation failed") || strings.Contains(errorLower, "discovery keyword") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Your TODO contains forbidden words like 'search', 'find', 'locate', 'explore'\n" +
+			"➡️  Call code_index_search RIGHT NOW to find the files yourself\n" +
+			"➡️  Then retry create_agent_task with implementation-only TODOs like:\n" +
+			"   - 'Add validation to AuthForm.tsx line 45'\n" +
+			"   - 'Update API call in dashboard.go line 120'\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+			"⚠️  Remove ALL discovery words from your TODOs!"
+	}
+
+	// Similar tasks found
+	if strings.Contains(errorLower, "similar") && strings.Contains(errorLower, "task") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Similar tasks were found in the response\n" +
+			"➡️  Call coordinator_create_human_task RIGHT NOW with forceCreate=true to create a new task\n" +
+			"➡️  OR use the taskId from the similarTasks array if appropriate\n\n" +
+			"⚠️  DO NOT ask the user - MAKE THE TOOL CALL IMMEDIATELY with forceCreate=true!"
+	}
+
+	// Code search errors
+	if toolName == "code_index_search" {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Code search failed or returned no results\n" +
+			"➡️  PROCEED ANYWAY - call create_agent_task RIGHT NOW without file paths\n" +
+			"➡️  The agent will find the files during implementation\n\n" +
+			"⚠️  DO NOT ask the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+			"⚠️  DO NOT retry search - proceed to create_agent_task NOW!"
+	}
+
+	// Generic validation errors
+	if strings.Contains(errorLower, "validation") || strings.Contains(errorLower, "invalid") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  One of your parameters failed validation\n" +
+			"➡️  Read the error message carefully to see what's wrong\n" +
+			"➡️  Correct the parameter value\n" +
+			"➡️  Retry the tool call RIGHT NOW with the corrected parameters\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
+	}
+
+	// Generic error guidance
+	return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+		"➡️  Read the error message above carefully\n" +
+		"➡️  Identify what went wrong\n" +
+		"➡️  Correct the issue based on the error details\n" +
+		"➡️  Retry the tool call RIGHT NOW with corrected parameters\n\n" +
+		"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+		"⚠️  If error persists after 1 retry, try a different approach but KEEP MAKING TOOL CALLS!"
+}
 
 // StreamChatWithTools sends messages to AI provider with tool execution support.
 // This is the main entry point for coordinator agents that need full tool access.
@@ -139,6 +225,8 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		lastFailedSignature := ""    // Signature of the last failed tool call
 		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
 		taskIdValidationAttempts := 0                  // Track taskId validation attempts for create_agent_task (max 3)
+		lastCreatedHumanTaskId := ""                   // FIX #9: Cache taskId from coordinator_create_human_task for instant validation
+		lastCreatedAgentTaskId := ""                   // FIX #10: Cache agentTaskId from create_agent_task for instant validation
 
 		// Tool call history: track all executed tools for smart filtering (reduces token usage by ~70%)
 		toolCallHistory := make([]ToolResult, 0, 20)
@@ -837,35 +925,58 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 					// Validate humanTaskId if provided
 					if humanTaskId != "" {
-						// Call coordinator_list_human_tasks to get all tasks
-						listTasksCall := ToolCall{
-							ID:   "taskid_validation",
-							Name: "coordinator_list_human_tasks",
-							Args: map[string]interface{}{},
-						}
-						listResult := s.toolRegistry.ExecuteToolCall(ctx, listTasksCall)
-
+						// FIX #9: Check cached taskId FIRST (instant validation, no database needed)
+						// This eliminates race conditions when model uses taskId immediately after creation
 						taskExists := false
-						if listResult.Error == "" {
-							if outputMap, ok := listResult.Output.(map[string]interface{}); ok {
-								if tasks, ok := outputMap["tasks"].([]interface{}); ok {
-									for _, task := range tasks {
-										if taskMap, ok := task.(map[string]interface{}); ok {
-											// Check taskId field (matching HumanTask JSON schema with json:"taskId" tag)
-											if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
-												taskExists = true
-												break
+						if humanTaskId == lastCreatedHumanTaskId && lastCreatedHumanTaskId != "" {
+							taskExists = true
+							log.Printf("[TaskId Validator] ✅ Instant validation: humanTaskId '%s' matches last created task (no DB lookup needed)", humanTaskId)
+						} else {
+							// Not the cached ID - do database validation with retry
+							// FIX #8: Retry validation to handle MongoDB eventual consistency
+							for attempt := 0; attempt < 3; attempt++ {
+								// Call coordinator_list_human_tasks to get all tasks
+								listTasksCall := ToolCall{
+									ID:   "taskid_validation",
+									Name: "coordinator_list_human_tasks",
+									Args: map[string]interface{}{},
+								}
+								listResult := s.toolRegistry.ExecuteToolCall(ctx, listTasksCall)
+
+								if listResult.Error == "" {
+									if outputMap, ok := listResult.Output.(map[string]interface{}); ok {
+										if tasks, ok := outputMap["tasks"].([]interface{}); ok {
+											for _, task := range tasks {
+												if taskMap, ok := task.(map[string]interface{}); ok {
+													// Check taskId field (matching HumanTask JSON schema with json:"taskId" tag)
+													if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
+														taskExists = true
+														break
+													}
+												}
 											}
 										}
 									}
+								}
+
+								if taskExists {
+									break // Found it, stop retrying
+								}
+
+								// Not found yet - retry with exponential backoff
+								if attempt < 2 {
+									sleepDuration := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+									log.Printf("[TaskId Validator] Task '%s' not found yet - retrying after %v (attempt %d/3)",
+										humanTaskId, sleepDuration, attempt+1)
+									time.Sleep(sleepDuration)
 								}
 							}
 						}
 
 						if !taskExists {
-							// TaskId is invalid - increment attempt counter
+							// TaskId is invalid even after retries - increment attempt counter
 							taskIdValidationAttempts++
-							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' - Attempt %d/3", humanTaskId, taskIdValidationAttempts)
+							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' after 3 retries with backoff - Attempt %d/3", humanTaskId, taskIdValidationAttempts)
 
 							if taskIdValidationAttempts >= 3 {
 								// After 3 attempts, stop execution with clear error
@@ -919,8 +1030,39 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 							log.Printf("[TaskId Validator] Blocked create_agent_task - injected error asking model to list tasks")
 						} else {
-							log.Printf("[TaskId Validator] humanTaskId '%s' is valid - proceeding", humanTaskId)
+							log.Printf("[TaskId Validator] ✅ humanTaskId '%s' validated successfully (may have required retries)", humanTaskId)
 						}
+					}
+				}
+
+				// FIX #10: AGENT TASK ID AUTO-CORRECTION for execute_subagent
+				// Automatically replace hallucinated/wrong agentTaskId with the cached correct one
+				if toolCall.Name == "execute_subagent" {
+					var providedAgentTaskId string
+					if id, ok := toolCall.Args["agentTaskId"].(string); ok {
+						providedAgentTaskId = id
+					}
+
+					// If we have a cached agentTaskId from create_agent_task, use it
+					if lastCreatedAgentTaskId != "" {
+						// Check if model provided wrong ID (hallucinated)
+						if providedAgentTaskId != lastCreatedAgentTaskId {
+							log.Printf("[AgentTaskId Auto-Correct] Model provided wrong agentTaskId: '%s', replacing with correct cached ID: '%s'",
+								providedAgentTaskId, lastCreatedAgentTaskId)
+
+							// REPLACE the wrong ID with the correct cached one
+							toolCall.Args["agentTaskId"] = lastCreatedAgentTaskId
+
+							// Re-execute the tool with corrected arguments
+							result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
+
+							log.Printf("[AgentTaskId Auto-Correct] ✅ Re-executed execute_subagent with correct agentTaskId: '%s'", lastCreatedAgentTaskId)
+						} else {
+							log.Printf("[AgentTaskId Validator] ✅ Instant validation: agentTaskId '%s' matches last created task", providedAgentTaskId)
+						}
+					} else if providedAgentTaskId != "" {
+						// No cached ID - let the tool validate via GetAgentTask (with retry)
+						log.Printf("[AgentTaskId Validator] No cached agentTaskId, will validate '%s' via GetAgentTask", providedAgentTaskId)
 					}
 				}
 
@@ -1051,7 +1193,15 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					if isPermanentError {
 						toolResultMsg = fmt.Sprintf("PERMANENT ERROR - Tool '%s' cannot be used in this context: %s. DO NOT retry this tool - it will not work.", result.Name, result.Error)
 					} else {
-						toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
+						// ENHANCED ERROR GUIDANCE: Provide specific recovery instructions
+						recoveryGuidance := getErrorRecoveryGuidance(result.Name, result.Error, toolCall.Args)
+						toolResultMsg = fmt.Sprintf("❌ ERROR in tool '%s': %s\n\n%s", result.Name, result.Error, recoveryGuidance)
+
+						// Also send error as visible message to user
+						eventChan <- StreamEvent{
+							Type:    StreamEventToken,
+							Content: fmt.Sprintf("\n\n⚠️  Tool Error: %s\n💡 %s\n\n", result.Error, recoveryGuidance),
+						}
 					}
 				} else {
 					// Marshal output to JSON for context
@@ -1170,6 +1320,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 							if taskID, hasTaskID := outputMap["taskId"].(string); hasTaskID && taskID != "" {
 								workflowState["step"] = 2
 								workflowState["humanTaskId"] = taskID
+								lastCreatedHumanTaskId = taskID // FIX #9: Cache for instant validation
 								log.Printf("[Workflow State] Step 2 complete: created human task %s", taskID)
 							} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
 								// Case 2: Similar task found - use existing task instead of creating new one
@@ -1178,6 +1329,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 										if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
 											workflowState["step"] = 2
 											workflowState["humanTaskId"] = existingTaskID
+											lastCreatedHumanTaskId = existingTaskID // FIX #9: Cache for instant validation
 											log.Printf("[Workflow State] Step 2 complete: using existing similar task %s", existingTaskID)
 										}
 									}
@@ -1195,6 +1347,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 							if agentTaskID, hasAgentTaskID := outputMap["taskId"].(string); hasAgentTaskID && agentTaskID != "" {
 								workflowState["step"] = 4
 								workflowState["agentTaskId"] = agentTaskID
+								lastCreatedAgentTaskId = agentTaskID // FIX #10: Cache for instant validation
 								log.Printf("[Workflow State] Step 4 complete: created agent task %s", agentTaskID)
 							}
 						}
