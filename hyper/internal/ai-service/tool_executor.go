@@ -135,7 +135,8 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
-		failedToolCalls := make(map[string]int)        // Track failed attempts separately
+		consecutiveFailures := 0     // Track CONSECUTIVE failures of the same tool+args
+		lastFailedSignature := ""    // Signature of the last failed tool call
 		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
 		taskIdValidationAttempts := 0                  // Track taskId validation attempts for create_agent_task (max 3)
 
@@ -932,24 +933,47 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					toolCallHistory = toolCallHistory[1:] // Remove oldest
 				}
 
-				// CRITICAL: Track failed tool calls separately - stop immediately on retry of failed operation
+				// CRITICAL: Track CONSECUTIVE failed tool calls - stop on 3+ consecutive identical failures
+				// This allows: compile → error → fix → compile (normal flow)
+				// But prevents: compile → error → compile → error → compile (infinite loop)
 				if result.Error != "" {
-					failedToolCalls[signature]++
-					if failedToolCalls[signature] >= 2 {
-						// Second failure with same args - stop immediately!
-						log.Printf("[Circuit Breaker - Failed Tool] Tool '%s' failed twice with identical arguments - stopping", toolCall.Name)
-						eventChan <- StreamEvent{
-							Type: StreamEventError,
-							Error: fmt.Sprintf("❌ CRITICAL ERROR: Tool '%s' failed TWICE with identical arguments. Error: %s\n\n"+
-								"🛑 You are retrying a FAILED operation. This will never work!\n"+
-								"✅ Try a DIFFERENT approach:\n"+
-								"   - If file not found: check directory listing or search results for the ACTUAL file name\n"+
-								"   - If path wrong: try different path or create the file\n"+
-								"   - If tool incompatible: use a different tool\n\n"+
-								"DO NOT retry the same failed operation again!", toolCall.Name, result.Error),
+					// Check if this is the same as the last failed call
+					if lastFailedSignature == signature {
+						consecutiveFailures++
+						if consecutiveFailures >= 3 {
+							// Third CONSECUTIVE failure with same args - stop!
+							log.Printf("[Circuit Breaker] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments - stopping", toolCall.Name)
+							// Return error to AI, don't stop execution
+							// The AI should see this error and try a different approach
+							loopWarning := fmt.Sprintf("❌ CRITICAL: Tool '%s' has FAILED 3 TIMES IN A ROW with identical arguments.\n\n"+
+								"Error: %s\n\n"+
+								"🛑 This approach is NOT working. You MUST try something different:\n"+
+								"   - If file not found: List the directory first to see what files actually exist\n"+
+								"   - If path wrong: Try a different path or check your working directory\n"+
+								"   - If tool incompatible: Use a completely different tool or approach\n\n"+
+								"DO NOT call this tool with these arguments again!", toolCall.Name, result.Error)
+
+							// Add warning to current messages so AI sees it
+							currentMessages = append(currentMessages, Message{
+								Role:    "system",
+								Content: loopWarning,
+							})
+
+							// Reset counters
+							consecutiveFailures = 0
+							lastFailedSignature = ""
+						} else {
+							lastFailedSignature = signature
 						}
-						return
+					} else {
+						// Different failure, reset counter
+						consecutiveFailures = 1
+						lastFailedSignature = signature
 					}
+				} else {
+					// Success - reset failure tracking
+					consecutiveFailures = 0
+					lastFailedSignature = ""
 				}
 
 				// Circuit breaker: check for repeated tool calls AND warn the AI
@@ -1362,7 +1386,8 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
-		failedToolCalls := make(map[string]int) // Track failed attempts separately
+		consecutiveFailures := 0     // Track CONSECUTIVE failures of the same tool+args
+		lastFailedSignature := ""    // Signature of the last failed tool call
 		// pathValidationRetries not needed in fallback model (Claude handles its own validation)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
@@ -1710,19 +1735,47 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						result.Name, string(argsJSON), string(outputJSON))
 				}
 
-				// CRITICAL: Track failed tool calls separately
+				// CRITICAL: Track CONSECUTIVE failed tool calls - stop on 3+ consecutive identical failures
+				// This allows: compile → error → fix → compile (normal flow)
+				// But prevents: compile → error → compile → error → compile (infinite loop)
 				if result.Error != "" {
-					failedToolCalls[signature]++
-					if failedToolCalls[signature] >= 2 {
-						log.Printf("[Circuit Breaker - Failed Tool] Tool '%s' failed twice with identical arguments - stopping", toolCall.Name)
-						eventChan <- StreamEvent{
-							Type: StreamEventError,
-							Error: fmt.Sprintf("❌ CRITICAL ERROR: Tool '%s' failed TWICE with identical arguments. Error: %s\n\n"+
-								"🛑 You are retrying a FAILED operation. This will never work!\n"+
-								"✅ Try a DIFFERENT approach - DO NOT retry the same failed operation!", toolCall.Name, result.Error),
+					// Check if this is the same as the last failed call
+					if lastFailedSignature == signature {
+						consecutiveFailures++
+						if consecutiveFailures >= 3 {
+							// Third CONSECUTIVE failure with same args - stop!
+							log.Printf("[Circuit Breaker - Filtered] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments", toolCall.Name)
+							// Return error to AI, don't stop execution
+							// The AI should see this error and try a different approach
+							loopWarning := fmt.Sprintf("❌ CRITICAL: Tool '%s' has FAILED 3 TIMES IN A ROW with identical arguments.\n\n"+
+								"Error: %s\n\n"+
+								"🛑 This approach is NOT working. You MUST try something different:\n"+
+								"   - If file not found: List the directory first to see what files actually exist\n"+
+								"   - If path wrong: Try a different path or check your working directory\n"+
+								"   - If tool incompatible: Use a completely different tool or approach\n\n"+
+								"DO NOT call this tool with these arguments again!", toolCall.Name, result.Error)
+
+							// Add warning to current messages so AI sees it
+							currentMessages = append(currentMessages, Message{
+								Role:    "system",
+								Content: loopWarning,
+							})
+
+							// Reset counters
+							consecutiveFailures = 0
+							lastFailedSignature = ""
+						} else {
+							lastFailedSignature = signature
 						}
-						return
+					} else {
+						// Different failure, reset counter
+						consecutiveFailures = 1
+						lastFailedSignature = signature
 					}
+				} else {
+					// Success - reset failure tracking
+					consecutiveFailures = 0
+					lastFailedSignature = ""
 				}
 
 				// Circuit breaker: check for repeated tool calls
