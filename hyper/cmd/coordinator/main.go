@@ -452,6 +452,27 @@ func main() {
 	embeddingDimensions := embeddingClient.GetDimensions()
 	logger.Info("Embedding dimensions", zap.Int("dimensions", embeddingDimensions))
 
+	// Set code index collection name with user ID and dimension suffix
+	// This allows:
+	// 1. User isolation - each user gets their own code index (if CODE_INDEX_USER_ID is set)
+	// 2. Seamless provider switching - different embedding dimensions use separate collections
+	// Pattern: {base}_{userID}_{dimensions} or {base}_{dimensions} if no user ID
+	storage.SetCodeIndexCollectionWithDimensions(embeddingDimensions)
+
+	if storage.CodeIndexUserID != "" {
+		logger.Info("Code index collection configured with user isolation",
+			zap.String("baseCollection", storage.CodeIndexCollectionBase),
+			zap.String("userId", storage.CodeIndexUserID),
+			zap.String("activeCollection", storage.CodeIndexCollection),
+			zap.Int("dimensions", embeddingDimensions))
+	} else {
+		logger.Info("Code index collection configured (shared mode)",
+			zap.String("baseCollection", storage.CodeIndexCollectionBase),
+			zap.String("activeCollection", storage.CodeIndexCollection),
+			zap.Int("dimensions", embeddingDimensions),
+			zap.String("note", "Set CODE_INDEX_USER_ID env var for user isolation"))
+	}
+
 	if err := ensureCodeIndexCollectionWithDimensions(qdrantClient, embeddingDimensions, logger); err != nil {
 		logger.Fatal("Failed to ensure code index collection", zap.Error(err))
 	}
