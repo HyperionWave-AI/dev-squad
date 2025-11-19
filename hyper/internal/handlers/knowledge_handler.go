@@ -886,7 +886,7 @@ func (h *KnowledgeHandler) CompactEntryHandler(c *gin.Context) {
 		}
 		// If nothing missing, default to showing some were preserved
 		if len(result.MissingElements) == 0 {
-			filePathsCount = 1 // At least one file path likely preserved
+			filePathsCount = 1     // At least one file path likely preserved
 			functionNamesCount = 1 // At least one function likely preserved
 		}
 	}
@@ -1219,13 +1219,13 @@ func (h *KnowledgeHandler) GetResyncStatusHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
-// SyncMarkdownKB syncs markdown files from docs/kb to knowledge base
+// SyncMarkdownKB syncs markdown files from .hyper/kb to knowledge base
 // POST /api/v1/knowledge/sync-markdown-kb
 func (h *KnowledgeHandler) SyncMarkdownKB(c *gin.Context) {
 	// Get KB_DOCS_PATH from environment or use default
 	docsPath := os.Getenv("KB_DOCS_PATH")
 	if docsPath == "" {
-		docsPath = "docs/kb"
+		docsPath = ".hyper/kb"
 	}
 
 	// Allow override via query parameter for testing
@@ -1258,13 +1258,13 @@ func (h *KnowledgeHandler) SyncMarkdownKB(c *gin.Context) {
 
 	// Return sync report
 	c.JSON(http.StatusOK, gin.H{
-		"success":         true,
-		"filesProcessed":  report.FilesProcessed,
-		"entriesCreated":  report.EntriesCreated,
-		"entriesUpdated":  report.EntriesUpdated,
-		"collections":     report.Collections,
-		"errors":          report.Errors,
-		"details":         report.Details,
+		"success":        true,
+		"filesProcessed": report.FilesProcessed,
+		"entriesCreated": report.EntriesCreated,
+		"entriesUpdated": report.EntriesUpdated,
+		"collections":    report.Collections,
+		"errors":         report.Errors,
+		"details":        report.Details,
 	})
 }
 
