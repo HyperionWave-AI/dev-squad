@@ -22,6 +22,7 @@ import (
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/server"
+	"hyper/internal/validation"
 
 	"github.com/joho/godotenv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -743,7 +744,9 @@ func main() {
 
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools to MCP server...")
-	filesystemHandler := handlers.NewFilesystemToolHandler(logger)
+	// Create code validator for automatic error detection (reuse projectRoot from line 492)
+	codeValidator := validation.NewCodeValidator(logger, projectRoot)
+	filesystemHandler := handlers.NewFilesystemToolHandler(logger, codeValidator, taskStorage)
 	if err := filesystemHandler.RegisterFilesystemTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register filesystem tools to MCP server", zap.Error(err))
 	}

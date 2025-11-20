@@ -15,6 +15,8 @@ const (
 	RequestIDKey contextKey = "requestID"
 	// IdentityKey is the context key for user identity
 	IdentityKey contextKey = "identity"
+	// AgentTaskIDKey is the context key for agent task ID
+	AgentTaskIDKey contextKey = "agentTaskID"
 )
 
 // Identity represents user identity extracted from JWT

@@ -27,6 +27,7 @@ import (
 	"hyper/internal/middleware"
 	"hyper/internal/services"
 	userstorage "hyper/internal/storage"
+	"hyper/internal/validation"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -192,6 +193,10 @@ func StartHTTPServer(
 	// Initialize subchat storage (needed for execute_subagent tool)
 	subchatStorage := storage.NewSubchatStorage(mongoDatabase, logger)
 
+	// Create code validator for compilation checks
+	projectRoot := tools.GetProjectRoot()
+	codeValidator := validation.NewCodeValidator(logger, projectRoot)
+
 	// Register coordinator tools (task management, knowledge base, MCP management)
 	logger.Info("Registering coordinator tools (task management, knowledge base, MCP management)...")
 	beforeCount := len(toolRegistry.List())
@@ -205,6 +210,7 @@ func StartHTTPServer(
 		aiSettingsService, // AI settings service for subagent prompts
 		aiChatService,  // AI service for sub-agent streaming
 		logger,         // Logger for debugging
+		codeValidator,  // Code validator for compilation checks
 	); err != nil {
 		logger.Error("Failed to register coordinator tools", zap.Error(err))
 		return err
@@ -254,7 +260,9 @@ func StartHTTPServer(
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools (bash, file operations, patch application)...")
 	beforeCount = len(toolRegistry.List())
-	if err := tools.RegisterFilesystemTools(toolRegistry); err != nil {
+
+	// Reuse code validator created earlier for filesystem tools
+	if err := tools.RegisterFilesystemTools(toolRegistry, codeValidator, taskStorage); err != nil {
 		logger.Error("Failed to register filesystem tools", zap.Error(err))
 		return err
 	}

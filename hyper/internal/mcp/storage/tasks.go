@@ -53,15 +53,20 @@ type TodoItem struct {
 	HumanPromptNotes          string     `json:"humanPromptNotes,omitempty" bson:"humanPromptNotes,omitempty"`
 	HumanPromptNotesAddedAt   *time.Time `json:"humanPromptNotesAddedAt,omitempty" bson:"humanPromptNotesAddedAt,omitempty"`
 	HumanPromptNotesUpdatedAt *time.Time `json:"humanPromptNotesUpdatedAt,omitempty" bson:"humanPromptNotesUpdatedAt,omitempty"`
+	IsMandatory               bool       `json:"isMandatory,omitempty" bson:"isMandatory,omitempty"`
+	ValidationCmd             string     `json:"validationCmd,omitempty" bson:"validationCmd,omitempty"`
 }
 
 // TodoItemInput represents the input format for creating a TODO item
 type TodoItemInput struct {
-	Description  string `json:"description"`
-	FilePath     string `json:"filePath,omitempty"`
-	FunctionName string `json:"functionName,omitempty"`
-	ContextHint  string `json:"contextHint,omitempty"`
-	Notes        string `json:"notes,omitempty"`
+	Description   string `json:"description"`
+	FilePath      string `json:"filePath,omitempty"`
+	FunctionName  string `json:"functionName,omitempty"`
+	ContextHint   string `json:"contextHint,omitempty"`
+	Notes         string `json:"notes,omitempty"`
+	Status        string `json:"status,omitempty"`
+	IsMandatory   bool   `json:"isMandatory,omitempty"`
+	ValidationCmd string `json:"validationCmd,omitempty"`
 }
 
 // HumanTask represents a task created by a human user
@@ -182,7 +187,8 @@ type TaskStorage interface {
 	ClearTodoPromptNotes(agentTaskID string, todoID string) error
 	ClearAllTasks() (*ClearResult, error)
 	SearchSimilarHumanTasks(prompt string, limit int, minScore float64) ([]*HumanTask, []float64, error)
-	
+	AddTodoToAgentTask(agentTaskID string, todo TodoItemInput) error
+
 	// Hierarchical task management methods
 	CreateChildAgentTask(parentTaskID string, params ChildTaskParams) (*AgentTask, error)
 	GetChildTasks(parentTaskID string) ([]*AgentTask, error)
@@ -362,14 +368,16 @@ func (s *MongoTaskStorage) CreateAgentTask(humanTaskID, agentName, role string, 
 	todoItems := make([]TodoItem, len(todos))
 	for i, input := range todos {
 		todoItems[i] = TodoItem{
-			ID:           uuid.New().String(),
-			Description:  input.Description,
-			Status:       TodoStatusPending,
-			CreatedAt:    now,
-			FilePath:     input.FilePath,
-			FunctionName: input.FunctionName,
-			ContextHint:  input.ContextHint,
-			Notes:        input.Notes,
+			ID:            uuid.New().String(),
+			Description:   input.Description,
+			Status:        TodoStatusPending,
+			CreatedAt:     now,
+			FilePath:      input.FilePath,
+			FunctionName:  input.FunctionName,
+			ContextHint:   input.ContextHint,
+			Notes:         input.Notes,
+			IsMandatory:   input.IsMandatory,
+			ValidationCmd: input.ValidationCmd,
 		}
 	}
 
@@ -1022,14 +1030,16 @@ func (s *MongoTaskStorage) CreateChildAgentTask(parentTaskID string, params Chil
 	// Convert TodoItemInput to TodoItem
 	for _, todoInput := range params.Todos {
 		todo := TodoItem{
-			ID:           uuid.New().String(),
-			Description:  todoInput.Description,
-			Status:       TodoStatusPending,
-			CreatedAt:    now,
-			FilePath:     todoInput.FilePath,
-			FunctionName: todoInput.FunctionName,
-			ContextHint:  todoInput.ContextHint,
-			Notes:        todoInput.Notes,
+			ID:            uuid.New().String(),
+			Description:   todoInput.Description,
+			Status:        TodoStatusPending,
+			CreatedAt:     now,
+			FilePath:      todoInput.FilePath,
+			FunctionName:  todoInput.FunctionName,
+			ContextHint:   todoInput.ContextHint,
+			Notes:         todoInput.Notes,
+			IsMandatory:   todoInput.IsMandatory,
+			ValidationCmd: todoInput.ValidationCmd,
 		}
 		childTask.Todos = append(childTask.Todos, todo)
 	}
@@ -1407,4 +1417,57 @@ func (s *MongoTaskStorage) updateParentStatus(parentTaskID string) error {
 
 	// Update parent status
 	return s.UpdateTaskStatus(parentTaskID, newStatus, "Status updated based on child task progress")
+}
+
+// AddTodoToAgentTask adds a new TODO to an existing agent task
+func (s *MongoTaskStorage) AddTodoToAgentTask(agentTaskID string, todo TodoItemInput) error {
+	todoID := uuid.New().String()
+	now := time.Now().UTC()
+
+	// Use status from input if provided, otherwise default to pending
+	status := TodoStatusPending
+	if todo.Status != "" {
+		status = TodoStatus(todo.Status)
+	}
+
+	todoItem := TodoItem{
+		ID:            todoID,
+		Description:   todo.Description,
+		Status:        status,
+		FilePath:      todo.FilePath,
+		FunctionName:  todo.FunctionName,
+		IsMandatory:   todo.IsMandatory,
+		ValidationCmd: todo.ValidationCmd,
+		ContextHint:   todo.ContextHint,
+		Notes:         todo.Notes,
+		CreatedAt:     now,
+	}
+
+	// Note: TodoItem struct doesn't have UpdatedAt field, but task-level updatedAt is set below
+
+	filter := bson.M{"taskId": agentTaskID}
+	update := bson.M{
+		"$push": bson.M{"todos": todoItem},
+		"$set":  bson.M{"updatedAt": now},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := s.agentTasksCollection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to add todo: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("agent task not found: %s", agentTaskID)
+	}
+
+	s.logger.Info("Added TODO to agent task",
+		zap.String("taskID", agentTaskID),
+		zap.String("todoID", todoID),
+		zap.String("description", todo.Description),
+		zap.Bool("mandatory", todo.IsMandatory))
+
+	return nil
 }

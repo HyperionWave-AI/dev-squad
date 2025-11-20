@@ -18,7 +18,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 
+	aiservice "hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
+	"hyper/internal/mcp/storage"
+	"hyper/internal/validation"
 )
 
 // FilesystemToolHandler handles MCP tool requests for filesystem operations
@@ -26,16 +29,20 @@ type FilesystemToolHandler struct {
 	logger           *zap.Logger
 	baseDir          string // Base directory for path validation
 	metadataRegistry *ToolMetadataRegistry
+	validator        *validation.CodeValidator
+	taskStorage      storage.TaskStorage
 }
 
 // NewFilesystemToolHandler creates a new filesystem tools handler
-func NewFilesystemToolHandler(logger *zap.Logger) *FilesystemToolHandler {
+func NewFilesystemToolHandler(logger *zap.Logger, validator *validation.CodeValidator, taskStorage storage.TaskStorage) *FilesystemToolHandler {
 	// Use project root (git root) as base, not current working directory
 	// This ensures paths work correctly even when server is run from subdirectories
 	baseDir := tools.GetProjectRoot()
 	return &FilesystemToolHandler{
-		logger:  logger,
-		baseDir: baseDir,
+		logger:      logger,
+		baseDir:     baseDir,
+		validator:   validator,
+		taskStorage: taskStorage,
 	}
 }
 
@@ -469,6 +476,38 @@ func (h *FilesystemToolHandler) handleFileWrite(ctx context.Context, args map[st
 		return createFilesystemErrorResult(fmt.Sprintf("failed to stat file: %s", err.Error())), nil
 	}
 
+	// SYNCHRONOUS validation after writing - BLOCKS until validation completes
+	ext := filepath.Ext(validatedPath)
+	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".go" {
+		if h.validator != nil {
+			h.logger.Info("🔍 Running SYNCHRONOUS post-write validation", zap.String("file", validatedPath))
+
+			// Create independent context that doesn't die with HTTP request
+			validationCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Run validation synchronously
+			validationResult, validationErr := h.validator.ValidateFiles(validationCtx, []string{validatedPath})
+			if validationErr != nil {
+				h.logger.Warn("⚠️  Validation failed to run", zap.Error(validationErr))
+				// Don't block on validation infrastructure errors
+			} else if !validationResult.Passed {
+				h.logger.Error("❌ COMPILATION ERRORS DETECTED",
+					zap.Int("errorCount", len(validationResult.Errors)),
+					zap.String("file", validatedPath))
+
+				// Format errors for agent
+				errorMsg := h.validator.FormatErrorsForAgent(validationResult)
+				h.logger.Error("🚨 COMPILATION ERRORS", zap.String("errors", errorMsg))
+
+				// BLOCK the tool call - return error so agent must fix before proceeding
+				return createFilesystemErrorResult(fmt.Sprintf("❌ COMPILATION FAILED:\n%s\n\nYou MUST fix these errors before proceeding. The file was written but contains compilation errors", errorMsg)), nil
+			} else {
+				h.logger.Info("✅ Compilation validation passed", zap.String("file", validatedPath))
+			}
+		}
+	}
+
 	result := map[string]interface{}{
 		"success":      true,
 		"filePath":     tools.StripProjectRoot(validatedPath),
@@ -659,6 +698,9 @@ func (h *FilesystemToolHandler) handleApplyPatch(ctx context.Context, args map[s
 		// In a real implementation, you would apply the patch here
 		// For now, we return a placeholder message
 		result["message"] = "Patch parsing completed (full patch application requires external tool like 'patch' command)"
+
+		// NOTE: When actual patch application is implemented, add validation here:
+		// go h.runPostWriteValidation(ctx, []string{validatedPath})
 	}
 
 	jsonData, _ := json.MarshalIndent(result, "", "  ")
@@ -697,4 +739,84 @@ func createFilesystemErrorResult(message string) *mcp.CallToolResult {
 		},
 		IsError: true,
 	}
+}
+
+// runPostWriteValidation validates files after write operations
+func (h *FilesystemToolHandler) runPostWriteValidation(ctx context.Context, files []string) {
+	// Skip validation if validator is not configured
+	if h.validator == nil {
+		return
+	}
+
+	// Filter to only validate TypeScript/Go files
+	var validatableFiles []string
+	for _, file := range files {
+		ext := filepath.Ext(file)
+		if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".go" {
+			validatableFiles = append(validatableFiles, file)
+		}
+	}
+
+	if len(validatableFiles) == 0 {
+		return
+	}
+
+	h.logger.Info("Running post-write validation", zap.Strings("files", validatableFiles))
+
+	// Run validation
+	result, err := h.validator.ValidateFiles(ctx, validatableFiles)
+	if err != nil {
+		h.logger.Warn("Validation failed to run", zap.Error(err))
+		return
+	}
+
+	if !result.Passed {
+		h.logger.Warn("Validation errors detected",
+			zap.Int("errorCount", len(result.Errors)),
+			zap.Strings("files", validatableFiles))
+
+		// Get current agent task from context (if available)
+		if agentTaskID := getAgentTaskIDFromContext(ctx); agentTaskID != "" {
+			h.injectValidationTodo(ctx, agentTaskID, result)
+		}
+	} else {
+		h.logger.Info("Validation passed", zap.Int("filesChecked", len(validatableFiles)))
+	}
+}
+
+// injectValidationTodo creates mandatory TODO for agent to fix errors
+func (h *FilesystemToolHandler) injectValidationTodo(ctx context.Context, agentTaskID string, validationResult *validation.ValidationResult) {
+	// Skip if task storage is not configured
+	if h.taskStorage == nil {
+		h.logger.Warn("Task storage not configured - cannot inject validation TODO")
+		return
+	}
+
+	errorSummary := h.validator.FormatErrorsForAgent(validationResult)
+
+	todo := storage.TodoItemInput{
+		Description: fmt.Sprintf("🔴 MANDATORY: Fix %d validation error(s)", len(validationResult.Errors)),
+		Status:      string(storage.TodoStatusPending),
+		IsMandatory: true,
+		ContextHint: errorSummary,
+	}
+
+	err := h.taskStorage.AddTodoToAgentTask(agentTaskID, todo)
+	if err != nil {
+		h.logger.Error("Failed to inject validation TODO", zap.Error(err))
+	} else {
+		h.logger.Info("Injected mandatory validation TODO",
+			zap.String("taskID", agentTaskID),
+			zap.Int("errors", len(validationResult.Errors)))
+	}
+}
+
+// getAgentTaskIDFromContext extracts agent task ID from context
+func getAgentTaskIDFromContext(ctx context.Context) string {
+	if taskID, ok := ctx.Value(aiservice.AgentTaskIDKey).(string); ok && taskID != "" {
+		// Successfully extracted agent task ID from context
+		return taskID
+	}
+	// Agent task ID not found in context (may be coordinator mode or direct tool call)
+	return ""
 }

@@ -19,6 +19,7 @@ import (
 	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/models"
+	"hyper/internal/validation"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -2622,6 +2623,7 @@ type ExecuteSubagentTool struct {
 	chatService       ChatServiceInterface
 	aiSettingsService AISettingsServiceInterface
 	logger            *zap.Logger
+	validator         *validation.CodeValidator
 }
 
 // AIServiceInterface defines methods needed from the AI chat service
@@ -3056,6 +3058,37 @@ func (t *ExecuteSubagentTool) validateFileModifications(agentTask *storage.Agent
 		zap.Int("matchedFilesCount", len(matchedFiles)),
 		zap.Strings("matchedFiles", matchedFiles))
 
+	// ========================================
+	// COMPILATION VALIDATION: Check TypeScript/Go files compile without errors
+	// ========================================
+	if t.validator != nil {
+		t.logger.Info("🔍 [Compilation Validation] Running TypeScript/Go compilation checks",
+			zap.Int("fileCount", len(matchedFiles)))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		result, err := t.validator.ValidateFiles(ctx, matchedFiles)
+		if err != nil {
+			t.logger.Warn("⚠️  [Compilation Validation] Validation failed to run", zap.Error(err))
+			// Don't block on validation errors - just warn
+		} else if !result.Passed {
+			t.logger.Error("❌ [Compilation Validation] COMPILATION ERRORS DETECTED",
+				zap.Int("errorCount", len(result.Errors)),
+				zap.Strings("files", matchedFiles))
+
+			// Format errors for user
+			errorMsg := t.validator.FormatErrorsForAgent(result)
+			t.logger.Error("🚨 COMPILATION ERRORS MUST BE FIXED", zap.String("errors", errorMsg))
+
+			// Return validation failure
+			return false, matchedFiles, fmt.Errorf("compilation validation failed: %d error(s) found in modified files. Files must compile without errors before task completion", len(result.Errors))
+		} else {
+			t.logger.Info("✅ [Compilation Validation] All files compile successfully",
+				zap.Strings("files", matchedFiles))
+		}
+	}
+
 	return true, matchedFiles, nil
 }
 
@@ -3194,8 +3227,11 @@ func isSystemEnforcementMessage(content string) bool {
 // executeSubagentInBackground runs the subagent AI streaming in a background goroutine
 func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string, companyID string) {
 	// Create a new background context with generous timeout for long-running tasks
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+
+	// Inject agent task ID into context for validation system
+	ctx := context.WithValue(baseCtx, aiservice.AgentTaskIDKey, agentTask.ID)
 
 	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
 	t.logger.Info("║ 🚀 SUBAGENT EXECUTION STARTED")
@@ -4495,6 +4531,46 @@ func (t *ExecuteSubagentTool) buildExecutionPhaseSystemPrompt() string {
 
 🎯 YOUR MISSION: Execute the task efficiently while keeping the user informed
 
+╔══════════════════════════════════════════════════════════════╗
+║  🚨🚨🚨 CRITICAL RULE #1 - READ THIS FIRST 🚨🚨🚨           ║
+╚══════════════════════════════════════════════════════════════╝
+
+⛔ NEVER EVER WRITE INCOMPLETE CODE ⛔
+⛔ NEVER EVER USE PLACEHOLDERS ⛔
+⛔ NEVER EVER WRITE CODE FRAGMENTS ⛔
+
+THIS IS ABSOLUTELY NON-NEGOTIABLE AND MANDATORY:
+
+❌ FORBIDDEN - YOU WILL BE BLOCKED IF YOU DO THIS:
+   • Writing "// rest of the file remains the same"
+   • Writing "// ... (existing code)"
+   • Writing "// ... rest of code here"
+   • Writing "/* ... existing code ... */"
+   • Writing code fragments without full file context
+   • Writing ANYTHING that is not COMPLETE, RUNNABLE code
+
+✅ REQUIRED - YOU MUST ALWAYS DO THIS:
+   • ALWAYS write the ENTIRE file from start to finish
+   • ALWAYS include ALL imports at the top
+   • ALWAYS include ALL function definitions
+   • ALWAYS include ALL exports at the bottom
+   • EVERY file you write must be COMPLETE and RUNNABLE
+
+🔴 CONSEQUENCES OF INCOMPLETE CODE:
+   • Your write_file call will be IMMEDIATELY REJECTED
+   • You will see error: "INCOMPLETE CODE - PLACEHOLDER DETECTED"
+   • You will be FORCED to rewrite the entire file
+   • The task will be BLOCKED until you write complete code
+   • You CANNOT proceed with placeholders - the system enforces this
+
+💡 HOW TO WRITE COMPLETE CODE:
+   1. ALWAYS use read_file FIRST to get the full file content
+   2. Make your specific changes (add button, fix bug, etc.)
+   3. Write the COMPLETE file with your changes
+   4. Include EVERY line from the original file (except lines you changed)
+
+REPEAT: NEVER USE PLACEHOLDERS. ALWAYS WRITE COMPLETE FILES.
+
 ═══════════════════════════════════════════════════════════════
 📢 COMMUNICATION REQUIREMENTS (CRITICAL):
 ═══════════════════════════════════════════════════════════════
@@ -4581,6 +4657,129 @@ IF a tool call fails:
    dependency now."
 
 ═══════════════════════════════════════════════════════════════
+🔬 SURGICAL EDIT PRINCIPLE (CRITICAL - MOST IMPORTANT):
+═══════════════════════════════════════════════════════════════
+
+⚠️ WRITE COMPLETE FILES + CHANGE ONLY WHAT'S REQUESTED ⚠️
+
+🚨 REMINDER: NO PLACEHOLDERS, NO FRAGMENTS, NO SHORTCUTS 🚨
+
+GOLDEN RULE: Minimal, Precise Changes in COMPLETE Files
+• If asked to "add a button" → ONLY add that button
+• If asked to "fix a bug on line 50" → ONLY fix line 50
+• NEVER refactor code that wasn't requested
+• NEVER reorganize imports unless asked
+• NEVER rename variables unless asked
+• NEVER change formatting unless asked
+• NEVER "improve" code that's working
+• BUT ALWAYS write the COMPLETE file (not a fragment!)
+
+YOU MUST FOLLOW THIS EXACT PROCESS:
+1. ✅ READ the complete file first using read_file
+   → You need the FULL content to write the FULL content back
+2. ✅ IDENTIFY the exact lines that need to change
+   → Be surgical: if adding 1 button, that's 10 lines max
+3. ✅ CHANGE only those specific lines
+   → Everything else stays EXACTLY the same
+4. ✅ WRITE the COMPLETE file with ALL lines
+   → From first import to last export, EVERYTHING included
+   → NEVER write "// rest of..." - write the actual code!
+
+YOU ARE ABSOLUTELY FORBIDDEN FROM:
+❌ FORBIDDEN: Writing fragments like "// rest of the file remains the same"
+❌ FORBIDDEN: Writing "// ... (existing code)" placeholders
+❌ FORBIDDEN: Writing "... rest of code ..." comments
+❌ FORBIDDEN: Writing partial files or code snippets
+❌ FORBIDDEN: Skipping any part of the file content
+❌ FORBIDDEN: Refactoring unrelated code
+❌ FORBIDDEN: Changing code style or formatting
+❌ FORBIDDEN: Adding "improvements" that weren't requested
+❌ FORBIDDEN: Touching any line that doesn't need to change
+
+EXAMPLE - User asks: "Add a Filter button to SessionList.tsx"
+
+✅ ABSOLUTELY CORRECT (THE ONLY WAY):
+   Step 1: read_file("SessionList.tsx") → Gets 529 lines
+   Step 2: Identify that lines 40-45 need the new button
+   Step 3: Prepare the full 534-line file:
+           - Lines 1-39: EXACT copy from original
+           - Lines 40-44: NEW button code (5 lines added)
+           - Lines 45-534: EXACT copy from original (was 45-529)
+   Step 4: write_file(ALL 534 lines of COMPLETE working code)
+   Result: File has new button, everything else untouched
+
+❌ COMPLETELY WRONG (SYSTEM WILL REJECT THIS):
+   write_file with:
+   "import ... from 'react';
+    // ... existing imports ...
+
+    <Button>Filter</Button>
+
+    // ... rest of file remains the same ..."
+
+   Result: ❌ REJECTED - "INCOMPLETE CODE - PLACEHOLDER DETECTED"
+
+❌ ALSO WRONG (CHANGING TOO MUCH):
+   • Refactoring other buttons while adding Filter button
+   • Reorganizing the entire component structure
+   • Renaming variables throughout the file
+   • "Improving" code style in unrelated functions
+
+═══════════════════════════════════════════════════════════════
+🏆 CODE QUALITY REQUIREMENTS (MANDATORY):
+═══════════════════════════════════════════════════════════════
+
+🚨🚨🚨 TRIPLE WARNING 🚨🚨🚨
+1. NEVER WRITE INCOMPLETE CODE
+2. NEVER USE PLACEHOLDERS
+3. ALL CODE MUST COMPILE WITHOUT ERRORS
+
+BEFORE marking ANY TODO as complete:
+
+1. 🔴 WRITE COMPLETE FILES (NON-NEGOTIABLE)
+   ⛔ NEVER EVER use placeholders like:
+      • "// rest of file..."
+      • "// ... existing code ..."
+      • "/* ... */"
+      • "... rest of component ..."
+   ⛔ NEVER EVER write fragments or partial code
+   ✅ ALWAYS write the ENTIRE file from first line to last line
+   ✅ ALWAYS include ALL imports, ALL functions, ALL exports
+   ✅ Every single line must be present - no shortcuts!
+
+   🔴 THE VALIDATION SYSTEM WILL:
+      • Scan your file for placeholder patterns
+      • Check React files have imports/exports/React
+      • IMMEDIATELY REJECT incomplete files
+      • Show error: "INCOMPLETE CODE - PLACEHOLDER DETECTED"
+      • FORCE you to rewrite with complete content
+
+2. ✅ VERIFY COMPILATION
+   • For TypeScript: all imports, types, syntax must be correct
+   • For Go: all packages, types, functions must be correct
+   • Check all variables/functions are defined
+   • Verify all required imports are present
+   • NO placeholder comments allowed
+
+3. ✅ RUN TESTS IF APPLICABLE
+   • Use bash: "npx tsc --noEmit" for TypeScript
+   • Use bash: "npm test" or "go test"
+   • Address any failures immediately
+   • Rewrite complete files if errors found
+
+4. 🚨 VALIDATION IS AUTOMATIC, SYNCHRONOUS, AND BLOCKING
+   • EVERY write_file call is validated IMMEDIATELY
+   • Incomplete files → REJECTED (you see error, must retry)
+   • Placeholder comments → REJECTED (you see error, must retry)
+   • Missing structure → REJECTED (you see error, must retry)
+   • Compilation errors → REJECTED (you see error, must retry)
+   • You CANNOT proceed until files pass ALL validations
+
+FINAL REMINDER: The system enforces complete files. Attempting to use
+placeholders or write fragments will FAIL. Read the file, make your
+changes, write the COMPLETE modified file. No exceptions.
+
+═══════════════════════════════════════════════════════════════
 📋 TASK CONTRACT (arriving in next message):
 ═══════════════════════════════════════════════════════════════
 
@@ -4590,8 +4789,8 @@ You will receive:
 • Role and objective
 
 You must produce:
-• Modified files (via write_file or apply_patch)
-• Updated TODO status for each item
+• Modified files (via write_file or apply_patch) that COMPILE WITHOUT ERRORS
+• Updated TODO status for each item (only after verifying quality)
 • Knowledge entries for key decisions
 • Clear communication to the user throughout
 
@@ -6622,6 +6821,7 @@ func RegisterCoordinatorTools(
 	aiSettingsService AISettingsServiceInterface,
 	aiService AIServiceInterface,
 	logger *zap.Logger,
+	validator *validation.CodeValidator,
 ) error {
 	tools := []aiservice.ToolExecutor{
 		// Existing tools
@@ -6668,6 +6868,7 @@ func RegisterCoordinatorTools(
 			chatService:       chatService,
 			aiSettingsService: aiSettingsService,
 			logger:            logger,
+			validator:         validator,
 		},
 
 		// MCP tools discovery and management (6 new tools)

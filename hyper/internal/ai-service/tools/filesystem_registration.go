@@ -4,8 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	aiservice "hyper/internal/ai-service"
+	"hyper/internal/mcp/storage"
+	"hyper/internal/validation"
+
+	"go.uber.org/zap"
 )
 
 // BashToolExecutor adapts BashTool to ToolExecutor interface
@@ -107,7 +115,9 @@ func (r *ReadFileToolExecutor) Execute(ctx context.Context, input map[string]int
 
 // WriteFileToolExecutor adapts WriteFileTool to ToolExecutor interface
 type WriteFileToolExecutor struct {
-	tool *WriteFileTool
+	tool        *WriteFileTool
+	validator   *validation.CodeValidator
+	taskStorage storage.TaskStorage
 }
 
 func (w *WriteFileToolExecutor) Name() string {
@@ -149,6 +159,77 @@ func (w *WriteFileToolExecutor) Execute(ctx context.Context, input map[string]in
 	var output interface{}
 	if err := json.Unmarshal([]byte(result), &output); err != nil {
 		return nil, fmt.Errorf("failed to parse tool output: %w", err)
+	}
+
+	// Run SYNCHRONOUS validation after successful write - BLOCKS until validation completes
+	if filePath, ok := input["path"].(string); ok && filePath != "" && w.validator != nil {
+		// Filter to only validate TypeScript/Go files
+		ext := filepath.Ext(filePath)
+		if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".go" {
+			zap.L().Info("🔍 Running SYNCHRONOUS post-write validation", zap.String("file", filePath))
+
+			// Check for incomplete/placeholder code FIRST
+			fileContent, readErr := os.ReadFile(filePath)
+			if readErr == nil {
+				contentStr := string(fileContent)
+
+				// Detect placeholder comments
+				placeholderPatterns := []string{
+					"// rest of",
+					"// ... (",
+					"...rest of",
+					"// (rest",
+					"/* rest of",
+					"# rest of",
+				}
+
+				for _, pattern := range placeholderPatterns {
+					if strings.Contains(strings.ToLower(contentStr), strings.ToLower(pattern)) {
+						zap.L().Error("❌ INCOMPLETE CODE - Placeholder detected",
+							zap.String("file", filePath),
+							zap.String("pattern", pattern))
+						return nil, fmt.Errorf("❌ INCOMPLETE CODE - PLACEHOLDER DETECTED:\nFile contains placeholder '%s'.\n\nWrite the COMPLETE file, not fragments.", pattern)
+					}
+				}
+
+				// For React components, check required structure
+				if ext == ".tsx" || ext == ".jsx" {
+					hasImport := strings.Contains(contentStr, "import")
+					hasExport := strings.Contains(contentStr, "export")
+					hasReact := strings.Contains(contentStr, "React") || strings.Contains(contentStr, "react")
+
+					if !hasImport || !hasExport || !hasReact {
+						zap.L().Error("❌ INCOMPLETE REACT COMPONENT",
+							zap.String("file", filePath),
+							zap.Bool("hasImport", hasImport),
+							zap.Bool("hasExport", hasExport),
+							zap.Bool("hasReact", hasReact))
+						return nil, fmt.Errorf("❌ INCOMPLETE REACT COMPONENT:\nMissing: imports=%v, exports=%v, React=%v\n\nWrite COMPLETE component with all imports and exports.", !hasImport, !hasExport, !hasReact)
+					}
+				}
+			}
+
+			// Create independent context
+			validationCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Run compilation validation
+			validationResult, err := w.validator.ValidateFiles(validationCtx, []string{filePath})
+			if err != nil {
+				zap.L().Warn("⚠️  Validation failed to run", zap.Error(err))
+			} else if !validationResult.Passed {
+				zap.L().Error("❌ COMPILATION ERRORS DETECTED",
+					zap.Int("errorCount", len(validationResult.Errors)),
+					zap.String("file", filePath))
+
+				errorMsg := w.validator.FormatErrorsForAgent(validationResult)
+				zap.L().Error("🚨 COMPILATION ERRORS", zap.String("errors", errorMsg))
+
+				return nil, fmt.Errorf("❌ COMPILATION FAILED:\n%s\n\nFix these errors before proceeding.", errorMsg)
+			} else {
+				zap.L().Info("✅ Validation passed", zap.String("file", filePath))
+			}
+		}
 	}
 
 	return output, nil
@@ -205,7 +286,9 @@ func (l *ListDirectoryToolExecutor) Execute(ctx context.Context, input map[strin
 
 // ApplyPatchToolExecutor adapts ApplyPatchTool to ToolExecutor interface
 type ApplyPatchToolExecutor struct {
-	tool *ApplyPatchTool
+	tool        *ApplyPatchTool
+	validator   *validation.CodeValidator
+	taskStorage storage.TaskStorage
 }
 
 func (a *ApplyPatchToolExecutor) Name() string {
@@ -253,18 +336,62 @@ func (a *ApplyPatchToolExecutor) Execute(ctx context.Context, input map[string]i
 		return nil, fmt.Errorf("failed to parse tool output: %w", err)
 	}
 
+	// Run SYNCHRONOUS validation after successful patch (if not dry-run) - BLOCKS until validation completes
+	dryRun, _ := input["dryRun"].(bool)
+	if !dryRun {
+		if filePath, ok := input["path"].(string); ok && filePath != "" && a.validator != nil {
+			// Filter to only validate TypeScript/Go files
+			ext := filepath.Ext(filePath)
+			if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".go" {
+				zap.L().Info("🔍 Running SYNCHRONOUS post-patch validation", zap.String("file", filePath))
+
+				// Create independent context that doesn't die with HTTP request
+				validationCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				// Run validation synchronously
+				validationResult, err := a.validator.ValidateFiles(validationCtx, []string{filePath})
+				if err != nil {
+					zap.L().Warn("⚠️  Validation failed to run", zap.Error(err))
+					// Don't block on validation infrastructure errors
+				} else if !validationResult.Passed {
+					zap.L().Error("❌ COMPILATION ERRORS DETECTED",
+						zap.Int("errorCount", len(validationResult.Errors)),
+						zap.String("file", filePath))
+
+					// Format errors for agent
+					errorMsg := a.validator.FormatErrorsForAgent(validationResult)
+					zap.L().Error("🚨 COMPILATION ERRORS", zap.String("errors", errorMsg))
+
+					// BLOCK the tool call - return error so agent must fix before proceeding
+					return nil, fmt.Errorf("❌ COMPILATION FAILED:\n%s\n\nYou MUST fix these errors before proceeding. The patch was applied but contains compilation errors", errorMsg)
+				} else {
+					zap.L().Info("✅ Compilation validation passed", zap.String("file", filePath))
+				}
+			}
+		}
+	}
+
 	return output, nil
 }
 
 // RegisterFilesystemTools registers all filesystem tools with the tool registry
 // Tools: bash, read_file, write_file, list_directory, apply_patch
-func RegisterFilesystemTools(registry *aiservice.ToolRegistry) error {
+func RegisterFilesystemTools(registry *aiservice.ToolRegistry, validator *validation.CodeValidator, taskStorage storage.TaskStorage) error {
 	tools := []aiservice.ToolExecutor{
 		&BashToolExecutor{tool: &BashTool{}},
 		&ReadFileToolExecutor{tool: &ReadFileTool{}},
-		&WriteFileToolExecutor{tool: &WriteFileTool{}},
+		&WriteFileToolExecutor{
+			tool:        &WriteFileTool{},
+			validator:   validator,
+			taskStorage: taskStorage,
+		},
 		&ListDirectoryToolExecutor{tool: &ListDirectoryTool{}},
-		&ApplyPatchToolExecutor{tool: &ApplyPatchTool{}},
+		&ApplyPatchToolExecutor{
+			tool:        &ApplyPatchTool{},
+			validator:   validator,
+			taskStorage: taskStorage,
+		},
 	}
 
 	for _, tool := range tools {
