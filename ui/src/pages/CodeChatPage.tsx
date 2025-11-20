@@ -572,6 +572,7 @@ export const CodeChatPage: React.FC = () => {
       setMessages([]);
       setStreamingContent('');
       setIsStreaming(false);
+      setStreamingSessionId(null); // Clear streaming session tracker to enable polling
       setStreamingToolCalls([]);
       setStreamingToolResults(new Map());
       setPendingToolCalls(new Set());

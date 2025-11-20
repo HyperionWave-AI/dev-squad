@@ -1374,6 +1374,29 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 		}
 	})
 
+	// Register progress listener for subchat execution (moved from streamAIResponse)
+	// This ensures subchats can stream messages even before user sends a message
+	progressCh := GetProgressNotifier(h.logger).RegisterSession(sessionID)
+	defer GetProgressNotifier(h.logger).UnregisterSession(sessionID)
+
+	// Goroutine to stream progress notifications to WebSocket (tracked with WaitGroup)
+	cleanup.wg.Add(1)
+	middleware.SafeGo(h.logger, func() {
+		defer cleanup.wg.Done()
+		for progress := range progressCh {
+			progressMsg := models.StreamMessage{
+				Type:    "token",
+				Content: "\n\n" + progress.Message + "\n\n",
+			}
+			if err := h.safeWriteJSON(conn, progressMsg); err != nil {
+				h.logger.Debug("Failed to send progress notification (client may have disconnected)",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Error(err))
+				return
+			}
+		}
+	})
+
 	// Main message loop
 	for {
 		select {
@@ -1570,27 +1593,8 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 		return
 	}
 
-	// Register for progress notifications (for subchat execution)
-	progressCh := GetProgressNotifier(h.logger).RegisterSession(sessionID)
-	defer GetProgressNotifier(h.logger).UnregisterSession(sessionID)
-
-	// Launch goroutine to stream progress notifications to WebSocket (tracked with WaitGroup)
-	cleanup.wg.Add(1)
-	middleware.SafeGo(h.logger, func() {
-		defer cleanup.wg.Done()
-		for progress := range progressCh {
-			progressMsg := models.StreamMessage{
-				Type:    "token",
-				Content: "\n\n" + progress.Message + "\n\n",
-			}
-			if err := h.safeWriteJSON(conn, progressMsg); err != nil {
-				h.logger.Debug("Failed to send progress notification (client may have disconnected)",
-					zap.String("sessionId", sessionID.Hex()),
-					zap.Error(err))
-				return
-			}
-		}
-	})
+	// Note: Progress listener registration moved to handleMessages (connection-level)
+	// This prevents double-registration and ensures subchats can stream before user sends messages
 
 	// Step 2: Determine active agent and fetch system prompt
 	var systemPromptText string

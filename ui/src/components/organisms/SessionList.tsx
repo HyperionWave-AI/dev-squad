@@ -1,7 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '../atoms/Button';
-import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2, Users, Bot, Filter } from 'lucide-react';
-import * as Dialog from '@radix-ui/react-dialog';
+import { 
+  Plus, 
+  MessageSquare, 
+  Trash2, 
+  Clock as LucideClock, 
+  MoreVertical as LucideMoreVertical, 
+  Edit2 as LucideEdit2, 
+  Users, 
+  Bot as LucideBot, 
+  Filter 
+} from 'lucide-react';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
 import { subagentsService } from '@/services/subagentsService';
 import type { Subagent } from '@/types/subagent';
@@ -30,20 +40,50 @@ interface SessionListProps {
   isLoading?: boolean;
 }
 
+// Object for filter types
+const FilterType = {
+  ALL: 'all',
+  MAIN_CHATS: 'main_chats',
+  SUBAGENT_DIRECT_CHATS: 'subagent_direct_chats'
+} as const;
+
+type FilterTypeValue = typeof FilterType[keyof typeof FilterType];
+
 // Helper function to organize sessions into hierarchy
-const organizeSessionsHierarchy = (sessions: ChatSession[]) => {
+const organizeSessionsHierarchy = (sessions: ChatSession[], filterType: FilterTypeValue) => {
   const mainSessions: ChatSession[] = [];
   const subchatsMap = new Map<string, ChatSession[]>();
 
-  // Separate main sessions and subchats
+  // Separate main sessions and subchats based on filter
   sessions.forEach(session => {
+    const isSubagentChat = !!(session.activeSubagentId || session.activeSubagentName);
+    
+    // Apply filter logic
+    switch (filterType) {
+      case FilterType.MAIN_CHATS:
+        if (!session.isSubchat && !isSubagentChat) {
+          mainSessions.push(session);
+        }
+        break;
+      case FilterType.SUBAGENT_DIRECT_CHATS:
+        if (isSubagentChat) {
+          mainSessions.push(session);
+        }
+        break;
+      case FilterType.ALL:
+      default:
+        if (!session.isSubchat) {
+          mainSessions.push(session);
+        }
+        break;
+    }
+
+    // Always populate subchats map for main sessions
     if (session.isSubchat && session.parentSessionId) {
       if (!subchatsMap.has(session.parentSessionId)) {
         subchatsMap.set(session.parentSessionId, []);
       }
       subchatsMap.get(session.parentSessionId)!.push(session);
-    } else {
-      mainSessions.push(session);
     }
   });
 
@@ -76,17 +116,22 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
   const [activatingAgent, setActivatingAgent] = useState<string | null>(null);
 
-  // New state for filter button
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  // New state for filter type
+  const [filterType, setFilterType] = useState<FilterTypeValue>(FilterType.ALL);
 
-  // Organize sessions into hierarchy
-  const { mainSessions, subchatsMap } = organizeSessionsHierarchy(sessions);
+  // Organize sessions into hierarchy based on filter
+  const { mainSessions, subchatsMap } = organizeSessionsHierarchy(sessions, filterType);
 
-  // Placeholder handler for filter button
+  // Handler for filter button
   const handleFilterClick = () => {
-    setIsFilterOpen(!isFilterOpen);
-    // TODO: Implement actual filtering logic
-    console.log('Filter button clicked');
+    const filterCycle: FilterTypeValue[] = [
+      FilterType.ALL, 
+      FilterType.MAIN_CHATS, 
+      FilterType.SUBAGENT_DIRECT_CHATS
+    ];
+    const currentIndex = filterCycle.indexOf(filterType);
+    const nextIndex = (currentIndex + 1) % filterCycle.length;
+    setFilterType(filterCycle[nextIndex]);
   };
 
   // Function to render a single session
@@ -135,13 +180,13 @@ export const SessionList: React.FC<SessionListProps> = ({
                 <h3 className="font-medium text-gray-900 dark:text-white truncate">
                   <div className="flex items-center gap-2">
                     {isSubagentChat && (
-                      <Bot className="w-4 h-4 text-pink-300 dark:text-pink-500 flex-shrink-0" />
+                      <LucideBot className="w-4 h-4 text-pink-300 dark:text-pink-500 flex-shrink-0" />
                     )}
                     {!isSubagentChat && !isSubchat && (
-                      <Bot className="w-4 h-4 text-green-500 dark:text-green-400 flex-shrink-0" />
+                      <LucideBot className="w-4 h-4 text-green-500 dark:text-green-400 flex-shrink-0" />
                     )}
                     {isSubchat && !isSubagentChat && (
-                      <Bot className="w-4 h-4 text-blue-500 dark:text-blue-400 flex-shrink-0" />
+                      <LucideBot className="w-4 h-4 text-blue-500 dark:text-blue-400 flex-shrink-0" />
                     )}
                     <span className="truncate">{session.title}</span>
                   </div>
@@ -153,7 +198,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 )}
                 <div className="flex items-center gap-3 mt-2 text-xs text-gray-400 dark:text-gray-500">
                   <div className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
+                    <LucideClock className="w-3 h-3" />
                     {(() => {
                       try {
                         const date = typeof session.timestamp === 'string'
@@ -188,7 +233,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-opacity"
                 aria-label="Session options"
               >
-                <MoreVertical className="w-4 h-4" />
+                <LucideMoreVertical className="w-4 h-4" />
               </button>
 
               {dropdownSessionId === session.id && (
@@ -200,7 +245,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                     }}
                     className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
                   >
-                    <Edit2 className="w-3 h-3" />
+                    <LucideEdit2 className="w-3 h-3" />
                     Rename
                   </button>
                   <button
@@ -222,6 +267,7 @@ export const SessionList: React.FC<SessionListProps> = ({
     );
   };
 
+  // Handlers for various actions
   const handleNewChat = () => {
     setIsNewDialogOpen(false);
     onNewChat();
@@ -265,7 +311,6 @@ export const SessionList: React.FC<SessionListProps> = ({
       setSubagents(subagents);
     } catch (error) {
       console.error('Failed to fetch subagents:', error);
-      // Optionally set an error state here to show in the modal
     } finally {
       setIsLoadingAgents(false);
     }
@@ -309,6 +354,20 @@ export const SessionList: React.FC<SessionListProps> = ({
     }
   }, [dropdownSessionId]);
 
+  // Get filter button text and variant
+  const getFilterButtonText = () => {
+    switch (filterType) {
+      case FilterType.ALL:
+        return 'All Chats';
+      case FilterType.MAIN_CHATS:
+        return 'Main Chats';
+      case FilterType.SUBAGENT_DIRECT_CHATS:
+        return 'Direct Chats';
+      default:
+        return 'Filter Chats';
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700">
       {/* Header */}
@@ -343,7 +402,7 @@ export const SessionList: React.FC<SessionListProps> = ({
             View Agents
           </Button>
           
-          {/* New Filter Button */}
+          {/* Updated Filter Button */}
           <Button
             onClick={handleFilterClick}
             variant="ghost"
@@ -351,7 +410,7 @@ export const SessionList: React.FC<SessionListProps> = ({
             disabled={isLoading}
           >
             <Filter className="w-4 h-4 mr-2" />
-            {isFilterOpen ? 'Hide Filters' : 'Show Filters'}
+            {getFilterButtonText()}
           </Button>
           
           {sessions.length > 0 && (
@@ -399,20 +458,20 @@ export const SessionList: React.FC<SessionListProps> = ({
         )}
       </div>
 
-      {/* New Chat Dialog */}
-      <Dialog.Root open={isNewDialogOpen} onOpenChange={setIsNewDialogOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-md mx-4">
+      {/* Dialogs */}
+      <DialogPrimitive.Root open={isNewDialogOpen} onOpenChange={setIsNewDialogOpen}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 bg-black/50 z-50" />
+          <DialogPrimitive.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-md mx-4">
             <div className="p-6">
-              <Dialog.Title className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              <DialogPrimitive.Title className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Start New Chat
-              </Dialog.Title>
-              <Dialog.Description className="text-sm text-gray-600 dark:text-gray-300 mb-6">
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="text-sm text-gray-600 dark:text-gray-300 mb-6">
                 Create a new chat session to start a fresh conversation.
-              </Dialog.Description>
+              </DialogPrimitive.Description>
               <div className="flex justify-end gap-3">
-                <Button variant="ghost" disabled={isLoading}>
+                <Button variant="ghost" onClick={() => setIsNewDialogOpen(false)} disabled={isLoading}>
                   Cancel
                 </Button>
                 <Button onClick={handleNewChat} variant="primary" disabled={isLoading}>
@@ -420,25 +479,25 @@ export const SessionList: React.FC<SessionListProps> = ({
                 </Button>
               </div>
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
 
-      {/* Delete All Confirmation Dialog */}
-      <Dialog.Root open={isDeleteAllDialogOpen} onOpenChange={setIsDeleteAllDialogOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-md mx-4">
+      {/* Delete All Dialog */}
+      <DialogPrimitive.Root open={isDeleteAllDialogOpen} onOpenChange={setIsDeleteAllDialogOpen}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 bg-black/50 z-50" />
+          <DialogPrimitive.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-md mx-4">
             <div className="p-6">
-              <Dialog.Title className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              <DialogPrimitive.Title className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Delete All Sessions
-              </Dialog.Title>
-              <Dialog.Description className="text-sm text-gray-600 dark:text-gray-300 mb-6">
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="text-sm text-gray-600 dark:text-gray-300 mb-6">
                 This will permanently delete all {sessions.length} chat sessions and their messages.
                 This action cannot be undone.
-              </Dialog.Description>
+              </DialogPrimitive.Description>
               <div className="flex justify-end gap-3">
-                <Button variant="ghost" disabled={isLoading}>
+                <Button variant="ghost" onClick={() => setIsDeleteAllDialogOpen(false)} disabled={isLoading}>
                   Cancel
                 </Button>
                 <Button onClick={handleDeleteAll} variant="danger" disabled={isLoading}>
@@ -446,22 +505,22 @@ export const SessionList: React.FC<SessionListProps> = ({
                 </Button>
               </div>
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
 
-      {/* Agents List Dialog */}
-      <Dialog.Root open={isAgentsModalOpen} onOpenChange={setIsAgentsModalOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+      {/* Agents Modal */}
+      <DialogPrimitive.Root open={isAgentsModalOpen} onOpenChange={setIsAgentsModalOpen}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm" />
+          <DialogPrimitive.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
             <div className="p-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-              <Dialog.Title className="text-xl font-semibold text-gray-900 dark:text-white">
+              <DialogPrimitive.Title className="text-xl font-semibold text-gray-900 dark:text-white">
                 Available Agents
-              </Dialog.Title>
-              <Dialog.Description className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="text-sm text-gray-600 dark:text-gray-300 mt-1">
                 These are the specialized agents available for use.
-              </Dialog.Description>
+              </DialogPrimitive.Description>
             </div>
             <div className="flex-1 overflow-y-auto p-6 relative">
               {isLoadingAgents && !activatingAgent ? (
@@ -496,29 +555,23 @@ export const SessionList: React.FC<SessionListProps> = ({
                 </div>
               )}
 
-              {/* Creative Loading Overlay for Agent Activation */}
+              {/* Activation Overlay */}
               {activatingAgent && (
                 <div className="absolute inset-0 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm flex items-center justify-center z-10">
                   <div className="text-center">
-                    {/* Animated robot icon */}
                     <div className="mb-6 flex justify-center">
                       <div className="relative">
-                        {/* Pulsing circles */}
                         <div className="absolute inset-0 animate-ping">
                           <div className="w-20 h-20 rounded-full bg-blue-400/30"></div>
                         </div>
                         <div className="absolute inset-0 animate-pulse" style={{ animationDelay: '75ms' }}>
                           <div className="w-20 h-20 rounded-full bg-blue-500/20"></div>
                         </div>
-
-                        {/* Central icon */}
                         <div className="relative w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center animate-bounce shadow-lg shadow-blue-500/50">
                           <MessageSquare className="w-10 h-10 text-white" />
                         </div>
                       </div>
                     </div>
-
-                    {/* Animated text */}
                     <div className="space-y-2">
                       <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent animate-pulse">
                         Activating {activatingAgent}
@@ -541,9 +594,9 @@ export const SessionList: React.FC<SessionListProps> = ({
                 Close
               </Button>
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
     </div>
   );
 };

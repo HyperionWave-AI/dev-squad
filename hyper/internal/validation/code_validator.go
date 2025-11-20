@@ -213,7 +213,11 @@ func (v *CodeValidator) parseTypeScriptOutput(output string) []ValidationError {
 	lines := strings.Split(output, "\n")
 
 	for _, line := range lines {
-		if strings.Contains(line, " - error TS") || strings.Contains(line, " - warning TS") {
+		// Handle both formats:
+		// 1. Pretty format: "file:line:column - error TS1234:"
+		// 2. Non-pretty format: "file(line,column): error TS1234:"
+		if strings.Contains(line, ": error TS") || strings.Contains(line, ": warning TS") ||
+			strings.Contains(line, " - error TS") || strings.Contains(line, " - warning TS") {
 			err := v.parseTypeScriptLine(line)
 			if err != nil {
 				errors = append(errors, *err)
@@ -225,8 +229,90 @@ func (v *CodeValidator) parseTypeScriptOutput(output string) []ValidationError {
 }
 
 // parseTypeScriptLine parses a single TypeScript error line
-// Format: src/file.tsx:10:5 - error TS2304: Cannot find name 'foo'.
+// Supports two formats:
+// 1. Pretty format: "src/file.tsx:10:5 - error TS2304: Cannot find name 'foo'."
+// 2. Non-pretty format: "src/file.tsx(10,5): error TS2304: Cannot find name 'foo'."
 func (v *CodeValidator) parseTypeScriptLine(line string) *ValidationError {
+	// Detect format by looking for parentheses vs colons
+	if strings.Contains(line, "(") && strings.Index(line, "(") < strings.Index(line, ":") {
+		// Non-pretty format: file(line,column): error TS1234: message
+		return v.parseTypeScriptNonPrettyFormat(line)
+	} else {
+		// Pretty format: file:line:column - error TS1234: message
+		return v.parseTypeScriptPrettyFormat(line)
+	}
+}
+
+// parseTypeScriptNonPrettyFormat parses: "src/file.tsx(34,6): error TS1294: This syntax is not allowed..."
+func (v *CodeValidator) parseTypeScriptNonPrettyFormat(line string) *ValidationError {
+	// Find the opening parenthesis
+	openParen := strings.Index(line, "(")
+	if openParen == -1 {
+		return nil
+	}
+
+	// Extract file path (everything before the opening parenthesis)
+	file := strings.TrimSpace(line[:openParen])
+
+	// Find the closing parenthesis
+	closeParen := strings.Index(line[openParen:], ")")
+	if closeParen == -1 {
+		return nil
+	}
+	closeParen += openParen
+
+	// Extract line,column from within parentheses
+	coordinates := line[openParen+1 : closeParen]
+	coordParts := strings.Split(coordinates, ",")
+	if len(coordParts) < 2 {
+		return nil
+	}
+
+	lineNum := 0
+	colNum := 0
+	fmt.Sscanf(coordParts[0], "%d", &lineNum)
+	fmt.Sscanf(coordParts[1], "%d", &colNum)
+
+	// Everything after the colon following the coordinates
+	remainder := line[closeParen+1:]
+	if !strings.HasPrefix(remainder, ":") {
+		return nil
+	}
+	remainder = strings.TrimPrefix(remainder, ":")
+	remainder = strings.TrimSpace(remainder)
+
+	// Parse "error TS1234: message" or "warning TS1234: message"
+	parts := strings.SplitN(remainder, ": ", 2)
+	if len(parts) < 2 {
+		return nil
+	}
+
+	severity := "error"
+	if strings.Contains(parts[0], "warning") {
+		severity = "warning"
+	}
+
+	// Extract error code (e.g., TS1294)
+	code := ""
+	codeMatch := strings.Fields(parts[0])
+	if len(codeMatch) > 0 {
+		code = codeMatch[len(codeMatch)-1]
+	}
+
+	message := parts[1]
+
+	return &ValidationError{
+		File:     file,
+		Line:     lineNum,
+		Column:   colNum,
+		Message:  strings.TrimSpace(message),
+		Code:     code,
+		Severity: severity,
+	}
+}
+
+// parseTypeScriptPrettyFormat parses: "src/file.tsx:10:5 - error TS2304: Cannot find name 'foo'."
+func (v *CodeValidator) parseTypeScriptPrettyFormat(line string) *ValidationError {
 	parts := strings.SplitN(line, " - ", 2)
 	if len(parts) < 2 {
 		return nil
