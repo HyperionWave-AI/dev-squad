@@ -45,3 +45,8 @@ hyper/coordinator
 # ML model files
 *.gguf
 models/*.gguf
+ui/test-results
+hyper/embed
+
+ui/test-reports/
+test-reports/
