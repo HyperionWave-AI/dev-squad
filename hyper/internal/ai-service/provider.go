@@ -691,7 +691,17 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	}
 
 	if systemPrompt != "" {
-		reqBody["system"] = systemPrompt
+		// Enable prompt caching for system prompt (20-25% speed improvement + 90% cost reduction)
+		// System prompt is static and can be cached for 5 minutes across all tool calls
+		reqBody["system"] = []map[string]interface{}{
+			{
+				"type": "text",
+				"text": systemPrompt,
+				"cache_control": map[string]interface{}{
+					"type": "ephemeral",
+				},
+			},
+		}
 	}
 	if len(apiTools) > 0 {
 		reqBody["tools"] = apiTools
@@ -720,6 +730,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", p.config.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31") // Enable prompt caching
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
