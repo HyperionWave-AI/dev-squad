@@ -11,9 +11,9 @@ func TestIndexedFolder_GetIncludePatterns(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "Default patterns when empty",
+			name:     "Returns nil when empty to signal use all supported extensions",
 			folder:   &IndexedFolder{},
-			expected: []string{"*.go", "*.ts", "*.js", "*.tsx", "*.jsx", "*.py"},
+			expected: nil,
 		},
 		{
 			name: "Custom patterns",
@@ -27,6 +27,15 @@ func TestIndexedFolder_GetIncludePatterns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.folder.GetIncludePatterns()
+
+			// Handle nil case
+			if tt.expected == nil {
+				if result != nil {
+					t.Errorf("Expected nil, got %v", result)
+				}
+				return
+			}
+
 			if len(result) != len(tt.expected) {
 				t.Errorf("Expected %d patterns, got %d", len(tt.expected), len(result))
 				return

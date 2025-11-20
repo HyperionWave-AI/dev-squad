@@ -17,22 +17,25 @@ ctx := context.Background()
 input := `{"command":"ls -la /tmp","timeout":10}`
 output, err := bashTool.Call(ctx, input)
 
-// Parse output
-var result tools.BashOutput
-json.Unmarshal([]byte(output), &result)
-
-fmt.Printf("Exit Code: %d\n", result.ExitCode)
-fmt.Printf("Stdout: %s\n", result.Stdout)
-fmt.Printf("Duration: %dms\n", result.Duration)
+// Output is raw stdout string
+fmt.Printf("Output: %s\n", output)
 ```
 
-**Output Example**:
-```json
-{
-  "stdout": "total 16\ndrwxr-xr-x  4 user  wheel  128 Oct 12 05:00 .\ndrwxr-xr-x  3 user  wheel   96 Oct 12 04:59 ..\n",
-  "stderr": "",
-  "exitCode": 0,
-  "durationMs": 15
+**Output Example** (raw stdout):
+```
+total 16
+drwxr-xr-x  4 user  wheel  128 Oct 12 05:00 .
+drwxr-xr-x  3 user  wheel   96 Oct 12 04:59 ..
+-rw-r--r--  1 user  wheel  256 Oct 12 05:00 test.txt
+```
+
+**Error Handling**:
+Commands that exit with non-zero status return an error with stderr/stdout:
+```go
+output, err := bashTool.Call(ctx, `{"command":"ls /nonexistent"}`)
+if err != nil {
+    fmt.Printf("Command failed: %v\n", err)
+    // Error: command failed (exit code 1, 15ms): ls: /nonexistent: No such file or directory
 }
 ```
 

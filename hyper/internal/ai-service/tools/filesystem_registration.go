@@ -51,13 +51,8 @@ func (b *BashToolExecutor) Execute(ctx context.Context, input map[string]interfa
 		return nil, err
 	}
 
-	// Parse result back to interface{} for ToolExecutor
-	var output interface{}
-	if err := json.Unmarshal([]byte(result), &output); err != nil {
-		return nil, fmt.Errorf("failed to parse tool output: %w", err)
-	}
-
-	return output, nil
+	// Return raw stdout string directly (bash now returns raw output, not JSON)
+	return result, nil
 }
 
 // ReadFileToolExecutor adapts ReadFileTool to ToolExecutor interface

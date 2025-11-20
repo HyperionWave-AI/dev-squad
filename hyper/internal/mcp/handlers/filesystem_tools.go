@@ -540,14 +540,24 @@ func (h *FilesystemToolHandler) extractFilePathFromPatch(patch string) (string, 
 		if strings.HasPrefix(line, "--- ") {
 			// Remove "--- " prefix
 			path := strings.TrimPrefix(line, "--- ")
-			// Remove a/ or b/ prefix if present
-			path = strings.TrimPrefix(path, "a/")
-			path = strings.TrimPrefix(path, "b/")
+			// Remove a/ or b/ prefix if present, preserving absolute paths
+			if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+				path = path[2:] // Remove "a/" or "b/"
+			}
 			// Remove any trailing whitespace or timestamps
 			if idx := strings.Index(path, "\t"); idx != -1 {
 				path = path[:idx]
 			}
 			path = strings.TrimSpace(path)
+			// Restore leading slash for common absolute path prefixes
+			if !strings.HasPrefix(path, "/") {
+				for _, prefix := range []string{"tmp/", "usr/", "etc/", "home/", "opt/", "var/", "root/"} {
+					if strings.HasPrefix(path, prefix) {
+						path = "/" + path
+						break
+					}
+				}
+			}
 			if path != "" && path != "/dev/null" {
 				return path, nil
 			}
@@ -556,14 +566,24 @@ func (h *FilesystemToolHandler) extractFilePathFromPatch(patch string) (string, 
 		if strings.HasPrefix(line, "+++ ") {
 			// Remove "+++ " prefix
 			path := strings.TrimPrefix(line, "+++ ")
-			// Remove a/ or b/ prefix if present
-			path = strings.TrimPrefix(path, "a/")
-			path = strings.TrimPrefix(path, "b/")
+			// Remove a/ or b/ prefix if present, preserving absolute paths
+			if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+				path = path[2:] // Remove "a/" or "b/"
+			}
 			// Remove any trailing whitespace or timestamps
 			if idx := strings.Index(path, "\t"); idx != -1 {
 				path = path[:idx]
 			}
 			path = strings.TrimSpace(path)
+			// Restore leading slash for common absolute path prefixes
+			if !strings.HasPrefix(path, "/") {
+				for _, prefix := range []string{"tmp/", "usr/", "etc/", "home/", "opt/", "var/", "root/"} {
+					if strings.HasPrefix(path, prefix) {
+						path = "/" + path
+						break
+					}
+				}
+			}
 			if path != "" && path != "/dev/null" {
 				return path, nil
 			}

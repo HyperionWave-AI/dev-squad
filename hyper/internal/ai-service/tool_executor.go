@@ -410,7 +410,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			// This forces ALL models into a linear workflow with zero ambiguity
 			// Each step unlocks exactly ONE required tool - model has no choice but to follow the sequence
 			// Applied to ALL models (not just Claude) to ensure consistent coordinator workflow
-			if true { // Enable workflow enforcement for all models (GPT, Claude, Groq, etc.)
+			if false { // DISABLED: Workflow enforcement (was blocking direct tool execution)
 				step := workflowState["step"].(int)
 				originalCount := len(tools)
 

@@ -162,7 +162,36 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	fmt.Printf("[DEBUG PRE-AI REQUEST] Total messages: %d\n", len(messages))
 	totalSize := 0
 	for i, msg := range messages {
-		msgSize := len(msg.Content)
+		var msgSize int
+
+		// Calculate size based on what's ACTUALLY sent to AI
+		if msg.Role == "tool_result" && msg.ToolResult != nil {
+			// For tool results, measure the actual output
+			if msg.ToolResult.Error != "" {
+				msgSize = len(msg.ToolResult.Error)
+			} else {
+				switch v := msg.ToolResult.Output.(type) {
+				case string:
+					msgSize = len(v)
+				default:
+					// Marshal to JSON to get size
+					if jsonBytes, err := json.Marshal(v); err == nil {
+						msgSize = len(jsonBytes)
+					}
+				}
+			}
+		} else if msg.Role == "tool_call" && msg.ToolCall != nil {
+			// For tool calls, measure the args
+			if argsJSON, err := json.Marshal(msg.ToolCall.Args); err == nil {
+				msgSize = len(argsJSON) + len(msg.Content)
+			} else {
+				msgSize = len(msg.Content)
+			}
+		} else {
+			// For other messages (user, assistant, system), Content is correct
+			msgSize = len(msg.Content)
+		}
+
 		totalSize += msgSize
 
 		// Preview (first 250 chars)
@@ -265,7 +294,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		case "tool_result":
 			// Tool results should be sent as ToolCallResponse parts
 			if msg.ToolResult != nil {
-				// Format result content
+				// Format result content - pass through as-is without forcing JSON
 				var resultContent string
 				if msg.ToolResult.Error != "" {
 					resultContent = msg.ToolResult.Error
@@ -275,7 +304,12 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 					case string:
 						resultContent = v
 					default:
-						resultContent = mustMarshalJSON(v)
+						// Try JSON marshal, fallback to fmt.Sprintf
+						if outputJSON, err := json.Marshal(v); err == nil {
+							resultContent = string(outputJSON)
+						} else {
+							resultContent = fmt.Sprintf("%v", v)
+						}
 					}
 					fmt.Printf("  [DEBUG] ToolResult output: %d bytes\n", len(resultContent))
 				}

@@ -38,6 +38,91 @@ func (m *MockToolsStorage) GetToolSchema(ctx context.Context, toolName string) (
 	return args.Get(0).(*storage.ToolMetadata), args.Error(1)
 }
 
+func (m *MockToolsStorage) StoreResourceMetadata(ctx context.Context, uri, name, description, mimeType, serverName string) error {
+	args := m.Called(ctx, uri, name, description, mimeType, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) GetServerResources(ctx context.Context, serverName string) ([]*storage.ResourceMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.ResourceMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) StorePromptMetadata(ctx context.Context, name, description string, arguments []map[string]interface{}, serverName string) error {
+	args := m.Called(ctx, name, description, arguments, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) GetServerPrompts(ctx context.Context, serverName string) ([]*storage.PromptMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.PromptMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) AddServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error {
+	args := m.Called(ctx, serverName, serverURL, description, headers)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) UpdateServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error {
+	args := m.Called(ctx, serverName, serverURL, description, headers)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) UpdateServerCounts(ctx context.Context, serverName string, toolCount, resourceCount, promptCount int) error {
+	args := m.Called(ctx, serverName, toolCount, resourceCount, promptCount)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) RemoveServer(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) GetServer(ctx context.Context, serverName string) (*storage.ServerMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.ServerMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) ListServers(ctx context.Context) ([]*storage.ServerMetadata, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.ServerMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) GetServerTools(ctx context.Context, serverName string) ([]*storage.ToolMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.ToolMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) RemoveServerTools(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) RemoveServerResources(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) RemoveServerPrompts(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
 // TestHandleDiscoverTools tests the discover_tools handler
 func TestHandleDiscoverTools(t *testing.T) {
 	tests := []struct {
@@ -456,7 +541,6 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"status": "success", "data": "result"}`,
 					},
 				},
@@ -474,11 +558,9 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "This is plain text in first block",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"status": "success", "data": "found in second block"}`,
 					},
 				},
@@ -496,15 +578,12 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "Plain text block 1",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: "Plain text block 2",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"result": "found in third block", "count": 42}`,
 					},
 				},
@@ -522,11 +601,9 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "First text content",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: "Second text content",
 					},
 				},
@@ -551,16 +628,13 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "not json",
 					},
 					// Simulate other content type by using empty text
 					&mcp.TextContent{
-						Type: "text",
 						Text: "",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"valid": "json", "block": 3}`,
 					},
 				},

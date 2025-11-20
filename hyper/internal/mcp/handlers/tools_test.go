@@ -36,7 +36,7 @@ func setupTestMongoDB(t *testing.T) (*storage.MongoTaskStorage, func()) {
 	// Create a test logger
 	logger, _ := zap.NewDevelopment()
 
-	taskStorage, err := storage.NewMongoTaskStorage(db, nil, logger)
+	taskStorage, err := storage.NewMongoTaskStorage(db, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("Failed to create MongoTaskStorage: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestHandleAddTaskPromptNotes(t *testing.T) {
 	taskStorage, cleanup := setupTestMongoDB(t)
 	defer cleanup()
 
-	handler := NewToolHandler(taskStorage, nil)
+	handler := NewToolHandler(taskStorage, nil, nil)
 	task := createTestAgentTask(t, taskStorage)
 
 	tests := []struct {
@@ -199,7 +199,7 @@ func TestHandleUpdateTaskPromptNotes(t *testing.T) {
 	taskStorage, cleanup := setupTestMongoDB(t)
 	defer cleanup()
 
-	handler := NewToolHandler(taskStorage, nil)
+	handler := NewToolHandler(taskStorage, nil, nil)
 	task := createTestAgentTask(t, taskStorage)
 
 	// First add some notes
@@ -292,7 +292,7 @@ func TestHandleClearTaskPromptNotes(t *testing.T) {
 	taskStorage, cleanup := setupTestMongoDB(t)
 	defer cleanup()
 
-	handler := NewToolHandler(taskStorage, nil)
+	handler := NewToolHandler(taskStorage, nil, nil)
 	task := createTestAgentTask(t, taskStorage)
 
 	// First add some notes
@@ -373,7 +373,7 @@ func TestHandleAddTodoPromptNotes(t *testing.T) {
 	taskStorage, cleanup := setupTestMongoDB(t)
 	defer cleanup()
 
-	handler := NewToolHandler(taskStorage, nil)
+	handler := NewToolHandler(taskStorage, nil, nil)
 	task := createTestAgentTask(t, taskStorage)
 	todoID := task.Todos[0].ID
 
@@ -504,7 +504,7 @@ func TestHandleUpdateTodoPromptNotes(t *testing.T) {
 	taskStorage, cleanup := setupTestMongoDB(t)
 	defer cleanup()
 
-	handler := NewToolHandler(taskStorage, nil)
+	handler := NewToolHandler(taskStorage, nil, nil)
 	task := createTestAgentTask(t, taskStorage)
 	todoID := task.Todos[0].ID
 
@@ -611,7 +611,7 @@ func TestHandleClearTodoPromptNotes(t *testing.T) {
 	taskStorage, cleanup := setupTestMongoDB(t)
 	defer cleanup()
 
-	handler := NewToolHandler(taskStorage, nil)
+	handler := NewToolHandler(taskStorage, nil, nil)
 	task := createTestAgentTask(t, taskStorage)
 	todoID := task.Todos[0].ID
 

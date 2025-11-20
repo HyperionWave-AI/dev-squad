@@ -39,8 +39,24 @@ func (m *MockQdrantClient) DeletePoint(collectionName string, pointID string) er
 	return nil
 }
 
+func (m *MockQdrantClient) DeleteCollection(collectionName string) error {
+	return nil
+}
+
 func (m *MockQdrantClient) UpdatePointPayload(collectionName string, pointID string, payload map[string]interface{}) error {
 	return nil
+}
+
+func (m *MockQdrantClient) RecreateCollectionWithReindex(collectionName string, entries []*storage.KnowledgeEntry, dimensions int) (int, error) {
+	return 0, nil
+}
+
+func (m *MockQdrantClient) GetDimensions() int {
+	return 384
+}
+
+func (m *MockQdrantClient) SearchSimilarWithFilter(collectionName string, query string, limit int, filter map[string]interface{}, voteBoost ...float64) ([]*storage.QdrantQueryResult, error) {
+	return nil, nil
 }
 
 func (m *MockQdrantClient) Ping(ctx context.Context) error {
