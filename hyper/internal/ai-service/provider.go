@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
@@ -156,38 +155,171 @@ func (p *openAIProvider) SupportsTools() bool {
 	return true
 }
 
-// StreamChatWithTools implements tool calling for OpenAI using GenerateContent
+// StreamChatWithTools implements tool calling for OpenAI using LangChain
 func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
+	// DEBUG: Log all messages BEFORE sending to AI
+	fmt.Printf("\n[DEBUG PRE-AI REQUEST] ========================================\n")
+	fmt.Printf("[DEBUG PRE-AI REQUEST] Total messages: %d\n", len(messages))
+	totalSize := 0
+	for i, msg := range messages {
+		msgSize := len(msg.Content)
+		totalSize += msgSize
+
+		// Preview (first 250 chars)
+		preview := msg.Content
+		if len(preview) > 250 {
+			preview = preview[:250] + "..."
+		}
+
+		// Log based on message type
+		if msg.Role == "tool_call" && msg.ToolCall != nil {
+			argsJSON, _ := json.Marshal(msg.ToolCall.Args)
+			fmt.Printf("[DEBUG PRE-AI MSG %d] Role: %s, ToolName: %s, ToolID: %s, Size: %d bytes\n",
+				i, msg.Role, msg.ToolCall.Name, msg.ToolCall.ID, msgSize)
+			fmt.Printf("  Args: %s\n", string(argsJSON))
+			if msg.Content != "" {
+				fmt.Printf("  Content: %s\n", preview)
+			}
+		} else if msg.Role == "tool_result" && msg.ToolResult != nil {
+			fmt.Printf("[DEBUG PRE-AI MSG %d] Role: %s, ToolName: %s, ToolID: %s, Size: %d bytes\n",
+				i, msg.Role, msg.ToolResult.Name, msg.ToolResult.ID, msgSize)
+			if msg.ToolResult.Error != "" {
+				fmt.Printf("  Error: %s\n", msg.ToolResult.Error)
+			} else {
+				outputPreview := fmt.Sprintf("%v", msg.ToolResult.Output)
+				if len(outputPreview) > 250 {
+					outputPreview = outputPreview[:250] + "..."
+				}
+				fmt.Printf("  Output: %s\n", outputPreview)
+			}
+		} else {
+			fmt.Printf("[DEBUG PRE-AI MSG %d] Role: %s, Size: %d bytes\n", i, msg.Role, msgSize)
+			fmt.Printf("  Content: %s\n", preview)
+		}
+	}
+	fmt.Printf("[DEBUG PRE-AI REQUEST] Total content size: %d bytes\n", totalSize)
+	fmt.Printf("[DEBUG PRE-AI REQUEST] ========================================\n\n")
+
+	// Helper function for JSON marshaling
+	mustMarshalJSON := func(v interface{}) string {
+		if v == nil {
+			return "{}"
+		}
+		bytes, err := json.Marshal(v)
+		if err != nil {
+			return "{}"
+		}
+		return string(bytes)
+	}
+
 	// Convert messages to LangChain MessageContent format
 	msgContents := make([]llms.MessageContent, 0, len(messages))
-	for _, msg := range messages {
-		var msgType llms.ChatMessageType
+	for i, msg := range messages {
+		fmt.Printf("[DEBUG MESSAGE CONVERSION %d] Role: %s\n", i, msg.Role)
+
 		switch msg.Role {
 		case "user":
-			msgType = llms.ChatMessageTypeHuman
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
+
 		case "assistant":
-			msgType = llms.ChatMessageTypeAI
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeAI, msg.Content))
+
 		case "system":
-			msgType = llms.ChatMessageTypeSystem
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeSystem, msg.Content))
+
+		case "tool_call":
+			// Tool calls should be sent as assistant messages with ToolCall parts
+			if msg.ToolCall != nil {
+				parts := []llms.ContentPart{}
+
+				// Add text content if present
+				if msg.Content != "" {
+					parts = append(parts, llms.TextPart(msg.Content))
+					fmt.Printf("  [DEBUG] Added TextPart: %d bytes\n", len(msg.Content))
+				}
+
+				// Add ToolCall part
+				toolCallPart := llms.ToolCall{
+					ID:   msg.ToolCall.ID,
+					Type: "function",
+					FunctionCall: &llms.FunctionCall{
+						Name:      msg.ToolCall.Name,
+						Arguments: mustMarshalJSON(msg.ToolCall.Args),
+					},
+				}
+				parts = append(parts, toolCallPart)
+				fmt.Printf("  [DEBUG] Added ToolCall part: ID=%s, Name=%s\n", msg.ToolCall.ID, msg.ToolCall.Name)
+
+				msgContent := llms.MessageContent{
+					Role:  llms.ChatMessageTypeAI,
+					Parts: parts,
+				}
+				msgContents = append(msgContents, msgContent)
+				fmt.Printf("  [DEBUG] Created MessageContent with %d parts\n", len(parts))
+			} else {
+				// Fallback if no ToolCall data
+				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeAI, msg.Content))
+				fmt.Printf("  [DEBUG] Fallback: using TextParts\n")
+			}
+
+		case "tool_result":
+			// Tool results should be sent as ToolCallResponse parts
+			if msg.ToolResult != nil {
+				// Format result content
+				var resultContent string
+				if msg.ToolResult.Error != "" {
+					resultContent = msg.ToolResult.Error
+					fmt.Printf("  [DEBUG] ToolResult error: %s\n", msg.ToolResult.Error)
+				} else {
+					switch v := msg.ToolResult.Output.(type) {
+					case string:
+						resultContent = v
+					default:
+						resultContent = mustMarshalJSON(v)
+					}
+					fmt.Printf("  [DEBUG] ToolResult output: %d bytes\n", len(resultContent))
+				}
+
+				msgContent := llms.MessageContent{
+					Role: llms.ChatMessageTypeHuman,
+					Parts: []llms.ContentPart{
+						llms.ToolCallResponse{
+							ToolCallID: msg.ToolResult.ID,
+							Name:       msg.ToolResult.Name,
+							Content:    resultContent,
+						},
+					},
+				}
+				msgContents = append(msgContents, msgContent)
+				fmt.Printf("  [DEBUG] Created ToolCallResponse: ToolCallID=%s, Name=%s\n", msg.ToolResult.ID, msg.ToolResult.Name)
+			} else {
+				// Fallback if no ToolResult data
+				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
+				fmt.Printf("  [DEBUG] Fallback: using TextParts\n")
+			}
+
 		default:
-			msgType = llms.ChatMessageTypeHuman
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
 		}
-		msgContents = append(msgContents, llms.TextParts(msgType, msg.Content))
 	}
 
 	// Create text channel for streaming
-	textChan := make(chan string, 1000) // Larger buffer to prevent blocking
+	textChan := make(chan string, 1000)
 	var toolCalls []ToolCall
 
-	// Prepare streaming function (non-blocking) with tool call filtering
+	// Prepare streaming function (non-blocking)
 	streamFunc := func(ctx context.Context, chunk []byte) error {
 		chunkStr := string(chunk)
 
-		// Filter out tool call JSON arrays that match the pattern:
-		// [{"id":"call_*","type":"function","function":{...}}]
-		// These are metadata that should not appear in the message content
-		if strings.HasPrefix(strings.TrimSpace(chunkStr), "[{\"id\":\"call_") {
-			// This looks like a tool call JSON array - skip it
+		// Strip tool call JSON if present (Groq/some providers append it to text)
+		// Pattern: [{"id":"functions.X:Y" or [{"id":"call_X"
+		if idx := strings.Index(chunkStr, `[{"id":"`); idx >= 0 {
+			// Keep only the text before the JSON array
+			chunkStr = chunkStr[:idx]
+		}
+
+		// Skip empty chunks
+		if strings.TrimSpace(chunkStr) == "" {
 			return nil
 		}
 
@@ -197,8 +329,6 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		case textChan <- chunkStr:
 			return nil
 		default:
-			// Channel full, skip chunk (non-blocking)
-			// This prevents GenerateContent from hanging
 			return nil
 		}
 	}
@@ -214,7 +344,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		opts = append(opts, llms.WithMaxTokens(p.config.MaxOutputTokens))
 	}
 
-	// Call GenerateContent in goroutine to avoid blocking
+	// Call GenerateContent in goroutine
 	type generateResult struct {
 		resp *llms.ContentResponse
 		err  error
@@ -224,7 +354,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	go func() {
 		resp, err := p.llm.GenerateContent(ctx, msgContents, opts...)
 		resultChan <- generateResult{resp: resp, err: err}
-		close(textChan) // Close after generation completes
+		close(textChan)
 	}()
 
 	// Wait for generation to complete
@@ -234,58 +364,65 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		return nil, fmt.Errorf("failed to generate content: %w", result.err)
 	}
 
-	// Extract tool calls from response
+	// Extract tool calls from response - USE AI-GENERATED IDs
 	if result.resp != nil && len(result.resp.Choices) > 0 {
 		choice := result.resp.Choices[0]
 
-		// Check for function call (FuncCall field)
-		if choice.FuncCall != nil {
-			var args map[string]interface{}
-			if choice.FuncCall.Arguments != "" {
-				if err := json.Unmarshal([]byte(choice.FuncCall.Arguments), &args); err == nil {
-					toolCalls = append(toolCalls, ToolCall{
-						ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
-						Name: choice.FuncCall.Name,
-						Args: args,
-					})
+		// DEBUG: Log complete response structure from LangChain
+		fmt.Printf("\n[DEBUG LANGCHAIN RESPONSE] ========================================\n")
+		fmt.Printf("[DEBUG LANGCHAIN] Total Choices: %d\n", len(result.resp.Choices))
+		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content: '%s'\n", choice.Content)
+		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content Length: %d bytes\n", len(choice.Content))
+		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - ToolCalls Count: %d\n", len(choice.ToolCalls))
+
+		// Log each tool call in the choice
+		if len(choice.ToolCalls) > 0 {
+			for i, tc := range choice.ToolCalls {
+				fmt.Printf("[DEBUG LANGCHAIN ToolCall %d]\n", i)
+				fmt.Printf("  ID: '%s'\n", tc.ID)
+				fmt.Printf("  Type: '%s'\n", tc.Type)
+				if tc.FunctionCall != nil {
+					fmt.Printf("  FunctionCall.Name: '%s'\n", tc.FunctionCall.Name)
+					fmt.Printf("  FunctionCall.Arguments: '%s'\n", tc.FunctionCall.Arguments)
+					fmt.Printf("  FunctionCall.Arguments Length: %d bytes\n", len(tc.FunctionCall.Arguments))
 				}
 			}
 		}
 
-		// Also check for tool calls in content (newer format)
-		if choice.Content != "" {
-			// Try to parse tool calls from JSON in content
-			var toolCallData struct {
-				ToolCalls []struct {
-					ID       string                 `json:"id"`
-					Type     string                 `json:"type"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
+		// Check if Content field contains the tool call JSON (this is the bug!)
+		if strings.Contains(choice.Content, `[{"id":"`) {
+			fmt.Printf("[DEBUG LANGCHAIN] ⚠️  WARNING: Content field contains tool call JSON!\n")
+			previewLen := 200
+			if len(choice.Content) < previewLen {
+				previewLen = len(choice.Content)
 			}
-			if err := json.Unmarshal([]byte(choice.Content), &toolCallData); err == nil {
-				for _, tc := range toolCallData.ToolCalls {
+			fmt.Printf("[DEBUG LANGCHAIN] Content preview: %s...\n", choice.Content[:previewLen])
+		}
+
+		fmt.Printf("[DEBUG LANGCHAIN RESPONSE] ========================================\n\n")
+
+		// Check ToolCalls array first (preferred - has real IDs from AI)
+		if len(choice.ToolCalls) > 0 {
+			for _, tc := range choice.ToolCalls {
+				if tc.FunctionCall != nil {
 					var args map[string]interface{}
-					if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err == nil {
+					if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err == nil {
 						toolCalls = append(toolCalls, ToolCall{
-							ID:   tc.ID,
-							Name: tc.Function.Name,
+							ID:   tc.ID, // Use AI-generated ID from ToolCalls
+							Name: tc.FunctionCall.Name,
 							Args: args,
 						})
+						fmt.Printf("[DEBUG OpenAI] Extracted tool call: %s (id=%s)\n", tc.FunctionCall.Name, tc.ID)
 					}
 				}
 			}
 		}
 	}
 
-	response := &ToolResponse{
+	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
-	}
-
-	return response, nil
+	}, nil
 }
 
 // anthropicProvider wraps langchaingo's Anthropic client

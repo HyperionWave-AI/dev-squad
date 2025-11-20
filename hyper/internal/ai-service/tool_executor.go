@@ -7,9 +7,30 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
 )
+
+// Debug logger that writes to a specific file for investigation
+var debugLogFile *os.File
+
+func init() {
+	var err error
+	debugLogFile, err = os.OpenFile("/tmp/tool_executor_debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("Failed to open debug log file: %v", err)
+	}
+}
+
+func debugLog(format string, args ...interface{}) {
+	if debugLogFile != nil {
+		timestamp := time.Now().Format("15:04:05.000")
+		msg := fmt.Sprintf(format, args...)
+		fmt.Fprintf(debugLogFile, "[%s] %s\n", timestamp, msg)
+		debugLogFile.Sync() // Flush immediately
+	}
+}
 
 // tool_executor.go - Tool Execution Orchestration
 //
@@ -28,6 +49,91 @@ import (
 //
 // Both methods implement sophisticated circuit breakers, caching, and validation
 // to ensure reliable tool execution and prevent infinite loops.
+
+// getErrorRecoveryGuidance provides specific recovery instructions based on error type
+func getErrorRecoveryGuidance(toolName string, errorMsg string, args map[string]interface{}) string {
+	errorLower := strings.ToLower(errorMsg)
+
+	// Validation errors - humanTaskId invalid
+	if strings.Contains(errorLower, "invalid") && strings.Contains(errorLower, "humantaskid") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Call coordinator_list_human_tasks RIGHT NOW to see all available tasks\n" +
+			"➡️  Find the correct task in the response\n" +
+			"➡️  Copy the EXACT 'taskId' field from that task\n" +
+			"➡️  Then retry create_agent_task with the correct taskId\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+			"⚠️  DO NOT generate or guess task IDs - copy them exactly from the list!"
+	}
+
+	// File path errors
+	if strings.Contains(errorLower, "path does not exist") || strings.Contains(errorLower, "file not found") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Check the FILE_PATHS_TO_USE array from your code_index_search results\n" +
+			"➡️  Use ONLY paths from that array - do not modify or type paths manually\n" +
+			"➡️  Retry the tool call RIGHT NOW with the correct path from FILE_PATHS_TO_USE\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
+	}
+
+	// Missing required parameters
+	if strings.Contains(errorLower, "required") && (strings.Contains(errorLower, "must be") || strings.Contains(errorLower, "is required")) {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  A required parameter is missing or has the wrong type\n" +
+			"➡️  Check the error message to see which parameter is missing\n" +
+			"➡️  Add the missing parameter with the correct value\n" +
+			"➡️  Retry the tool call RIGHT NOW with all required parameters\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
+	}
+
+	// TODO validation errors (discovery keywords)
+	if strings.Contains(errorLower, "todo validation failed") || strings.Contains(errorLower, "discovery keyword") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Your TODO contains forbidden words like 'search', 'find', 'locate', 'explore'\n" +
+			"➡️  Call code_index_search RIGHT NOW to find the files yourself\n" +
+			"➡️  Then retry create_agent_task with implementation-only TODOs like:\n" +
+			"   - 'Add validation to AuthForm.tsx line 45'\n" +
+			"   - 'Update API call in dashboard.go line 120'\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+			"⚠️  Remove ALL discovery words from your TODOs!"
+	}
+
+	// Similar tasks found
+	if strings.Contains(errorLower, "similar") && strings.Contains(errorLower, "task") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Similar tasks were found in the response\n" +
+			"➡️  Call coordinator_create_human_task RIGHT NOW with forceCreate=true to create a new task\n" +
+			"➡️  OR use the taskId from the similarTasks array if appropriate\n\n" +
+			"⚠️  DO NOT ask the user - MAKE THE TOOL CALL IMMEDIATELY with forceCreate=true!"
+	}
+
+	// Code search errors
+	if toolName == "code_index_search" {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  Code search failed or returned no results\n" +
+			"➡️  PROCEED ANYWAY - call create_agent_task RIGHT NOW without file paths\n" +
+			"➡️  The agent will find the files during implementation\n\n" +
+			"⚠️  DO NOT ask the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+			"⚠️  DO NOT retry search - proceed to create_agent_task NOW!"
+	}
+
+	// Generic validation errors
+	if strings.Contains(errorLower, "validation") || strings.Contains(errorLower, "invalid") {
+		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+			"➡️  One of your parameters failed validation\n" +
+			"➡️  Read the error message carefully to see what's wrong\n" +
+			"➡️  Correct the parameter value\n" +
+			"➡️  Retry the tool call RIGHT NOW with the corrected parameters\n\n" +
+			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
+	}
+
+	// Generic error guidance
+	return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
+		"➡️  Read the error message above carefully\n" +
+		"➡️  Identify what went wrong\n" +
+		"➡️  Correct the issue based on the error details\n" +
+		"➡️  Retry the tool call RIGHT NOW with corrected parameters\n\n" +
+		"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
+		"⚠️  If error persists after 1 retry, try a different approach but KEEP MAKING TOOL CALLS!"
+}
 
 // StreamChatWithTools sends messages to AI provider with tool execution support.
 // This is the main entry point for coordinator agents that need full tool access.
@@ -125,19 +231,25 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 	// Start tool-enabled streaming
 	go func() {
 		defer close(eventChan)
+		debugLog("========== GOROUTINE STARTED ==========")
+		debugLog("Request ID: %s, MaxToolCalls: %d", requestID, maxToolCalls)
 
 		toolCallCount := 0
 		iterationCount := 0
 		currentMessages := append([]Message{}, messages...) // Copy messages
+		debugLog("Initial message count: %d", len(currentMessages))
 
 		// Tool result cache: prevent duplicate tool executions
 		resultCache := NewToolResultCache()
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
-		failedToolCalls := make(map[string]int)        // Track failed attempts separately
+		consecutiveFailures := 0     // Track CONSECUTIVE failures of the same tool+args
+		lastFailedSignature := ""    // Signature of the last failed tool call
 		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
 		taskIdValidationAttempts := 0                  // Track taskId validation attempts for create_agent_task (max 3)
+		lastCreatedHumanTaskId := ""                   // FIX #9: Cache taskId from coordinator_create_human_task for instant validation
+		lastCreatedAgentTaskId := ""                   // FIX #10: Cache agentTaskId from create_agent_task for instant validation
 
 		// Tool call history: track all executed tools for smart filtering (reduces token usage by ~70%)
 		toolCallHistory := make([]ToolResult, 0, 20)
@@ -244,10 +356,13 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
 			iterationCount++
+			debugLog("---------- ITERATION %d START ----------", iterationCount)
+			debugLog("Current tool call count: %d/%d", toolCallCount, maxToolCalls)
 
 			// CRITICAL: Reload full tools array at start of each iteration
 			// This prevents the filtered tools from previous iteration being reused
 			tools = s.toolRegistry.GetToolsForLangChain()
+			debugLog("Reloaded tools: %d", len(tools))
 
 			// Calculate context size BEFORE applying sliding window
 			contextSize := 0
@@ -324,6 +439,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			if true { // Enable workflow enforcement for all models (GPT, Claude, Groq, etc.)
 				step := workflowState["step"].(int)
 				originalCount := len(tools)
+				debugLog("PRESCRIPTIVE FILTER: Current workflow step = %d, tools before filter = %d", step, originalCount)
 
 				// Define allowed tools per step (WHITELIST approach)
 				var allowedTools []string
@@ -363,6 +479,8 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 					tools = filteredTools
 				}
 
+				debugLog("PRESCRIPTIVE FILTER: Allowed tools for step %d = %v", step, allowedTools)
+				debugLog("PRESCRIPTIVE FILTER: After filter = %d tools", len(tools))
 				if originalCount != len(tools) {
 					log.Printf("[Phase 3 Prescriptive Filter] Step %d: Filtered %d → %d tools (allowed: %v)",
 						step, originalCount, len(tools), allowedTools)
@@ -554,33 +672,64 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				}
 			}
 
-			// Stream response tokens
+			// Collect response tokens (but don't stream yet)
 			var responseText string
 			responseTokens := 0
+			var collectedChunks []string
 			for chunk := range response.TextChannel {
-				eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
+				collectedChunks = append(collectedChunks, chunk)
 				responseText += chunk
 				responseTokens++
 			}
+
+			debugLog("AI RESPONSE: iteration=%d, tokens=%d, toolCalls=%d", iterationCount, responseTokens, len(response.ToolCalls))
 
 			// Log iteration response details
 			log.Printf("[AI Processing] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
 				iterationCount, responseTokens, len(response.ToolCalls))
 
+			// DEBUG: Check if responseText contains tool JSON
+			if strings.Contains(responseText, `[{"id":"`) {
+				log.Printf("[DEBUG TOOL_EXECUTOR] ⚠️  WARNING: responseText contains tool JSON!")
+				preview := responseText
+				if len(preview) > 300 {
+					preview = preview[:300] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR] responseText preview: %s", preview)
+			} else {
+				log.Printf("[DEBUG TOOL_EXECUTOR] ✓ responseText is clean (no tool JSON)")
+				preview := responseText
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR] responseText preview: %s", preview)
+			}
+
 			// Check for tool calls
 			if len(response.ToolCalls) == 0 {
-				// No more tool calls, we're done
+				debugLog("EXIT: No tool calls - streaming final response (%d chunks)", len(collectedChunks))
+				// No tool calls - NOW stream the collected text (final response)
+				for _, chunk := range collectedChunks {
+					eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
+				}
 				log.Printf("[ChatService] Stream complete - RequestID: %s - Total iterations: %d, Tool calls: %d",
 					requestID, iterationCount, toolCallCount)
+				debugLog("========== GOROUTINE ENDED (no tool calls) ==========")
 				return
 			}
+
+			// Tool calls pending - suppress text output
+			log.Printf("[ChatService] Suppressing %d tokens of text - tool calls pending: %d",
+				len(collectedChunks), len(response.ToolCalls))
 
 			// Process each tool call
 			for _, toolCall := range response.ToolCalls {
 				toolCallCount++
+				debugLog("TOOL CALL #%d: name=%s", toolCallCount, toolCall.Name)
 				if toolCallCount > maxToolCalls {
 					log.Printf("[ChatService] Max tool calls reached (%d) - RequestID: %s", maxToolCalls, requestID)
 					eventChan <- StreamEvent{Type: StreamEventError, Error: fmt.Sprintf("maximum tool calls (%d) exceeded", maxToolCalls)}
+					debugLog("========== GOROUTINE ENDED (max tools reached) ==========")
 					return
 				}
 
@@ -588,6 +737,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				argsJSON, _ := json.Marshal(toolCall.Args)
 				log.Printf("[Tool Request] AI requested tool '%s' with args: %s",
 					toolCall.Name, string(argsJSON))
+				debugLog("TOOL CALL: name=%s, args=%s", toolCall.Name, string(argsJSON))
 
 				// WORKFLOW VALIDATION: Check if this tool call is allowed in current workflow state
 				var result ToolResult
@@ -819,35 +969,58 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 					// Validate humanTaskId if provided
 					if humanTaskId != "" {
-						// Call coordinator_list_human_tasks to get all tasks
-						listTasksCall := ToolCall{
-							ID:   "taskid_validation",
-							Name: "coordinator_list_human_tasks",
-							Args: map[string]interface{}{},
-						}
-						listResult := s.toolRegistry.ExecuteToolCall(ctx, listTasksCall)
-
+						// FIX #9: Check cached taskId FIRST (instant validation, no database needed)
+						// This eliminates race conditions when model uses taskId immediately after creation
 						taskExists := false
-						if listResult.Error == "" {
-							if outputMap, ok := listResult.Output.(map[string]interface{}); ok {
-								if tasks, ok := outputMap["tasks"].([]interface{}); ok {
-									for _, task := range tasks {
-										if taskMap, ok := task.(map[string]interface{}); ok {
-											// Check taskId field (matching HumanTask JSON schema with json:"taskId" tag)
-											if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
-												taskExists = true
-												break
+						if humanTaskId == lastCreatedHumanTaskId && lastCreatedHumanTaskId != "" {
+							taskExists = true
+							log.Printf("[TaskId Validator] ✅ Instant validation: humanTaskId '%s' matches last created task (no DB lookup needed)", humanTaskId)
+						} else {
+							// Not the cached ID - do database validation with retry
+							// FIX #8: Retry validation to handle MongoDB eventual consistency
+							for attempt := 0; attempt < 3; attempt++ {
+								// Call coordinator_list_human_tasks to get all tasks
+								listTasksCall := ToolCall{
+									ID:   "taskid_validation",
+									Name: "coordinator_list_human_tasks",
+									Args: map[string]interface{}{},
+								}
+								listResult := s.toolRegistry.ExecuteToolCall(ctx, listTasksCall)
+
+								if listResult.Error == "" {
+									if outputMap, ok := listResult.Output.(map[string]interface{}); ok {
+										if tasks, ok := outputMap["tasks"].([]interface{}); ok {
+											for _, task := range tasks {
+												if taskMap, ok := task.(map[string]interface{}); ok {
+													// Check taskId field (matching HumanTask JSON schema with json:"taskId" tag)
+													if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
+														taskExists = true
+														break
+													}
+												}
 											}
 										}
 									}
+								}
+
+								if taskExists {
+									break // Found it, stop retrying
+								}
+
+								// Not found yet - retry with exponential backoff
+								if attempt < 2 {
+									sleepDuration := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+									log.Printf("[TaskId Validator] Task '%s' not found yet - retrying after %v (attempt %d/3)",
+										humanTaskId, sleepDuration, attempt+1)
+									time.Sleep(sleepDuration)
 								}
 							}
 						}
 
 						if !taskExists {
-							// TaskId is invalid - increment attempt counter
+							// TaskId is invalid even after retries - increment attempt counter
 							taskIdValidationAttempts++
-							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' - Attempt %d/3", humanTaskId, taskIdValidationAttempts)
+							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' after 3 retries with backoff - Attempt %d/3", humanTaskId, taskIdValidationAttempts)
 
 							if taskIdValidationAttempts >= 3 {
 								// After 3 attempts, stop execution with clear error
@@ -901,8 +1074,39 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 							log.Printf("[TaskId Validator] Blocked create_agent_task - injected error asking model to list tasks")
 						} else {
-							log.Printf("[TaskId Validator] humanTaskId '%s' is valid - proceeding", humanTaskId)
+							log.Printf("[TaskId Validator] ✅ humanTaskId '%s' validated successfully (may have required retries)", humanTaskId)
 						}
+					}
+				}
+
+				// FIX #10: AGENT TASK ID AUTO-CORRECTION for execute_subagent
+				// Automatically replace hallucinated/wrong agentTaskId with the cached correct one
+				if toolCall.Name == "execute_subagent" {
+					var providedAgentTaskId string
+					if id, ok := toolCall.Args["agentTaskId"].(string); ok {
+						providedAgentTaskId = id
+					}
+
+					// If we have a cached agentTaskId from create_agent_task, use it
+					if lastCreatedAgentTaskId != "" {
+						// Check if model provided wrong ID (hallucinated)
+						if providedAgentTaskId != lastCreatedAgentTaskId {
+							log.Printf("[AgentTaskId Auto-Correct] Model provided wrong agentTaskId: '%s', replacing with correct cached ID: '%s'",
+								providedAgentTaskId, lastCreatedAgentTaskId)
+
+							// REPLACE the wrong ID with the correct cached one
+							toolCall.Args["agentTaskId"] = lastCreatedAgentTaskId
+
+							// Re-execute the tool with corrected arguments
+							result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
+
+							log.Printf("[AgentTaskId Auto-Correct] ✅ Re-executed execute_subagent with correct agentTaskId: '%s'", lastCreatedAgentTaskId)
+						} else {
+							log.Printf("[AgentTaskId Validator] ✅ Instant validation: agentTaskId '%s' matches last created task", providedAgentTaskId)
+						}
+					} else if providedAgentTaskId != "" {
+						// No cached ID - let the tool validate via GetAgentTask (with retry)
+						log.Printf("[AgentTaskId Validator] No cached agentTaskId, will validate '%s' via GetAgentTask", providedAgentTaskId)
 					}
 				}
 
@@ -915,24 +1119,47 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					toolCallHistory = toolCallHistory[1:] // Remove oldest
 				}
 
-				// CRITICAL: Track failed tool calls separately - stop immediately on retry of failed operation
+				// CRITICAL: Track CONSECUTIVE failed tool calls - stop on 3+ consecutive identical failures
+				// This allows: compile → error → fix → compile (normal flow)
+				// But prevents: compile → error → compile → error → compile (infinite loop)
 				if result.Error != "" {
-					failedToolCalls[signature]++
-					if failedToolCalls[signature] >= 2 {
-						// Second failure with same args - stop immediately!
-						log.Printf("[Circuit Breaker - Failed Tool] Tool '%s' failed twice with identical arguments - stopping", toolCall.Name)
-						eventChan <- StreamEvent{
-							Type: StreamEventError,
-							Error: fmt.Sprintf("❌ CRITICAL ERROR: Tool '%s' failed TWICE with identical arguments. Error: %s\n\n"+
-								"🛑 You are retrying a FAILED operation. This will never work!\n"+
-								"✅ Try a DIFFERENT approach:\n"+
-								"   - If file not found: check directory listing or search results for the ACTUAL file name\n"+
-								"   - If path wrong: try different path or create the file\n"+
-								"   - If tool incompatible: use a different tool\n\n"+
-								"DO NOT retry the same failed operation again!", toolCall.Name, result.Error),
+					// Check if this is the same as the last failed call
+					if lastFailedSignature == signature {
+						consecutiveFailures++
+						if consecutiveFailures >= 3 {
+							// Third CONSECUTIVE failure with same args - stop!
+							log.Printf("[Circuit Breaker] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments - stopping", toolCall.Name)
+							// Return error to AI, don't stop execution
+							// The AI should see this error and try a different approach
+							loopWarning := fmt.Sprintf("❌ CRITICAL: Tool '%s' has FAILED 3 TIMES IN A ROW with identical arguments.\n\n"+
+								"Error: %s\n\n"+
+								"🛑 This approach is NOT working. You MUST try something different:\n"+
+								"   - If file not found: List the directory first to see what files actually exist\n"+
+								"   - If path wrong: Try a different path or check your working directory\n"+
+								"   - If tool incompatible: Use a completely different tool or approach\n\n"+
+								"DO NOT call this tool with these arguments again!", toolCall.Name, result.Error)
+
+							// Add warning to current messages so AI sees it
+							currentMessages = append(currentMessages, Message{
+								Role:    "system",
+								Content: loopWarning,
+							})
+
+							// Reset counters
+							consecutiveFailures = 0
+							lastFailedSignature = ""
+						} else {
+							lastFailedSignature = signature
 						}
-						return
+					} else {
+						// Different failure, reset counter
+						consecutiveFailures = 1
+						lastFailedSignature = signature
 					}
+				} else {
+					// Success - reset failure tracking
+					consecutiveFailures = 0
+					lastFailedSignature = ""
 				}
 
 				// Circuit breaker: check for repeated tool calls AND warn the AI
@@ -1010,7 +1237,15 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					if isPermanentError {
 						toolResultMsg = fmt.Sprintf("PERMANENT ERROR - Tool '%s' cannot be used in this context: %s. DO NOT retry this tool - it will not work.", result.Name, result.Error)
 					} else {
-						toolResultMsg = fmt.Sprintf("Tool '%s' error: %s", result.Name, result.Error)
+						// ENHANCED ERROR GUIDANCE: Provide specific recovery instructions
+						recoveryGuidance := getErrorRecoveryGuidance(result.Name, result.Error, toolCall.Args)
+						toolResultMsg = fmt.Sprintf("❌ ERROR in tool '%s': %s\n\n%s", result.Name, result.Error, recoveryGuidance)
+
+						// Also send error as visible message to user
+						eventChan <- StreamEvent{
+							Type:    StreamEventToken,
+							Content: fmt.Sprintf("\n\n⚠️  Tool Error: %s\n💡 %s\n\n", result.Error, recoveryGuidance),
+						}
 					}
 				} else {
 					// Marshal output to JSON for context
@@ -1061,28 +1296,37 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 				}
 
-				// CRITICAL FIX: Truncate tool results that are too large to prevent token limit errors
-				// Individual tool results can be HUGE (e.g., bash ls -R output = 1.98MB)
-				// Even if sliding window triggers, if one recent message is huge, it doesn't help
-				// For fallback model (Haiku), use higher limit to preserve more context
-				maxToolResultSize := 10000 // 10KB per tool result (default)
-				if s.usingFallback {
-					maxToolResultSize = 30000 // 30KB for fallback model - preserve more context
-				}
-				if len(toolResultMsg) > maxToolResultSize {
-					originalSize := len(toolResultMsg)
-					// Keep first portion and add truncation notice
-					truncatedSize := maxToolResultSize - 500
-					toolResultMsg = toolResultMsg[:truncatedSize] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars to prevent token limit. If you need more, use a more specific query or process the data in smaller chunks.] ...", originalSize, truncatedSize)
-					log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars to prevent token limit",
-						result.Name, originalSize, len(toolResultMsg))
-				}
+				// DISABLED: Tool result truncation removed per user request
+				// Full tool results will be sent to AI without size limitations
+				// Previous truncation: 10KB (default) or 30KB (fallback model)
+				// Note: This may cause token limit errors with very large tool outputs
+				// maxToolResultSize := 10000 // 10KB per tool result (default)
+				// if s.usingFallback {
+				// 	maxToolResultSize = 30000 // 30KB for fallback model - preserve more context
+				// }
+				// if len(toolResultMsg) > maxToolResultSize {
+				// 	originalSize := len(toolResultMsg)
+				// 	// Keep first portion and add truncation notice
+				// 	truncatedSize := maxToolResultSize - 500
+				// 	toolResultMsg = toolResultMsg[:truncatedSize] + fmt.Sprintf("\n\n... [TRUNCATED: Result was %d chars, showing first %d chars to prevent token limit. If you need more, use a more specific query or process the data in smaller chunks.] ...", originalSize, truncatedSize)
+				// 	log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars to prevent token limit",
+				// 		result.Name, originalSize, len(toolResultMsg))
+				// }
 
 				// CRITICAL FIX: Add tool_call message BEFORE tool_result (required by Anthropic API)
 				// This ensures proper conversation history tracking
+				// Strip tool call JSON from content (some models like Groq include it in text)
+				cleanContent := responseText
+				if strings.Contains(cleanContent, `[{"id":"`) {
+					// Find and remove the JSON array part
+					if idx := strings.Index(cleanContent, `[{"id":"`); idx >= 0 {
+						cleanContent = strings.TrimSpace(cleanContent[:idx])
+					}
+				}
+
 				currentMessages = append(currentMessages, Message{
 					Role:    "tool_call",
-					Content: responseText,
+					Content: cleanContent,
 					ToolCall: &ToolCall{
 						ID:   toolCall.ID,
 						Name: toolCall.Name,
@@ -1108,11 +1352,13 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution
 				// Apply to ALL models to match prescriptive filter behavior (line 714)
 				if result.Error == "" {
+					debugLog("WORKFLOW: Tool %s succeeded, checking for state update", toolCall.Name)
 					switch toolCall.Name {
 					case "coordinator_list_human_tasks":
 						if workflowState["step"].(int) == 0 {
 							workflowState["step"] = 1
 							log.Printf("[Workflow State] Step 1 complete: listed tasks")
+							debugLog("WORKFLOW: Updated state to step 1")
 						}
 
 					case "coordinator_create_human_task":
@@ -1120,6 +1366,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 							if taskID, hasTaskID := outputMap["taskId"].(string); hasTaskID && taskID != "" {
 								workflowState["step"] = 2
 								workflowState["humanTaskId"] = taskID
+								lastCreatedHumanTaskId = taskID // FIX #9: Cache for instant validation
 								log.Printf("[Workflow State] Step 2 complete: created human task %s", taskID)
 							} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
 								// Case 2: Similar task found - use existing task instead of creating new one
@@ -1128,6 +1375,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 										if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
 											workflowState["step"] = 2
 											workflowState["humanTaskId"] = existingTaskID
+											lastCreatedHumanTaskId = existingTaskID // FIX #9: Cache for instant validation
 											log.Printf("[Workflow State] Step 2 complete: using existing similar task %s", existingTaskID)
 										}
 									}
@@ -1139,12 +1387,14 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						workflowState["step"] = 3
 						workflowState["searchCompleted"] = true
 						log.Printf("[Workflow State] Step 3 complete: code search done")
+						debugLog("WORKFLOW: Updated state to step 3 (after code_index_search)")
 
 					case "create_agent_task":
 						if outputMap, ok := result.Output.(map[string]interface{}); ok {
 							if agentTaskID, hasAgentTaskID := outputMap["taskId"].(string); hasAgentTaskID && agentTaskID != "" {
 								workflowState["step"] = 4
 								workflowState["agentTaskId"] = agentTaskID
+								lastCreatedAgentTaskId = agentTaskID // FIX #10: Cache for instant validation
 								log.Printf("[Workflow State] Step 4 complete: created agent task %s", agentTaskID)
 							}
 						}
@@ -1182,9 +1432,12 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						}
 						return sum
 					}())
+				debugLog("END OF TOOL CALL: currentMessages=%d, continuing to next iteration", len(currentMessages))
 			}
+			debugLog("END OF ALL TOOL CALLS IN THIS ITERATION: toolCallCount=%d, looping back", toolCallCount)
 		}
 
+		debugLog("LOOP EXITED: toolCallCount=%d/%d, iterationCount=%d/%d", toolCallCount, maxToolCalls, iterationCount, s.config.MaxIterations)
 		// Check which limit was reached
 		if toolCallCount >= maxToolCalls {
 			// Max tool calls reached
@@ -1326,17 +1579,21 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 	// Start tool-enabled streaming
 	go func() {
 		defer close(eventChan)
+		debugLog("========== GOROUTINE STARTED ==========")
+		debugLog("Request ID: %s, MaxToolCalls: %d", requestID, maxToolCalls)
 
 		toolCallCount := 0
 		iterationCount := 0
 		currentMessages := append([]Message{}, messages...) // Copy messages
+		debugLog("Initial message count: %d", len(currentMessages))
 
 		// Tool result cache: prevent duplicate tool executions
 		resultCache := NewToolResultCache()
 
 		// Circuit breaker: track recent tool calls to detect infinite loops
 		recentToolCalls := make([]string, 0, 10)
-		failedToolCalls := make(map[string]int) // Track failed attempts separately
+		consecutiveFailures := 0     // Track CONSECUTIVE failures of the same tool+args
+		lastFailedSignature := ""    // Signature of the last failed tool call
 		// pathValidationRetries not needed in fallback model (Claude handles its own validation)
 		toolCallSignature := func(name string, args map[string]interface{}) string {
 			argsJSON, _ := json.Marshal(args)
@@ -1448,40 +1705,63 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				contextSize += len(msg.Content)
 			}
 
+			// SLIDING WINDOW DISABLED
 			// Apply sliding window BEFORE context exceeds model's token limit
 			// Claude: 200K tokens (≈800KB text) - use 150KB threshold
 			// GPT: 32K tokens (≈128KB text) - use 40KB threshold to be safe
-			var maxContextSize int
-			var maxMessages int
-			if isClaudeModel {
-				maxContextSize = 150000 // 150KB for Claude (≈37K tokens, leaves room for output)
-				maxMessages = 20        // Keep more messages for Claude
-			} else {
-				maxContextSize = 40000 // 40KB for GPT (≈10K tokens)
-				maxMessages = 6        // Conservative for GPT
-			}
+			// var maxContextSize int
+			// var maxMessages int
+			// if isClaudeModel {
+			// 	maxContextSize = 150000 // 150KB for Claude (≈37K tokens, leaves room for output)
+			// 	maxMessages = 20        // Keep more messages for Claude
+			// } else {
+			// 	maxContextSize = 40000 // 40KB for GPT (≈10K tokens)
+			// 	maxMessages = 6        // Conservative for GPT
+			// }
 
-			if contextSize > maxContextSize {
-				log.Printf("[Sliding Window - Filtered] Context size %d chars exceeds threshold %d chars, applying window",
-					contextSize, maxContextSize)
-				currentMessages = applySlidingWindow(currentMessages, maxMessages)
+			// if contextSize > maxContextSize {
+			// 	log.Printf("[Sliding Window - Filtered] Context size %d chars exceeds threshold %d chars, applying window",
+			// 		contextSize, maxContextSize)
+			// 	currentMessages = applySlidingWindow(currentMessages, maxMessages)
 
-				// Recalculate after trimming
-				contextSize = 0
-				for _, msg := range currentMessages {
-					contextSize += len(msg.Content)
-				}
-			}
+			// 	// Recalculate after trimming
+			// 	contextSize = 0
+			// 	for _, msg := range currentMessages {
+			// 		contextSize += len(msg.Content)
+			// 	}
+			// }
 
-			// Log iteration details
-			log.Printf("[AI Processing - Filtered Tools] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d",
-				iterationCount, contextSize, contextSize, toolCallCount)
+			// Log iteration details with more info
+			log.Printf("[AI Processing - Filtered Tools] === ITERATION %d START ===", iterationCount)
+			log.Printf("[AI Processing - Filtered Tools] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d, Max iterations: %d",
+				iterationCount, contextSize, contextSize, toolCallCount, s.config.MaxIterations)
 
 			// DEBUG: Log context details before LLM API call
 			contextSize = calculateContextSize(currentMessages)
-// toolResultPreview := getToolResultPreview(currentMessages, 200)
-// 			log.Printf("[DEBUG Context - Filtered] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
-// 				len(currentMessages), contextSize, toolResultPreview)
+
+			// LOG EXACT MESSAGES SENT TO AI
+			log.Printf("[DEBUG - AI Input] Sending %d messages to AI (iteration %d):", len(currentMessages), iterationCount)
+			for i, msg := range currentMessages {
+				contentPreview := msg.Content
+				if len(contentPreview) > 200 {
+					contentPreview = contentPreview[:200] + "..."
+				}
+
+				if msg.Role == "tool_result" && msg.ToolResult != nil {
+					outputPreview := fmt.Sprintf("%v", msg.ToolResult.Output)
+					if len(outputPreview) > 500 {
+						outputPreview = outputPreview[:500] + "..."
+					}
+					log.Printf("  [%d] Role: %s, ToolName: %s, ToolID: %s, Output: %s",
+						i, msg.Role, msg.ToolResult.Name, msg.ToolResult.ID, outputPreview)
+				} else if msg.Role == "tool_call" && msg.ToolCall != nil {
+					argsJSON, _ := json.Marshal(msg.ToolCall.Args)
+					log.Printf("  [%d] Role: %s, ToolName: %s, ToolID: %s, Args: %s",
+						i, msg.Role, msg.ToolCall.Name, msg.ToolCall.ID, string(argsJSON))
+				} else {
+					log.Printf("  [%d] Role: %s, Content: %s", i, msg.Role, contentPreview)
+				}
+			}
 
 			// Call provider with FILTERED tools
 			toolProvider := s.provider.(ToolCapableProvider)
@@ -1502,8 +1782,31 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 			}
 
 			// Log iteration response details
+			log.Printf("[AI Processing - Filtered] === ITERATION %d COMPLETE ===", iterationCount)
 			log.Printf("[AI Processing - Filtered] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
 				iterationCount, responseTokens, len(response.ToolCalls))
+
+			// DEBUG: Check if responseText contains tool JSON (FILTERED PATH)
+			if strings.Contains(responseText, `[{"id":"`) {
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] ⚠️  WARNING: responseText contains tool JSON!")
+				preview := responseText
+				if len(preview) > 300 {
+					preview = preview[:300] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] responseText preview: %s", preview)
+			} else {
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] ✓ responseText is clean (no tool JSON)")
+				preview := responseText
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] responseText preview: %s", preview)
+			}
+
+			// Log end turn if no tool calls
+			if len(response.ToolCalls) == 0 {
+				log.Printf("[AI Processing - Filtered] 🏁 AI ENDED TURN - No more tool calls requested (normal completion)")
+			}
 
 			// Check for tool calls
 			if len(response.ToolCalls) == 0 {
@@ -1638,19 +1941,47 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						result.Name, string(argsJSON), string(outputJSON))
 				}
 
-				// CRITICAL: Track failed tool calls separately
+				// CRITICAL: Track CONSECUTIVE failed tool calls - stop on 3+ consecutive identical failures
+				// This allows: compile → error → fix → compile (normal flow)
+				// But prevents: compile → error → compile → error → compile (infinite loop)
 				if result.Error != "" {
-					failedToolCalls[signature]++
-					if failedToolCalls[signature] >= 2 {
-						log.Printf("[Circuit Breaker - Failed Tool] Tool '%s' failed twice with identical arguments - stopping", toolCall.Name)
-						eventChan <- StreamEvent{
-							Type: StreamEventError,
-							Error: fmt.Sprintf("❌ CRITICAL ERROR: Tool '%s' failed TWICE with identical arguments. Error: %s\n\n"+
-								"🛑 You are retrying a FAILED operation. This will never work!\n"+
-								"✅ Try a DIFFERENT approach - DO NOT retry the same failed operation!", toolCall.Name, result.Error),
+					// Check if this is the same as the last failed call
+					if lastFailedSignature == signature {
+						consecutiveFailures++
+						if consecutiveFailures >= 3 {
+							// Third CONSECUTIVE failure with same args - stop!
+							log.Printf("[Circuit Breaker - Filtered] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments", toolCall.Name)
+							// Return error to AI, don't stop execution
+							// The AI should see this error and try a different approach
+							loopWarning := fmt.Sprintf("❌ CRITICAL: Tool '%s' has FAILED 3 TIMES IN A ROW with identical arguments.\n\n"+
+								"Error: %s\n\n"+
+								"🛑 This approach is NOT working. You MUST try something different:\n"+
+								"   - If file not found: List the directory first to see what files actually exist\n"+
+								"   - If path wrong: Try a different path or check your working directory\n"+
+								"   - If tool incompatible: Use a completely different tool or approach\n\n"+
+								"DO NOT call this tool with these arguments again!", toolCall.Name, result.Error)
+
+							// Add warning to current messages so AI sees it
+							currentMessages = append(currentMessages, Message{
+								Role:    "system",
+								Content: loopWarning,
+							})
+
+							// Reset counters
+							consecutiveFailures = 0
+							lastFailedSignature = ""
+						} else {
+							lastFailedSignature = signature
 						}
-						return
+					} else {
+						// Different failure, reset counter
+						consecutiveFailures = 1
+						lastFailedSignature = signature
 					}
+				} else {
+					// Success - reset failure tracking
+					consecutiveFailures = 0
+					lastFailedSignature = ""
 				}
 
 				// Circuit breaker: check for repeated tool calls
@@ -1727,21 +2058,24 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					}
 				}
 
-				// Truncate large tool results (apply to result.Output, not string)
-				const maxToolResultSize = 10000
-				if outputJSON, err := json.Marshal(result.Output); err == nil {
-					if len(outputJSON) > maxToolResultSize {
-						originalSize := len(outputJSON)
-						truncated := string(outputJSON[:maxToolResultSize-500])
-						result.Output = map[string]interface{}{
-							"_truncated": true,
-							"_message":   fmt.Sprintf("Result was %d chars, showing first %d chars", originalSize, maxToolResultSize-500),
-							"_preview":   truncated,
-						}
-						log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars",
-							result.Name, originalSize, len(truncated))
-					}
-				}
+				// DISABLED: Tool result truncation removed per user request
+				// Full tool results will be sent to AI without size limitations
+				// Previous truncation: 10KB with structured preview
+				// Note: This may cause token limit errors with very large tool outputs
+				// const maxToolResultSize = 10000
+				// if outputJSON, err := json.Marshal(result.Output); err == nil {
+				// 	if len(outputJSON) > maxToolResultSize {
+				// 		originalSize := len(outputJSON)
+				// 		truncated := string(outputJSON[:maxToolResultSize-500])
+				// 		result.Output = map[string]interface{}{
+				// 			"_truncated": true,
+				// 			"_message":   fmt.Sprintf("Result was %d chars, showing first %d chars", originalSize, maxToolResultSize-500),
+				// 			"_preview":   truncated,
+				// 		}
+				// 		log.Printf("[Tool Result Truncation] Truncated tool '%s' result from %d to %d chars",
+				// 			result.Name, originalSize, len(truncated))
+				// 	}
+				// }
 
 				// CRITICAL FIX: Add tool_result message with proper role (user, not system)
 				// This matches Anthropic's API format and ensures conversation continuity

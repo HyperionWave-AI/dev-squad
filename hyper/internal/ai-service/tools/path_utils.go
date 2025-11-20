@@ -117,8 +117,36 @@ func StripProjectRoot(absPath string) string {
 
 // IsSystemPath checks if command contains dangerous system paths
 func IsSystemPath(command string) bool {
-	systemPaths := []string{"/etc/", "/var/", "/sys/", "/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/proc/", "/dev/"}
+	// Allow safe /dev/ redirects (common Unix pattern)
+	safeDevPaths := []string{"/dev/null", "/dev/stdout", "/dev/stderr"}
 	cmdLower := strings.ToLower(command)
+
+	// First check if command contains any /dev/ references
+	if strings.Contains(cmdLower, "/dev/") {
+		// Check if all /dev/ references are safe redirects
+		isSafe := false
+		for _, safePath := range safeDevPaths {
+			if strings.Contains(cmdLower, safePath) {
+				isSafe = true
+				break
+			}
+		}
+		// If /dev/ is present but not a safe redirect, block it
+		if !isSafe {
+			// Check if it's ONLY safe paths by removing them and checking if /dev/ still exists
+			tempCmd := cmdLower
+			for _, safePath := range safeDevPaths {
+				tempCmd = strings.ReplaceAll(tempCmd, safePath, "")
+			}
+			// If /dev/ still exists after removing safe paths, it's dangerous
+			if strings.Contains(tempCmd, "/dev/") {
+				return true
+			}
+		}
+	}
+
+	// Check other system paths
+	systemPaths := []string{"/etc/", "/var/", "/sys/", "/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/proc/"}
 	for _, sysPath := range systemPaths {
 		if strings.Contains(cmdLower, sysPath) {
 			return true

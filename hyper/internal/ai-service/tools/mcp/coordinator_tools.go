@@ -47,18 +47,30 @@ func correctFilePaths(paths []string, logger *zap.Logger) ([]string, []string, b
 			continue
 		}
 
-		// Check if path exists as-is
-		if _, err := os.Stat(path); err == nil {
-			correctedPaths = append(correctedPaths, path)
-			logger.Debug("✅ Path valid", zap.String("path", path))
+		// FIX #5: Resolve relative paths against project root, not working directory
+		// Relative paths like "./ui/src/..." should be resolved from project root
+		resolvedPath := path
+		if !filepath.IsAbs(path) {
+			// Path is relative - resolve against project root
+			resolvedPath = filepath.Join(projectRoot, path)
+			logger.Debug("Resolved relative path",
+				zap.String("original", path),
+				zap.String("resolved", resolvedPath))
+		}
+
+		// Check if resolved path exists
+		if _, err := os.Stat(resolvedPath); err == nil {
+			correctedPaths = append(correctedPaths, resolvedPath)
+			logger.Debug("✅ Path valid", zap.String("path", resolvedPath))
 			continue
 		}
 
 		// Path doesn't exist, try to fix it
 		logger.Warn("⚠️  Path does not exist, attempting correction",
-			zap.String("originalPath", path))
+			zap.String("originalPath", path),
+			zap.String("resolvedPath", resolvedPath))
 
-		fixedPath := tryFixPath(path, projectRoot, logger)
+		fixedPath := tryFixPath(resolvedPath, projectRoot, logger)
 
 		if fixedPath != "" {
 			// Verify the fixed path exists
@@ -395,16 +407,24 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 }
 
 func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	// SMART AUTO-FETCH: Extract humanTaskId from input but ALWAYS validate it exists in database
-	// If invalid/missing, auto-fetch the latest pending task (don't trust the model)
-	providedTaskID, _ := input["humanTaskId"].(string)
-	
+	// FIX #2: Explicit Error for humanTaskId Type Mismatch
+	// Previously: Silent type assertion failure treated wrong type as empty string
+	// Now: Fail fast with clear error if humanTaskId is provided but wrong type
+	providedTaskID := ""
+	if taskIDRaw, exists := input["humanTaskId"]; exists {
+		var ok bool
+		providedTaskID, ok = taskIDRaw.(string)
+		if !ok {
+			return nil, fmt.Errorf("humanTaskId must be a string, got %T: %v", taskIDRaw, taskIDRaw)
+		}
+	}
+
 	// Extract task details for complexity analysis
 	agentName, _ := input["agentName"].(string)
 	role, _ := input["role"].(string)
 	contextSummary, _ := input["contextSummary"].(string)
 
-	// Extract filesModified for complexity analysis
+	// Extract filesModified for complexity analysis (will be validated more strictly later)
 	var filesModified []string
 	if fm, ok := input["filesModified"].([]interface{}); ok {
 		filesModified = make([]string, len(fm))
@@ -455,24 +475,45 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 
 	var humanTaskID string
 
-	// If task ID was provided, validate it exists in database
+	// FIX #3: Retry Logic for Task Lookup (handles race conditions)
+	// Previously: Single lookup could fail if MongoDB hasn't committed yet
+	// Now: Retry up to 3 times with exponential backoff for eventual consistency
 	if providedTaskID != "" {
-		task, err := t.storage.GetHumanTask(providedTaskID)
+		var task *storage.HumanTask
+		var err error
+
+		// Retry up to 3 times with exponential backoff
+		for attempt := 0; attempt < 3; attempt++ {
+			task, err = t.storage.GetHumanTask(providedTaskID)
+			if err == nil && task != nil {
+				break // Success
+			}
+			if attempt < 2 {
+				// Wait before retry: 100ms, then 200ms
+				sleepDuration := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+				zap.L().Debug("Retrying humanTaskId lookup after delay",
+					zap.String("providedTaskId", providedTaskID),
+					zap.Int("attempt", attempt+1),
+					zap.Duration("delay", sleepDuration))
+				time.Sleep(sleepDuration)
+			}
+		}
+
 		if err != nil || task == nil {
-			// INVALID TASK ID - Model hallucinated or sent wrong ID
-			zap.L().Warn("Model provided invalid humanTaskId - auto-fetching latest task",
+			// Failed after retries - log original providedTaskID for debugging
+			zap.L().Warn("Failed to find humanTaskId after retries - auto-fetching latest task",
 				zap.String("providedTaskId", providedTaskID),
 				zap.String("error", fmt.Sprintf("%v", err)),
-				zap.String("reason", "task_not_found_in_database"))
+				zap.Int("retries", 3))
 
-			// Auto-fetch latest task
+			// Auto-fetch latest task as fallback
 			latestTask, fetchErr := fetchLatestTask()
 			if fetchErr != nil {
-				return nil, fetchErr
+				return nil, fmt.Errorf("invalid humanTaskId %q and no fallback task available: %w", providedTaskID, fetchErr)
 			}
 			humanTaskID = latestTask.ID
 
-			zap.L().Info("Auto-corrected humanTaskId (model sent invalid ID)",
+			zap.L().Info("Auto-corrected humanTaskId (not found after retries)",
 				zap.String("modelProvidedId", providedTaskID),
 				zap.String("correctedId", humanTaskID),
 				zap.String("prompt", latestTask.Prompt),
@@ -585,13 +626,22 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 	contextSummary, _ = input["contextSummary"].(string)
 	priorWorkSummary, _ := input["priorWorkSummary"].(string)
 
-	// Reuse filesModified from earlier (line 407), no need to redeclare
+	// FIX #1: Strict Type Validation for filesModified (re-extract with better validation)
+	// Previously: Silent type coercion failure would leave empty strings in array
+	// Now: Fail fast with clear error message if any element is not a string
+	// Note: filesModified was extracted earlier for complexity analysis, now re-validating strictly
+	filesModified = nil // Clear earlier extraction, will rebuild with validation
 	if fm, ok := input["filesModified"].([]interface{}); ok {
-		filesModified = make([]string, len(fm))
+		filesModified = make([]string, 0, len(fm)) // Use capacity, not length
 		for i, f := range fm {
-			if str, ok := f.(string); ok {
-				filesModified[i] = str
+			str, ok := f.(string)
+			if !ok {
+				return nil, fmt.Errorf("filesModified[%d] must be a string, got %T: %v", i, f, f)
 			}
+			if str == "" {
+				continue // Skip empty strings instead of adding them
+			}
+			filesModified = append(filesModified, str)
 		}
 	}
 
@@ -600,52 +650,69 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		cachedPaths := GetLastCodeSearchPaths()
 		if len(cachedPaths) > 0 {
 			filesModified = cachedPaths
-			zap.L().Info("✅ Auto-populated filesModified from code_index_search cache",
+			zap.L().Info("✅ Auto-populated filesModified from code_index_search cache (empty input)",
 				zap.Int("filesCount", len(filesModified)),
 				zap.Strings("files", filesModified))
 		}
 	}
 
-	// DEPRECATED FOLDER FILTER: Remove paths from deprecated /ui folder
-	// The project has migrated to /ui2, so /ui paths should be filtered out
+	// REMOVED: Deprecated folder filter was incorrectly filtering valid /ui paths
+	// The project still uses /ui folder, there is no /ui2 migration
+
+	// FIX #4: Always Update filesModified After Correction
+	// Previously: Only updated if conditions met, could leave invalid paths
+	// Now: ALWAYS use correctedPaths (filters empty strings and invalid paths)
+	var unfixablePaths []string
+	originalProvidedPaths := make([]string, len(filesModified))
+	copy(originalProvidedPaths, filesModified)
+
 	if len(filesModified) > 0 {
-		var validPaths []string
-		var deprecatedPaths []string
+		correctedPaths, unfixable, isIndexingIssue := correctFilePaths(filesModified, zap.L())
+		unfixablePaths = unfixable
 
-		for _, path := range filesModified {
-			// Check if path contains /ui/ but NOT /ui2/
-			if strings.Contains(path, "/ui/") && !strings.Contains(path, "/ui2/") {
-				deprecatedPaths = append(deprecatedPaths, path)
-			} else {
-				validPaths = append(validPaths, path)
-			}
-		}
+		// ALWAYS update filesModified with corrected paths
+		// This filters out empty strings, invalid paths, and fixes correctable paths
+		originalCount := len(filesModified)
+		filesModified = correctedPaths
 
-		if len(deprecatedPaths) > 0 {
-			zap.L().Warn("⚠️ Filtered out deprecated /ui folder paths",
-				zap.Int("filteredCount", len(deprecatedPaths)),
-				zap.Int("remainingCount", len(validPaths)),
-				zap.Strings("deprecatedPaths", deprecatedPaths))
-			filesModified = validPaths
+		if len(unfixablePaths) > 0 {
+			// Some paths could not be fixed - log error but continue with valid paths
+			zap.L().Error("❌ Path correction failed for some files",
+				zap.Int("originalCount", originalCount),
+				zap.Int("correctedCount", len(correctedPaths)),
+				zap.Strings("unfixablePaths", unfixablePaths),
+				zap.Bool("indexingIssue", isIndexingIssue))
+		} else if len(correctedPaths) < originalCount {
+			// Some paths were filtered (empty strings or invalid)
+			zap.L().Info("✅ File paths corrected and validated",
+				zap.Int("originalCount", originalCount),
+				zap.Int("correctedCount", len(correctedPaths)),
+				zap.Bool("indexingIssue", isIndexingIssue))
 		}
 	}
 
-	// PATH CORRECTION: Fix invalid paths before validation (defensive programming)
-	// Only runs if paths exist but some are invalid
-	if len(filesModified) > 0 {
-		correctedPaths, unfixablePaths, isIndexingIssue := correctFilePaths(filesModified, zap.L())
-		if len(unfixablePaths) > 0 {
-			// Some paths could not be fixed - this will fail validation
-			zap.L().Error("❌ Path correction failed for some files",
-				zap.Strings("unfixablePaths", unfixablePaths),
-				zap.Bool("indexingIssue", isIndexingIssue))
-			// Don't return error here - let validation handle it with proper error message
-		} else if len(correctedPaths) != len(filesModified) {
-			// Paths were corrected successfully
-			filesModified = correctedPaths
-			zap.L().Info("✅ File paths corrected and validated",
-				zap.Int("correctedCount", len(correctedPaths)),
-				zap.Bool("indexingIssue", isIndexingIssue))
+	// FIX #7: Smart Fallback to Cached Paths
+	// If ALL provided paths failed validation, use the cached paths from code_index_search
+	// This handles the case where the model hallucinated paths instead of using search results
+	if len(originalProvidedPaths) > 0 && len(filesModified) == 0 {
+		cachedPaths := GetLastCodeSearchPaths()
+		if len(cachedPaths) > 0 {
+			// Deduplicate cached paths
+			seenPaths := make(map[string]bool)
+			uniquePaths := make([]string, 0, len(cachedPaths))
+			for _, path := range cachedPaths {
+				if !seenPaths[path] {
+					seenPaths[path] = true
+					uniquePaths = append(uniquePaths, path)
+				}
+			}
+
+			filesModified = uniquePaths
+			zap.L().Warn("⚠️  All provided paths failed validation - falling back to code_index_search cache",
+				zap.Int("providedCount", len(originalProvidedPaths)),
+				zap.Strings("providedPaths", originalProvidedPaths),
+				zap.Int("cachedCount", len(uniquePaths)),
+				zap.Strings("cachedPaths", uniquePaths))
 		}
 	}
 
@@ -676,8 +743,9 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
-	// VALIDATION: Warn if filesModified is empty
-	// This is a strong indicator the coordinator didn't use code_index_search results
+	// FIX #6: Better validation error messages
+	// Previously: Generic "filesModified is empty" message
+	// Now: Explain WHY it's empty and what paths were attempted
 	if len(filesModified) == 0 {
 		zap.L().Warn("⚠️  filesModified is empty - subagent may not know which files to modify",
 			zap.String("agentName", agentName),
@@ -692,21 +760,40 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 			fileExtensions := []string{".tsx", ".ts", ".jsx", ".js", ".go", ".css", ".html", ".py", ".java"}
 			for _, ext := range fileExtensions {
 				if strings.Contains(todoLower, ext) {
-					return nil, fmt.Errorf(
-						"❌ filesModified validation failed:\n"+
-							"• filesModified is empty\n"+
-							"• BUT TODO #%d references a file: %s\n\n"+
-							"🚨 YOU MUST POPULATE filesModified\n"+
-							"• Run code_index_search to find relevant files\n"+
-							"• Extract filePath values from search results\n"+
-							"• Pass them in filesModified array\n\n"+
-							"Example:\n"+
-							"1. code_index_search('settings component')\n"+
-							"2. create_agent_task({\n"+
-							"     filesModified: [\"/path/to/Settings.tsx\", \"/path/to/settings.css\"],\n"+
-							"     todos: [\"Add responsive CSS...\"]\n"+
-							"   })",
-						i+1, todo)
+					// Build helpful error message based on what actually happened
+					errorMsg := "❌ filesModified validation failed:\n"
+
+					if len(originalProvidedPaths) > 0 {
+						// Paths were provided but all failed validation
+						errorMsg += fmt.Sprintf("• You provided %d file path(s), but NONE of them exist:\n", len(originalProvidedPaths))
+						for _, path := range originalProvidedPaths {
+							errorMsg += fmt.Sprintf("  - %s ❌\n", path)
+						}
+						errorMsg += "\n• TODO #" + fmt.Sprintf("%d", i+1) + " references a file: " + todo + "\n\n"
+						errorMsg += "🚨 THE PATHS YOU PROVIDED DON'T EXIST\n"
+						errorMsg += "• Run code_index_search again with a better query\n"
+						errorMsg += "• Verify the file paths returned by code_index_search\n"
+						errorMsg += "• Use EXACT paths from FILE_PATHS_TO_USE in the search results\n"
+						errorMsg += "• Do NOT type paths manually - copy them from search results\n\n"
+						errorMsg += "💡 TIP: The files you're looking for might have different names or locations\n"
+						errorMsg += "   Try searching for key terms from the file name or functionality"
+					} else {
+						// No paths were provided at all
+						errorMsg += "• filesModified is empty\n"
+						errorMsg += fmt.Sprintf("• BUT TODO #%d references a file: %s\n\n", i+1, todo)
+						errorMsg += "🚨 YOU MUST POPULATE filesModified\n"
+						errorMsg += "• Run code_index_search to find relevant files\n"
+						errorMsg += "• Extract filePath values from search results\n"
+						errorMsg += "• Pass them in filesModified array\n\n"
+						errorMsg += "Example:\n"
+						errorMsg += "1. code_index_search('settings component')\n"
+						errorMsg += "2. create_agent_task({\n"
+						errorMsg += "     filesModified: [\"/path/to/Settings.tsx\", \"/path/to/settings.css\"],\n"
+						errorMsg += "     todos: [\"Add responsive CSS...\"]\n"
+						errorMsg += "   })"
+					}
+
+					return nil, fmt.Errorf("%s", errorMsg)
 				}
 			}
 		}
@@ -2640,10 +2727,28 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 		zap.String("agentTaskId", agentTaskID),
 		zap.String("parentChatId", parentChatID))
 
-	// Get the agent task to extract subagent name and details
-	agentTask, err := t.taskStorage.GetAgentTask(agentTaskID)
+	// FIX #10: Retry GetAgentTask to handle MongoDB eventual consistency
+	// Retry up to 3 times with exponential backoff (same pattern as CreateAgentTaskTool)
+	var agentTask *storage.AgentTask
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		agentTask, err = t.taskStorage.GetAgentTask(agentTaskID)
+		if err == nil && agentTask != nil {
+			break // Success
+		}
+		if attempt < 2 {
+			// Wait before retry: 100ms, then 200ms
+			sleepDuration := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
+			t.logger.Debug("Retrying agentTaskId lookup after delay",
+				zap.String("agentTaskId", agentTaskID),
+				zap.Int("attempt", attempt+1),
+				zap.Duration("delay", sleepDuration))
+			time.Sleep(sleepDuration)
+		}
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to get agent task: %w", err)
+		return nil, fmt.Errorf("failed to get agent task after 3 retries: %w", err)
 	}
 
 	t.logger.Info("📋 Retrieved agent task",
