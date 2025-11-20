@@ -113,28 +113,12 @@ func (v *CodeValidator) validateTypeScript(ctx context.Context, files []string) 
 	// Check if ui directory exists
 	uiDir := filepath.Join(v.projectRoot, "ui")
 
-	// Build command with specific files to check
-	args := []string{"tsc", "--noEmit", "--pretty", "false"}
+	// Run tsc on ENTIRE project with incremental compilation (respects tsconfig.json)
+	// Using --incremental creates .tsbuildinfo cache for 10-15x faster subsequent runs
+	// CRITICAL: We must NOT pass specific files to respect tsconfig.json configuration
+	// Use --project tsconfig.app.json to ensure we use the app config (with erasableSyntaxOnly)
+	args := []string{"tsc", "--project", "tsconfig.app.json", "--noEmit", "--incremental", "--pretty", "false"}
 
-	// Convert file paths to relative paths from ui directory
-	for _, file := range files {
-		absPath, err := filepath.Abs(file)
-		if err != nil {
-			v.logger.Warn("Failed to get absolute path", zap.String("file", file), zap.Error(err))
-			continue
-		}
-
-		// Convert to relative path from ui directory
-		relPath, err := filepath.Rel(uiDir, absPath)
-		if err != nil {
-			v.logger.Warn("Failed to get relative path", zap.String("file", file), zap.Error(err))
-			continue
-		}
-
-		args = append(args, relPath)
-	}
-
-	// Run tsc --noEmit <files...>
 	cmd := exec.CommandContext(ctx, "npx", args...)
 	cmd.Dir = uiDir
 
@@ -145,21 +129,47 @@ func (v *CodeValidator) validateTypeScript(ctx context.Context, files []string) 
 	_ = cmd.Run() // Ignore error - we parse errors from output
 	duration := time.Since(start)
 
-	// Parse TypeScript errors
+	// Parse ALL TypeScript errors from entire project
 	output := stdout.String() + stderr.String()
-	errors := v.parseTypeScriptOutput(output)
+	allErrors := v.parseTypeScriptOutput(output)
+
+	// Convert modified files to relative paths for filtering
+	modifiedFilesSet := make(map[string]bool)
+	for _, file := range files {
+		absPath, err := filepath.Abs(file)
+		if err != nil {
+			continue
+		}
+		relPath, err := filepath.Rel(uiDir, absPath)
+		if err != nil {
+			continue
+		}
+		// Normalize path separators for comparison
+		modifiedFilesSet[filepath.ToSlash(relPath)] = true
+	}
+
+	// Filter errors to only include modified files
+	var relevantErrors []ValidationError
+	for _, err := range allErrors {
+		// Normalize error file path for comparison
+		normalizedErrFile := filepath.ToSlash(err.File)
+		if modifiedFilesSet[normalizedErrFile] {
+			relevantErrors = append(relevantErrors, err)
+		}
+	}
 
 	v.logger.Info("TypeScript validation completed",
-		zap.Int("errorCount", len(errors)),
+		zap.Int("totalErrors", len(allErrors)),
+		zap.Int("relevantErrors", len(relevantErrors)),
 		zap.Duration("duration", duration),
 		zap.Strings("checkedFiles", files))
 
 	return &ValidationResult{
-		Passed:       len(errors) == 0,
-		Errors:       errors,
+		Passed:       len(relevantErrors) == 0,
+		Errors:       relevantErrors,
 		CheckedFiles: files,
 		Duration:     duration,
-		Command:      fmt.Sprintf("npx tsc --noEmit %s", strings.Join(files, " ")),
+		Command:      "npx tsc --project tsconfig.app.json --noEmit --incremental",
 	}, nil
 }
 

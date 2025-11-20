@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '../atoms/Button';
-import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2, Users, Bot } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2, Users, Bot, Filter } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
 import { subagentsService } from '@/services/subagentsService';
@@ -76,8 +76,18 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
   const [activatingAgent, setActivatingAgent] = useState<string | null>(null);
 
+  // New state for filter button
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
   // Organize sessions into hierarchy
   const { mainSessions, subchatsMap } = organizeSessionsHierarchy(sessions);
+
+  // Placeholder handler for filter button
+  const handleFilterClick = () => {
+    setIsFilterOpen(!isFilterOpen);
+    // TODO: Implement actual filtering logic
+    console.log('Filter button clicked');
+  };
 
   // Function to render a single session
   const renderSession = (session: ChatSession, isSubchat = false) => {
@@ -100,115 +110,115 @@ export const SessionList: React.FC<SessionListProps> = ({
         }`}
         onClick={() => onSessionSelect(session.id)}
       >
-      <div className="flex items-start justify-between">
-        <div className="flex-1 min-w-0">
-          {editingSessionId === session.id ? (
-            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-              <input
-                type="text"
-                value={editingTitle}
-                onChange={(e) => setEditingTitle(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleRenameSubmit(session.id);
-                  } else if (e.key === 'Escape') {
-                    handleRenameCancel();
-                  }
-                }}
-                onBlur={() => handleRenameSubmit(session.id)}
-                className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                autoFocus
-              />
-            </div>
-          ) : (
-            <>
-              <h3 className="font-medium text-gray-900 dark:text-white truncate">
-                <div className="flex items-center gap-2">
-                  {isSubagentChat && (
-                    <Bot className="w-4 h-4 text-pink-300 dark:text-pink-500 flex-shrink-0" />
-                  )}
-                  {!isSubagentChat && !isSubchat && (
-                    <Bot className="w-4 h-4 text-green-500 dark:text-green-400 flex-shrink-0" />
-                  )}
-                  {isSubchat && !isSubagentChat && (
-                    <Bot className="w-4 h-4 text-blue-500 dark:text-blue-400 flex-shrink-0" />
-                  )}
-                  <span className="truncate">{session.title}</span>
-                </div>
-              </h3>
-              {session.lastMessage && (
-                <p className="text-sm text-gray-500 dark:text-gray-400 truncate mt-1">
-                  {session.lastMessage}
-                </p>
-              )}
-              <div className="flex items-center gap-3 mt-2 text-xs text-gray-400 dark:text-gray-500">
-                <div className="flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
-                  {(() => {
-                    try {
-                      const date = typeof session.timestamp === 'string'
-                        ? new Date(session.timestamp)
-                        : session.timestamp;
-                      return isNaN(date.getTime())
-                        ? 'Invalid date'
-                        : formatDistanceToNow(date, { addSuffix: true });
-                    } catch {
-                      return 'Invalid date';
+        <div className="flex items-start justify-between">
+          <div className="flex-1 min-w-0">
+            {editingSessionId === session.id ? (
+              <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="text"
+                  value={editingTitle}
+                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleRenameSubmit(session.id);
+                    } else if (e.key === 'Escape') {
+                      handleRenameCancel();
                     }
-                  })()}
-                </div>
-                <div className="flex items-center gap-1">
-                  <MessageSquare className="w-3 h-3" />
-                  {session.messageCount}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-
-        {editingSessionId !== session.id && (
-          <div className="relative">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setDropdownSessionId(
-                  dropdownSessionId === session.id ? null : session.id
-                );
-              }}
-              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-opacity"
-              aria-label="Session options"
-            >
-              <MoreVertical className="w-4 h-4" />
-            </button>
-
-            {dropdownSessionId === session.id && (
-              <div className="absolute right-0 top-8 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg z-10 min-w-[120px]">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRename(session.id, session.title);
                   }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
-                >
-                  <Edit2 className="w-3 h-3" />
-                  Rename
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteSession(session.id);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
-                >
-                  <Trash2 className="w-3 h-3" />
-                  Delete
-                </button>
+                  onBlur={() => handleRenameSubmit(session.id)}
+                  className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
               </div>
+            ) : (
+              <>
+                <h3 className="font-medium text-gray-900 dark:text-white truncate">
+                  <div className="flex items-center gap-2">
+                    {isSubagentChat && (
+                      <Bot className="w-4 h-4 text-pink-300 dark:text-pink-500 flex-shrink-0" />
+                    )}
+                    {!isSubagentChat && !isSubchat && (
+                      <Bot className="w-4 h-4 text-green-500 dark:text-green-400 flex-shrink-0" />
+                    )}
+                    {isSubchat && !isSubagentChat && (
+                      <Bot className="w-4 h-4 text-blue-500 dark:text-blue-400 flex-shrink-0" />
+                    )}
+                    <span className="truncate">{session.title}</span>
+                  </div>
+                </h3>
+                {session.lastMessage && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 truncate mt-1">
+                    {session.lastMessage}
+                  </p>
+                )}
+                <div className="flex items-center gap-3 mt-2 text-xs text-gray-400 dark:text-gray-500">
+                  <div className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {(() => {
+                      try {
+                        const date = typeof session.timestamp === 'string'
+                          ? new Date(session.timestamp)
+                          : session.timestamp;
+                        return isNaN(date.getTime())
+                          ? 'Invalid date'
+                          : formatDistanceToNow(date, { addSuffix: true });
+                      } catch {
+                        return 'Invalid date';
+                      }
+                    })()}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <MessageSquare className="w-3 h-3" />
+                    {session.messageCount}
+                  </div>
+                </div>
+              </>
             )}
           </div>
-        )}
+
+          {editingSessionId !== session.id && (
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDropdownSessionId(
+                    dropdownSessionId === session.id ? null : session.id
+                  );
+                }}
+                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-opacity"
+                aria-label="Session options"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              {dropdownSessionId === session.id && (
+                <div className="absolute right-0 top-8 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg z-10 min-w-[120px]">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRename(session.id, session.title);
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                    Rename
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteSession(session.id);
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Delete
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
     );
   };
 
@@ -287,7 +297,6 @@ export const SessionList: React.FC<SessionListProps> = ({
     }
   };
 
-
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = () => {
@@ -324,7 +333,6 @@ export const SessionList: React.FC<SessionListProps> = ({
             New Chat
           </Button>
           
-          {/* Replaced Placeholder Button */}
           <Button
             onClick={handleViewAgentsClick}
             variant="secondary"
@@ -333,6 +341,17 @@ export const SessionList: React.FC<SessionListProps> = ({
           >
             <Users className="w-4 h-4 mr-2" />
             View Agents
+          </Button>
+          
+          {/* New Filter Button */}
+          <Button
+            onClick={handleFilterClick}
+            variant="ghost"
+            className="w-full justify-center"
+            disabled={isLoading}
+          >
+            <Filter className="w-4 h-4 mr-2" />
+            {isFilterOpen ? 'Hide Filters' : 'Show Filters'}
           </Button>
           
           {sessions.length > 0 && (
@@ -379,7 +398,6 @@ export const SessionList: React.FC<SessionListProps> = ({
           </div>
         )}
       </div>
-
 
       {/* New Chat Dialog */}
       <Dialog.Root open={isNewDialogOpen} onOpenChange={setIsNewDialogOpen}>
@@ -431,7 +449,8 @@ export const SessionList: React.FC<SessionListProps> = ({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-          {/* Agents List Dialog */}
+
+      {/* Agents List Dialog */}
       <Dialog.Root open={isAgentsModalOpen} onOpenChange={setIsAgentsModalOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm" />
@@ -473,7 +492,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 </ul>
               ) : (
                 <div className="text-center text-gray-500 dark:text-gray-400 py-8">
-                    <p>No agents found or failed to load.</p>
+                  <p>No agents found or failed to load.</p>
                 </div>
               )}
 
