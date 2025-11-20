@@ -14,7 +14,6 @@ coordinator/mcp-http-bridge/hyperion-coordinator-bridge
 ui-old/dist/
 
 # Local Hyperion configuration
-.hyper
 docker-compose.*.yml
 coordinator/embed/ui/
 bin/
