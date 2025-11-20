@@ -7,6 +7,8 @@
  * - Creating, updating, and deleting entries
  */
 
+import type { SyncReport } from '@/types/knowledge';
+
 export interface KnowledgeEntry {
   id: string;
   collection: string;
@@ -466,6 +468,26 @@ class KnowledgeService {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Failed to get resync status');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Sync markdown files from knowledge-base folder
+   * Imports markdown files and creates/updates knowledge entries
+   */
+  async syncMarkdownKB(): Promise<SyncReport> {
+    const response = await fetch('/api/v1/knowledge/sync-markdown-kb', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to sync markdown KB');
     }
 
     return response.json();
