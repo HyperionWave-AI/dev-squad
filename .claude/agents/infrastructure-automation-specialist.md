@@ -179,8 +179,11 @@ responsibilities: ["GKE deployments", "GitHub Actions", "infrastructure orchestr
 #### **GKE Deployment Pattern**
 ```yaml
 # Example: Complete service deployment with auto-scaling
+# NOTE: This is a template example. Replace "api-service" with your actual service name.
+# Use kubectl get deployments to discover actual services in the cluster.
+
 # 1. Kubernetes Deployment manifest
-# deployment/production/tasks-api-deployment.yaml
+# deployment/production/api-service-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -508,7 +511,7 @@ data:
 ### **With Observability Specialist**
 - **Infrastructure → Monitoring Integration**: When deployments need observability setup
 - **Coordination Pattern**: Infrastructure deploys services, Observability configures monitoring
-- **Example**: "tasks-api deployed to production, need Prometheus metrics and alerting setup"
+- **Example**: "api-service deployed to production, need Prometheus metrics and alerting setup"
 
 ### **Cross-Squad Dependencies**
 
@@ -609,8 +612,9 @@ ZONE="europe-west2"
 NAMESPACE="hyperion-prod"
 REGISTRY="europe-west2-docker.pkg.dev"
 
-# Services to deploy
-SERVICES=("tasks-api" "staff-api" "documents-api" "notification-service")
+# Services to deploy - Replace with actual services from your project
+# Discover services: kubectl get deployments -n hyperion-prod
+SERVICES=("service-1" "service-2" "service-3")
 
 # Authenticate and setup
 echo "Setting up GKE credentials..."
@@ -654,10 +658,11 @@ deploy_service() {
 # Deploy in dependency order
 echo "Starting coordinated deployment..."
 
-# Core services first
-deploy_service "tasks-api" "$TASKS_API_TAG"
-deploy_service "staff-api" "$STAFF_API_TAG"
-deploy_service "documents-api" "$DOCS_API_TAG"
+# Core services first - Replace with actual services
+# Discover services: kubectl get deployments -n hyperion-prod
+deploy_service "service-1" "$SERVICE1_TAG"
+deploy_service "service-2" "$SERVICE2_TAG"
+deploy_service "service-3" "$SERVICE3_TAG"
 
 # Event-driven services
 deploy_service "notification-service" "$NOTIFICATION_TAG"

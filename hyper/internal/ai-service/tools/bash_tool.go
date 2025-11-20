@@ -15,7 +15,7 @@ type BashTool struct{}
 // BashInput represents the input schema for bash execution
 type BashInput struct {
 	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"` // timeout in seconds, default 30
+	Timeout int    `json:"timeout,omitempty"` // timeout in seconds, default 3600 (60 minutes)
 }
 
 var dangerousCommands = []string{
@@ -34,7 +34,7 @@ func (b *BashTool) Name() string {
 
 // Description returns the tool description
 func (b *BashTool) Description() string {
-	return "Execute shell commands and return stdout/stderr. Supports timeout (default 30s). Use for system operations, file checks, script execution."
+	return "Execute shell commands and return stdout/stderr. Supports timeout (default 3600s/60min). Use for system operations, file checks, script execution."
 }
 
 // Call executes the bash command and returns raw stdout
@@ -62,10 +62,10 @@ func (b *BashTool) Call(ctx context.Context, input string) (string, error) {
 		return "", fmt.Errorf("access to system directories is blocked for security")
 	}
 
-	// Set timeout (default 30s)
+	// Set timeout (default 3600s / 60 minutes)
 	timeout := time.Duration(bashInput.Timeout) * time.Second
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = 3600 * time.Second
 	}
 
 	// Create command with timeout

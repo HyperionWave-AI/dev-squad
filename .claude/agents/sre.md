@@ -112,10 +112,11 @@ When deploying changes in the development environment:
 # For any service changes, just restart the pod:
 kubectl --context=docker-desktop rollout restart deployment/<service-name> -n hyperion-dev
 
-# Examples:
-kubectl --context=docker-desktop rollout restart deployment/config-api -n hyperion-dev
-kubectl --context=docker-desktop rollout restart deployment/chat-api -n hyperion-dev
-kubectl --context=docker-desktop rollout restart deployment/tasks-api -n hyperion-dev
+# Examples (replace SERVICE-NAME with actual service):
+kubectl --context=docker-desktop rollout restart deployment/SERVICE-NAME -n hyperion-dev
+
+# To discover available services:
+kubectl --context=docker-desktop get deployments -n hyperion-dev
 ```
 
 The development environment uses:
@@ -147,14 +148,16 @@ The project implements a **dual-environment deployment strategy** with distinct 
 ### 1. Shared Runtime Development Pattern
 ```yaml
 Go Runtime: localhost/hyperion/go-runtime:latest
-  - Serves: tasks-api, documents-api, staff-api, chat-api, config-api, hyperion-core
+  - Serves: All Go-based services in the project
   - Base: golang:1.25-bookworm with Air hot-reload
   - Benefits: 2-5 second rebuilds, resource efficiency
+  - Discovery: Use kubectl or code_index_search to find Go services
 
-Web Runtime: localhost/hyperion/web-runtime:latest  
-  - Serves: hyperion-web-ui
+Web Runtime: localhost/hyperion/web-runtime:latest
+  - Serves: Frontend web UI services
   - Base: Node.js 20 with Vite dev server
   - Features: Hot module replacement, instant feedback
+  - Discovery: Use code_index_search to find frontend services
 ```
 
 ### 2. Production Build System (Makefile.production)
@@ -371,15 +374,15 @@ The Hyperion development environment uses **Air** for hot reload of Go services.
 
 #### Key Services with Hot Reload:
 ```bash
-# All Go services in hyperion-dev namespace use Air:
-- hyperion-core       # Core orchestration service
-- tasks-api          # Task management API
-- documents-api      # Document processing API  
-- staff-api          # Staff/agent management API
-- chat-api           # Chat and messaging API
-- config-api         # Configuration management API
-- data-mcp           # Data operations and chart generation
-- core-mcp           # Core MCP tools
+# All Go services in hyperion-dev namespace use Air
+# Use kubectl to discover active services:
+kubectl --context=docker-desktop get deployments -n hyperion-dev
+
+# Common service categories:
+- Core orchestration services
+- API services (REST endpoints)
+- MCP protocol services
+- Integration services
 ```
 
 #### Volume Mounts:
@@ -435,12 +438,11 @@ If Air hot reload is not working, manually restart pods:
 # Restart specific service
 kubectl --context=docker-desktop rollout restart deployment/<service-name> -n hyperion-dev
 
-# Examples:
-kubectl --context=docker-desktop rollout restart deployment/tasks-api -n hyperion-dev
-kubectl --context=docker-desktop rollout restart deployment/staff-api -n hyperion-dev  
-kubectl --context=docker-desktop rollout restart deployment/chat-api -n hyperion-dev
-kubectl --context=docker-desktop rollout restart deployment/config-api -n hyperion-dev
-kubectl --context=docker-desktop rollout restart deployment/documents-api -n hyperion-dev
+# Example pattern (replace SERVICE-NAME with actual service):
+kubectl --context=docker-desktop rollout restart deployment/SERVICE-NAME -n hyperion-dev
+
+# First discover available services:
+kubectl --context=docker-desktop get deployments -n hyperion-dev
 
 # Wait for rollout to complete
 kubectl --context=docker-desktop rollout status deployment/<service-name> -n hyperion-dev --timeout=60s
@@ -618,18 +620,28 @@ echo "admin123" | docker login registry.hyperionwave.com -u admin --password-std
 
 ## 📝 Service-Specific Deployment Notes
 
-### Core Services
-- **hyperion-core**: Main orchestration service, handles AI routing
-- **tasks-api**: Task management with MCP support
-- **documents-api**: Document processing with vector storage
-- **staff-api**: People and agent management
-- **chat-api**: Conversation management
-- **config-api**: Configuration and MCP server management
+### Discovering Services
+Use the following tools to discover services in the project:
+```bash
+# List all deployments in dev
+kubectl --context=docker-desktop get deployments -n hyperion-dev
 
-### Support Services
-- **hyperion-web-ui**: React-based frontend with Vite
-- **data-mcp**: Data access MCP server
-- **core-mcp**: Core functionality MCP server
+# List all services
+kubectl --context=docker-desktop get services -n hyperion-dev
+
+# Search codebase for service directories
+# Use code_index_search or filesystem tools to explore the project structure
+```
+
+### Service Categories
+Services typically fall into these categories:
+- **Core Orchestration**: Main coordination and AI routing services
+- **API Services**: RESTful API endpoints for business logic
+- **MCP Services**: Model Context Protocol tool servers
+- **Frontend Services**: Web UI and user interface applications
+- **Integration Services**: External system integrations
+
+Consult project-specific documentation for the complete service inventory.
 
 ## 🛠️ CLI Tools & Utilities
 

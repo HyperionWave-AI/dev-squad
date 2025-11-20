@@ -49,3 +49,4 @@ hyper/embed
 
 ui/test-reports/
 test-reports/
+/logs

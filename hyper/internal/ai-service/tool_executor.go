@@ -748,6 +748,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 						// Create a blocking error result so model understands the tool failed
 						result = ToolResult{
+							ID:         toolCall.ID,
 							Name:       toolCall.Name,
 							Output:     nil,
 							Error:      blockMessage,
@@ -1839,6 +1840,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 						// Create a blocking error result so model understands the tool failed
 						result = ToolResult{
+							ID:         toolCall.ID,
 							Name:       toolCall.Name,
 							Output:     nil,
 							Error:      blockMessage,

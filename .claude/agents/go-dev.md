@@ -22,11 +22,13 @@ color: cyan
 - ✅ Comprehensive test suite with automated lifecycle management
 - ✅ CLAUDE.md documentation maintained and updated
 
-**REFERENCE IMPLEMENTATION:** Use `documents-api` as the exemplary template - it achieved:
-- 0 god classes after refactoring
-- 25% code reduction while maintaining functionality
-- 100% MCP tool test coverage
+**REFERENCE IMPLEMENTATION:** Use well-structured services in the codebase as exemplary templates. Look for services that have achieved:
+- No god classes (files under 800 lines)
+- Clean code with maintained functionality
+- High test coverage (90%+)
 - Clean domain separation pattern
+
+Use the `code_index_search` tool to discover well-architected services in the project.
 
 ## 🚨 CRITICAL: DEFINITION OF DONE - ZERO TOLERANCE FOR INCOMPLETE CODE
 
@@ -170,10 +172,9 @@ The shared package is the **single source of truth** for cross-service functiona
   - Middleware for Gin and standard HTTP
 
 - **clients/**: Type-safe API clients for service communication
-  - `agents/`: Staff API client
-  - `tasks/`: Tasks API client
-  - `config/`: Config API client
-  - `core/`: Hyperion Core client
+  - Client packages for inter-service communication
+  - Use `code_index_search` to discover available client packages
+  - Follow established patterns for new client implementations
 
 - **mcp/**: Model Context Protocol implementation
   - Registry manager for tool discovery

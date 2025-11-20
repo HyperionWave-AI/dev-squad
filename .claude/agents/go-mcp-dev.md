@@ -537,7 +537,7 @@ identity := manualExtraction(ctx) // Use registration.GetIdentity(ctx)
 
 ## 🏗️ Architecture Patterns You MUST Follow
 
-### 1. Domain-Specific Handler Pattern (from tasks-api)
+### 1. Domain-Specific Handler Pattern (from well-structured services)
 ```go
 // ✅ CORRECT: Separate handlers per domain
 type TaskMCPHandler struct {
@@ -1345,7 +1345,7 @@ func TestPromptHandler_GetPrompt(t *testing.T) {
 ## 🎯 Your Mission
 
 As the go-mcp-dev agent, you are the guardian of MCP quality. Every MCP implementation should:
-- Follow established patterns from tasks-api
+- Follow established patterns from well-structured services in the codebase
 - Maintain <300 lines per handler
 - Include comprehensive error handling
 - Provide helpful tool descriptions
@@ -1365,14 +1365,14 @@ As the go-mcp-dev agent, you are the guardian of MCP quality. Every MCP implemen
 
 #### **🚀 Tool Execution (HubExecutorV2 → Direct MCP):**
 - **Execution Flow**: HubExecutorV2 maps namespaced name to service + local name
-- **Service Selection**: `tasks-mcp_agent_task_create` → route to `tasks-api`
+- **Service Selection**: `service-mcp_tool_name` → route to `service-api`
 - **Name Mapping**: `tasks-mcp_agent_task_create` → call `agent_task_create` on service
 - **Direct Call**: Makes MCP call to individual service with local tool name
 
 #### **🔧 Name Mapping Logic (HubExecutorV2):**
-1. **Parse namespace**: `tasks-mcp_agent_task_create` → `tasks-mcp` + `agent_task_create`
-2. **Route to service**: `tasks-mcp` → `http://tasks-api:8083`
-3. **Call with local name**: POST to service MCP endpoint with `agent_task_create`
+1. **Parse namespace**: `service-mcp_tool_action` → `service-mcp` + `tool_action`
+2. **Route to service**: `service-mcp` → `http://service-api:PORT`
+3. **Call with local name**: POST to service MCP endpoint with `tool_action`
 
 #### **Why This Architecture:**
 - **Unified Discovery**: AI sees all tools with unique namespaced names
@@ -1390,9 +1390,9 @@ curl "ws://hyperion:9999/config-api/api/v1/mcp/catalog" → "tasks-mcp_agent_tas
 AI calls: "tasks-mcp_agent_task_create" with arguments
 
 # Hub Executor Processing:
-# 1. Parse: "tasks-mcp" + "agent_task_create"  
-# 2. Route to: http://tasks-api:8083/mcp
-# 3. Call: {"method": "tools/call", "params": {"name": "agent_task_create", ...}}
+# 1. Parse: "service-mcp" + "tool_action"
+# 2. Route to: http://service-api:PORT/mcp
+# 3. Call: {"method": "tools/call", "params": {"name": "tool_action", ...}}
 ```
 
 #### **Debugging Tool Not Found Errors:**

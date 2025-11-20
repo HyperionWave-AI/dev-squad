@@ -123,8 +123,8 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, input map[strin
 		return nil, err
 	}
 
-	// Execute with timeout (30 seconds default)
-	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Execute with timeout (5 minutes default)
+	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	return tool.Execute(execCtx, input)

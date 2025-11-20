@@ -251,6 +251,20 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 		}
 	}
 
+	// CRITICAL FIX: Stream any remaining accumulated text to frontend before completing
+	// This handles the case where AI generates text after the last tool call
+	if fullResponse != "" && !e.config.OutputSink.IsDisconnected() {
+		if err := e.config.OutputSink.SendToken(fullResponse); err != nil {
+			e.logger.Warn("Failed to send final accumulated text to frontend",
+				zap.String("sessionId", e.config.SessionID.Hex()),
+				zap.Error(err))
+		} else {
+			e.logger.Debug("Streamed final accumulated text to frontend",
+				zap.String("sessionId", e.config.SessionID.Hex()),
+				zap.Int("textLength", len(fullResponse)))
+		}
+	}
+
 	// Send completion signal if client still connected
 	if !e.config.OutputSink.IsDisconnected() {
 		e.config.OutputSink.SendDone()

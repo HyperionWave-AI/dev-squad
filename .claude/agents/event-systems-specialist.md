@@ -4,7 +4,7 @@ description: "NATS JetStream and MCP protocol expert specializing in event-drive
 squad: "Backend Infrastructure Squad"
 domain: ["events", "nats", "jetstream", "mcp"]
 tools: ["hyper", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-fetch", "mcp-server-mongodb"]
-responsibilities: ["notification-service", "config-api", "NATS JetStream", "MCP protocol"]
+responsibilities: ["Event-driven services", "Configuration management", "NATS JetStream", "MCP protocol"]
 ---
 
 # Event Systems Specialist - Backend Infrastructure Squad
@@ -129,7 +129,7 @@ responsibilities: ["notification-service", "config-api", "NATS JetStream", "MCP 
         "domain": "events",
         "title": "[clear title: e.g., 'Task Event Stream Configuration Pattern']",
         "content": "[detailed NATS configs, MCP tool schemas, event flow diagrams, integration examples]",
-        "relatedServices": ["notification-service", "config-api", "tasks-api"],
+        "relatedServices": ["notification-service", "config-service", "api-service"],  // Replace with actual services
         "eventStreams": ["task.created", "task.updated", "notification.sent"],
         "mcpTools": ["task_notification", "event_publisher"],
         "createdBy": "event-systems-specialist",

@@ -68,6 +68,14 @@ func NewChatProvider(config *AIConfig) (ChatProvider, error) {
 	}
 }
 
+// Global HTTP logger instance for AI requests/responses
+var httpLogger *HTTPLogger
+
+func init() {
+	// Initialize HTTP logger to ./logs/ directory
+	httpLogger = NewHTTPLogger("./logs")
+}
+
 // openAIProvider wraps langchaingo's OpenAI client
 type openAIProvider struct {
 	llm    *openai.LLM
@@ -292,7 +300,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 			}
 
 		case "tool_result":
-			// Tool results should be sent as ToolCallResponse parts
+			// Tool results should be sent as Tool messages with ToolCallResponse parts
 			if msg.ToolResult != nil {
 				// Format result content - pass through as-is without forcing JSON
 				var resultContent string
@@ -315,7 +323,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 				}
 
 				msgContent := llms.MessageContent{
-					Role: llms.ChatMessageTypeHuman,
+					Role: llms.ChatMessageTypeTool,  // FIXED: Use Tool role, not Human
 					Parts: []llms.ContentPart{
 						llms.ToolCallResponse{
 							ToolCallID: msg.ToolResult.ID,
@@ -325,7 +333,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 					},
 				}
 				msgContents = append(msgContents, msgContent)
-				fmt.Printf("  [DEBUG] Created ToolCallResponse: ToolCallID=%s, Name=%s\n", msg.ToolResult.ID, msg.ToolResult.Name)
+				fmt.Printf("  [DEBUG] Created ToolCallResponse with Tool role: ToolCallID=%s, Name=%s\n", msg.ToolResult.ID, msg.ToolResult.Name)
 			} else {
 				// Fallback if no ToolResult data
 				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
@@ -378,6 +386,18 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		opts = append(opts, llms.WithMaxTokens(p.config.MaxOutputTokens))
 	}
 
+	// LOG REQUEST: Serialize msgContents and tools before AI call
+	httpLogger.LogLangChainRequest(
+		p.config.Provider,
+		convertMsgContentsToJSON(msgContents),
+		convertToolsToJSON(tools),
+		map[string]interface{}{
+			"temperature":     p.config.Temperature,
+			"maxOutputTokens": p.config.MaxOutputTokens,
+			"model":           p.config.Model,
+		},
+	)
+
 	// Call GenerateContent in goroutine
 	type generateResult struct {
 		resp *llms.ContentResponse
@@ -393,6 +413,13 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 
 	// Wait for generation to complete
 	result := <-resultChan
+
+	// LOG RESPONSE: Log the response immediately after AI call
+	httpLogger.LogLangChainResponse(
+		p.config.Provider,
+		convertContentResponseToJSON(result.resp),
+		result.err,
+	)
 
 	if result.err != nil && result.err != context.Canceled {
 		return nil, fmt.Errorf("failed to generate content: %w", result.err)
