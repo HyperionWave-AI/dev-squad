@@ -340,9 +340,168 @@ func NewCoordinatorTools(taskStorage storage.TaskStorage, knowledgeStorage stora
 	}
 }
 
+// AnalyzeComplexityTool implements complexity analysis for tasks
+type AnalyzeComplexityTool struct {
+	aiService AIServiceInterface
+}
+
+func (t *AnalyzeComplexityTool) Name() string {
+	return "analyze_complexity"
+}
+
+func (t *AnalyzeComplexityTool) Description() string {
+	return "Analyze task complexity using 5 heuristics (file count, file size, cross-squad impact, architectural scope, estimated line changes). Returns complexity score (0.0-1.0), level (low/medium/high/extreme), and split suggestions if score >= 0.6. IMPORTANT: Call this BEFORE creating agent tasks to determine if work should be split. Only available when complexity analysis mode is enabled."
+}
+
+func (t *AnalyzeComplexityTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"description": map[string]interface{}{
+				"type":        "string",
+				"description": "Task description - what needs to be done and why",
+			},
+			"filesModified": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+				"description": "Array of file paths that will be modified (discovered from code_index_search)",
+			},
+			"role": map[string]interface{}{
+				"type":        "string",
+				"description": "Agent role or objective for this work",
+			},
+			"contextSummary": map[string]interface{}{
+				"type":        "string",
+				"description": "Additional context about the changes needed",
+			},
+		},
+		"required": []string{"description", "filesModified"},
+	}
+}
+
+func (t *AnalyzeComplexityTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	// Check if complexity analysis mode is enabled
+	complexityMode := ctx.Value("complexityAnalysisMode")
+	if complexityMode == nil || !complexityMode.(bool) {
+		return map[string]interface{}{
+			"error":   "Complexity analysis mode is disabled",
+			"message": "Enable complexity analysis mode (purple toggle button) to use this tool",
+		}, nil
+	}
+
+	// Extract inputs
+	description, _ := input["description"].(string)
+	role, _ := input["role"].(string)
+	contextSummary, _ := input["contextSummary"].(string)
+
+	// Extract filesModified array
+	var filesModified []string
+	if fm, ok := input["filesModified"].([]interface{}); ok {
+		for _, f := range fm {
+			if str, ok := f.(string); ok {
+				filesModified = append(filesModified, str)
+			}
+		}
+	}
+
+	// Validate required fields
+	if description == "" {
+		return nil, fmt.Errorf("description is required")
+	}
+	if len(filesModified) == 0 {
+		return nil, fmt.Errorf("filesModified is required and must not be empty")
+	}
+
+	zap.L().Info("🔍 Analyzing task complexity",
+		zap.String("description", description),
+		zap.Int("filesCount", len(filesModified)))
+
+	// Get AI config and create chat provider
+	config := t.aiService.GetConfig()
+	chatProvider, err := aiservice.NewChatProvider(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create chat provider: %w", err)
+	}
+
+	// Create complexity analyzer
+	analyzer := aiservice.NewComplexityAnalyzer(config, chatProvider)
+
+	// Build task context
+	taskContext := aiservice.TaskContext{
+		Description:    description,
+		FilesModified:  filesModified,
+		Role:           role,
+		ContextSummary: contextSummary,
+	}
+
+	// Perform complexity analysis
+	analysis, err := analyzer.AnalyzeComplexity(ctx, taskContext)
+	if err != nil {
+		return nil, fmt.Errorf("complexity analysis failed: %w", err)
+	}
+
+	zap.L().Info("📊 Complexity Analysis Complete",
+		zap.Float64("score", analysis.OverallScore),
+		zap.String("level", string(analysis.Level)),
+		zap.Bool("shouldSplit", analysis.ShouldSplit))
+
+	// Build result
+	result := map[string]interface{}{
+		"overallScore": analysis.OverallScore,
+		"level":        string(analysis.Level),
+		"shouldSplit":  analysis.ShouldSplit,
+		"reasoning":    analysis.Reasoning,
+		"heuristicScores": map[string]interface{}{
+			"fileCount":            analysis.HeuristicScores.FileCount,
+			"fileSize":             analysis.HeuristicScores.FileSize,
+			"crossSquadImpact":     analysis.HeuristicScores.CrossSquadImpact,
+			"architecturalScope":   analysis.HeuristicScores.ArchitecturalScope,
+			"estimatedLineChanges": analysis.HeuristicScores.EstimatedLineChanges,
+		},
+		"recommendation": fmt.Sprintf("Complexity: %.2f (%s) - %s",
+			analysis.OverallScore,
+			analysis.Level,
+			analyzer.GetComplexityDescription(analysis.Level)),
+	}
+
+	// Generate split suggestions if task is complex
+	if analysis.ShouldSplit {
+		zap.L().Info("⚠️  Task is COMPLEX - generating split suggestions",
+			zap.Float64("score", analysis.OverallScore))
+
+		suggestions, err := analyzer.GenerateSplitSuggestions(ctx, taskContext, analysis)
+		if err != nil {
+			zap.L().Warn("Failed to generate split suggestions", zap.Error(err))
+			result["splitSuggestionsError"] = err.Error()
+		} else {
+			zap.L().Info("✅ Generated split suggestions",
+				zap.Int("count", len(suggestions)))
+
+			suggestionsArray := make([]map[string]interface{}, len(suggestions))
+			for i, s := range suggestions {
+				suggestionsArray[i] = map[string]interface{}{
+					"subtaskTitle":        s.SubtaskTitle,
+					"subtaskDescription":  s.SubtaskDescription,
+					"filesInvolved":       s.FilesInvolved,
+					"estimatedComplexity": s.EstimatedComplexity,
+					"dependencies":        s.Dependencies,
+					"rationale":           s.Rationale,
+				}
+			}
+			result["splitSuggestions"] = suggestionsArray
+			result["recommendedSplitCount"] = analyzer.GetRecommendedSplitCount(analysis)
+		}
+	}
+
+	return result, nil
+}
+
 // CreateAgentTaskTool implements the ToolExecutor interface
 type CreateAgentTaskTool struct {
-	storage storage.TaskStorage
+	storage   storage.TaskStorage
+	aiService AIServiceInterface // For complexity analysis
 }
 
 func (t *CreateAgentTaskTool) Name() string {
@@ -350,7 +509,7 @@ func (t *CreateAgentTaskTool) Name() string {
 }
 
 func (t *CreateAgentTaskTool) Description() string {
-	return "Create a new agent task linked to a human task. Returns task ID. SMART AUTO-FETCH: If humanTaskId is omitted, automatically fetches the most recent pending human task from the database. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. Required: agentName, role, todos. Optional: humanTaskId, contextSummary, filesModified, qdrantCollections, priorWorkSummary."
+	return "Create a new agent task linked to a human task. Returns task ID. SMART AUTO-FETCH: If humanTaskId is omitted, automatically fetches the most recent pending human task from the database. IMPORTANT: Use code_index_search FIRST to discover relevant files, then populate filesModified with the file paths from search results. Include detailed context in contextSummary with WHAT to change, WHERE (file:line from search results), and HOW. NEVER ask the user for file paths - discover them automatically with code_index_search. COMPLEXITY ANALYSIS REQUIREMENT: When complexity analysis mode is ON (purple toggle), you MUST call coordinator_analyze_complexity FIRST and pass the result in the complexityAnalysis field. This is MANDATORY and task creation will fail without it. Required: agentName, role, todos. Optional: humanTaskId, contextSummary, filesModified, qdrantCollections, priorWorkSummary, complexityAnalysis."
 }
 
 func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
@@ -397,6 +556,10 @@ func (t *CreateAgentTaskTool) InputSchema() map[string]interface{} {
 			"priorWorkSummary": map[string]interface{}{
 				"type":        "string",
 				"description": "Summary of previous agent's work and key decisions (for multi-phase tasks)",
+			},
+			"complexityAnalysis": map[string]interface{}{
+				"type":        "object",
+				"description": "MANDATORY when complexity analysis mode is ON. Result from coordinator_analyze_complexity tool call. Must include: overallScore, level, shouldSplit, reasoning. Pass the entire result object from the analyze_complexity tool.",
 			},
 		},
 		"required": []string{"agentName", "role", "todos"},
@@ -813,6 +976,93 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		}
 	}
 
+	// MANDATORY COMPLEXITY ANALYSIS CHECK: When toggle is ON, require pre-analysis
+	var complexityAnalysisResult *map[string]interface{}
+	complexityModeEnabled := ctx.Value("complexityAnalysisMode") != nil && ctx.Value("complexityAnalysisMode").(bool)
+
+	if complexityModeEnabled {
+		zap.L().Info("🔍 Complexity Analysis Mode: ENABLED - checking for mandatory pre-analysis",
+			zap.String("agentName", agentName),
+			zap.Int("filesCount", len(filesModified)),
+			zap.Int("todosCount", len(todos)))
+
+		// Check if complexityAnalysis was provided
+		complexityAnalysisInput, hasComplexityAnalysis := input["complexityAnalysis"].(map[string]interface{})
+
+		if !hasComplexityAnalysis || complexityAnalysisInput == nil {
+			// FAIL: Complexity analysis mode is ON but no analysis was provided
+			return nil, fmt.Errorf(
+				"❌ COMPLEXITY ANALYSIS REQUIRED\n\n"+
+					"Complexity Analysis Mode is ON (purple toggle enabled).\n"+
+					"You MUST call coordinator_analyze_complexity BEFORE creating agent tasks.\n\n"+
+					"📋 MANDATORY WORKFLOW:\n"+
+					"1. Call coordinator_analyze_complexity with:\n"+
+					"   - description: %q\n"+
+					"   - role: %q\n"+
+					"   - contextSummary: (your context)\n"+
+					"   - filesModified: %v\n\n"+
+					"2. Review the complexity score and split suggestions\n\n"+
+					"3. If shouldSplit is true (score >= 0.6):\n"+
+					"   - Split the task into multiple smaller agent tasks\n"+
+					"   - Use the splitSuggestions from the analysis result\n"+
+					"   - Create separate agent tasks for each subtask\n\n"+
+					"4. If shouldSplit is false (score < 0.6):\n"+
+					"   - Call create_agent_task again with complexityAnalysis field:\n"+
+					"   - Pass the ENTIRE result object from analyze_complexity\n\n"+
+					"Example:\n"+
+					"  analysis = coordinator_analyze_complexity({...})\n"+
+					"  if analysis.shouldSplit:\n"+
+					"    # Create multiple smaller tasks\n"+
+					"  else:\n"+
+					"    coordinator_create_agent_task({..., complexityAnalysis: analysis})\n\n"+
+					"⚠️  This check is MANDATORY when the purple toggle is ON.\n"+
+					"💡 To disable this check, turn OFF the complexity analysis toggle in the UI.",
+				role,
+				role,
+				filesModified)
+		}
+
+		// Validate that complexityAnalysis has required fields
+		overallScore, hasScore := complexityAnalysisInput["overallScore"].(float64)
+		level, hasLevel := complexityAnalysisInput["level"].(string)
+		shouldSplit, hasShouldSplit := complexityAnalysisInput["shouldSplit"].(bool)
+		reasoning, hasReasoning := complexityAnalysisInput["reasoning"].(string)
+
+		if !hasScore || !hasLevel || !hasShouldSplit || !hasReasoning {
+			return nil, fmt.Errorf(
+				"❌ INVALID COMPLEXITY ANALYSIS\n\n"+
+					"The complexityAnalysis object is incomplete. Required fields:\n"+
+					"- overallScore (float64): %v (present: %v)\n"+
+					"- level (string): %v (present: %v)\n"+
+					"- shouldSplit (bool): %v (present: %v)\n"+
+					"- reasoning (string): %v (present: %v)\n\n"+
+					"💡 Pass the ENTIRE result object from coordinator_analyze_complexity.\n"+
+					"   Do NOT manually construct the complexityAnalysis field.",
+				hasScore, hasScore, hasLevel, hasLevel, hasShouldSplit, hasShouldSplit, hasReasoning, hasReasoning)
+		}
+
+		// Log successful validation
+		zap.L().Info("✅ Complexity analysis validated",
+			zap.Float64("score", overallScore),
+			zap.String("level", level),
+			zap.Bool("shouldSplit", shouldSplit))
+
+		// WARN if task should be split but coordinator is creating it anyway
+		if shouldSplit {
+			zap.L().Warn("⚠️  HIGH COMPLEXITY TASK - Should be split but proceeding anyway",
+				zap.Float64("score", overallScore),
+				zap.String("level", level),
+				zap.String("reasoning", reasoning))
+
+			// Include warning in logs but allow task creation (coordinator made an informed decision)
+		}
+
+		// Store the validated complexity analysis for return
+		complexityAnalysisResult = &complexityAnalysisInput
+	} else {
+		zap.L().Debug("Complexity analysis mode: DISABLED - no pre-analysis required")
+	}
+
 	// Create agent task via storage
 	task, err := t.storage.CreateAgentTask(
 		humanTaskID,
@@ -828,15 +1078,22 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 		return nil, fmt.Errorf("failed to create agent task: %w", err)
 	}
 
-	// Return task summary
-	return map[string]interface{}{
+	// Return task summary with optional complexity analysis
+	result := map[string]interface{}{
 		"taskId":     task.ID,
 		"agentName":  task.AgentName,
 		"role":       task.Role,
 		"status":     task.Status,
 		"todosCount": len(task.Todos),
 		"createdAt":  task.CreatedAt,
-	}, nil
+	}
+
+	// Include complexity analysis if performed
+	if complexityAnalysisResult != nil {
+		result["complexityAnalysis"] = *complexityAnalysisResult
+	}
+
+	return result, nil
 }
 
 // ListAgentTasksTool implements the ToolExecutor interface
@@ -4529,8 +4786,11 @@ func RegisterCoordinatorTools(
 	logger *zap.Logger,
 ) error {
 	tools := []aiservice.ToolExecutor{
+		// Complexity analysis (call BEFORE creating tasks)
+		&AnalyzeComplexityTool{aiService: aiService},
+
 		// Existing tools
-		&CreateAgentTaskTool{storage: taskStorage},
+		&CreateAgentTaskTool{storage: taskStorage, aiService: aiService},
 		&ListAgentTasksTool{storage: taskStorage},
 		&QueryKnowledgeTool{storage: knowledgeStorage},
 

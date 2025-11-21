@@ -584,6 +584,47 @@ func (s *ChatService) UpdateErrorPreventionMode(ctx context.Context, sessionID p
 	return session, nil
 }
 
+// UpdateComplexityAnalysisMode updates the complexity analysis mode for a chat session
+func (s *ChatService) UpdateComplexityAnalysisMode(ctx context.Context, sessionID primitive.ObjectID, userID, companyID string, enabled bool) (*models.ChatSession, error) {
+	// Verify session belongs to user and company (authorization)
+	session, err := s.GetSession(ctx, sessionID, companyID)
+	if err != nil {
+		return nil, err
+	}
+
+	if session.UserID != userID {
+		return nil, fmt.Errorf("unauthorized: session does not belong to user")
+	}
+
+	// Update the session
+	now := time.Now().UTC()
+	update := bson.M{
+		"$set": bson.M{
+			"complexityAnalysisMode": enabled,
+			"updatedAt":              now,
+		},
+	}
+
+	result, err := s.sessionsCollection.UpdateOne(ctx, bson.M{"_id": sessionID}, update)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update complexity analysis mode: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return nil, fmt.Errorf("session not found")
+	}
+
+	s.logger.Info("Chat session complexity analysis mode updated",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("userId", userID),
+		zap.Bool("complexityAnalysisMode", enabled))
+
+	// Return updated session
+	session.ComplexityAnalysisMode = enabled
+	session.UpdatedAt = now
+	return session, nil
+}
+
 // SetSessionSubagent sets or clears the active subagent for a chat session
 func (s *ChatService) SetSessionSubagent(ctx context.Context, sessionID primitive.ObjectID, subagentID *primitive.ObjectID, companyID string) error {
 	filter := bson.M{

@@ -21,6 +21,7 @@ export interface ChatSession {
   parentChatId?: string; // For subchats - links to parent session
   activeSubagentId?: string; // Indicates session is being processed by a subagent
   errorPreventionMode: boolean; // Toggle for validation plugin
+  complexityAnalysisMode: boolean; // Toggle for complexity analysis and task splitting
   createdAt: string;
   updatedAt: string;
 }
@@ -224,6 +225,28 @@ export async function updateErrorPreventionMode(
   return {
     success: response.success,
     errorPreventionMode: response.errorPreventionMode,
+  };
+}
+
+/**
+ * Update complexity analysis mode for a session
+ */
+export async function updateComplexityAnalysisMode(
+  sessionId: string,
+  enabled: boolean
+): Promise<{ success: boolean; complexityAnalysisMode: boolean }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    complexityAnalysisMode: boolean;
+    session: ChatSession;
+  }>(`/chat/sessions/${sessionId}/complexity-analysis`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+
+  return {
+    success: response.success,
+    complexityAnalysisMode: response.complexityAnalysisMode,
   };
 }
 

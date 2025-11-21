@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AlertCircle, BarChart3, X, Shield, ShieldOff } from 'lucide-react';
+import { AlertCircle, BarChart3, X, Shield, ShieldOff, GitBranch, GitMerge } from 'lucide-react';
 import { SessionList } from '@/components/organisms/SessionList';
 import { ChatMessage } from '@/components/organisms/ChatMessage';
 import { ChatInput } from '@/components/organisms/ChatInput';
@@ -27,6 +27,7 @@ import {
   deleteSession,
   updateSession,
   updateErrorPreventionMode,
+  updateComplexityAnalysisMode,
   connectChatStream,
   type ChatMessage as ChatMessageType,
   type ChatStreamConnection,
@@ -46,6 +47,7 @@ interface SessionItem {
   parentSessionId?: string; // For subchats - links to parent session
   isSubchat?: boolean; // Indicates if this is a subchat
   errorPreventionMode?: boolean; // Error prevention toggle state
+  complexityAnalysisMode?: boolean; // Complexity analysis toggle state
 }
 
 export const CodeChatPage: React.FC = () => {
@@ -74,6 +76,9 @@ export const CodeChatPage: React.FC = () => {
 
   // Error prevention mode state
   const [errorPreventionMode, setErrorPreventionMode] = useState(false);
+
+  // Complexity analysis mode state
+  const [complexityAnalysisMode, setComplexityAnalysisMode] = useState(false);
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -173,14 +178,15 @@ export const CodeChatPage: React.FC = () => {
     };
   }, [activeSessionId]);
 
-  // Load error prevention mode when session changes
+  // Load error prevention mode and complexity analysis mode when session changes
   useEffect(() => {
     if (activeSessionId && sessions.length > 0) {
       const currentSession = sessions.find((s) => s.id === activeSessionId);
       if (currentSession) {
-        // Access errorPreventionMode from the session data
+        // Access modes from the session data
         const sessionData = (currentSession as any);
         setErrorPreventionMode(sessionData.errorPreventionMode || false);
+        setComplexityAnalysisMode(sessionData.complexityAnalysisMode || false);
       }
     }
   }, [activeSessionId, sessions]);
@@ -201,6 +207,7 @@ export const CodeChatPage: React.FC = () => {
         parentSessionId: session.parentChatId, // Map parentChatId to parentSessionId
         isSubchat: !!session.parentChatId, // Session is a subchat if it has a parent
         errorPreventionMode: session.errorPreventionMode, // Error prevention mode toggle
+        complexityAnalysisMode: session.complexityAnalysisMode, // Complexity analysis mode toggle
       }));
       setSessions(mappedSessions);
 
@@ -734,6 +741,32 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
+  // Toggle complexity analysis mode
+  const toggleComplexityAnalysis = async () => {
+    if (!activeSessionId) return;
+
+    const newMode = !complexityAnalysisMode;
+
+    try {
+      const result = await updateComplexityAnalysisMode(activeSessionId, newMode);
+      setComplexityAnalysisMode(result.complexityAnalysisMode);
+
+      // Update the session in the sessions list
+      setSessions(prevSessions =>
+        prevSessions.map(session =>
+          session.id === activeSessionId
+            ? { ...session, complexityAnalysisMode: result.complexityAnalysisMode }
+            : session
+        )
+      );
+
+      console.log(`[CodeChatPage] Complexity Analysis Mode: ${result.complexityAnalysisMode ? 'ON' : 'OFF'}`);
+    } catch (error) {
+      console.error('[CodeChatPage] Failed to toggle complexity analysis mode:', error);
+      setError('Failed to toggle complexity analysis mode');
+    }
+  };
+
   // Note: Subchats are now interruptible (supports intelligent interrupt categorization)
   // Backend handles STOP, MODIFY, CLARIFY, STATUS, CONTINUE categories
 
@@ -783,6 +816,27 @@ export const CodeChatPage: React.FC = () => {
                     <Shield className="w-5 h-5 text-green-600 dark:text-green-400" />
                   ) : (
                     <ShieldOff className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                  )}
+                </button>
+
+                {/* Complexity Analysis Mode Toggle */}
+                <button
+                  onClick={toggleComplexityAnalysis}
+                  className={`p-2 rounded-lg transition-all ${
+                    complexityAnalysisMode
+                      ? 'bg-purple-100 dark:bg-purple-900/30 hover:bg-purple-200 dark:hover:bg-purple-900/50 border-2 border-purple-500 dark:border-purple-400'
+                      : 'hover:bg-gray-100 dark:hover:bg-gray-700 border-2 border-gray-300 dark:border-gray-600'
+                  }`}
+                  title={
+                    complexityAnalysisMode
+                      ? 'Complexity Analysis: ON - AI analyzes task complexity and suggests splitting large tasks'
+                      : 'Complexity Analysis: OFF - No complexity analysis (useful for debugging)'
+                  }
+                >
+                  {complexityAnalysisMode ? (
+                    <GitBranch className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                  ) : (
+                    <GitMerge className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                   )}
                 </button>
 

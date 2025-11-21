@@ -8,16 +8,17 @@ import (
 
 // ChatSession represents a conversation session with AI
 type ChatSession struct {
-	ID                  primitive.ObjectID  `json:"id" bson:"_id,omitempty"`
-	UserID              string              `json:"userId" bson:"userId"`
-	CompanyID           string              `json:"companyId" bson:"companyId"`
-	Title               string              `json:"title" bson:"title"`
-	ParentChatID        *primitive.ObjectID `json:"parentChatId,omitempty" bson:"parentChatId,omitempty"`      // For subchats - links to parent session
-	ActiveSubagentID    *primitive.ObjectID `json:"activeSubagentId,omitempty" bson:"activeSubagentId,omitempty"` // For user-created subagents
-	ActiveSubagentName  *string             `json:"activeSubagentName,omitempty" bson:"activeSubagentName,omitempty"` // For system subagents (go-dev, ui-dev, etc.)
-	ErrorPreventionMode bool                `json:"errorPreventionMode" bson:"errorPreventionMode"` // Toggle for validation plugin (default: false)
-	CreatedAt           time.Time           `json:"createdAt" bson:"createdAt"`
-	UpdatedAt           time.Time           `json:"updatedAt" bson:"updatedAt"`
+	ID                    primitive.ObjectID  `json:"id" bson:"_id,omitempty"`
+	UserID                string              `json:"userId" bson:"userId"`
+	CompanyID             string              `json:"companyId" bson:"companyId"`
+	Title                 string              `json:"title" bson:"title"`
+	ParentChatID          *primitive.ObjectID `json:"parentChatId,omitempty" bson:"parentChatId,omitempty"`      // For subchats - links to parent session
+	ActiveSubagentID      *primitive.ObjectID `json:"activeSubagentId,omitempty" bson:"activeSubagentId,omitempty"` // For user-created subagents
+	ActiveSubagentName    *string             `json:"activeSubagentName,omitempty" bson:"activeSubagentName,omitempty"` // For system subagents (go-dev, ui-dev, etc.)
+	ErrorPreventionMode   bool                `json:"errorPreventionMode" bson:"errorPreventionMode"` // Toggle for validation plugin (default: false)
+	ComplexityAnalysisMode bool               `json:"complexityAnalysisMode" bson:"complexityAnalysisMode"` // Toggle for complexity analysis and task splitting (default: false)
+	CreatedAt             time.Time           `json:"createdAt" bson:"createdAt"`
+	UpdatedAt             time.Time           `json:"updatedAt" bson:"updatedAt"`
 }
 
 // ChatMessage represents a single message in a conversation
