@@ -126,15 +126,9 @@ func TestReadFileTool(t *testing.T) {
 			input:     `{"path":"` + normalFile + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
-				var result ReadFileOutput
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("failed to unmarshal: %v", err)
-				}
-				if result.Content != "hello world" {
-					t.Errorf("expected 'hello world', got: %s", result.Content)
-				}
-				if result.Encoding != "utf8" {
-					t.Errorf("expected utf8 encoding, got: %s", result.Encoding)
+				// Now returns raw content without JSON wrapping
+				if output != "hello world" {
+					t.Errorf("expected 'hello world', got: %s", output)
 				}
 			},
 		},
@@ -143,12 +137,9 @@ func TestReadFileTool(t *testing.T) {
 			input:     `{"path":"` + binaryFile + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
-				var result ReadFileOutput
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("failed to unmarshal: %v", err)
-				}
-				if result.Encoding != "binary" {
-					t.Errorf("expected binary encoding, got: %s", result.Encoding)
+				// Now returns raw content - just verify it's not empty
+				if output == "" {
+					t.Error("expected non-empty binary content")
 				}
 			},
 		},
