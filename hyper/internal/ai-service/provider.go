@@ -48,6 +48,7 @@ type ToolCapableProvider interface {
 type ToolResponse struct {
 	TextChannel <-chan string // Channel for streaming text tokens
 	ToolCalls   []ToolCall    // Tool calls requested by the AI
+	StopReason  string        // Why the model stopped: "end_turn", "tool_use", "max_tokens", etc.
 }
 
 // NewChatProvider creates a ChatProvider based on the configuration
@@ -425,15 +426,18 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		return nil, fmt.Errorf("failed to generate content: %w", result.err)
 	}
 
-	// Extract tool calls from response - USE AI-GENERATED IDs
+	// Extract tool calls and stop reason from response - USE AI-GENERATED IDs
+	var stopReason string
 	if result.resp != nil && len(result.resp.Choices) > 0 {
 		choice := result.resp.Choices[0]
+		stopReason = choice.StopReason // Capture stop reason from LangChain
 
 		// DEBUG: Log complete response structure from LangChain
 		fmt.Printf("\n[DEBUG LANGCHAIN RESPONSE] ========================================\n")
 		fmt.Printf("[DEBUG LANGCHAIN] Total Choices: %d\n", len(result.resp.Choices))
 		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content: '%s'\n", choice.Content)
 		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content Length: %d bytes\n", len(choice.Content))
+		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - StopReason: '%s'\n", choice.StopReason)
 		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - ToolCalls Count: %d\n", len(choice.ToolCalls))
 
 		// Log each tool call in the choice
@@ -483,6 +487,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
+		StopReason:  stopReason,
 	}, nil
 }
 
@@ -850,6 +855,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
+		StopReason:  anthropicResp.StopReason,
 	}, nil
 }
 

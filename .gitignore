@@ -50,3 +50,12 @@ hyper/embed
 ui/test-reports/
 test-reports/
 /logs
+hyper/coverage_utils.out
+hyper/coverage_storage.out
+hyper/coverage_services.out
+hyper/coverage_report.html
+hyper/coverage_models.out
+hyper/coverage_middleware.out
+hyper/coverage_mcp.out
+hyper/coverage_api.out
+hyper/coverage.out
