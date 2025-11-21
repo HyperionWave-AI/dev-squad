@@ -92,12 +92,9 @@ func (r *ReadFileToolExecutor) Execute(ctx context.Context, input map[string]int
 		return nil, err
 	}
 
-	var output interface{}
-	if err := json.Unmarshal([]byte(result), &output); err != nil {
-		return nil, fmt.Errorf("failed to parse tool output: %w", err)
-	}
-
-	return output, nil
+	// Return raw file content directly (read_file returns raw content, not JSON)
+	// This matches the tool's design: "makes it easier for AI to process file contents directly"
+	return result, nil
 }
 
 // WriteFileToolExecutor adapts WriteFileTool to ToolExecutor interface
