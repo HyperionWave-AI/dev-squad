@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AlertCircle, BarChart3, X } from 'lucide-react';
+import { AlertCircle, BarChart3, X, Shield, ShieldOff } from 'lucide-react';
 import { SessionList } from '@/components/organisms/SessionList';
 import { ChatMessage } from '@/components/organisms/ChatMessage';
 import { ChatInput } from '@/components/organisms/ChatInput';
@@ -26,6 +26,7 @@ import {
   getMessages,
   deleteSession,
   updateSession,
+  updateErrorPreventionMode,
   connectChatStream,
   type ChatMessage as ChatMessageType,
   type ChatStreamConnection,
@@ -44,6 +45,7 @@ interface SessionItem {
   activeSubagentName?: string; // Indicates session is with a system subagent (go-dev, ui-dev, etc.)
   parentSessionId?: string; // For subchats - links to parent session
   isSubchat?: boolean; // Indicates if this is a subchat
+  errorPreventionMode?: boolean; // Error prevention toggle state
 }
 
 export const CodeChatPage: React.FC = () => {
@@ -69,6 +71,9 @@ export const CodeChatPage: React.FC = () => {
 
   // Metrics drawer state
   const [metricsDrawerOpen, setMetricsDrawerOpen] = useState(false);
+
+  // Error prevention mode state
+  const [errorPreventionMode, setErrorPreventionMode] = useState(false);
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +173,18 @@ export const CodeChatPage: React.FC = () => {
     };
   }, [activeSessionId]);
 
+  // Load error prevention mode when session changes
+  useEffect(() => {
+    if (activeSessionId && sessions.length > 0) {
+      const currentSession = sessions.find((s) => s.id === activeSessionId);
+      if (currentSession) {
+        // Access errorPreventionMode from the session data
+        const sessionData = (currentSession as any);
+        setErrorPreventionMode(sessionData.errorPreventionMode || false);
+      }
+    }
+  }, [activeSessionId, sessions]);
+
   // Load sessions from API
   const loadSessions = async () => {
     try {
@@ -183,6 +200,7 @@ export const CodeChatPage: React.FC = () => {
         activeSubagentName: (session as any).activeSubagentName, // System subagent
         parentSessionId: session.parentChatId, // Map parentChatId to parentSessionId
         isSubchat: !!session.parentChatId, // Session is a subchat if it has a parent
+        errorPreventionMode: session.errorPreventionMode, // Error prevention mode toggle
       }));
       setSessions(mappedSessions);
 
@@ -674,7 +692,7 @@ export const CodeChatPage: React.FC = () => {
 
     // Check connection state and handle accordingly
     const connectionState = wsConnectionStateRef.current;
-    
+
     if (connectionState === 'connected' && wsConnectionRef.current?.ws.readyState === WebSocket.OPEN) {
       // Connection is ready, send immediately
       sendMessageInternal(text);
@@ -687,6 +705,32 @@ export const CodeChatPage: React.FC = () => {
       console.log('[CodeChatPage] WebSocket disconnected, reconnecting and queueing message');
       messageQueueRef.current.push(text);
       connectWebSocket(activeSessionId);
+    }
+  };
+
+  // Toggle error prevention mode
+  const toggleErrorPrevention = async () => {
+    if (!activeSessionId) return;
+
+    const newMode = !errorPreventionMode;
+
+    try {
+      const result = await updateErrorPreventionMode(activeSessionId, newMode);
+      setErrorPreventionMode(result.errorPreventionMode);
+
+      // Update the session in the sessions list
+      setSessions(prevSessions =>
+        prevSessions.map(session =>
+          session.id === activeSessionId
+            ? { ...session, errorPreventionMode: result.errorPreventionMode }
+            : session
+        )
+      );
+
+      console.log(`[CodeChatPage] Error Prevention Mode: ${result.errorPreventionMode ? 'ON' : 'OFF'}`);
+    } catch (error) {
+      console.error('[CodeChatPage] Failed to toggle error prevention mode:', error);
+      setError('Failed to toggle error prevention mode');
     }
   };
 
@@ -720,6 +764,28 @@ export const CodeChatPage: React.FC = () => {
               </h1>
               <div className="flex items-center gap-3">
                 <ConversationModeToggle showLabel={true} />
+
+                {/* Error Prevention Mode Toggle */}
+                <button
+                  onClick={toggleErrorPrevention}
+                  className={`p-2 rounded-lg transition-all ${
+                    errorPreventionMode
+                      ? 'bg-green-100 dark:bg-green-900/30 hover:bg-green-200 dark:hover:bg-green-900/50 border-2 border-green-500 dark:border-green-400'
+                      : 'hover:bg-gray-100 dark:hover:bg-gray-700 border-2 border-gray-300 dark:border-gray-600'
+                  }`}
+                  title={
+                    errorPreventionMode
+                      ? 'Error Prevention: ON - AI validates code and fixes errors automatically'
+                      : 'Error Prevention: OFF - No validation (useful for debugging)'
+                  }
+                >
+                  {errorPreventionMode ? (
+                    <Shield className="w-5 h-5 text-green-600 dark:text-green-400" />
+                  ) : (
+                    <ShieldOff className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                  )}
+                </button>
+
                 <button
                   onClick={() => setMetricsDrawerOpen(!metricsDrawerOpen)}
                   className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"

@@ -20,6 +20,7 @@ export interface ChatSession {
   title: string;
   parentChatId?: string; // For subchats - links to parent session
   activeSubagentId?: string; // Indicates session is being processed by a subagent
+  errorPreventionMode: boolean; // Toggle for validation plugin
   createdAt: string;
   updatedAt: string;
 }
@@ -202,6 +203,28 @@ export async function updateSession(sessionId: string, title: string): Promise<C
   }
 
   return response.session;
+}
+
+/**
+ * Update error prevention mode for a chat session
+ */
+export async function updateErrorPreventionMode(
+  sessionId: string,
+  enabled: boolean
+): Promise<{ success: boolean; errorPreventionMode: boolean }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    errorPreventionMode: boolean;
+    session: ChatSession;
+  }>(`/chat/sessions/${sessionId}/error-prevention`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+
+  return {
+    success: response.success,
+    errorPreventionMode: response.errorPreventionMode,
+  };
 }
 
 // ============================================================
