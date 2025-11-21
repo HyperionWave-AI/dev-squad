@@ -6,6 +6,9 @@ import (
 	"fmt"
 
 	aiservice "hyper/internal/ai-service"
+	"hyper/internal/validation"
+
+	"go.uber.org/zap"
 )
 
 // BashToolExecutor adapts BashTool to ToolExecutor interface
@@ -250,11 +253,11 @@ func (a *ApplyPatchToolExecutor) Execute(ctx context.Context, input map[string]i
 
 // RegisterFilesystemTools registers all filesystem tools with the tool registry
 // Tools: bash, read_file, write_file, list_directory, apply_patch
-func RegisterFilesystemTools(registry *aiservice.ToolRegistry) error {
+func RegisterFilesystemTools(registry *aiservice.ToolRegistry, validator *validation.CodeValidator, logger *zap.Logger) error {
 	tools := []aiservice.ToolExecutor{
 		&BashToolExecutor{tool: &BashTool{}},
 		&ReadFileToolExecutor{tool: &ReadFileTool{}},
-		&WriteFileToolExecutor{tool: &WriteFileTool{}},
+		&WriteFileToolExecutor{tool: &WriteFileTool{validator: validator, logger: logger}},
 		&ListDirectoryToolExecutor{tool: &ListDirectoryTool{}},
 		&ApplyPatchToolExecutor{tool: &ApplyPatchTool{}},
 	}

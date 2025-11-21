@@ -17,6 +17,7 @@ import * as Accordion from '@radix-ui/react-accordion';
 import { ChevronDown, Wrench, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { cn } from '@/utils';
 import { Badge } from '@/components/atoms/Badge';
+import { CopyButton } from '@/components/atoms/CopyButton';
 import { useConversationMode } from '@/contexts/ConversationModeContext';
 import { ToolResultDisplay } from '@/components/molecules/ToolResultDisplay';
 import type { ChatMessage as ChatMessageType, ToolCall, ToolResult } from '@/services/chatService';
@@ -196,19 +197,27 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   return (
     <div
       className={cn(
-        'flex w-full mb-4',
+        'flex w-full mb-4 group', // Added 'group' for hover state
         isUser ? 'justify-end' : 'justify-start'
       )}
     >
       <div
         className={cn(
-          'max-w-[85%] rounded-lg px-4 py-3 shadow-sm',
+          'max-w-[85%] rounded-lg px-4 py-3 shadow-sm relative', // Added 'relative' for positioning
           'overflow-x-auto',
           isUser
             ? 'bg-primary-500 text-white'
             : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
         )}
       >
+        {/* Copy Button - positioned absolutely, only visible on hover */}
+        {content && (
+          <CopyButton 
+            text={content} 
+            className="absolute top-2 right-2" 
+          />
+        )}
+
         {/* Role Badge */}
         <div className="flex items-center gap-2 mb-2">
           <Badge variant={isUser ? 'default' : 'secondary'}>

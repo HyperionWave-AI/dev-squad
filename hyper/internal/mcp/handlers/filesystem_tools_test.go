@@ -15,7 +15,7 @@ import (
 
 func TestFilesystemToolHandler(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	handler := NewFilesystemToolHandler(logger)
+	handler := NewFilesystemToolHandler(logger, nil)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1.0.0"}, &mcp.ServerOptions{HasTools: true})
 
 	// Register tools
@@ -25,7 +25,7 @@ func TestFilesystemToolHandler(t *testing.T) {
 
 func TestValidatePath(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	handler := NewFilesystemToolHandler(logger)
+	handler := NewFilesystemToolHandler(logger, nil)
 
 	tests := []struct {
 		name      string
@@ -68,7 +68,7 @@ func TestValidatePath(t *testing.T) {
 
 func TestSanitizeCommand(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	handler := NewFilesystemToolHandler(logger)
+	handler := NewFilesystemToolHandler(logger, nil)
 
 	tests := []struct {
 		name      string
@@ -118,7 +118,7 @@ func TestSanitizeCommand(t *testing.T) {
 
 func TestHandleFileReadWrite(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	handler := NewFilesystemToolHandler(logger)
+	handler := NewFilesystemToolHandler(logger, nil)
 
 	// Create temp directory
 	tmpDir := t.TempDir()
@@ -187,7 +187,7 @@ func TestHandleFileReadWrite(t *testing.T) {
 
 func TestHandleBash(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	handler := NewFilesystemToolHandler(logger)
+	handler := NewFilesystemToolHandler(logger, nil)
 
 	t.Run("simple command", func(t *testing.T) {
 		args := map[string]interface{}{
@@ -226,7 +226,7 @@ func TestHandleBash(t *testing.T) {
 
 func TestHandleApplyPatch(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	handler := NewFilesystemToolHandler(logger)
+	handler := NewFilesystemToolHandler(logger, nil)
 
 	// Create temp file
 	tmpDir := t.TempDir()
@@ -283,7 +283,7 @@ func TestHandleApplyPatch(t *testing.T) {
 
 func TestHandleFileReadLargeFile(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	handler := NewFilesystemToolHandler(logger)
+	handler := NewFilesystemToolHandler(logger, nil)
 
 	// Create temp file with > 10KB content
 	tmpDir := t.TempDir()

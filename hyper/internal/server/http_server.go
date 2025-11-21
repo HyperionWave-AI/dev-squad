@@ -27,6 +27,7 @@ import (
 	"hyper/internal/middleware"
 	"hyper/internal/services"
 	userstorage "hyper/internal/storage"
+	"hyper/internal/validation"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -251,10 +252,15 @@ func StartHTTPServer(
 		logger.Debug("Registered code index tool", zap.String("name", toolName))
 	}
 
+	// Initialize code validator for error prevention mode (per-session control via context)
+	logger.Info("Initializing code validator for error prevention...")
+	validator := validation.NewCodeValidator(logger, tools.GetProjectRoot())
+	logger.Info("Code validator initialized (per-session control)")
+
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools (bash, file operations, patch application)...")
 	beforeCount = len(toolRegistry.List())
-	if err := tools.RegisterFilesystemTools(toolRegistry); err != nil {
+	if err := tools.RegisterFilesystemTools(toolRegistry, validator, logger); err != nil {
 		logger.Error("Failed to register filesystem tools", zap.Error(err))
 		return err
 	}

@@ -1909,9 +1909,14 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 
 	// Step 5: Inject system prompt as first message (if exists)
 	if systemPromptText != "" {
-	// Step 5: Inject session ID and company ID into context for tool access (e.g., execute_subagent)
+	// Step 5: Inject session ID, company ID, and error prevention mode into context for tool access
 	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
 	ctxWithCompany := context.WithValue(ctxWithSession, "companyID", companyID)
+	ctxWithErrorPrevention := context.WithValue(ctxWithCompany, "errorPreventionMode", session.ErrorPreventionMode)
+
+	h.logger.Info("Context prepared for AI execution",
+		zap.String("sessionID", sessionID.Hex()),
+		zap.Bool("errorPreventionMode", session.ErrorPreventionMode))
 
 	// Step 6: Register for interrupt notifications (for prioritized interrupt handling)
 	notifier := GetMessageNotifier(h.logger)
@@ -1977,7 +1982,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	// Step 11: Create and execute the stream executor (with adapted chat service)
 	chatServiceAdapter := &chatServiceAdapter{service: h.chatService}
 	exec := executor.NewStreamExecutor(execConfig, chatServiceAdapter, h.aiService)
-	fullResponse, err := exec.Execute(ctxWithCompany, langchainMessages)
+	fullResponse, err := exec.Execute(ctxWithErrorPrevention, langchainMessages)
 
 	if err != nil {
 		h.logger.Error("AI execution failed", zap.Error(err))

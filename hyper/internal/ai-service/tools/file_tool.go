@@ -10,6 +10,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+
+	"hyper/internal/validation"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -92,7 +97,10 @@ func (r *ReadFileTool) Call(ctx context.Context, input string) (string, error) {
 }
 
 // WriteFileTool writes file contents with safety checks
-type WriteFileTool struct{}
+type WriteFileTool struct{
+	validator *validation.CodeValidator
+	logger    *zap.Logger
+}
 
 // WriteFileInput represents the input schema for file writing
 type WriteFileInput struct {
@@ -155,6 +163,48 @@ func (w *WriteFileTool) Call(ctx context.Context, input string) (string, error) 
 	if err := os.Rename(tempFile, writeInput.FilePath); err != nil {
 		os.Remove(tempFile) // cleanup on error
 		return "", fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	// SYNCHRONOUS post-write validation (only if error prevention mode is enabled)
+	errorPreventionMode := ctx.Value("errorPreventionMode")
+	isErrorPreventionEnabled := errorPreventionMode != nil && errorPreventionMode.(bool)
+
+	if w.logger != nil {
+		w.logger.Info("📝 writeFile tool called",
+			zap.String("path", writeInput.FilePath),
+			zap.Bool("errorPreventionMode", isErrorPreventionEnabled))
+	}
+
+	ext := filepath.Ext(writeInput.FilePath)
+	if isErrorPreventionEnabled && (ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".go") {
+		if w.validator != nil && w.logger != nil {
+			w.logger.Info("🔍 Running SYNCHRONOUS post-write validation (Error Prevention Mode: ON)",
+				zap.String("file", writeInput.FilePath))
+
+			// Create independent context that doesn't die with HTTP request
+			validationCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Run validation synchronously
+			validationResult, validationErr := w.validator.ValidateFiles(validationCtx, []string{writeInput.FilePath})
+			if validationErr != nil {
+				w.logger.Warn("⚠️  Validation failed to run", zap.Error(validationErr))
+				// Don't block on validation infrastructure errors
+			} else if !validationResult.Passed {
+				w.logger.Error("❌ COMPILATION ERRORS DETECTED",
+					zap.Int("errorCount", len(validationResult.Errors)),
+					zap.String("file", writeInput.FilePath))
+
+				// Format errors for agent
+				errorMsg := w.validator.FormatErrorsForAgent(validationResult)
+				w.logger.Error("🚨 COMPILATION ERRORS", zap.String("errors", errorMsg))
+
+				// BLOCK the tool call - return error so agent must fix before proceeding
+				return "", fmt.Errorf("❌ COMPILATION FAILED:\n%s\n\nYou MUST fix these errors before proceeding. The file was written but contains compilation errors", errorMsg)
+			} else {
+				w.logger.Info("✅ Compilation validation passed", zap.String("file", writeInput.FilePath))
+			}
+		}
 	}
 
 	output := WriteFileOutput{
