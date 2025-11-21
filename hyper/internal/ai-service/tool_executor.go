@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
@@ -722,7 +723,73 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 			log.Printf("[ChatService] Suppressing %d tokens of text - tool calls pending: %d",
 				len(collectedChunks), len(response.ToolCalls))
 
-			// Process each tool call
+			// PARALLEL TOOL EXECUTION: Pre-execute tools in parallel if enabled
+			// This executes all non-cached tools concurrently, then processes results sequentially
+			if s.config.ParallelToolExecution && len(response.ToolCalls) > 1 {
+				log.Printf("[Parallel Tool Execution] Pre-executing %d tool calls in parallel", len(response.ToolCalls))
+
+				// Pre-execute all non-cached tool calls in parallel
+				type toolPreExecution struct {
+					signature string
+					toolCall  ToolCall
+					result    *ToolResult
+				}
+
+				var preExecutions []toolPreExecution
+				var mu sync.Mutex
+				var wg sync.WaitGroup
+
+				for _, tc := range response.ToolCalls {
+					sig := toolCallSignature(tc.Name, tc.Args)
+
+					// Skip if already cached
+					if cached, found := resultCache.Get(sig); found {
+						// Check if we should skip cache
+						skipCache := false
+						if tc.Name == "coordinator_create_human_task" {
+							if outputMap, ok := cached.Output.(map[string]interface{}); ok {
+								if similarTasksFound, exists := outputMap["similarTasksFound"].(bool); exists && similarTasksFound {
+									skipCache = true
+								}
+							}
+						}
+
+						if !skipCache {
+							continue // Use cached result - no need to pre-execute
+						}
+					}
+
+					// Pre-execute this tool call in parallel
+					wg.Add(1)
+					go func(toolCall ToolCall, signature string) {
+						defer wg.Done()
+
+						toolCtx := ctx
+						if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+							toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+						}
+
+						// Execute tool (the actual slow operation)
+						result := s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
+
+						// Store result with lock
+						mu.Lock()
+						preExecutions = append(preExecutions, toolPreExecution{
+							signature: signature,
+							toolCall:  toolCall,
+							result:    &result,
+						})
+						resultCache.Set(signature, &result)
+						mu.Unlock()
+					}(tc, sig)
+				}
+
+				// Wait for all parallel executions to complete
+				wg.Wait()
+				log.Printf("[Parallel Tool Execution] Pre-execution completed - executed %d tools in parallel", len(preExecutions))
+			}
+
+			// Process each tool call (now using cached results from parallel execution)
 			for _, toolCall := range response.ToolCalls {
 				toolCallCount++
 				debugLog("TOOL CALL #%d: name=%s", toolCallCount, toolCall.Name)
