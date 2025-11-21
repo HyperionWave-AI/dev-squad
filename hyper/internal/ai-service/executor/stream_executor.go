@@ -30,6 +30,7 @@ type StreamConfig struct {
 
 	// Optional callbacks
 	CompletionValidator CompletionValidatorFunc // Custom logic to determine when streaming is complete
+	OnMessageSavedWhileDisconnected func(sessionID primitive.ObjectID) // Callback when message is saved but client disconnected
 
 	// Interrupt handling
 	InterruptCh <-chan struct{} // Channel to listen for user interrupts
@@ -283,6 +284,13 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 		e.logger.Debug("Saved final assistant text",
 			zap.String("sessionId", e.config.SessionID.Hex()),
 			zap.Int("textLength", len(fullResponse)))
+
+		// If WebSocket was disconnected but message was saved, invoke callback to notify
+		if e.config.OutputSink.IsDisconnected() && e.config.OnMessageSavedWhileDisconnected != nil {
+			e.logger.Info("WebSocket disconnected but message saved - invoking notification callback",
+				zap.String("sessionId", e.config.SessionID.Hex()))
+			e.config.OnMessageSavedWhileDisconnected(e.config.SessionID)
+		}
 	} else {
 		e.logger.Debug("No remaining assistant text to save (all text saved before tool calls)",
 			zap.String("sessionId", e.config.SessionID.Hex()))
@@ -371,10 +379,19 @@ func (e *StreamExecutor) handleToolCall(ctx context.Context, event *aiservice.St
 	}
 
 	// Save tool call to database (always, even if client disconnected)
+	e.logger.Info("💾 Saving tool call to database",
+		zap.String("sessionId", e.config.SessionID.Hex()),
+		zap.String("toolCallID", event.ToolCall.ID),
+		zap.String("toolName", event.ToolCall.Name))
 	_, err := e.chatService.SaveToolCall(ctx, e.config.SessionID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, e.config.CompanyID)
 	if err != nil {
 		e.logger.Error("Failed to save tool call to database", zap.Error(err))
 		// Continue streaming even if save fails
+	} else {
+		e.logger.Info("✅ Tool call saved successfully",
+			zap.String("sessionId", e.config.SessionID.Hex()),
+			zap.String("toolCallID", event.ToolCall.ID),
+			zap.String("toolName", event.ToolCall.Name))
 	}
 
 	// Send tool call to output sink if client still connected
@@ -413,6 +430,22 @@ func (e *StreamExecutor) handleToolResult(ctx context.Context, event *aiservice.
 
 	// Save tool result to database if allowed
 	if shouldSave {
+		// CRITICAL LOGGING: Track tool call ID through result save
+		e.logger.Info("💾 Saving tool result to database",
+			zap.String("sessionId", e.config.SessionID.Hex()),
+			zap.String("toolResultID", event.ToolResult.ID),
+			zap.String("toolName", event.ToolResult.Name),
+			zap.Int("outputLength", len(outputStr)),
+			zap.String("error", event.ToolResult.Error))
+
+		// Check if ID is empty BEFORE saving
+		if event.ToolResult.ID == "" {
+			e.logger.Error("🚨 BUG DETECTED: ToolResult.ID is EMPTY before SaveToolResult!",
+				zap.String("sessionId", e.config.SessionID.Hex()),
+				zap.String("toolName", event.ToolResult.Name),
+				zap.Int64("durationMs", event.ToolResult.DurationMs))
+		}
+
 		_, err := e.chatService.SaveToolResult(
 			ctx,
 			e.config.SessionID,
@@ -426,6 +459,11 @@ func (e *StreamExecutor) handleToolResult(ctx context.Context, event *aiservice.
 		if err != nil {
 			e.logger.Error("Failed to save tool result to database", zap.Error(err))
 			// Continue streaming even if save fails
+		} else {
+			e.logger.Info("✅ Tool result saved successfully",
+				zap.String("sessionId", e.config.SessionID.Hex()),
+				zap.String("toolResultID", event.ToolResult.ID),
+				zap.String("toolName", event.ToolResult.Name))
 		}
 	}
 

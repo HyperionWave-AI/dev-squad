@@ -38,6 +38,15 @@ func ConvertToLangChainMessages(dbMessages []models.ChatMessage) []Message {
 
 		// CRITICAL: Preserve tool result structured data
 		if dbMsg.ToolResult != nil {
+			// CRITICAL LOGGING: Check if ID is empty when retrieved from database
+			if dbMsg.ToolResult.ID == "" {
+				fmt.Printf("🚨 BUG DETECTED: ToolResult.ID is EMPTY when retrieved from MongoDB!\n")
+				fmt.Printf("   Tool Name: %s\n", dbMsg.ToolResult.Name)
+				fmt.Printf("   Message ID: %s\n", dbMsg.ID.Hex())
+				fmt.Printf("   Message Role: %s\n", dbMsg.Role)
+				fmt.Printf("   This will cause 'tool_call_id is missing' error in next AI request!\n")
+			}
+
 			langchainMsg.ToolResult = &ToolResult{
 				ID:         dbMsg.ToolResult.ID,
 				Name:       dbMsg.ToolResult.Name,

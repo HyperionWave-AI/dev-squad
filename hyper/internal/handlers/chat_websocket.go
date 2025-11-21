@@ -1003,7 +1003,7 @@ DO NOT DO THE AGENT'S JOB!`
 // WebSocket upgrader configuration (Production Hardened)
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  8192,  // 8KB - efficient for large messages
-	WriteBufferSize: 16384, // 16KB - handles streaming AI responses well
+	WriteBufferSize: 32768, // 32KB - handles large streaming AI responses (increased to prevent broken pipe)
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
@@ -1953,15 +1953,25 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	}
 
 	// Step 10: Create executor config
+	// Callback for when message is saved despite WebSocket disconnection
+	onMessageSavedWhileDisconnected := func(sessID primitive.ObjectID) {
+		broadcaster := GetWebSocketBroadcaster(h.logger)
+		broadcaster.BroadcastToSession(sessID, models.StreamMessage{
+			Type:    "message_saved",
+			Content: "AI response saved - please refresh to see the full message",
+		})
+	}
+
 	execConfig := executor.StreamConfig{
-		SessionID:           sessionID,
-		CompanyID:           companyID,
-		SystemPrompt:        systemPromptText,
-		AllowedTools:        allowedTools,
-		OutputSink:          outputSink,
-		InterruptCh:         interruptCh,
-		ToolResultProcessor: toolResultProcessor,
-		Logger:              h.logger,
+		SessionID:                       sessionID,
+		CompanyID:                       companyID,
+		SystemPrompt:                    systemPromptText,
+		AllowedTools:                    allowedTools,
+		OutputSink:                      outputSink,
+		InterruptCh:                     interruptCh,
+		ToolResultProcessor:             toolResultProcessor,
+		OnMessageSavedWhileDisconnected: onMessageSavedWhileDisconnected,
+		Logger:                          h.logger,
 	}
 
 	// Step 11: Create and execute the stream executor (with adapted chat service)
