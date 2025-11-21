@@ -1,182 +1,217 @@
-# Hyperion HowTo Knowledge Base
+# HowTo Guides
 
-This directory contains practical implementation patterns and best practices for building services in the Hyperion ecosystem.
+**Collection:** howto
+**Last Updated:** 2025-11-21
+
+---
 
 ## Overview
 
-These guides provide step-by-step implementation patterns extracted from production code. Each guide includes working code examples, file references, and key considerations for maintainability and security.
-
-## Available Patterns
-
-### Database Patterns
-
-#### [MongoDB Secure Connection](./mongodb-secure-connection.md)
-Standard MongoDB connection pattern with JWT-based authentication and multi-tenant isolation.
-
-**Key Topics:**
-- Connection initialization with timeout and verification
-- Service-level index creation
-- JWT identity requirements for security
-- Environment-driven configuration
-
-**Technologies:** MongoDB 7.0, Go Driver, Zap Logger
+This directory contains practical, step-by-step guides for implementing common patterns and workflows in the Hyperion AI Platform. Each guide is tutorial-style and provides general templates that can be adapted to your specific use case.
 
 ---
 
-### Vector Database Patterns
+## Available Guides
 
-#### [Qdrant Client Initialization](./qdrant-client-initialization.md)
-Initialize Qdrant vector database client with TEI embedding service integration.
-
-**Key Topics:**
-- Client configuration with embedding service
-- Environment variable setup
-- Default values and timeouts
-- Vector dimension configuration (768 for nomic-embed-text-v1.5)
-
-**Technologies:** Qdrant, TEI (Text Embeddings Inference)
-
-#### [Qdrant Collection Management](./qdrant-collection-management.md)
-Idempotent collection creation and dimension validation pattern.
-
-**Key Topics:**
-- Safe collection creation (won't recreate existing)
-- Vector dimension validation
-- Custom error types for dimension mismatches
-- Cosine similarity configuration
-
-**Technologies:** Qdrant REST API, Go HTTP Client
-
----
-
-### Protocol Patterns
-
-#### [MCP Tool Registration](./mcp-tool-registration.md)
-Register Model Context Protocol tools with proper schema validation and handlers.
-
-**Key Topics:**
-- Tool definition with JSON Schema
-- Parameter validation (required/optional)
-- Handler function patterns
-- Error result formatting
-- Naming conventions (snake_case for tools, camelCase for params)
-
-**Technologies:** MCP SDK, JSON Schema, Go
-
----
-
-### Microservice Patterns
+### Backend Development
 
 #### [Go Microservice Scaffolding](./go-microservice-scaffolding.md)
-Standard HTTP microservice initialization with dependency injection and service layer architecture.
+Learn how to scaffold a new Go 1.25 microservice from scratch with proper structure, configuration, and error handling.
 
-**Key Topics:**
-- Dependency injection pattern
-- Service layer initialization
-- Router and middleware setup (Gin)
-- Configuration loading from .env
-- Error propagation and fail-fast design
+**Topics:** Project structure, main entry point, graceful shutdown, Makefile automation
 
-**Technologies:** Go 1.25, Gin Framework, Zap Logger
+**Use when:** Starting a new service, understanding Hyperion backend architecture
+
+---
 
 #### [JWT Authentication Middleware](./jwt-authentication-middleware.md)
-Gin middleware for JWT validation with dev/prod mode support.
+Implement JWT token validation middleware for protecting API endpoints with user identity extraction.
 
-**Key Topics:**
-- Development mode with mock credentials
-- Production JWT validation (HMAC)
-- Flexible claim extraction (multiple formats)
-- Context injection for handlers
-- Security features (Bearer token, signature verification)
+**Topics:** Token validation, claims extraction, context injection, dev mode
 
-**Technologies:** Gin Framework, golang-jwt
+**Use when:** Securing APIs, implementing user authentication, multi-tenant apps
 
 ---
 
-### Build and Deploy Patterns
+#### [MongoDB Secure Connection](./mongodb-secure-connection.md)
+Connect to MongoDB using user JWT identity for secure, multi-tenant data access patterns.
 
-#### [Makefile Build and Deploy](./makefile-build-deploy.md)
-Standard Makefile targets for consistent build, test, and deployment operations.
+**Topics:** User-scoped clients, automatic filtering, connection pooling, security patterns
 
-**Key Topics:**
-- Development workflows (hot-reload, backend-only)
-- Production builds (native binary, Docker)
-- Testing and clean targets
-- Environment variable management
-- Common workflows and troubleshooting
+**Use when:** Building multi-tenant apps, ensuring data isolation, following zero-trust principles
 
-**Technologies:** GNU Make, Go 1.25, Vite, Air
+**Security Note:** Hyperion REQUIRES all MongoDB operations use user JWT identity. System-level access is prohibited.
 
 ---
 
-## Pattern Categories
+#### [Qdrant Client Initialization](./qdrant-client-initialization.md)
+Set up and use Qdrant vector database for semantic search and embedding storage.
 
-### By Technology
-- **Go**: All patterns use Go 1.25
-- **Databases**: MongoDB, Qdrant
-- **Frameworks**: Gin (HTTP), MCP (Protocol)
-- **Build Tools**: Make, Vite, Air
+**Topics:** Client setup, collection management, embedding generation, similarity search
 
-### By Domain
-- **Authentication**: JWT middleware
-- **Database**: MongoDB connection, Qdrant initialization
-- **Microservices**: Service scaffolding, routing
-- **Protocol**: MCP tool registration
-- **Build**: Makefile targets, development workflows
+**Use when:** Implementing semantic search, building knowledge bases, vector similarity queries
 
-### By Pattern Type
-- **Initialization**: MongoDB, Qdrant client, microservice setup
-- **Middleware**: JWT authentication
-- **Management**: Qdrant collections
-- **Registration**: MCP tools
-- **Build**: Makefile targets
+---
 
-## Usage Guidelines
+#### [MCP Tool Registration](./mcp-tool-registration.md)
+Register and implement Model Context Protocol (MCP) tools for AI agent integration.
 
-### When to Use These Patterns
+**Topics:** Tool schema definition, handler implementation, parameter validation, response formatting
 
-1. **Starting a New Service**: Begin with [Go Microservice Scaffolding](./go-microservice-scaffolding.md)
-2. **Adding Database**: Use [MongoDB Secure Connection](./mongodb-secure-connection.md)
-3. **Adding Vector Search**: Start with [Qdrant Client Initialization](./qdrant-client-initialization.md)
-4. **Implementing Auth**: Follow [JWT Authentication Middleware](./jwt-authentication-middleware.md)
-5. **Creating MCP Tools**: Reference [MCP Tool Registration](./mcp-tool-registration.md)
-6. **Build Configuration**: Check [Makefile Build and Deploy](./makefile-build-deploy.md)
+**Use when:** Creating AI tools, extending agent capabilities, integrating with LLMs
 
-### Best Practices
+---
 
-All patterns follow these Hyperion standards:
-- **Security First**: JWT identity for all operations, no system accounts
-- **Fail Fast**: Early error returns during initialization
-- **Structured Logging**: Zap logger with contextual fields
-- **Environment Config**: .env files for configuration
-- **Naming Conventions**: snake_case (tools), camelCase (JSON), PascalCase (Go)
-- **Error Wrapping**: Use `fmt.Errorf("context: %w", err)` for error chains
+#### [REST API Endpoint Patterns](./rest-api-endpoint-patterns.md)
+Design and implement REST API endpoints following Hyperion conventions.
 
-### Contributing New Patterns
+**Topics:** Route registration, request validation, error handling, response formatting
 
-When adding new patterns to this knowledge base:
+**Use when:** Creating new API endpoints, understanding API patterns
 
-1. **Use the standard template**:
-   - Overview
-   - Technology
-   - Use Case
-   - Implementation (with file references)
-   - Key Points
-   - Metadata
+---
 
-2. **Include working code**: Extract real examples from production code
+#### [WebSocket Connection Handling](./websocket-connection-handling.md)
+Implement WebSocket connections for real-time, bidirectional communication.
 
-3. **Add file references**: Use `file:line` format for traceability
+**Topics:** Connection upgrade, message handling, broadcasting, graceful disconnect
 
-4. **Syntax highlighting**: Use proper language tags in code blocks
+**Use when:** Building chat interfaces, real-time updates, streaming responses
 
-5. **Security notes**: Highlight security considerations prominently
+---
 
-6. **Update this README**: Add your pattern to the appropriate category
+### Build & Deploy
 
-## Metadata
+#### [Makefile Build Commands](./makefile-build-deploy.md)
+Use Makefile targets for building, testing, and deploying services.
 
-- **Collection**: howto
-- **Last Updated**: 2025-11-20
-- **Total Patterns**: 7
-- **Pattern Format**: Markdown with code examples
+**Topics:** Build automation, hot reload, testing, CI/CD integration
+
+**Use when:** Building services, setting up dev environment, understanding build pipeline
+
+**Important:** Production deploys MUST use CI/CD (GitHub Actions), not manual commands.
+
+---
+
+### Frontend Development
+
+#### [React Component Structuring](./react-component-structuring.md)
+Organize React components using Atomic Design principles (atoms, molecules, organisms).
+
+**Topics:** Component hierarchy, file organization, reusability, TypeScript integration
+
+**Use when:** Building UI components, structuring frontend codebase
+
+---
+
+## How to Use These Guides
+
+### 1. Choose Your Guide
+Select a guide based on your current task. Use the "Use when" section to determine relevance.
+
+### 2. Review Prerequisites
+Check the "Prerequisites" section to ensure you have necessary knowledge and tools.
+
+### 3. Follow Steps Sequentially
+Work through steps in order. Code examples are general templates - adapt to your needs.
+
+### 4. Understand Best Practices
+Pay special attention to "Best Practices" and "Common Pitfalls" sections.
+
+### 5. Troubleshoot Issues
+Use the "Troubleshooting" section for common errors and solutions.
+
+### 6. Consult Related Docs
+Review "Related Documentation" links for deeper understanding.
+
+---
+
+## Guide Structure
+
+Each guide follows this template:
+
+```markdown
+# How to [Task Name]
+
+**Collection:** howto
+**Tags:** relevant, tags, here
+**Version:** 1.0
+**Last Updated:** YYYY-MM-DD
+
+## Overview
+Brief description of what this guide covers.
+
+## Prerequisites
+- Required knowledge
+- Tools needed
+- Related concepts
+
+## When to Use This Guide
+- Specific use cases
+- When to apply this pattern
+
+## Steps
+### Step 1: [First Action]
+Explanation and code examples...
+
+### Step 2: [Second Action]
+...
+
+## Best Practices
+Key recommendations and patterns.
+
+## Common Pitfalls
+Mistakes to avoid.
+
+## Related Documentation
+Links to other KB articles.
+
+## Troubleshooting
+Common issues and solutions.
+```
+
+---
+
+## Contributing New Guides
+
+When creating new HowTo guides:
+
+1. **Use General Templates:** Provide reusable patterns, not project-specific code
+2. **Explain Why:** Don't just show what - explain why decisions are made
+3. **Include Examples:** Show both good (✅) and bad (❌) patterns
+4. **Add Troubleshooting:** Document common errors you encountered
+5. **Link Related Docs:** Cross-reference other KB articles
+6. **Keep Updated:** Update guides when patterns or tools change
+
+---
+
+## Related Documentation
+
+### Architecture & Design
+- [Component Architecture](../component-architecture.md) - System overview
+- [Data Contracts](../data-contracts.md) - Type definitions
+- [API Service Layer](../api-service-layer.md) - REST API documentation
+
+### Infrastructure & Data
+- [MongoDB Integration](../mongodb-integration.md) - Database patterns
+- [Qdrant Integration](../qdrant-integration.md) - Vector database
+- [Configuration Reference](../configuration-reference.md) - Environment variables
+
+### Security
+- [JWT Authentication](../security-patterns/jwt-authentication.md) - Auth architecture
+- [Rate Limiting](../security-patterns/rate-limiting.md) - API protection
+
+### Frontend
+- [UI Client Stack](../ui-client-stack.md) - Frontend technologies
+- [React Architecture](../frontend-patterns/react-architecture.md) - Component patterns
+
+---
+
+## Feedback & Improvements
+
+Found an issue or have suggestions?
+- Update the guide directly (with version bump)
+- Add to "Common Pitfalls" if you discover new issues
+- Expand "Troubleshooting" with solutions you found
+
+These guides are living documents - keep them accurate and useful!
