@@ -132,7 +132,7 @@ responsibilities: ["MongoDB operations", "coordinator knowledge vector database"
         "domain": "data",
         "title": "[clear title: e.g., 'Task Priority Index Optimization Pattern']",
         "content": "[detailed MongoDB queries, index strategies, coordinator knowledge configurations, migration scripts, performance benchmarks]",
-        "relatedServices": ["tasks-api", "staff-api", "documents-api"],
+        "relatedServices": ["api-service-1", "api-service-2", "api-service-3"],  // Replace with actual services
         "databaseObjects": ["tasks collection", "priority_index", "user_tasks_view"],
         "performanceMetrics": ["query_time_before", "query_time_after", "index_size"],
         "createdBy": "data-platform-specialist",
@@ -256,7 +256,7 @@ async function optimizeTaskEmbeddings() {
 ### **With Backend Services Specialist**
 - **Performance Issue Resolution**: When APIs experience slow database queries
 - **Coordination Pattern**: Backend reports performance issue, Data specialist optimizes
-- **Example**: "staff-api search endpoint timing out, needs index optimization"
+- **Example**: "search endpoint in api-service timing out, needs index optimization"
 
 ### **With Event Systems Specialist**
 - **Event-Driven Data Operations**: When events trigger data aggregation or analysis
@@ -276,7 +276,7 @@ async function optimizeTaskEmbeddings() {
         "messageType": "performance_resolution",
         "squadId": "backend-infrastructure",
         "agentId": "data-platform-specialist",
-        "content": "Optimized staff-api search queries with compound indexes",
+        "content": "Optimized api-service search queries with compound indexes",
         "performanceResults": {
           "endpoint": "GET /api/v1/staff/search",
           "improvementBefore": "2.3s average",

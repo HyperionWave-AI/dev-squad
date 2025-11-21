@@ -478,6 +478,20 @@ export const CodeChatPage: React.FC = () => {
         setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
       },
       onMessageSaved: (databaseId: string) => {
+        // Check if this is a WebSocket disconnection notification (new backend feature)
+        if (databaseId.includes('AI response saved')) {
+          console.log('[CodeChatPage] WebSocket disconnected but message saved - refetching messages');
+          // Refetch messages to get the complete AI response that was saved
+          if (activeSessionId) {
+            loadMessages(activeSessionId);
+          }
+          // Stop showing streaming state
+          setIsStreaming(false);
+          streamingContentRef.current = '';
+          setStreamingContent('');
+          return;
+        }
+
         // Bug #3 Fix: Properly replace optimistic message ID with database ID
         console.log('[CodeChatPage] Message saved with database ID:', databaseId);
         setMessages((prev) => {

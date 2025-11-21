@@ -48,6 +48,7 @@ type ToolCapableProvider interface {
 type ToolResponse struct {
 	TextChannel <-chan string // Channel for streaming text tokens
 	ToolCalls   []ToolCall    // Tool calls requested by the AI
+	StopReason  string        // Why the model stopped: "end_turn", "tool_use", "max_tokens", etc.
 }
 
 // NewChatProvider creates a ChatProvider based on the configuration
@@ -66,6 +67,14 @@ func NewChatProvider(config *AIConfig) (ChatProvider, error) {
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
+}
+
+// Global HTTP logger instance for AI requests/responses
+var httpLogger *HTTPLogger
+
+func init() {
+	// Initialize HTTP logger to ./logs/ directory
+	httpLogger = NewHTTPLogger("./logs")
 }
 
 // openAIProvider wraps langchaingo's OpenAI client
@@ -162,7 +171,36 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	fmt.Printf("[DEBUG PRE-AI REQUEST] Total messages: %d\n", len(messages))
 	totalSize := 0
 	for i, msg := range messages {
-		msgSize := len(msg.Content)
+		var msgSize int
+
+		// Calculate size based on what's ACTUALLY sent to AI
+		if msg.Role == "tool_result" && msg.ToolResult != nil {
+			// For tool results, measure the actual output
+			if msg.ToolResult.Error != "" {
+				msgSize = len(msg.ToolResult.Error)
+			} else {
+				switch v := msg.ToolResult.Output.(type) {
+				case string:
+					msgSize = len(v)
+				default:
+					// Marshal to JSON to get size
+					if jsonBytes, err := json.Marshal(v); err == nil {
+						msgSize = len(jsonBytes)
+					}
+				}
+			}
+		} else if msg.Role == "tool_call" && msg.ToolCall != nil {
+			// For tool calls, measure the args
+			if argsJSON, err := json.Marshal(msg.ToolCall.Args); err == nil {
+				msgSize = len(argsJSON) + len(msg.Content)
+			} else {
+				msgSize = len(msg.Content)
+			}
+		} else {
+			// For other messages (user, assistant, system), Content is correct
+			msgSize = len(msg.Content)
+		}
+
 		totalSize += msgSize
 
 		// Preview (first 250 chars)
@@ -263,9 +301,9 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 			}
 
 		case "tool_result":
-			// Tool results should be sent as ToolCallResponse parts
+			// Tool results should be sent as Tool messages with ToolCallResponse parts
 			if msg.ToolResult != nil {
-				// Format result content
+				// Format result content - pass through as-is without forcing JSON
 				var resultContent string
 				if msg.ToolResult.Error != "" {
 					resultContent = msg.ToolResult.Error
@@ -275,13 +313,18 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 					case string:
 						resultContent = v
 					default:
-						resultContent = mustMarshalJSON(v)
+						// Try JSON marshal, fallback to fmt.Sprintf
+						if outputJSON, err := json.Marshal(v); err == nil {
+							resultContent = string(outputJSON)
+						} else {
+							resultContent = fmt.Sprintf("%v", v)
+						}
 					}
 					fmt.Printf("  [DEBUG] ToolResult output: %d bytes\n", len(resultContent))
 				}
 
 				msgContent := llms.MessageContent{
-					Role: llms.ChatMessageTypeHuman,
+					Role: llms.ChatMessageTypeTool,  // FIXED: Use Tool role, not Human
 					Parts: []llms.ContentPart{
 						llms.ToolCallResponse{
 							ToolCallID: msg.ToolResult.ID,
@@ -291,7 +334,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 					},
 				}
 				msgContents = append(msgContents, msgContent)
-				fmt.Printf("  [DEBUG] Created ToolCallResponse: ToolCallID=%s, Name=%s\n", msg.ToolResult.ID, msg.ToolResult.Name)
+				fmt.Printf("  [DEBUG] Created ToolCallResponse with Tool role: ToolCallID=%s, Name=%s\n", msg.ToolResult.ID, msg.ToolResult.Name)
 			} else {
 				// Fallback if no ToolResult data
 				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
@@ -344,6 +387,18 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		opts = append(opts, llms.WithMaxTokens(p.config.MaxOutputTokens))
 	}
 
+	// LOG REQUEST: Serialize msgContents and tools before AI call
+	httpLogger.LogLangChainRequest(
+		p.config.Provider,
+		convertMsgContentsToJSON(msgContents),
+		convertToolsToJSON(tools),
+		map[string]interface{}{
+			"temperature":     p.config.Temperature,
+			"maxOutputTokens": p.config.MaxOutputTokens,
+			"model":           p.config.Model,
+		},
+	)
+
 	// Call GenerateContent in goroutine
 	type generateResult struct {
 		resp *llms.ContentResponse
@@ -360,19 +415,29 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	// Wait for generation to complete
 	result := <-resultChan
 
+	// LOG RESPONSE: Log the response immediately after AI call
+	httpLogger.LogLangChainResponse(
+		p.config.Provider,
+		convertContentResponseToJSON(result.resp),
+		result.err,
+	)
+
 	if result.err != nil && result.err != context.Canceled {
 		return nil, fmt.Errorf("failed to generate content: %w", result.err)
 	}
 
-	// Extract tool calls from response - USE AI-GENERATED IDs
+	// Extract tool calls and stop reason from response - USE AI-GENERATED IDs
+	var stopReason string
 	if result.resp != nil && len(result.resp.Choices) > 0 {
 		choice := result.resp.Choices[0]
+		stopReason = choice.StopReason // Capture stop reason from LangChain
 
 		// DEBUG: Log complete response structure from LangChain
 		fmt.Printf("\n[DEBUG LANGCHAIN RESPONSE] ========================================\n")
 		fmt.Printf("[DEBUG LANGCHAIN] Total Choices: %d\n", len(result.resp.Choices))
 		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content: '%s'\n", choice.Content)
 		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content Length: %d bytes\n", len(choice.Content))
+		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - StopReason: '%s'\n", choice.StopReason)
 		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - ToolCalls Count: %d\n", len(choice.ToolCalls))
 
 		// Log each tool call in the choice
@@ -422,6 +487,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
+		StopReason:  stopReason,
 	}, nil
 }
 
@@ -789,6 +855,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
+		StopReason:  anthropicResp.StopReason,
 	}, nil
 }
 

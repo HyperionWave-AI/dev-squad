@@ -38,6 +38,15 @@ func ConvertToLangChainMessages(dbMessages []models.ChatMessage) []Message {
 
 		// CRITICAL: Preserve tool result structured data
 		if dbMsg.ToolResult != nil {
+			// CRITICAL LOGGING: Check if ID is empty when retrieved from database
+			if dbMsg.ToolResult.ID == "" {
+				fmt.Printf("🚨 BUG DETECTED: ToolResult.ID is EMPTY when retrieved from MongoDB!\n")
+				fmt.Printf("   Tool Name: %s\n", dbMsg.ToolResult.Name)
+				fmt.Printf("   Message ID: %s\n", dbMsg.ID.Hex())
+				fmt.Printf("   Message Role: %s\n", dbMsg.Role)
+				fmt.Printf("   This will cause 'tool_call_id is missing' error in next AI request!\n")
+			}
+
 			langchainMsg.ToolResult = &ToolResult{
 				ID:         dbMsg.ToolResult.ID,
 				Name:       dbMsg.ToolResult.Name,
@@ -48,13 +57,37 @@ func ConvertToLangChainMessages(dbMessages []models.ChatMessage) []Message {
 			}
 
 			// Enhance content with tool result for AI context
-			// Include both success and error cases
+			// Pass through output as-is without forcing JSON conversion
 			if dbMsg.ToolResult.Error != "" {
 				langchainMsg.Content = fmt.Sprintf("Tool result for %s (ID: %s) - ERROR: %s\nDuration: %dms",
 					dbMsg.ToolResult.Name, dbMsg.ToolResult.ID, dbMsg.ToolResult.Error, dbMsg.ToolResult.DurationMs)
-			} else if outputJSON, err := json.Marshal(dbMsg.ToolResult.Output); err == nil {
+			} else {
+				// Convert output to string representation
+				var outputStr string
+				switch v := dbMsg.ToolResult.Output.(type) {
+				case string:
+					outputStr = v
+				default:
+					// Only marshal to JSON if not already a string
+					if outputJSON, err := json.Marshal(v); err == nil {
+						outputStr = string(outputJSON)
+					} else {
+						outputStr = fmt.Sprintf("%v", v)
+					}
+				}
+
 				langchainMsg.Content = fmt.Sprintf("Tool result for %s (ID: %s):\n%s\nDuration: %dms",
-					dbMsg.ToolResult.Name, dbMsg.ToolResult.ID, string(outputJSON), dbMsg.ToolResult.DurationMs)
+					dbMsg.ToolResult.Name, dbMsg.ToolResult.ID, outputStr, dbMsg.ToolResult.DurationMs)
+
+				// DETAILED LOGGING: Show actual tool result data being sent to AI
+				fmt.Printf("[DETAILED TOOL RESULT → AI] Tool: %s | ID: %s\n", dbMsg.ToolResult.Name, dbMsg.ToolResult.ID)
+				fmt.Printf("[DETAILED TOOL RESULT → AI] Output Type: %T\n", dbMsg.ToolResult.Output)
+				fmt.Printf("[DETAILED TOOL RESULT → AI] Output Length: %d bytes\n", len(outputStr))
+				if len(outputStr) > 500 {
+					fmt.Printf("[DETAILED TOOL RESULT → AI] Output Preview (first 500 chars): %s...\n", outputStr[:500])
+				} else {
+					fmt.Printf("[DETAILED TOOL RESULT → AI] Full Output: %s\n", outputStr)
+				}
 			}
 		}
 

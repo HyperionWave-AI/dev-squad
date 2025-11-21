@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // MockTaskStorage for testing workflow resources
@@ -42,8 +43,24 @@ func (m *MockWorkflowTaskStorage) ListAllHumanTasks() []*storage.HumanTask {
 	return []*storage.HumanTask{}
 }
 
+func (m *MockWorkflowTaskStorage) ListHumanTasks(filter bson.M) ([]*storage.HumanTask, error) {
+	return []*storage.HumanTask{}, nil
+}
+
 func (m *MockWorkflowTaskStorage) ListAllAgentTasks() []*storage.AgentTask {
 	return m.agentTasks
+}
+
+func (m *MockWorkflowTaskStorage) ListAgentTasks(filter bson.M, offset, limit int) ([]*storage.AgentTask, int, error) {
+	total := len(m.agentTasks)
+	if offset >= total {
+		return []*storage.AgentTask{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return m.agentTasks[offset:end], total, nil
 }
 
 func (m *MockWorkflowTaskStorage) UpdateTaskStatus(taskID string, status storage.TaskStatus, notes string) error {
@@ -80,6 +97,10 @@ func (m *MockWorkflowTaskStorage) ClearTodoPromptNotes(agentTaskID string, todoI
 
 func (m *MockWorkflowTaskStorage) ClearAllTasks() (*storage.ClearResult, error) {
 	return nil, nil
+}
+
+func (m *MockWorkflowTaskStorage) SearchSimilarHumanTasks(prompt string, limit int, minScore float64) ([]*storage.HumanTask, []float64, error) {
+	return []*storage.HumanTask{}, []float64{}, nil
 }
 
 func TestWorkflowResourceHandler_ActiveAgents(t *testing.T) {

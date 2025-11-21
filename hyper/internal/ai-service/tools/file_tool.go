@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -87,25 +86,9 @@ func (r *ReadFileTool) Call(ctx context.Context, input string) (string, error) {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// Detect encoding
-	encoding := "binary"
-	if utf8.Valid(content) {
-		encoding = "utf8"
-	}
-
-	output := ReadFileOutput{
-		Path:     StripProjectRoot(readInput.FilePath),
-		Content:  string(content),
-		Size:     info.Size(),
-		Encoding: encoding,
-	}
-
-	result, err := json.Marshal(output)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal output: %w", err)
-	}
-
-	return string(result), nil
+	// Return raw content without JSON wrapping
+	// This makes it easier for AI to process file contents directly
+	return string(content), nil
 }
 
 // WriteFileTool writes file contents with safety checks

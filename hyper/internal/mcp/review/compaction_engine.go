@@ -179,20 +179,20 @@ func (ce *CompactionEngine) buildCompactionPrompt(text string, targetWords int) 
 
 TARGET: %d tokens (~3000 characters) - must fit under 1000 token limit
 
-MANDATORY STRUCTURE (use these exact markdown headings):
-## Problem
+MANDATORY STRUCTURE (use these exact section headers):
+PROBLEM
 What issue/question was being addressed? (100 tokens)
 
-## Solution
+SOLUTION
 How was it solved? Key implementation details. (250 tokens)
 
-## Key Files
+KEY FILES
 Which files/functions were modified? Be specific with paths and line numbers. (150 tokens)
 
-## Gotchas
+GOTCHAS
 Edge cases, errors encountered, important warnings. (150 tokens)
 
-## Testing
+TESTING
 How to verify/test this? Commands, expected results. (100 tokens)
 
 PRESERVATION RULES (CRITICAL - AI systems need these for retrieval):
@@ -209,7 +209,7 @@ PRESERVATION RULES (CRITICAL - AI systems need these for retrieval):
 ORIGINAL TEXT:
 %s
 
-Provide ONLY the compacted markdown text following the 5-section structure. No preamble, no meta-commentary, no explanations.`, targetWords, targetWords*4, targetWords, preservationNote, text)
+Provide ONLY the compacted text following the 5-section structure. No preamble, no meta-commentary, no explanations.`, targetWords, targetWords*4, targetWords, preservationNote, text)
 
 	return prompt
 }

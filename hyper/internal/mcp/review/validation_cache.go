@@ -63,11 +63,19 @@ func (vc *ValidationCache) CleanExpired() {
 	}
 }
 
-// Size returns the current number of cached entries
+// Size returns the current number of non-expired cached entries
 func (vc *ValidationCache) Size() int {
 	vc.mu.RLock()
 	defer vc.mu.RUnlock()
 
-	return len(vc.cache)
+	// Count only non-expired entries
+	count := 0
+	now := time.Now()
+	for _, entry := range vc.cache {
+		if now.Sub(entry.Timestamp) <= vc.ttl {
+			count++
+		}
+	}
+	return count
 }
 

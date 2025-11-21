@@ -19,7 +19,7 @@ type MockKnowledgeStorage struct {
 	collections []string
 }
 
-func (m *MockKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}) (*storage.KnowledgeEntry, error) {
+func (m *MockKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*storage.KnowledgeEntry, error) {
 	entry := &storage.KnowledgeEntry{
 		ID:         "test-id",
 		Collection: collection,
@@ -31,7 +31,23 @@ func (m *MockKnowledgeStorage) Upsert(collection, text string, metadata map[stri
 	return entry, nil
 }
 
-func (m *MockKnowledgeStorage) Query(collection, query string, limit int) ([]*storage.QueryResult, error) {
+func (m *MockKnowledgeStorage) UpdateEntry(id, text string, metadata map[string]interface{}) (*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+
+func (m *MockKnowledgeStorage) DeleteEntry(id string) error {
+	return nil
+}
+
+func (m *MockKnowledgeStorage) GetEntryByID(id string) (*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+
+func (m *MockKnowledgeStorage) GetEntriesByCollection(collectionName string) ([]*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+
+func (m *MockKnowledgeStorage) Query(collection, query string, limit int, taskId *string, voteBoost ...float64) ([]*storage.QueryResult, error) {
 	results := make([]*storage.QueryResult, 0)
 	for _, entry := range m.entries {
 		if entry.Collection == collection {
@@ -45,6 +61,34 @@ func (m *MockKnowledgeStorage) Query(collection, query string, limit int) ([]*st
 		}
 	}
 	return results, nil
+}
+
+func (m *MockKnowledgeStorage) CreateCollection(name, category, description string, tags []string) (*storage.Collection, error) {
+	return nil, nil
+}
+
+func (m *MockKnowledgeStorage) DeleteCollection(id string) (string, int64, error) {
+	return "", 0, nil
+}
+
+func (m *MockKnowledgeStorage) UpdateCollectionMetadata(collectionName, description string, tags []string, category string) (*storage.CollectionMetadata, error) {
+	return nil, nil
+}
+
+func (m *MockKnowledgeStorage) RenameCollection(oldName, newName string) (int64, error) {
+	return 0, nil
+}
+
+func (m *MockKnowledgeStorage) VoteOnEntry(entryID, userID, vote, reason string) (*storage.Vote, error) {
+	return nil, nil
+}
+
+func (m *MockKnowledgeStorage) GetEntryVotes(entryID, userID string) (*storage.VoteSummary, error) {
+	return nil, nil
+}
+
+func (m *MockKnowledgeStorage) BatchSyncVotesToQdrant(collectionName string) (int, error) {
+	return 0, nil
 }
 
 func (m *MockKnowledgeStorage) ListCollections() []string {

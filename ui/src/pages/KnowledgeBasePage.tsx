@@ -10,6 +10,7 @@ import {
 import { Badge } from '@/components/atoms/Badge';
 import { ResyncButton } from '@/components/ResyncButton';
 import { ResyncProgressDialog } from '@/components/ResyncProgressDialog';
+import { MarkdownSyncButton } from '@/components/organisms/MarkdownSyncButton';
 import { knowledgeApi } from '@/services/knowledgeApi';
 import { knowledgeService } from '@/services/knowledgeService';
 import type { KnowledgeCollection, KnowledgeEntry } from '@/types/knowledge';
@@ -306,7 +307,10 @@ export function KnowledgeBasePage() {
           gradientTo="#8b5cf6"
         />
         <div className="flex gap-4 justify-between items-center">
-          <ResyncButton onResyncStarted={handleResyncStarted} />
+          <div className="flex gap-3">
+            <ResyncButton onResyncStarted={handleResyncStarted} />
+            <MarkdownSyncButton onSyncComplete={loadCollections} />
+          </div>
           <div className="flex gap-4">
             <Badge variant="default" className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600">
               {collections.length} Collections

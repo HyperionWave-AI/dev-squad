@@ -436,6 +436,20 @@ func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.Ob
 		content = fmt.Sprintf("Tool error: %s - %s", toolName, errorMsg)
 	}
 
+	// CRITICAL LOGGING: Log what's being saved
+	if toolCallID == "" {
+		s.logger.Error("🚨 BUG DETECTED: SaveToolResult called with EMPTY toolCallID!",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.Int64("durationMs", durationMs))
+	} else {
+		s.logger.Info("💾 SaveToolResult preparing to save",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolCallID", toolCallID),
+			zap.String("toolName", toolName),
+			zap.Int64("durationMs", durationMs))
+	}
+
 	// Prepare message
 	message := &models.ChatMessage{
 		ID:        primitive.NewObjectID(),

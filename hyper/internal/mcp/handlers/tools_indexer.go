@@ -71,7 +71,7 @@ func (r *ToolMetadataRegistry) RegisterToolWithServer(
 
 // IndexRegisteredTools indexes all tools from the registry into ToolsStorage
 // This makes the tools discoverable via the discover_tools MCP tool
-func IndexRegisteredTools(registry *ToolMetadataRegistry, toolsStorage *storage.ToolsStorage, logger *zap.Logger) (int, error) {
+func IndexRegisteredTools(registry *ToolMetadataRegistry, toolsStorage storage.ToolsStorageInterface, logger *zap.Logger) (int, error) {
 	if registry == nil {
 		return 0, fmt.Errorf("registry is nil")
 	}

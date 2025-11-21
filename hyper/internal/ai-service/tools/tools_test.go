@@ -24,15 +24,9 @@ func TestBashTool(t *testing.T) {
 			input:     `{"command":"echo hello"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
-				var result BashOutput
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("failed to unmarshal output: %v", err)
-				}
-				if !strings.Contains(result.Stdout, "hello") {
-					t.Errorf("expected 'hello' in stdout, got: %s", result.Stdout)
-				}
-				if result.ExitCode != 0 {
-					t.Errorf("expected exit code 0, got: %d", result.ExitCode)
+				// Output is now raw stdout
+				if !strings.Contains(output, "hello") {
+					t.Errorf("expected 'hello' in output, got: %s", output)
 				}
 			},
 		},
@@ -47,15 +41,9 @@ func TestBashTool(t *testing.T) {
 		{
 			name:      "error with invalid command",
 			input:     `{"command":"nonexistentcommand123"}`,
-			wantError: false, // command runs but exits with error
+			wantError: true, // Now returns error for non-zero exit codes
 			checkFunc: func(t *testing.T, output string) {
-				var result BashOutput
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("failed to unmarshal output: %v", err)
-				}
-				if result.ExitCode == 0 {
-					t.Errorf("expected non-zero exit code for invalid command")
-				}
+				// Should not be called since we expect error
 			},
 		},
 		{
@@ -138,15 +126,9 @@ func TestReadFileTool(t *testing.T) {
 			input:     `{"path":"` + normalFile + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
-				var result ReadFileOutput
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("failed to unmarshal: %v", err)
-				}
-				if result.Content != "hello world" {
-					t.Errorf("expected 'hello world', got: %s", result.Content)
-				}
-				if result.Encoding != "utf8" {
-					t.Errorf("expected utf8 encoding, got: %s", result.Encoding)
+				// Now returns raw content without JSON wrapping
+				if output != "hello world" {
+					t.Errorf("expected 'hello world', got: %s", output)
 				}
 			},
 		},
@@ -155,12 +137,9 @@ func TestReadFileTool(t *testing.T) {
 			input:     `{"path":"` + binaryFile + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
-				var result ReadFileOutput
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("failed to unmarshal: %v", err)
-				}
-				if result.Encoding != "binary" {
-					t.Errorf("expected binary encoding, got: %s", result.Encoding)
+				// Now returns raw content - just verify it's not empty
+				if output == "" {
+					t.Error("expected non-empty binary content")
 				}
 			},
 		},
@@ -459,7 +438,7 @@ line 5`
 	}{
 		{
 			name:      "valid patch",
-			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `"}`,
+			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -480,7 +459,7 @@ line 5`
 		},
 		{
 			name:      "invalid patch (context mismatch)",
-			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(invalidPatch, "\n", "\\n") + `"}`,
+			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(invalidPatch, "\n", "\\n") + `"}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -497,7 +476,7 @@ line 5`
 		},
 		{
 			name:      "dry run mode",
-			input:     `{"filePath":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `","dryRun":true}`,
+			input:     `{"path":"` + testFile + `","patch":"` + strings.ReplaceAll(validPatch, "\n", "\\n") + `","dryRun":true}`,
 			wantError: false,
 			checkFunc: func(t *testing.T, output string) {
 				var result ApplyPatchOutput
@@ -513,7 +492,7 @@ line 5`
 		},
 		{
 			name:      "file not found",
-			input:     `{"filePath":"` + filepath.Join(tmpDir, "nonexistent.txt") + `","patch":"` + validPatch + `"}`,
+			input:     `{"path":"` + filepath.Join(tmpDir, "nonexistent.txt") + `","patch":"` + validPatch + `"}`,
 			wantError: true,
 		},
 	}

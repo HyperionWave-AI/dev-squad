@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"hyper/internal/config"
+
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -436,7 +438,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			// This forces ALL models into a linear workflow with zero ambiguity
 			// Each step unlocks exactly ONE required tool - model has no choice but to follow the sequence
 			// Applied to ALL models (not just Claude) to ensure consistent coordinator workflow
-			if true { // Enable workflow enforcement for all models (GPT, Claude, Groq, etc.)
+			if false { // DISABLED: Workflow enforcement (was blocking direct tool execution)
 				step := workflowState["step"].(int)
 				originalCount := len(tools)
 				debugLog("PRESCRIPTIVE FILTER: Current workflow step = %d, tools before filter = %d", step, originalCount)
@@ -705,16 +707,35 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				log.Printf("[DEBUG TOOL_EXECUTOR] responseText preview: %s", preview)
 			}
 
-			// Check for tool calls
-			if len(response.ToolCalls) == 0 {
-				debugLog("EXIT: No tool calls - streaming final response (%d chunks)", len(collectedChunks))
-				// No tool calls - NOW stream the collected text (final response)
+			// Check stop reason to determine if turn has ended
+			// According to Claude API docs, stop_reason is the ONLY authoritative flag:
+			// - "end_turn": model finished naturally, turn is over
+			// - "tool_use": model is requesting tool execution, turn continues
+			// - "max_tokens", "stop_sequence", etc.: other completion reasons
+			//
+			// IMPORTANT: Tool call count is NOT a reliable indicator of end turn!
+			// The model can return 0 tool calls with stop_reason="tool_use" if it's continuing.
+			if response.StopReason == "end_turn" {
+				debugLog("EXIT: StopReason=end_turn - streaming final response (%d chunks)", len(collectedChunks))
+				// Turn ended - stream the collected text (final response)
 				for _, chunk := range collectedChunks {
 					eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
 				}
-				log.Printf("[ChatService] Stream complete - RequestID: %s - Total iterations: %d, Tool calls: %d",
+				log.Printf("[ChatService] Stream complete - RequestID: %s - StopReason: end_turn - Total iterations: %d, Tool calls: %d",
 					requestID, iterationCount, toolCallCount)
-				debugLog("========== GOROUTINE ENDED (no tool calls) ==========")
+				debugLog("========== GOROUTINE ENDED (stop_reason=end_turn) ==========")
+				return
+			}
+
+			// If we get here with 0 tool calls and stop_reason != "end_turn", something is wrong
+			if len(response.ToolCalls) == 0 {
+				log.Printf("[ChatService] WARNING: StopReason=%s but no tool calls - treating as end turn", response.StopReason)
+				// Stream response and end
+				for _, chunk := range collectedChunks {
+					eventChan <- StreamEvent{Type: StreamEventToken, Content: chunk}
+				}
+				log.Printf("[ChatService] Stream complete - RequestID: %s - StopReason: %s (fallback) - Total iterations: %d, Tool calls: %d",
+					requestID, response.StopReason, iterationCount, toolCallCount)
 				return
 			}
 
@@ -748,6 +769,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 						// Create a blocking error result so model understands the tool failed
 						result = ToolResult{
+							ID:         toolCall.ID,
 							Name:       toolCall.Name,
 							Output:     nil,
 							Error:      blockMessage,
@@ -1334,6 +1356,37 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					},
 				})
 
+
+			// GUARDRAIL: Check if adding this tool result would exceed context limit
+			// Calculate current context size
+			currentContextSize := calculateContextSize(currentMessages)
+
+			// Estimate size of the tool result we're about to add
+			toolResultSize := len(fmt.Sprintf("%v", toolResultMsg))
+			if result.Error != "" {
+				toolResultSize += len(result.Error)
+			}
+
+			// Get max context size from config (default 500KB, configurable via MAX_CONTEXT_SIZE env var)
+			maxContextBeforeToolResult := config.GetMaxContextSize()
+
+			// If adding this result would exceed limit, replace it with a warning
+			if currentContextSize+toolResultSize > maxContextBeforeToolResult {
+				log.Printf("[Context Guardrail] Tool result would exceed %s limit (current: %d, result: %d, total: %d). Blocking with guidance message.",
+					config.FormatSize(maxContextBeforeToolResult), currentContextSize, toolResultSize, currentContextSize+toolResultSize)
+
+				// Replace the result with a helpful error message
+				toolResultMsg = "⚠️ Context is too big, try different approach to reduce command output.\n\n" +
+					fmt.Sprintf("The tool '%s' output (%d bytes) would push context over %s limit (current: %d bytes).\n\n",
+						toolCall.Name, toolResultSize, config.FormatSize(maxContextBeforeToolResult), currentContextSize) +
+					"Suggestions:\n" +
+					"• Use filters, grep, or head/tail to limit output size\n" +
+					"• Process data in smaller chunks\n" +
+					"• Write large outputs to files instead of returning them\n" +
+					"• Use pagination or summarization for list operations"
+
+				result.Error = "Context size limit exceeded"
+			}
 				// CRITICAL FIX: Add tool_result message with proper structure (not system role)
 				// This ensures the AI provider actually receives and processes the tool results
 				// The toolResultMsg is used for Output to preserve truncation and loop warning logic
@@ -1803,16 +1856,20 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] responseText preview: %s", preview)
 			}
 
-			// Log end turn if no tool calls
-			if len(response.ToolCalls) == 0 {
-				log.Printf("[AI Processing - Filtered] 🏁 AI ENDED TURN - No more tool calls requested (normal completion)")
+			// Check stop reason to determine if turn has ended
+			// According to Claude API docs, stop_reason is the ONLY authoritative flag
+			if response.StopReason == "end_turn" {
+				log.Printf("[AI Processing - Filtered] 🏁 AI ENDED TURN - stop_reason=end_turn (natural completion)")
+				log.Printf("[ChatService - Filtered] Stream complete - RequestID: %s - StopReason: end_turn - Total iterations: %d, Tool calls: %d",
+					requestID, iterationCount, toolCallCount)
+				return
 			}
 
-			// Check for tool calls
+			// If we get here with 0 tool calls and stop_reason != "end_turn", something is wrong
 			if len(response.ToolCalls) == 0 {
-				// No more tool calls, we're done
-				log.Printf("[ChatService - Filtered] Stream complete - RequestID: %s - Total iterations: %d, Tool calls: %d",
-					requestID, iterationCount, toolCallCount)
+				log.Printf("[AI Processing - Filtered] WARNING: StopReason=%s but no tool calls - treating as end turn", response.StopReason)
+				log.Printf("[ChatService - Filtered] Stream complete - RequestID: %s - StopReason: %s (fallback) - Total iterations: %d, Tool calls: %d",
+					requestID, response.StopReason, iterationCount, toolCallCount)
 				return
 			}
 
@@ -1839,6 +1896,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 						// Create a blocking error result so model understands the tool failed
 						result = ToolResult{
+							ID:         toolCall.ID,
 							Name:       toolCall.Name,
 							Output:     nil,
 							Error:      blockMessage,
@@ -2077,6 +2135,39 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				// 	}
 				// }
 
+
+			// GUARDRAIL: Check if adding this tool result would exceed context limit
+			// Calculate current context size
+			currentContextSize := calculateContextSize(currentMessages)
+
+			// Estimate size of the tool result we're about to add
+			var toolResultSize int
+			if result.Error != "" {
+				toolResultSize = len(result.Error)
+			} else {
+				toolResultSize = len(fmt.Sprintf("%v", result.Output))
+			}
+
+			// Get max context size from config (default 500KB, configurable via MAX_CONTEXT_SIZE env var)
+			maxContextBeforeToolResult := config.GetMaxContextSize()
+
+			// If adding this result would exceed limit, replace it with a warning
+			if currentContextSize+toolResultSize > maxContextBeforeToolResult {
+				log.Printf("[Context Guardrail] Tool result would exceed %s limit (current: %d, result: %d, total: %d). Blocking with guidance message.",
+					config.FormatSize(maxContextBeforeToolResult), currentContextSize, toolResultSize, currentContextSize+toolResultSize)
+
+				// Replace the result with a helpful error message
+				result.Output = "⚠️ Context is too big, try different approach to reduce command output.\n\n" +
+					fmt.Sprintf("The tool '%s' output (%d bytes) would push context over %s limit (current: %d bytes).\n\n",
+						toolCall.Name, toolResultSize, config.FormatSize(maxContextBeforeToolResult), currentContextSize) +
+					"Suggestions:\n" +
+					"• Use filters, grep, or head/tail to limit output size\n" +
+					"• Process data in smaller chunks\n" +
+					"• Write large outputs to files instead of returning them\n" +
+					"• Use pagination or summarization for list operations"
+
+				result.Error = "Context size limit exceeded"
+			}
 				// CRITICAL FIX: Add tool_result message with proper role (user, not system)
 				// This matches Anthropic's API format and ensures conversation continuity
 				currentMessages = append(currentMessages, Message{

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	aiservice "hyper/internal/ai-service"
+	"hyper/internal/ai-service/executor"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/config"
 	"hyper/internal/mcp/storage"
@@ -25,6 +26,210 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
+
+// chatServiceAdapter adapts ChatServiceInterface to executor.ChatServiceInterface.
+// This is needed because the actual service returns *models.ChatMessage but executor expects *interface{}.
+type chatServiceAdapter struct {
+	service ChatServiceInterface
+}
+
+func (a *chatServiceAdapter) SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*interface{}, error) {
+	msg, err := a.service.SaveMessage(ctx, sessionID, role, content, companyID)
+	if err != nil {
+		return nil, err
+	}
+	var result interface{} = msg
+	return &result, nil
+}
+
+func (a *chatServiceAdapter) SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, args map[string]interface{}, companyID string) (*interface{}, error) {
+	msg, err := a.service.SaveToolCall(ctx, sessionID, toolCallID, toolName, args, companyID)
+	if err != nil {
+		return nil, err
+	}
+	var result interface{} = msg
+	return &result, nil
+}
+
+func (a *chatServiceAdapter) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName, output, errorMsg string, durationMs int64, companyID string) (*interface{}, error) {
+	msg, err := a.service.SaveToolResult(ctx, sessionID, toolCallID, toolName, output, errorMsg, durationMs, companyID)
+	if err != nil {
+		return nil, err
+	}
+	var result interface{} = msg
+	return &result, nil
+}
+
+// websocketSink is a local adapter that implements executor.StreamOutputSink for WebSocket connections.
+// This avoids import cycles by implementing the interface locally in handlers package.
+type websocketSink struct {
+	conn         *websocket.Conn
+	logger       *zap.Logger
+	handler      *ChatWebSocketHandler
+	disconnected bool
+	mu           sync.Mutex
+}
+
+// newWebSocketSink creates a WebSocket sink adapter.
+func newWebSocketSink(conn *websocket.Conn, handler *ChatWebSocketHandler, logger *zap.Logger) *websocketSink {
+	return &websocketSink{
+		conn:         conn,
+		handler:      handler,
+		logger:       logger,
+		disconnected: false,
+	}
+}
+
+// SendToken implements executor.StreamOutputSink
+func (w *websocketSink) SendToken(content string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil
+	}
+
+	streamMsg := models.StreamMessage{
+		Type:    "token",
+		Content: content,
+	}
+
+	if err := w.handler.safeWriteJSON(w.conn, streamMsg); err != nil {
+		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			w.logger.Debug("WebSocket client disconnected during token streaming")
+			w.disconnected = true
+			return nil
+		}
+		w.logger.Warn("Failed to send token to WebSocket", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
+// SendToolCall implements executor.StreamOutputSink
+func (w *websocketSink) SendToolCall(toolName, toolID string, args map[string]interface{}) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil
+	}
+
+	streamMsg := models.StreamMessage{
+		Type: "tool_call",
+		ToolCall: &models.ToolCallEvent{
+			Tool: toolName,
+			Args: args,
+			ID:   toolID,
+		},
+	}
+
+	if err := w.handler.safeWriteJSON(w.conn, streamMsg); err != nil {
+		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			w.logger.Debug("WebSocket client disconnected during tool call streaming")
+			w.disconnected = true
+			return nil
+		}
+		w.logger.Warn("Failed to send tool call to WebSocket", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
+// SendToolResult implements executor.StreamOutputSink
+func (w *websocketSink) SendToolResult(toolID, result, errorMsg string, durationMs int) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil
+	}
+
+	streamMsg := models.StreamMessage{
+		Type: "tool_result",
+		ToolResult: &models.ToolResultEvent{
+			ID:         toolID,
+			Result:     result,
+			Error:      errorMsg,
+			DurationMs: durationMs,
+		},
+	}
+
+	if err := w.handler.safeWriteJSON(w.conn, streamMsg); err != nil {
+		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			w.logger.Debug("WebSocket client disconnected during tool result streaming")
+			w.disconnected = true
+			return nil
+		}
+		w.logger.Warn("Failed to send tool result to WebSocket", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
+// SendDone implements executor.StreamOutputSink
+func (w *websocketSink) SendDone() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil
+	}
+
+	doneMsg := models.StreamMessage{
+		Type:    "done",
+		Content: "",
+	}
+
+	if err := w.handler.safeWriteJSON(w.conn, doneMsg); err != nil {
+		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			w.logger.Debug("WebSocket client disconnected before completion message")
+			w.disconnected = true
+			return nil
+		}
+		w.logger.Warn("Failed to send done message", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
+// SendError implements executor.StreamOutputSink
+func (w *websocketSink) SendError(errorMsg string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil
+	}
+
+	errMsg := models.StreamMessage{
+		Type:    "error",
+		Content: errorMsg,
+	}
+
+	if err := w.handler.safeWriteJSON(w.conn, errMsg); err != nil {
+		w.logger.Warn("Failed to send error message", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
+// IsDisconnected implements executor.StreamOutputSink
+func (w *websocketSink) IsDisconnected() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.disconnected
+}
 
 // DefaultSystemPrompt is the default system prompt for Chat coordinator (GPT models)
 // Exported for use by AI settings service
@@ -798,7 +1003,7 @@ DO NOT DO THE AGENT'S JOB!`
 // WebSocket upgrader configuration (Production Hardened)
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  8192,  // 8KB - efficient for large messages
-	WriteBufferSize: 16384, // 16KB - handles streaming AI responses well
+	WriteBufferSize: 32768, // 32KB - handles large streaming AI responses (increased to prevent broken pipe)
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
@@ -1704,33 +1909,24 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 
 	// Step 5: Inject system prompt as first message (if exists)
 	if systemPromptText != "" {
-		// Prepend system message
-		systemMessage := aiservice.Message{
-			Role:    "system",
-			Content: systemPromptText,
-		}
-		langchainMessages = append([]aiservice.Message{systemMessage}, langchainMessages...)
-
-		h.logger.Debug("Injected system prompt",
-			zap.String("sessionId", sessionID.Hex()),
-			zap.Int("promptLength", len(systemPromptText)))
-	}
-
-	// Step 6: Stream AI response via ai-service with tool support
-	// Inject session ID and company ID into context for tool access (e.g., execute_subagent)
+	// Step 5: Inject session ID and company ID into context for tool access (e.g., execute_subagent)
 	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
 	ctxWithCompany := context.WithValue(ctxWithSession, "companyID", companyID)
-	maxToolCalls := h.aiService.GetConfig().MaxToolCalls
 
-	// Track AI streaming start time for metrics
-	streamStart := time.Now()
+	// Step 6: Register for interrupt notifications (for prioritized interrupt handling)
+	notifier := GetMessageNotifier(h.logger)
+	interruptCh := notifier.RegisterSession(sessionID)
+	defer notifier.UnregisterSession(sessionID)
 
-	// Choose appropriate streaming method based on mode
-	var aiStream <-chan aiservice.StreamEvent
+	// Step 7: Create WebSocket sink for streaming output (using local adapter to avoid import cycles)
+	outputSink := newWebSocketSink(conn, h, h.logger)
+
+	// Step 8: Determine allowed tools based on mode
+	var allowedTools []string
 	if isDirectSubagentChat {
 		// Direct subagent mode: Use filtered tools (exclude delegation tools)
-		allowedTools := h.aiService.GetAllowedToolsForDirectSubagent()
-		h.logger.Info("Starting direct subagent chat stream with filtered tools",
+		allowedTools = h.aiService.GetAllowedToolsForDirectSubagent()
+		h.logger.Info("Using direct subagent mode with filtered tools",
 			zap.String("sessionId", sessionID.Hex()),
 			zap.Int("allowedToolsCount", len(allowedTools)),
 			zap.String("subagentName", func() string {
@@ -1742,322 +1938,59 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 				}
 				return "unknown"
 			}()))
-		aiStream, err = h.aiService.StreamChatWithToolsFiltered(ctxWithCompany, langchainMessages, maxToolCalls, allowedTools)
 	} else {
 		// Coordinator mode: Use all tools (includes delegation)
-		h.logger.Info("Starting coordinator chat stream with full tool access",
+		h.logger.Info("Using coordinator mode with full tool access",
 			zap.String("sessionId", sessionID.Hex()))
-		aiStream, err = h.aiService.StreamChatWithTools(ctxWithCompany, langchainMessages, maxToolCalls)
+		// nil = all tools
+		allowedTools = nil
 	}
 
+	// Step 9: Create tool result processor to handle size-aware processing
+	toolResultProcessor := func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
+		processed := h.processToolResultWithSizeLimit(toolName, output)
+		return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
+	}
+
+	// Step 10: Create executor config
+	// Callback for when message is saved despite WebSocket disconnection
+	onMessageSavedWhileDisconnected := func(sessID primitive.ObjectID) {
+		broadcaster := GetWebSocketBroadcaster(h.logger)
+		broadcaster.BroadcastToSession(sessID, models.StreamMessage{
+			Type:    "message_saved",
+			Content: "AI response saved - please refresh to see the full message",
+		})
+	}
+
+	execConfig := executor.StreamConfig{
+		SessionID:                       sessionID,
+		CompanyID:                       companyID,
+		SystemPrompt:                    systemPromptText,
+		AllowedTools:                    allowedTools,
+		OutputSink:                      outputSink,
+		InterruptCh:                     interruptCh,
+		ToolResultProcessor:             toolResultProcessor,
+		OnMessageSavedWhileDisconnected: onMessageSavedWhileDisconnected,
+		Logger:                          h.logger,
+	}
+
+	// Step 11: Create and execute the stream executor (with adapted chat service)
+	chatServiceAdapter := &chatServiceAdapter{service: h.chatService}
+	exec := executor.NewStreamExecutor(execConfig, chatServiceAdapter, h.aiService)
+	fullResponse, err := exec.Execute(ctxWithCompany, langchainMessages)
+
 	if err != nil {
-		h.logger.Error("Failed to get AI response", zap.Error(err))
-		h.sendError(conn, "Failed to get AI response: "+err.Error())
+		h.logger.Error("AI execution failed", zap.Error(err))
+		if !outputSink.IsDisconnected() {
+			h.sendError(conn, "AI execution failed: "+err.Error())
+		}
 		return
 	}
 
-	// Step 7: Register for interrupt notifications (for prioritized interrupt handling)
-	notifier := GetMessageNotifier(h.logger)
-	interruptCh := notifier.RegisterSession(sessionID)
-	defer notifier.UnregisterSession(sessionID)
-
-	// Step 8: Stream mixed content (tokens and tool events) to WebSocket client with prioritized interrupt handling
-	fullResponse := ""
-	tokenCount := 0
-	toolCallCount := 0
-	clientDisconnected := false // Track client disconnect state
-
-	// Panic recovery for stream processing
-	defer func() {
-		if r := recover(); r != nil {
-			h.logger.Error("Panic during AI stream processing",
-				zap.String("sessionId", sessionID.Hex()),
-				zap.Any("panic", r),
-				zap.Int("tokensStreamed", tokenCount),
-				zap.Int("toolCalls", toolCallCount))
-
-			// Try to save whatever response we have so far
-			if fullResponse != "" {
-				if _, err := h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID); err != nil {
-					h.logger.Error("Failed to save partial response after panic", zap.Error(err))
-				}
-			}
-
-			// Try to notify client if still connected
-			if !clientDisconnected {
-				h.sendError(conn, "Internal error during AI processing")
-			}
-		}
-	}()
-
-	for event := range aiStream {
-		// PRIORITY SELECT: Non-blocking interrupt check (runs before every AI event)
-		select {
-		case <-interruptCh:
-			h.logger.Info("🚨 User interrupt detected during AI streaming - processing interrupt",
-				zap.String("sessionId", sessionID.Hex()),
-				zap.Int("tokensStreamed", tokenCount))
-			// Emit notification to client that interrupt was detected
-			if !clientDisconnected {
-				interruptNotice := models.StreamMessage{
-					Type:    "token",
-					Content: "\n\n⏸️ _Interrupt detected - processing your message..._\n\n",
-				}
-				h.safeWriteJSON(conn, interruptNotice)
-			}
-			// Continue processing the event - don't return here
-			// The interrupt handler in the main loop will process the new message
-		default:
-			// No interrupt, continue with normal processing
-		}
-
-		// NORMAL SELECT: Process AI stream events
-		select {
-		case <-ctx.Done():
-			h.logger.Info("Context cancelled during streaming",
-				zap.String("sessionId", sessionID.Hex()),
-				zap.Int("tokensStreamed", tokenCount),
-				zap.Int("toolCalls", toolCallCount))
-			return
-		default:
-			// Handle different event types
-			switch event.Type {
-			case aiservice.StreamEventToken:
-				// Accumulate response even if client disconnected
-				fullResponse += event.Content
-				tokenCount++
-
-				// Buffer size protection: Check accumulated response size
-				if len(fullResponse) > config.MaxStreamBufferBytes {
-					h.logger.Warn("AI response exceeded buffer limit, truncating stream",
-						zap.String("sessionId", sessionID.Hex()),
-						zap.Int("responseSize", len(fullResponse)),
-						zap.Int("maxSize", config.MaxStreamBufferBytes),
-						zap.Int("tokensStreamed", tokenCount))
-
-					// Send truncation notice to client if still connected
-					if !clientDisconnected {
-						truncationMsg := models.StreamMessage{
-							Type:    "token",
-							Content: "\n\n_[Response truncated - exceeded maximum size limit]_",
-						}
-						h.safeWriteJSON(conn, truncationMsg)
-					}
-
-					// Record truncation metric
-					metrics.AIResponseTruncations.Inc()
-
-					// Break out of event loop to save what we have
-					break
-				}
-
-				// Try to send to WebSocket if client still connected
-				if !clientDisconnected {
-					streamMsg := models.StreamMessage{
-						Type:    "token",
-						Content: event.Content,
-					}
-					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
-						// Check if this is a normal disconnection (client closed browser/refreshed)
-						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-							h.logger.Debug("Client disconnected during streaming - continuing processing in background",
-								zap.String("sessionId", sessionID.Hex()),
-								zap.Int("tokensStreamed", tokenCount))
-							clientDisconnected = true // Set flag and continue processing
-						} else {
-							h.logger.Warn("Failed to send token to WebSocket - continuing processing",
-								zap.String("sessionId", sessionID.Hex()),
-								zap.Error(err))
-							clientDisconnected = true // Assume client is gone
-						}
-						// Don't return - continue processing to save to database
-					}
-				}
-
-			case aiservice.StreamEventToolCall:
-				// AI is requesting a tool execution
-				toolCallCount++
-
-				// FIX: Save accumulated assistant text BEFORE the tool call (if any)
-				// This ensures text is persisted even if client refreshes mid-execution
-				if fullResponse != "" {
-					_, err := h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID)
-					if err != nil {
-						h.logger.Error("Failed to save assistant text before tool call", zap.Error(err))
-						// Continue even if save fails
-					} else {
-						h.logger.Debug("Saved assistant text before tool call",
-							zap.String("sessionId", sessionID.Hex()),
-							zap.Int("textLength", len(fullResponse)))
-					}
-					// Clear accumulated response to start fresh for text after this tool call
-					fullResponse = ""
-				}
-
-				// Save tool call to database (always, even if client disconnected)
-				_, err := h.chatService.SaveToolCall(ctx, sessionID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, companyID)
-				if err != nil {
-					h.logger.Error("Failed to save tool call to database", zap.Error(err))
-					// Continue streaming even if save fails
-				}
-
-				// Send tool call to WebSocket client if still connected
-				if !clientDisconnected {
-					streamMsg := models.StreamMessage{
-						Type: "tool_call",
-						ToolCall: &models.ToolCallEvent{
-							Tool: event.ToolCall.Name,
-							Args: event.ToolCall.Args,
-							ID:   event.ToolCall.ID,
-						},
-					}
-					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
-						// Check if this is a normal disconnection
-						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-							h.logger.Debug("Client disconnected during tool call streaming - continuing processing",
-								zap.String("sessionId", sessionID.Hex()))
-							clientDisconnected = true
-						} else {
-							h.logger.Warn("Failed to send tool call to WebSocket - continuing processing",
-								zap.String("sessionId", sessionID.Hex()),
-								zap.Error(err))
-							clientDisconnected = true
-						}
-						// Don't return - continue processing
-					}
-				}
-
-			case aiservice.StreamEventToolResult:
-				// Tool execution completed
-
-				// NEW: Apply size-aware processing
-				processed := h.processToolResultWithSizeLimit(
-					event.ToolResult.Name,
-					event.ToolResult.Output,
-				)
-
-				// Determine what to save to database
-				var outputToSave interface{}
-				if processed.ShouldSaveFull {
-					// Save original output (for normal or truncated tiers)
-					outputToSave = event.ToolResult.Output
-				} else {
-					// Save only the processed message (for suppressed tier)
-					outputToSave = processed.OutputStr
-				}
-
-				// Convert to string for database storage
-				outputStr := ""
-				if outputToSave != nil {
-					if str, ok := outputToSave.(string); ok {
-						outputStr = str
-					} else {
-						// Marshal non-string outputs to JSON
-						outputBytes, _ := json.Marshal(outputToSave)
-						outputStr = string(outputBytes)
-					}
-				}
-
-				// Save tool result to database (always, even if client disconnected)
-				_, err := h.chatService.SaveToolResult(ctx, sessionID, event.ToolResult.ID, event.ToolResult.Name, outputStr, event.ToolResult.Error, event.ToolResult.DurationMs, companyID)
-				if err != nil {
-					h.logger.Error("Failed to save tool result to database", zap.Error(err))
-					// Continue streaming even if save fails
-				}
-
-				// Send tool result to WebSocket client if still connected
-				// Use processed output for streaming (may be truncated or suppressed message)
-				if !clientDisconnected && processed.ShouldStream {
-					streamMsg := models.StreamMessage{
-						Type: "tool_result",
-						ToolResult: &models.ToolResultEvent{
-							ID:         event.ToolResult.ID,
-							Result:     processed.OutputStr, // Send processed output
-							Error:      event.ToolResult.Error,
-							DurationMs: int(event.ToolResult.DurationMs),
-						},
-					}
-					if err := h.safeWriteJSON(conn, streamMsg); err != nil {
-						// Check if this is a normal disconnection
-						if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-							h.logger.Debug("Client disconnected during tool result streaming - continuing processing",
-								zap.String("sessionId", sessionID.Hex()))
-							clientDisconnected = true
-						} else {
-							h.logger.Warn("Failed to send tool result to WebSocket - continuing processing",
-								zap.String("sessionId", sessionID.Hex()),
-								zap.Error(err))
-							clientDisconnected = true
-						}
-						// Don't return - continue processing
-					}
-				}
-
-			case aiservice.StreamEventError:
-				// Error during processing
-				h.logger.Error("AI service error during streaming", zap.String("error", event.Error))
-				h.sendError(conn, "AI error: "+event.Error)
-				return
-			}
-		}
-	}
-
-	// Step 8: Send completion message (if client still connected)
-	if !clientDisconnected {
-		doneMsg := models.StreamMessage{
-			Type:    "done",
-			Content: "",
-		}
-		if err := h.safeWriteJSON(conn, doneMsg); err != nil {
-			// Check if this is a normal disconnection
-			if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-				h.logger.Debug("Client disconnected before completion message",
-					zap.String("sessionId", sessionID.Hex()))
-			} else {
-				h.logger.Warn("Failed to send done message", zap.Error(err))
-			}
-			clientDisconnected = true
-			// Don't return - continue to save response to database
-		}
-	}
-
-	// Step 9: Save remaining AI response to database (if any)
-	// Only save if there's remaining content after tool calls
-	if fullResponse != "" {
-		_, err = h.chatService.SaveMessage(ctx, sessionID, "assistant", fullResponse, companyID)
-		if err != nil {
-			h.logger.Error("Failed to save final AI response", zap.Error(err))
-			// Only try to send error if client still connected
-			if !clientDisconnected {
-				h.sendError(conn, "Failed to save AI response")
-			}
-			return
-		}
-		h.logger.Debug("Saved final assistant text after tool calls",
-			zap.String("sessionId", sessionID.Hex()),
-			zap.Int("textLength", len(fullResponse)))
-	} else {
-		h.logger.Debug("No remaining assistant text to save (all text saved before tool calls)",
-			zap.String("sessionId", sessionID.Hex()))
-	}
-
-	// Record AI streaming metrics (tokens and duration)
-	metrics.AIStreamTokens.Add(float64(tokenCount))
-	metrics.AIStreamDuration.Observe(time.Since(streamStart).Seconds())
-
-	if clientDisconnected {
-		h.logger.Info("AI response completed in background after client disconnect",
-			zap.String("sessionId", sessionID.Hex()),
-			zap.Int("tokensStreamed", tokenCount),
-			zap.Int("toolCalls", toolCallCount),
-			zap.Int("responseLength", len(fullResponse)))
-	} else {
-		h.logger.Info("AI response streamed successfully",
-			zap.String("sessionId", sessionID.Hex()),
-			zap.Int("tokensStreamed", tokenCount),
-			zap.Int("toolCalls", toolCallCount),
-			zap.Int("responseLength", len(fullResponse)))
-	}
+	h.logger.Info("AI execution completed successfully",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int("responseLength", len(fullResponse)))
+}
 }
 
 // streamToolResult streams tool result to WebSocket with chunking for large outputs

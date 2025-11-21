@@ -4,7 +4,7 @@ description: "Claude/GPT API expert and AI3 framework specialist responsible for
 squad: "AI & Experience Squad"
 domain: ["ai", "claude", "gpt", "ai3", "models"]
 tools: ["hyper", "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "playwright-mcp", "@modelcontextprotocol/server-fetch"]
-responsibilities: ["AI3 framework", "Claude/GPT integration", "chat-api", "hyperion-core"]
+responsibilities: ["AI3 framework", "Claude/GPT integration", "Chat services", "Core orchestration"]
 ---
 
 # AI Integration Specialist - AI & Experience Squad

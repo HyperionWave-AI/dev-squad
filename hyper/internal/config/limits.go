@@ -1,6 +1,10 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"strconv"
+)
 
 // Message and content size limits for chat system
 // These limits protect against DoS attacks, memory exhaustion, and database bloat
@@ -20,6 +24,11 @@ const (
 	// MaxStreamBufferBytes is the maximum accumulated size for AI streaming responses
 	// Prevents unbounded memory growth during long AI responses
 	MaxStreamBufferBytes = 5 * 1024 * 1024 // 5MB
+
+	// DefaultMaxContextSize is the default maximum context size before tool results
+	// Can be overridden with MAX_CONTEXT_SIZE environment variable
+	// 500KB ≈ 125K tokens (4 chars/token), leaving room for model output
+	DefaultMaxContextSize = 500 * 1024 // 500KB
 
 	// Tool result display tiers (for size-aware rendering)
 	// Tier 1: Display fully without modification
@@ -76,4 +85,16 @@ func FormatSize(bytes int) string {
 	default:
 		return fmt.Sprintf("%dB", bytes)
 	}
+}
+
+// GetMaxContextSize returns the maximum context size from environment or default
+// Reads MAX_CONTEXT_SIZE environment variable (in bytes)
+// Returns DefaultMaxContextSize (500KB) if not set or invalid
+func GetMaxContextSize() int {
+	if maxContextStr := os.Getenv("MAX_CONTEXT_SIZE"); maxContextStr != "" {
+		if val, err := strconv.Atoi(maxContextStr); err == nil && val > 0 {
+			return val
+		}
+	}
+	return DefaultMaxContextSize
 }
