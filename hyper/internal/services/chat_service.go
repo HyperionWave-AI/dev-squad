@@ -320,8 +320,8 @@ func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.Objec
 	filter := bson.M{
 		"sessionId": sessionID,
 		"role": bson.M{"$ne": "system_internal"},
+		"isArchived": bson.M{"$ne": true},
 	}
-
 	// Count total user-visible messages
 	total, err := s.messagesCollection.CountDocuments(ctx, filter)
 	if err != nil {
@@ -416,7 +416,10 @@ func (s *ChatService) SaveMessage(ctx context.Context, sessionID primitive.Objec
 
 // GetSessionMessages retrieves all messages for a session (for AI context)
 func (s *ChatService) GetSessionMessages(ctx context.Context, sessionID primitive.ObjectID) ([]models.ChatMessage, error) {
-	filter := bson.M{"sessionId": sessionID}
+	filter := bson.M{
+		"sessionId": sessionID,
+		"isArchived": bson.M{"$ne": true},
+	}
 	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: 1}}) // Chronological order
 
 	cursor, err := s.messagesCollection.Find(ctx, filter, opts)

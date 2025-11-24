@@ -434,8 +434,8 @@ export const SessionList: React.FC<SessionListProps> = ({
           {/* Agents List Dialog */}
       <Dialog.Root open={isAgentsModalOpen} onOpenChange={setIsAgentsModalOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-50 backdrop-blur-sm" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[1200] backdrop-blur-sm" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-[1200] w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
             <div className="p-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
               <Dialog.Title className="text-xl font-semibold text-gray-900 dark:text-white">
                 Available Agents

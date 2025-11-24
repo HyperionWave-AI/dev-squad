@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { type ContextMetadata, type ContextError } from '../types/chat';
 
 interface UseContextStatusOptions {
@@ -29,9 +29,20 @@ export const useContextStatus = (
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollingEnabled, setPollingEnabled] = useState(false);
+  
+  // Use ref to track current sessionId for fetch operations
+  const sessionIdRef = useRef<string | undefined>(sessionId);
+  
+  // Update ref when sessionId changes
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   const fetchContextStatus = useCallback(async () => {
-    if (!sessionId) {
+    // Use ref to get current sessionId instead of closure
+    const currentSessionId = sessionIdRef.current;
+    
+    if (!currentSessionId) {
       setError('Session ID is required');
       return;
     }
@@ -41,7 +52,7 @@ export const useContextStatus = (
       setError(null);
 
       const response = await fetch(
-        `/api/v1/chat/sessions/${sessionId}/context-status`,
+        `/api/v1/chat/sessions/${currentSessionId}/context-status`,
         {
           method: 'GET',
           headers: {
@@ -55,39 +66,75 @@ export const useContextStatus = (
       }
 
       const data = await response.json();
-      setContextMetadata(data.contextStatus);
 
-      // Check if we need to show an error
-      if (data.contextStatus.percentageUsed >= 90) {
-        setContextError({
-          code: data.contextStatus.percentageUsed >= 100 ? 'CONTEXT_FULL' : 'CONTEXT_CRITICAL',
-          message:
-            data.contextStatus.percentageUsed >= 100
+      // Map backend response to frontend ContextMetadata type
+      const backendData = data.contextStatus;
+      const mappedMetadata: ContextMetadata = {
+        tokenCount: backendData.totalTokens || 0,
+        maxTokens: backendData.maxTokens || 100000,
+        percentageUsed: backendData.percentageUsed || 0,
+        isWarning: backendData.isWarning || false,
+        isCritical: backendData.isCritical || false,
+        messageCount: backendData.messageCount || 0,
+        lastUpdated: backendData.lastUpdated || new Date().toISOString(),
+        canAddMessage: !backendData.isCritical,
+      };
+
+      // Only update state if values actually changed to prevent unnecessary re-renders
+      setContextMetadata(prev => {
+        if (!prev ||
+            prev.tokenCount !== mappedMetadata.tokenCount ||
+            prev.percentageUsed !== mappedMetadata.percentageUsed ||
+            prev.messageCount !== mappedMetadata.messageCount ||
+            prev.isCritical !== mappedMetadata.isCritical ||
+            prev.isWarning !== mappedMetadata.isWarning) {
+          return mappedMetadata;
+        }
+        return prev;
+      });
+
+      // Check if we need to show an error - only update if error code changes
+      const newErrorCode = mappedMetadata.percentageUsed >= 100 ? 'CONTEXT_FULL'
+                         : mappedMetadata.percentageUsed >= 90 ? 'CONTEXT_CRITICAL'
+                         : mappedMetadata.percentageUsed >= 80 ? 'CONTEXT_WARNING'
+                         : null;
+
+      setContextError(prev => {
+        // If error code hasn't changed, keep previous error (prevents re-renders)
+        if (prev?.code === newErrorCode && newErrorCode !== null) {
+          return prev;
+        }
+
+        // Create new error object only if code changed
+        if (newErrorCode === 'CONTEXT_FULL' || newErrorCode === 'CONTEXT_CRITICAL') {
+          return {
+            code: newErrorCode,
+            message: newErrorCode === 'CONTEXT_FULL'
               ? 'Context limit reached. Archive or summarize messages immediately.'
               : 'Context usage is critical. Consider archiving or summarizing messages.',
-          currentTokens: data.contextStatus.tokenCount,
-          maxTokens: data.contextStatus.maxTokens,
-          percentageUsed: data.contextStatus.percentageUsed,
-          recoveryOptions: ['archive', 'summarize'],
-          suggestedAction: 'archive',
-          canArchiveMessages: true,
-          canSummarize: true,
-        });
-      } else if (data.contextStatus.percentageUsed >= 80) {
-        setContextError({
-          code: 'CONTEXT_WARNING',
-          message: 'Context usage is at warning level. Consider archiving or summarizing messages.',
-          currentTokens: data.contextStatus.tokenCount,
-          maxTokens: data.contextStatus.maxTokens,
-          percentageUsed: data.contextStatus.percentageUsed,
-          recoveryOptions: ['archive', 'summarize'],
-          suggestedAction: 'summarize',
-          canArchiveMessages: true,
-          canSummarize: true,
-        });
-      } else {
-        setContextError(null);
-      }
+            currentTokens: mappedMetadata.tokenCount,
+            maxTokens: mappedMetadata.maxTokens,
+            percentageUsed: mappedMetadata.percentageUsed,
+            recoveryOptions: ['archive', 'summarize'],
+            suggestedAction: 'archive',
+            canArchiveMessages: true,
+            canSummarize: true,
+          };
+        } else if (newErrorCode === 'CONTEXT_WARNING') {
+          return {
+            code: 'CONTEXT_WARNING',
+            message: 'Context usage is at warning level. Consider archiving or summarizing messages.',
+            currentTokens: mappedMetadata.tokenCount,
+            maxTokens: mappedMetadata.maxTokens,
+            percentageUsed: mappedMetadata.percentageUsed,
+            recoveryOptions: ['archive', 'summarize'],
+            suggestedAction: 'summarize',
+            canArchiveMessages: true,
+            canSummarize: true,
+          };
+        }
+        return null;
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch context status';
       setError(errorMessage);
@@ -95,7 +142,7 @@ export const useContextStatus = (
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId]);
+  }, []);
 
   const startPolling = useCallback(() => {
     setPollingEnabled(true);
@@ -107,7 +154,7 @@ export const useContextStatus = (
 
   // Set up polling
   useEffect(() => {
-    if (!pollingEnabled || !sessionId || pollInterval <= 0) {
+    if (!pollingEnabled || !sessionIdRef.current || pollInterval <= 0) {
       return;
     }
 
@@ -118,7 +165,7 @@ export const useContextStatus = (
     const interval = setInterval(fetchContextStatus, pollInterval);
 
     return () => clearInterval(interval);
-  }, [pollingEnabled, sessionId, pollInterval, fetchContextStatus]);
+  }, [pollingEnabled, pollInterval, fetchContextStatus]);
 
   return {
     contextMetadata,

@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"hyper/internal/models"
 	"hyper/internal/services"
@@ -11,6 +12,12 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
+
+// isOptimisticMessageID checks if a message ID is an optimistic ID (frontend-generated)
+// Optimistic IDs have the format "msg-{timestamp}" and haven't been persisted to the database yet
+func isOptimisticMessageID(idStr string) bool {
+	return strings.HasPrefix(idStr, "msg-")
+}
 
 // ChatHandler handles HTTP REST requests for chat sessions
 type ChatHandler struct {
@@ -503,12 +510,37 @@ func (h *ChatHandler) ArchiveMessagesHandler(c *gin.Context) {
 		return
 	}
 
+	// Filter out optimistic message IDs (those starting with "msg-")
+	// These are temporary IDs created on the frontend and haven't been persisted yet
+	validMessageIDs := []string{}
+	skippedCount := 0
+	for _, idStr := range req.MessageIDs {
+		// Skip optimistic IDs - they don't exist in the database
+		if !isOptimisticMessageID(idStr) {
+			validMessageIDs = append(validMessageIDs, idStr)
+		} else {
+			skippedCount++
+		}
+	}
+
+	// If no valid message IDs remain, return success (nothing to archive)
+	if len(validMessageIDs) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success":         true,
+			"message":         "No persisted messages to archive (all were temporary)",
+			"archivedCount":   0,
+			"skippedCount":    skippedCount,
+			"contextStatus":   nil,
+		})
+		return
+	}
+
 	// Convert string IDs to ObjectIDs
-	messageIDs := make([]primitive.ObjectID, len(req.MessageIDs))
-	for i, idStr := range req.MessageIDs {
+	messageIDs := make([]primitive.ObjectID, len(validMessageIDs))
+	for i, idStr := range validMessageIDs {
 		id, err := primitive.ObjectIDFromHex(idStr)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message ID: " + idStr})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message ID format: " + idStr})
 			return
 		}
 		messageIDs[i] = id
@@ -531,6 +563,7 @@ func (h *ChatHandler) ArchiveMessagesHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success":         true,
 		"message":         "Messages archived successfully",
+		"skippedCount":    skippedCount,
 		"archivedCount":   len(messageIDs),
 		"contextStatus":   usage,
 	})

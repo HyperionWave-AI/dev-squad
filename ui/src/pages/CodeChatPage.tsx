@@ -91,10 +91,8 @@ export const CodeChatPage: React.FC = () => {
 
   // Context management state
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
-  const [contextMetadata, setContextMetadata] = useState<any>(null);
-  const [contextError, setContextError] = useState<any>(null);
-  // Plugin registry hook (currently unused but available for future use)
   const [contextModalOpen, setContextModalOpen] = useState(false);
+  // Plugin registry hook (currently unused but available for future use)
   const {
     toggleErrorPrevention: _pluginToggleErrorPrevention,
     toggleComplexityAnalysis: _pluginToggleComplexityAnalysis,
@@ -110,18 +108,13 @@ export const CodeChatPage: React.FC = () => {
 
   // Performance monitoring
   const performance = useStreamingPerformance();
+  const { resetMetrics, startMonitoring, stopMonitoring, recordChunk } = performance;
 
   // Context status polling
-  const { contextMetadata: fetchedContextMetadata, contextError: fetchedContextError, startPolling, stopPolling } = useContextStatus({
+  const { contextMetadata, contextError, startPolling, stopPolling } = useContextStatus({
     sessionId: activeSessionId || undefined,
     pollInterval: 2000,
   });
-
-  // Update context state when fetched data changes
-  useEffect(() => {
-    setContextMetadata(fetchedContextMetadata);
-    setContextError(fetchedContextError);
-  }, [fetchedContextMetadata, fetchedContextError]);
 
   // Start polling when session is active
   useEffect(() => {
@@ -170,6 +163,9 @@ export const CodeChatPage: React.FC = () => {
   }, []);
 
 
+  // Connect to WebSocket when session changes
+  // Note: connectWebSocket is intentionally NOT in deps to avoid reconnecting on every render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeSessionId) {
       connectWebSocket(activeSessionId);
@@ -433,7 +429,7 @@ export const CodeChatPage: React.FC = () => {
           setStreamingToolResults(new Map());
 
           // Stop performance monitoring
-          performance.stopMonitoring();
+          stopMonitoring();
         } else {
           // Accumulate streaming content
           streamingContentRef.current += content;
@@ -449,7 +445,7 @@ export const CodeChatPage: React.FC = () => {
           }
 
           // Record chunk for performance monitoring
-          performance.recordChunk(content);
+          recordChunk(content);
         }
       },
       onToolCall: (tool: string, args: Record<string, any>, id: string) => {
@@ -598,7 +594,7 @@ export const CodeChatPage: React.FC = () => {
     });
 
     wsConnectionRef.current = connection;
-  }, [activeSessionId, streamingSessionId, performance]);
+  }, [activeSessionId, streamingSessionId, stopMonitoring, recordChunk]);
 
   // Session management handlers
   const handleNewChat = async () => {
@@ -694,8 +690,8 @@ export const CodeChatPage: React.FC = () => {
     streamingContentRef.current = '';
 
     // Start performance monitoring
-    performance.resetMetrics();
-    performance.startMonitoring();
+    resetMetrics();
+    startMonitoring();
 
     // Send message via WebSocket
     wsConnectionRef.current.sendMessage(text).catch(err => {
@@ -703,9 +699,26 @@ export const CodeChatPage: React.FC = () => {
       setIsStreaming(false);
       setStreamingContent('');
       streamingContentRef.current = '';
-      performance.stopMonitoring();
+      stopMonitoring();
     });
-  }, [activeSessionId, performance]);
+  }, [activeSessionId, resetMetrics, startMonitoring, stopMonitoring]);
+
+  // Memoized callbacks to prevent re-render loops
+  const handleArchiveDialogOpen = useCallback(() => {
+    setArchiveDialogOpen(true);
+  }, []);
+
+  const handleArchiveDialogClose = useCallback(() => {
+    setArchiveDialogOpen(false);
+  }, []);
+
+  const handleContextModalClose = useCallback(() => {
+    setContextModalOpen(false);
+  }, []);
+
+  const handleProgressClose = useCallback(() => {
+    setProgressEvents([]);
+  }, []);
 
   // Message sending handler
   const handleSendMessage = (text: string) => {
@@ -817,12 +830,12 @@ export const CodeChatPage: React.FC = () => {
                 </h1>
                 <ConnectionStatusIndicator status={connectionStatus} />
                 <ContextIndicator
-                  contextMetadata={contextMetadata}
+                  contextMetadata={contextMetadata ?? undefined}
                   isLoading={false}
                   error={contextError?.message}
                   isModalOpen={contextModalOpen}
                   onModalOpenChange={setContextModalOpen}
-                  onArchiveClick={() => setArchiveDialogOpen(true)}
+                  onArchiveClick={handleArchiveDialogOpen}
                 />
               </div>
               <div className="flex items-center gap-3">
@@ -831,7 +844,7 @@ export const CodeChatPage: React.FC = () => {
                 {/* Archive Messages Button */}
                 {(contextError?.code === 'CONTEXT_WARNING' || contextError?.code === 'CONTEXT_CRITICAL' || contextError?.code === 'CONTEXT_FULL') && (
                   <button
-                    onClick={() => setArchiveDialogOpen(true)}
+                    onClick={handleArchiveDialogOpen}
                     className="p-2 rounded-lg transition-all bg-orange-100 dark:bg-orange-900/30 hover:bg-orange-200 dark:hover:bg-orange-900/50 border-2 border-orange-500 dark:border-orange-400"
                     title="Archive messages to free up context"
                   >
@@ -1013,7 +1026,7 @@ export const CodeChatPage: React.FC = () => {
       <ArchiveDialog
         isOpen={archiveDialogOpen}
         messages={messages.filter(m => ['user', 'assistant', 'system'].includes(m.role)) as any}
-        onClose={() => setArchiveDialogOpen(false)}
+        onClose={handleArchiveDialogClose}
         onArchive={async (request, sessionId) => {
           try {
             const result = await archiveMessages(sessionId, request.messageIds, request.reason);
@@ -1033,12 +1046,12 @@ export const CodeChatPage: React.FC = () => {
       {/* Context Status Modal - Rendered at page level */}
       <ContextStatusModal
         isOpen={contextModalOpen}
-        contextMetadata={contextMetadata}
+        contextMetadata={contextMetadata ?? undefined}
         contextError={contextError}
         isLoading={false}
         error={contextError?.message}
-        onClose={() => setContextModalOpen(false)}
-        onArchiveClick={() => setArchiveDialogOpen(true)}
+        onClose={handleContextModalClose}
+        onArchiveClick={handleArchiveDialogOpen}
       />
 
       {/* Performance Monitor - Fixed bottom-right */}
@@ -1052,7 +1065,7 @@ export const CodeChatPage: React.FC = () => {
       {/* Progress Tracker - Fixed bottom-right (above performance monitor) */}
       <ProgressTracker
         events={progressEvents}
-        onClose={() => setProgressEvents([])}
+        onClose={handleProgressClose}
       />
       {/* Metrics Drawer - Slide in from right */}
       {metricsDrawerOpen && (

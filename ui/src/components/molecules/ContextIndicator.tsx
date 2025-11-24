@@ -144,10 +144,10 @@ export const ContextStatusModal: React.FC<{
     return (
       <>
         <div
-          className="fixed inset-0 bg-black/20 dark:bg-black/40 z-40 backdrop-blur-sm"
+          className="fixed inset-0 bg-black/20 dark:bg-black/40 z-[1200] backdrop-blur-sm"
           onClick={onClose}
         />
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 pointer-events-none">
+        <div className="fixed inset-0 flex items-center justify-center z-[1300] p-4 pointer-events-none">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 pointer-events-auto">
             <div className="flex items-center justify-center gap-3">
               <div className="w-5 h-5 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
@@ -163,10 +163,10 @@ export const ContextStatusModal: React.FC<{
     return (
       <>
         <div
-          className="fixed inset-0 bg-black/20 dark:bg-black/40 z-40 backdrop-blur-sm"
+          className="fixed inset-0 bg-black/20 dark:bg-black/40 z-[1200] backdrop-blur-sm"
           onClick={onClose}
         />
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 pointer-events-none">
+        <div className="fixed inset-0 flex items-center justify-center z-[1300] p-4 pointer-events-none">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 pointer-events-auto">
             <div className="flex items-start gap-3">
               <span className="text-2xl">⚠️</span>
@@ -209,12 +209,12 @@ export const ContextStatusModal: React.FC<{
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/20 dark:bg-black/40 z-40 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/20 dark:bg-black/40 z-[1200] backdrop-blur-sm"
         onClick={onClose}
       />
 
       {/* Modal */}
-      <div className="fixed inset-0 flex items-center justify-center z-50 p-4 pointer-events-none">
+      <div className="fixed inset-0 flex items-center justify-center z-[1300] p-4 pointer-events-none">
         <div className={`bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6 context-indicator context-${status} pointer-events-auto`}>
           {/* Header */}
           <div className="flex items-center justify-between mb-4">
@@ -352,36 +352,23 @@ export const ContextStatusModal: React.FC<{
 };
 
 /**
- * ContextIndicator Component (Legacy - for backward compatibility)
- * Now acts as a wrapper that shows the button and manages modal state
+ * ContextIndicator Component
+ * Only renders the button - modal should be rendered at page level
  */
 export const ContextIndicator: React.FC<ContextIndicatorProps> = ({
   contextMetadata,
   isLoading = false,
   error,
-  onArchiveClick,
-  onSummarizeClick,
-  isModalOpen = false,
   onModalOpenChange,
 }) => {
+  // Only render the button - modal should be rendered at page level
   return (
-    <>
-      <ContextStatusButton
-        contextMetadata={contextMetadata}
-        isLoading={isLoading}
-        error={error}
-        onClick={() => onModalOpenChange?.(true)}
-      />
-      <ContextStatusModal
-        isOpen={isModalOpen}
-        contextMetadata={contextMetadata}
-        isLoading={isLoading}
-        error={error}
-        onClose={() => onModalOpenChange?.(false)}
-        onArchiveClick={onArchiveClick}
-        onSummarizeClick={onSummarizeClick}
-      />
-    </>
+    <ContextStatusButton
+      contextMetadata={contextMetadata}
+      isLoading={isLoading}
+      error={error}
+      onClick={() => onModalOpenChange?.(true)}
+    />
   );
 };
 
