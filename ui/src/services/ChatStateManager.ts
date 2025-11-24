@@ -14,6 +14,7 @@
  */
 
 import { type ChatMessage as ChatMessageType, type ToolCall, type ToolResult, ConnectionState } from '@/services/chatService';
+import { type ContextMetadata } from '@/types/chat';
 
 export interface ChatState {
   // Session state
@@ -34,6 +35,13 @@ export interface ChatState {
   // Connection state
   connectionState: ConnectionState;
   lastError: string | null;
+
+  // Context state
+  contextMetadata: ContextMetadata | null;
+  contextWarningShown: boolean;
+  contextCriticalShown: boolean;
+  isContextFull: boolean;
+  lastContextUpdate: number; // timestamp
 
   // UI state
   metricsDrawerOpen: boolean;
@@ -76,6 +84,11 @@ export class ChatStateManager {
       streamingToolResults: new Map(),
       connectionState: ConnectionState.DISCONNECTED,
       lastError: null,
+      contextMetadata: null,
+      contextWarningShown: false,
+      contextCriticalShown: false,
+      isContextFull: false,
+      lastContextUpdate: 0,
       metricsDrawerOpen: false,
       errorPreventionMode: false,
       complexityAnalysisMode: false,
@@ -179,6 +192,11 @@ export class ChatStateManager {
       streamingToolResults: new Map(),
       connectionState: ConnectionState.DISCONNECTED,
       lastError: null,
+      contextMetadata: null,
+      contextWarningShown: false,
+      contextCriticalShown: false,
+      isContextFull: false,
+      lastContextUpdate: 0,
       metricsDrawerOpen: false,
       errorPreventionMode: false,
       complexityAnalysisMode: false,

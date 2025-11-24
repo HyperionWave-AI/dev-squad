@@ -274,6 +274,71 @@ export async function updateComplexityAnalysisMode(
   };
 }
 
+/**
+ * Get context status for a chat session
+ */
+export async function getContextStatus(
+  sessionId: string
+): Promise<{ contextStatus: any; contextError?: any }> {
+  const response = await fetchJSON<{ contextStatus: any; contextError?: any }>(
+    `/chat/sessions/${sessionId}/context-status`,
+    { method: 'GET' }
+  );
+
+  return response;
+}
+
+/**
+ * Archive messages in a chat session
+ */
+export async function archiveMessages(
+  sessionId: string,
+  messageIds: string[],
+  reason?: string
+): Promise<{ success: boolean; archivedCount: number; tokensSaved: number }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    archivedCount: number;
+    tokensSaved: number;
+  }>(`/chat/sessions/${sessionId}/archive`, {
+    method: 'POST',
+    body: JSON.stringify({
+      messageIds,
+      reason: reason || 'User-initiated archive to free up context',
+    }),
+  });
+
+  if (!response.success) {
+    throw new Error('Failed to archive messages');
+  }
+
+  return response;
+}
+
+/**
+ * Summarize messages in a chat session
+ */
+export async function summarizeMessages(
+  sessionId: string,
+  messageIds?: string[],
+  reason?: string
+): Promise<{ success: boolean; summarizedCount: number; tokensSaved: number; summary?: string }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    summarizedCount: number;
+    tokensSaved: number;
+    summary?: string;
+  }>(`/chat/sessions/${sessionId}/summarize`, {
+    method: 'POST',
+    body: JSON.stringify({
+      messageIds: messageIds || [],
+      reason: reason || 'User-initiated summarization to free up context',
+    }),
+  });
+
+  return response;
+}
+
 // ============================================================
 // WEBSOCKET STREAM CONNECTION (USING WEBSOCKETMANAGER)
 // ============================================================

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"hyper/internal/config"
+	"hyper/internal/utils"
 	"hyper/internal/metrics"
 	"hyper/internal/models"
 
@@ -21,6 +22,8 @@ type ChatService struct {
 	mongoClient        *mongo.Client
 	sessionsCollection *mongo.Collection
 	messagesCollection *mongo.Collection
+	contextManager     *utils.ContextManager
+	messageSummarizer  *utils.MessageSummarizer
 	logger             *zap.Logger
 }
 
@@ -30,8 +33,16 @@ func NewChatService(db *mongo.Database, logger *zap.Logger) (*ChatService, error
 		mongoClient:        db.Client(),
 		sessionsCollection: db.Collection("chat_sessions"),
 		messagesCollection: db.Collection("chat_messages"),
+		contextManager:     utils.NewContextManager(utils.DefaultContextLimitConfig(), logger),
+		messageSummarizer:  utils.NewMessageSummarizer(logger),
 		logger:             logger,
 	}
+
+	logger.Info("Context management initialized",
+		zap.Int("maxTokens", utils.DefaultContextLimitConfig().MaxTokens),
+		zap.Float64("warningThreshold", utils.DefaultContextLimitConfig().WarningThreshold),
+		zap.Float64("criticalThreshold", utils.DefaultContextLimitConfig().CriticalThreshold),
+		zap.Float64("autoSummarizeThreshold", utils.DefaultContextLimitConfig().AutoSummarizeThreshold))
 
 	// Create indexes
 	ctx := context.Background()
@@ -70,8 +81,85 @@ func NewChatService(db *mongo.Database, logger *zap.Logger) (*ChatService, error
 	return service, nil
 }
 
-// executeInTransaction executes a function within a MongoDB transaction
-// Handles session management, transaction lifecycle, and error handling
+// GetContextManager returns the context manager instance
+func (s *ChatService) GetContextManager() *utils.ContextManager {
+	return s.contextManager
+}
+
+// GetMessageSummarizer returns the message summarizer instance
+func (s *ChatService) GetMessageSummarizer() *utils.MessageSummarizer {
+	return s.messageSummarizer
+}
+
+// GetContextStatus returns the current context usage for a session
+func (s *ChatService) GetContextStatus(ctx context.Context, sessionID primitive.ObjectID) (*utils.ContextUsage, error) {
+	messages, err := s.GetSessionMessages(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session messages: %w", err)
+	}
+
+	usage := s.contextManager.UpdateContextUsage(ctx, sessionID.Hex(), messages)
+	return usage, nil
+}
+
+// CheckContextBeforeMessage checks if a message can be added without exceeding limits
+func (s *ChatService) CheckContextBeforeMessage(ctx context.Context, sessionID primitive.ObjectID, messageContent string) (bool, *utils.ContextUsage, error) {
+	messages, err := s.GetSessionMessages(ctx, sessionID)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to get session messages: %w", err)
+	}
+
+	usage := s.contextManager.UpdateContextUsage(ctx, sessionID.Hex(), messages)
+	canAdd, _ := s.contextManager.CanAddMessage(sessionID.Hex(), messageContent)
+
+	if !canAdd {
+		s.logger.Warn("🚨 Context limit exceeded - cannot add message",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("currentTokens", usage.TotalTokens),
+			zap.Int("maxTokens", usage.MaxTokens),
+			zap.Float64("percentageUsed", usage.PercentageUsed))
+		return false, usage, nil
+	}
+
+	if usage.IsCritical {
+		s.logger.Warn("⚠️ CRITICAL: Context usage at critical level",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("currentTokens", usage.TotalTokens),
+			zap.Float64("percentageUsed", usage.PercentageUsed))
+	} else if usage.IsWarning {
+		s.logger.Warn("⚠️ WARNING: Context usage approaching limit",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("currentTokens", usage.TotalTokens),
+			zap.Float64("percentageUsed", usage.PercentageUsed))
+	}
+
+	return true, usage, nil
+}
+
+// ShouldTriggerSummarization checks if summarization should be triggered
+func (s *ChatService) ShouldTriggerSummarization(usage *utils.ContextUsage) bool {
+	return usage.NeedsSummarization
+}
+
+// GetSummarizationRecommendation provides a summarization recommendation
+func (s *ChatService) GetSummarizationRecommendation(ctx context.Context, messages []models.ChatMessage) (*utils.SummarizationResult, error) {
+	result, err := s.messageSummarizer.SummarizeMessages(
+		ctx,
+		messages,
+		utils.StrategyOldestFirst,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate summarization recommendation: %w", err)
+	}
+
+	s.logger.Info("Generated summarization recommendation",
+		zap.Int("messageCount", len(messages)),
+		zap.Int("groupCount", len(result.MessageGroups)),
+		zap.Int("tokensSaved", result.TotalTokensSaved))
+
+	return result, nil
+}
+
 func (s *ChatService) executeInTransaction(ctx context.Context, fn func(sessCtx mongo.SessionContext) error) error {
 	session, err := s.mongoClient.StartSession()
 	if err != nil {
@@ -693,4 +781,247 @@ func (s *ChatService) SetSessionSubagentName(ctx context.Context, sessionID prim
 	}
 
 	return nil
+}
+
+// UpdateSessionContextMetrics updates the context token count and percentage for a session
+func (s *ChatService) UpdateSessionContextMetrics(ctx context.Context, sessionID primitive.ObjectID, tokenCount int, percentage float64) error {
+	filter := bson.M{"_id": sessionID}
+	update := bson.M{
+		"$set": bson.M{
+			"contextTokenCount": tokenCount,
+			"contextPercentage": percentage,
+			"updatedAt":         time.Now().UTC(),
+		},
+	}
+
+	result, err := s.sessionsCollection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update session context metrics: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("session not found")
+	}
+
+	s.logger.Debug("Session context metrics updated",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int("tokenCount", tokenCount),
+		zap.Float64("percentage", percentage))
+
+	return nil
+}
+
+// ArchiveMessages marks messages as archived (for context management)
+func (s *ChatService) ArchiveMessages(ctx context.Context, sessionID primitive.ObjectID, messageIDs []primitive.ObjectID) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	filter := bson.M{
+		"sessionId": sessionID,
+		"_id": bson.M{"$in": messageIDs},
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"isArchived": true,
+			"timestamp":  time.Now().UTC(), // Update timestamp to reflect archival
+		},
+	}
+
+	result, err := s.messagesCollection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to archive messages: %w", err)
+	}
+
+	s.logger.Info("Messages archived",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int64("archivedCount", result.ModifiedCount))
+
+	return nil
+}
+
+// GetArchivedMessages retrieves archived messages for a session
+func (s *ChatService) GetArchivedMessages(ctx context.Context, sessionID primitive.ObjectID, companyID string, limit, offset int) (*models.GetMessagesResponse, error) {
+	// Verify session exists and user has access
+	_, err := s.GetSession(ctx, sessionID, companyID)
+	if err != nil {
+		return nil, err
+	}
+
+	filter := bson.M{
+		"sessionId":  sessionID,
+		"isArchived": true,
+	}
+
+	// Count total archived messages
+	total, err := s.messagesCollection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count archived messages: %w", err)
+	}
+
+	// Query archived messages with pagination
+	opts := options.Find().
+		SetSort(bson.D{{Key: "timestamp", Value: -1}}). // Descending for newest first
+		SetLimit(int64(limit)).
+		SetSkip(int64(offset))
+
+	cursor, err := s.messagesCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query archived messages: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var messages []models.ChatMessage
+	if err := cursor.All(ctx, &messages); err != nil {
+		return nil, fmt.Errorf("failed to decode archived messages: %w", err)
+	}
+
+	response := &models.GetMessagesResponse{
+		Messages: messages,
+		Total:    total,
+		Limit:    limit,
+		Offset:   offset,
+		HasMore:  int64(offset+len(messages)) < total,
+	}
+
+	return response, nil
+}
+
+// RestoreArchivedMessages restores archived messages back to active conversation
+func (s *ChatService) RestoreArchivedMessages(ctx context.Context, sessionID primitive.ObjectID, messageIDs []primitive.ObjectID) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	filter := bson.M{
+		"sessionId": sessionID,
+		"_id": bson.M{"$in": messageIDs},
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"isArchived": false,
+		},
+	}
+
+	result, err := s.messagesCollection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to restore archived messages: %w", err)
+	}
+
+	s.logger.Info("Archived messages restored",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int64("restoredCount", result.ModifiedCount))
+
+	return nil
+}
+
+// SummarizeOldMessages summarizes old messages in a session to free up context
+// Returns the summary message and the IDs of messages that were summarized
+func (s *ChatService) SummarizeOldMessages(ctx context.Context, sessionID primitive.ObjectID, keepRecentMinutes int) (*models.ChatMessage, []primitive.ObjectID, error) {
+	// Get all messages in the session
+	messages, err := s.GetSessionMessages(ctx, sessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get session messages: %w", err)
+	}
+
+	if len(messages) == 0 {
+		return nil, nil, fmt.Errorf("no messages to summarize")
+	}
+
+	// Identify messages to summarize (older than keepRecentMinutes)
+	cutoffTime := time.Now().Add(-time.Duration(keepRecentMinutes) * time.Minute)
+	var messagesToSummarize []models.ChatMessage
+	var messagesToSummarizeIDs []primitive.ObjectID
+
+	for _, msg := range messages {
+		if msg.Timestamp.Before(cutoffTime) && !msg.IsArchived && !msg.IsSummary {
+			messagesToSummarize = append(messagesToSummarize, msg)
+			messagesToSummarizeIDs = append(messagesToSummarizeIDs, msg.ID)
+		}
+	}
+
+	if len(messagesToSummarize) == 0 {
+		return nil, nil, fmt.Errorf("no old messages to summarize")
+	}
+
+	// Create a summary message
+	summaryContent := fmt.Sprintf(
+		"[SUMMARY] Summarized %d messages from %s to %s. Key discussion points preserved.",
+		len(messagesToSummarize),
+		messagesToSummarize[0].Timestamp.Format("2006-01-02 15:04:05"),
+		messagesToSummarize[len(messagesToSummarize)-1].Timestamp.Format("2006-01-02 15:04:05"),
+	)
+
+	summaryMessage := &models.ChatMessage{
+		ID:                   primitive.NewObjectID(),
+		SessionID:            sessionID,
+		Role:                 "summary",
+		Content:              summaryContent,
+		Timestamp:            time.Now().UTC(),
+		IsSummary:            true,
+		OriginalMessageCount: len(messagesToSummarize),
+	}
+
+	// Save the summary message
+	_, err = s.messagesCollection.InsertOne(ctx, summaryMessage)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to save summary message: %w", err)
+	}
+
+	// Archive the old messages
+	err = s.ArchiveMessages(ctx, sessionID, messagesToSummarizeIDs)
+	if err != nil {
+		s.logger.Warn("Failed to archive summarized messages",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
+	}
+
+	s.logger.Info("Messages summarized",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int("summarizedCount", len(messagesToSummarize)),
+		zap.String("summaryId", summaryMessage.ID.Hex()))
+
+	return summaryMessage, messagesToSummarizeIDs, nil
+}
+
+// SaveMessageWithContextCheck saves a message after checking context limits
+// Returns (message, usage, error) where usage contains context information
+func (s *ChatService) SaveMessageWithContextCheck(ctx context.Context, sessionID primitive.ObjectID, role, content string, companyID string) (*models.ChatMessage, *utils.ContextUsage, error) {
+	// Check context before saving
+	canAdd, usage, err := s.CheckContextBeforeMessage(ctx, sessionID, content)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to check context: %w", err)
+	}
+
+	if !canAdd {
+		return nil, usage, fmt.Errorf("context limit exceeded: cannot add message (%.1f%% of %d tokens used)",
+			usage.PercentageUsed, usage.MaxTokens)
+	}
+
+	// Save the message
+	message, err := s.SaveMessage(ctx, sessionID, role, content, companyID)
+	if err != nil {
+		return nil, usage, err
+	}
+
+	// Update context metrics after saving
+	updatedUsage, err := s.GetContextStatus(ctx, sessionID)
+	if err != nil {
+		s.logger.Warn("Failed to update context metrics after saving message",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
+		return message, usage, nil
+	}
+
+	// Update session with new context metrics
+	err = s.UpdateSessionContextMetrics(ctx, sessionID, updatedUsage.TotalTokens, updatedUsage.PercentageUsed)
+	if err != nil {
+		s.logger.Warn("Failed to persist context metrics",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
+	}
+
+	return message, updatedUsage, nil
 }

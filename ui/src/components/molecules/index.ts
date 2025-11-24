@@ -3,3 +3,4 @@ export * from './Card';
 export * from './FormField';
 export * from './NavItem';
 export * from './MenuItem';
+export * from './ContextIndicator';

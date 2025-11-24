@@ -422,6 +422,178 @@ func (h *ChatHandler) SetSessionSubagent(c *gin.Context) {
 	})
 }
 
+// GetContextStatus retrieves the current context usage for a session
+// GET /api/v1/chat/sessions/:id/context-status
+func (h *ChatHandler) GetContextStatus(c *gin.Context) {
+	userID, companyID, err := h.extractUserContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: " + err.Error()})
+		return
+	}
+
+	sessionIDStr := c.Param("id")
+	sessionID, err := primitive.ObjectIDFromHex(sessionIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID"})
+		return
+	}
+
+	// Verify session belongs to user
+	session, err := h.chatService.GetSession(c.Request.Context(), sessionID, companyID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found or access denied"})
+		return
+	}
+	if session.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	// Get context status
+	usage, err := h.chatService.GetContextStatus(c.Request.Context(), sessionID)
+	if err != nil {
+		h.logger.Error("Failed to get context status", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get context status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"contextStatus": usage,
+		"session": gin.H{
+			"id":                  session.ID,
+			"title":               session.Title,
+			"contextTokenCount":   session.ContextTokenCount,
+			"contextPercentage":   session.ContextPercentage,
+		},
+	})
+}
+
+// ArchiveMessagesHandler archives messages to free up context
+// POST /api/v1/chat/sessions/:id/archive
+func (h *ChatHandler) ArchiveMessagesHandler(c *gin.Context) {
+	userID, companyID, err := h.extractUserContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: " + err.Error()})
+		return
+	}
+
+	sessionIDStr := c.Param("id")
+	sessionID, err := primitive.ObjectIDFromHex(sessionIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID"})
+		return
+	}
+
+	// Verify session belongs to user
+	session, err := h.chatService.GetSession(c.Request.Context(), sessionID, companyID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found or access denied"})
+		return
+	}
+	if session.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	var req struct {
+		MessageIDs []string `json:"messageIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// Convert string IDs to ObjectIDs
+	messageIDs := make([]primitive.ObjectID, len(req.MessageIDs))
+	for i, idStr := range req.MessageIDs {
+		id, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message ID: " + idStr})
+			return
+		}
+		messageIDs[i] = id
+	}
+
+	// Archive messages
+	err = h.chatService.ArchiveMessages(c.Request.Context(), sessionID, messageIDs)
+	if err != nil {
+		h.logger.Error("Failed to archive messages", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to archive messages"})
+		return
+	}
+
+	// Get updated context status
+	usage, err := h.chatService.GetContextStatus(c.Request.Context(), sessionID)
+	if err != nil {
+		h.logger.Warn("Failed to get updated context status", zap.Error(err))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":         true,
+		"message":         "Messages archived successfully",
+		"archivedCount":   len(messageIDs),
+		"contextStatus":   usage,
+	})
+}
+
+// SummarizeMessagesHandler summarizes old messages to free up context
+// POST /api/v1/chat/sessions/:id/summarize
+func (h *ChatHandler) SummarizeMessagesHandler(c *gin.Context) {
+	userID, companyID, err := h.extractUserContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: " + err.Error()})
+		return
+	}
+
+	sessionIDStr := c.Param("id")
+	sessionID, err := primitive.ObjectIDFromHex(sessionIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID"})
+		return
+	}
+
+	// Verify session belongs to user
+	session, err := h.chatService.GetSession(c.Request.Context(), sessionID, companyID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found or access denied"})
+		return
+	}
+	if session.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	var req struct {
+		KeepRecentMinutes int `json:"keepRecentMinutes" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// Summarize messages
+	summaryMessage, summarizedIDs, err := h.chatService.SummarizeOldMessages(c.Request.Context(), sessionID, req.KeepRecentMinutes)
+	if err != nil {
+		h.logger.Error("Failed to summarize messages", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to summarize messages: " + err.Error()})
+		return
+	}
+
+	// Get updated context status
+	usage, err := h.chatService.GetContextStatus(c.Request.Context(), sessionID)
+	if err != nil {
+		h.logger.Warn("Failed to get updated context status", zap.Error(err))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":           true,
+		"message":           "Messages summarized successfully",
+		"summaryMessage":    summaryMessage,
+		"summarizedCount":   len(summarizedIDs),
+		"contextStatus":     usage,
+	})
+}
+
 // RegisterChatRoutes registers all chat-related routes
 func (h *ChatHandler) RegisterChatRoutes(r *gin.RouterGroup) {
 	r.POST("/sessions", h.CreateSession)
@@ -431,6 +603,9 @@ func (h *ChatHandler) RegisterChatRoutes(r *gin.RouterGroup) {
 	r.DELETE("/sessions/:id", h.DeleteSession)
 	r.GET("/sessions/:id/messages", h.GetMessages)
 	r.PUT("/sessions/:id/subagent", h.SetSessionSubagent)
-	r.PATCH("/sessions/:id/error-prevention", h.UpdateErrorPreventionMode) // Toggle error prevention mode
-	r.PATCH("/sessions/:id/complexity-analysis", h.UpdateComplexityAnalysisMode) // Toggle complexity analysis mode
+	r.GET("/sessions/:id/context-status", h.GetContextStatus)
+	r.POST("/sessions/:id/archive", h.ArchiveMessagesHandler)
+	r.POST("/sessions/:id/summarize", h.SummarizeMessagesHandler)
+	r.PATCH("/sessions/:id/error-prevention", h.UpdateErrorPreventionMode)
+	r.PATCH("/sessions/:id/complexity-analysis", h.UpdateComplexityAnalysisMode)
 }

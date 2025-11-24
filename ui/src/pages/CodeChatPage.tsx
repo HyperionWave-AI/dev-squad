@@ -22,8 +22,11 @@ import { ConversationModeToggle } from '@/components/molecules/ConversationModeT
 import { ConnectionStatusIndicator, type ConnectionStatus } from '@/components/molecules/ConnectionStatusIndicator';
 import { ErrorBoundary } from '@/components/molecules/ErrorBoundary';
 
+import { ContextIndicator, ContextStatusModal } from '@/components/molecules/ContextIndicator';
+import { ArchiveDialog } from '@/components/organisms/ArchiveDialog';
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
 import { usePluginRegistry } from '@/hooks/usePluginRegistry';
+import { useContextStatus } from '@/hooks/useContextStatus';
 import {
   createSession,
   getSessions,
@@ -32,6 +35,7 @@ import {
   updateSession,
   updateErrorPreventionMode,
   updateComplexityAnalysisMode,
+  archiveMessages,
   connectChatStream,
   type ChatMessage as ChatMessageType,
   type ChatStreamConnection,
@@ -85,7 +89,12 @@ export const CodeChatPage: React.FC = () => {
   // Complexity analysis mode state
   const [complexityAnalysisMode, setComplexityAnalysisMode] = useState(false);
 
+  // Context management state
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [contextMetadata, setContextMetadata] = useState<any>(null);
+  const [contextError, setContextError] = useState<any>(null);
   // Plugin registry hook (currently unused but available for future use)
+  const [contextModalOpen, setContextModalOpen] = useState(false);
   const {
     toggleErrorPrevention: _pluginToggleErrorPrevention,
     toggleComplexityAnalysis: _pluginToggleComplexityAnalysis,
@@ -102,6 +111,26 @@ export const CodeChatPage: React.FC = () => {
   // Performance monitoring
   const performance = useStreamingPerformance();
 
+  // Context status polling
+  const { contextMetadata: fetchedContextMetadata, contextError: fetchedContextError, startPolling, stopPolling } = useContextStatus({
+    sessionId: activeSessionId || undefined,
+    pollInterval: 2000,
+  });
+
+  // Update context state when fetched data changes
+  useEffect(() => {
+    setContextMetadata(fetchedContextMetadata);
+    setContextError(fetchedContextError);
+  }, [fetchedContextMetadata, fetchedContextError]);
+
+  // Start polling when session is active
+  useEffect(() => {
+    if (activeSessionId) {
+      startPolling();
+    } else {
+      stopPolling();
+    }
+  }, [activeSessionId, startPolling, stopPolling]);
   // Refs for WebSocket and streaming content
   const wsConnectionRef = useRef<ChatStreamConnection | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -787,10 +816,28 @@ export const CodeChatPage: React.FC = () => {
                   {sessions.find((s) => s.id === activeSessionId)?.title || 'Chat'}
                 </h1>
                 <ConnectionStatusIndicator status={connectionStatus} />
+                <ContextIndicator
+                  contextMetadata={contextMetadata}
+                  isLoading={false}
+                  error={contextError?.message}
+                  isModalOpen={contextModalOpen}
+                  onModalOpenChange={setContextModalOpen}
+                  onArchiveClick={() => setArchiveDialogOpen(true)}
+                />
               </div>
               <div className="flex items-center gap-3">
                 <ConversationModeToggle showLabel={true} />
 
+                {/* Archive Messages Button */}
+                {(contextError?.code === 'CONTEXT_WARNING' || contextError?.code === 'CONTEXT_CRITICAL' || contextError?.code === 'CONTEXT_FULL') && (
+                  <button
+                    onClick={() => setArchiveDialogOpen(true)}
+                    className="p-2 rounded-lg transition-all bg-orange-100 dark:bg-orange-900/30 hover:bg-orange-200 dark:hover:bg-orange-900/50 border-2 border-orange-500 dark:border-orange-400"
+                    title="Archive messages to free up context"
+                  >
+                    <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+                  </button>
+                )}
                 {/* Error Prevention Mode Toggle */}
                 <button
                   onClick={toggleErrorPrevention}
@@ -961,6 +1008,38 @@ export const CodeChatPage: React.FC = () => {
           }
         />
       </div>
+
+      {/* Archive Dialog */}
+      <ArchiveDialog
+        isOpen={archiveDialogOpen}
+        messages={messages.filter(m => ['user', 'assistant', 'system'].includes(m.role)) as any}
+        onClose={() => setArchiveDialogOpen(false)}
+        onArchive={async (request, sessionId) => {
+          try {
+            const result = await archiveMessages(sessionId, request.messageIds, request.reason);
+            console.log('Messages archived:', result);
+            // Refresh messages to show updated context
+            if (activeSessionId) {
+              await loadMessages(activeSessionId);
+            }
+          } catch (error) {
+            console.error('Failed to archive messages:', error);
+            setError(error instanceof Error ? error.message : 'Failed to archive messages');
+          }
+        }}
+        sessionId={activeSessionId || ''}
+      />
+
+      {/* Context Status Modal - Rendered at page level */}
+      <ContextStatusModal
+        isOpen={contextModalOpen}
+        contextMetadata={contextMetadata}
+        contextError={contextError}
+        isLoading={false}
+        error={contextError?.message}
+        onClose={() => setContextModalOpen(false)}
+        onArchiveClick={() => setArchiveDialogOpen(true)}
+      />
 
       {/* Performance Monitor - Fixed bottom-right */}
       <PerformanceMonitor

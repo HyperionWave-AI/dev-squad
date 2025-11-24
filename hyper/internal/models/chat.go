@@ -12,6 +12,8 @@ type ChatSession struct {
 	UserID                string              `json:"userId" bson:"userId"`
 	CompanyID             string              `json:"companyId" bson:"companyId"`
 	Title                 string              `json:"title" bson:"title"`
+	ContextTokenCount     int                 `json:"contextTokenCount" bson:"contextTokenCount"`                 // Total tokens used in session
+	ContextPercentage     float64             `json:"contextPercentage" bson:"contextPercentage"`                 // Percentage of max context used
 	ParentChatID          *primitive.ObjectID `json:"parentChatId,omitempty" bson:"parentChatId,omitempty"`      // For subchats - links to parent session
 	ActiveSubagentID      *primitive.ObjectID `json:"activeSubagentId,omitempty" bson:"activeSubagentId,omitempty"` // For user-created subagents
 	ActiveSubagentName    *string             `json:"activeSubagentName,omitempty" bson:"activeSubagentName,omitempty"` // For system subagents (go-dev, ui-dev, etc.)
@@ -23,11 +25,15 @@ type ChatSession struct {
 
 // ChatMessage represents a single message in a conversation
 type ChatMessage struct {
-	ID        primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-	SessionID primitive.ObjectID `json:"sessionId" bson:"sessionId"`
-	Role      string             `json:"role" bson:"role"` // "user", "assistant", "system", "tool_call", "tool_result"
-	Content   string             `json:"content" bson:"content"`
-	Timestamp time.Time          `json:"timestamp" bson:"timestamp"`
+	ID                  primitive.ObjectID `json:"id" bson:"_id,omitempty"`
+	SessionID           primitive.ObjectID `json:"sessionId" bson:"sessionId"`
+	Role                string             `json:"role" bson:"role"` // "user", "assistant", "system", "tool_call", "tool_result", "summary"
+	Content             string             `json:"content" bson:"content"`
+	Timestamp           time.Time          `json:"timestamp" bson:"timestamp"`
+	TokenCount          int                `json:"tokenCount" bson:"tokenCount"`                       // Estimated token count for this message
+	IsArchived          bool               `json:"isArchived" bson:"isArchived"`                       // Whether this message has been archived
+	IsSummary           bool               `json:"isSummary" bson:"isSummary"`                         // Whether this message is a summary of older messages
+	OriginalMessageCount int               `json:"originalMessageCount" bson:"originalMessageCount"`   // Number of messages this summary represents
 
 	// Tool-related fields (optional, only for tool_call and tool_result roles)
 	ToolCall   *ToolCallData   `json:"toolCall,omitempty" bson:"toolCall,omitempty"`
@@ -105,4 +111,41 @@ type ToolResultChunk struct {
 	Index int    `json:"index"`
 	Total int    `json:"total"`
 	Done  bool   `json:"done"`
+}
+
+// ContextErrorCode represents different types of context errors
+type ContextErrorCode string
+
+const (
+	ContextWarning    ContextErrorCode = "CONTEXT_WARNING"
+	ContextCritical   ContextErrorCode = "CONTEXT_CRITICAL"
+	ContextFull       ContextErrorCode = "CONTEXT_FULL"
+	SummarizationFail ContextErrorCode = "SUMMARIZATION_FAILED"
+)
+
+// RecoveryOption represents an action the user can take to recover from context error
+type RecoveryOption struct {
+	Label       string `json:"label"`
+	Action      string `json:"action"` // "archive", "new_chat", "summarize", "clear"
+	Description string `json:"description"`
+}
+
+// ContextError represents a context-related error with recovery suggestions
+type ContextError struct {
+	Code             ContextErrorCode `json:"code"`
+	Message          string           `json:"message"`
+	Suggestion       string           `json:"suggestion"`
+	RecoveryOptions  []RecoveryOption `json:"recoveryOptions"`
+	ContextMetadata  *ContextMetadata `json:"contextMetadata,omitempty"`
+	Timestamp        time.Time        `json:"timestamp"`
+}
+
+// ContextMetadata represents context usage information
+type ContextMetadata struct {
+	TokenCount    int       `json:"tokenCount"`
+	MaxTokens     int       `json:"maxTokens"`
+	PercentageUsed float64  `json:"percentageUsed"`
+	IsNearLimit   bool      `json:"isNearLimit"`
+	IsFull        bool      `json:"isFull"`
+	LastUpdated   time.Time `json:"lastUpdated"`
 }

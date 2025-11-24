@@ -50,6 +50,53 @@ export function useChatState() {
     manager.reset();
   }, [manager]);
 
+  // Context management helpers
+  const updateContextMetadata = useCallback(
+    (metadata: typeof state.contextMetadata) => {
+      manager.setState({
+        contextMetadata: metadata,
+        lastContextUpdate: Date.now(),
+      });
+    },
+    [manager]
+  );
+
+  const setContextWarningShown = useCallback(
+    (shown: boolean) => {
+      manager.setField('contextWarningShown', shown);
+    },
+    [manager]
+  );
+
+  const setContextCriticalShown = useCallback(
+    (shown: boolean) => {
+      manager.setField('contextCriticalShown', shown);
+    },
+    [manager]
+  );
+
+  const setContextFull = useCallback(
+    (isFull: boolean) => {
+      manager.setField('isContextFull', isFull);
+    },
+    [manager]
+  );
+
+  const getContextPercentage = useCallback(() => {
+    if (!state.contextMetadata) return 0;
+    return state.contextMetadata.percentageUsed || 0;
+  }, [state.contextMetadata]);
+
+  const isContextNearLimit = useCallback(() => {
+    const percentage = getContextPercentage();
+    return percentage >= 80;
+  }, [getContextPercentage]);
+
+  const isContextAtLimit = useCallback(() => {
+    const percentage = getContextPercentage();
+    return percentage >= 100;
+  }, [getContextPercentage]);
+
   return {
     state,
     setState: updateState,
@@ -57,5 +104,13 @@ export function useChatState() {
     rollback,
     reset,
     manager,
+    // Context helpers
+    updateContextMetadata,
+    setContextWarningShown,
+    setContextCriticalShown,
+    setContextFull,
+    getContextPercentage,
+    isContextNearLimit,
+    isContextAtLimit,
   };
 }
