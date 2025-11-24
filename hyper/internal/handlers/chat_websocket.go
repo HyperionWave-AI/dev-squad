@@ -1326,13 +1326,11 @@ func (sc *StreamCleanup) Close() {
 // handleMessages manages the WebSocket message loop with processing state
 func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string) {
 	// Set read deadline for ping/pong (5 minutes to allow users time to review responses)
-	conn.SetReadDeadline(time.Now().Add(300 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // Reduced from 5 minutes to 30 seconds
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(300 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // Reduced from 5 minutes to 30 seconds
 		return nil
 	})
-
-	// Start ping ticker to keep connection alive
 	ticker := time.NewTicker(30 * time.Second)
 
 	// Create stream cleanup manager for channel lifecycle

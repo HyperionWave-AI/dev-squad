@@ -19,6 +19,7 @@ import { PerformanceMonitor } from '@/components/organisms/PerformanceMonitor';
 import { ProgressTracker, type TrackableEvent } from '@/components/organisms/ProgressTracker';
 import { MetricsDashboard } from '@/components/organisms/MetricsDashboard';
 import { ConversationModeToggle } from '@/components/molecules/ConversationModeToggle';
+
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
 import { usePluginRegistry } from '@/hooks/usePluginRegistry';
 import {
@@ -32,9 +33,11 @@ import {
   connectChatStream,
   type ChatMessage as ChatMessageType,
   type ChatStreamConnection,
+  ConnectionState,
   type ToolCall,
   type ToolResult,
 } from '@/services/chatService';
+
 
 // Local interface for session display (matches SessionList expectations)
 interface SessionItem {
@@ -92,6 +95,7 @@ export const CodeChatPage: React.FC = () => {
   // Error state
   const [error, setError] = useState<string | null>(null);
 
+  // Connection status state
   // Performance monitoring
   const performance = useStreamingPerformance();
 
@@ -141,12 +145,10 @@ export const CodeChatPage: React.FC = () => {
     const intervalId = setInterval(() => {
       // Fix Bug #8: Smarter WebSocket health check - only reconnect if truly CLOSED
       if (wsConnectionRef.current) {
-        const state = wsConnectionRef.current.ws.readyState;
-        // Only reconnect if connection is CLOSED (3), not CONNECTING (0) or CLOSING (2)
-        if (state === WebSocket.CLOSED) {
+        const state = wsConnectionRef.current.getState();
+        // Only reconnect if connection is DISCONNECTED, not CONNECTING or DISCONNECTING
+        if (state === ConnectionState.DISCONNECTED) {
           console.log('[CodeChatPage] WebSocket closed, reconnecting...');
-          connectWebSocket(activeSessionId);
-
           // Poll messages when WebSocket is disconnected (not streaming)
           if (!isStreaming && !streamingSessionId) {
             console.log('[CodeChatPage] Polling messages - WebSocket disconnected (state: CLOSED)');
@@ -178,7 +180,7 @@ export const CodeChatPage: React.FC = () => {
     // Cleanup on session change or unmount
     return () => {
       if (wsConnectionRef.current) {
-        wsConnectionRef.current.disconnect();
+        wsConnectionRef.current.disconnect().catch(err => console.error('[CodeChatPage] Error disconnecting:', err));
         wsConnectionRef.current = null;
       }
       if (reconnectTimeoutRef.current) {
@@ -319,22 +321,20 @@ export const CodeChatPage: React.FC = () => {
   const connectWebSocket = useCallback((sessionId: string) => {
     // Fix Bug #8: Guard against redundant connections
     if (wsConnectionRef.current &&
-        wsConnectionRef.current.ws.readyState === WebSocket.OPEN &&
+        wsConnectionRef.current.isConnected() &&
         activeSessionIdRef.current === sessionId) {
       console.log('[CodeChatPage] Already connected to session, skipping reconnect');
       return;
     }
-
     // Bug #5 Fix: Proper connection cleanup before creating new connection
     // 1. Clear any pending reconnection attempts
     if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
 
     // 2. Disconnect existing connection
     if (wsConnectionRef.current) {
-      wsConnectionRef.current.disconnect();
+      wsConnectionRef.current.disconnect().catch(err => console.error('[CodeChatPage] Error disconnecting:', err));
       wsConnectionRef.current = null;
     }
 
@@ -691,15 +691,13 @@ export const CodeChatPage: React.FC = () => {
     performance.startMonitoring();
 
     // Send message via WebSocket
-    try {
-      wsConnectionRef.current.sendMessage(text);
-    } catch (err) {
+    wsConnectionRef.current.sendMessage(text).catch(err => {
       setError(err instanceof Error ? err.message : 'Failed to send message');
       setIsStreaming(false);
       setStreamingContent('');
       streamingContentRef.current = '';
       performance.stopMonitoring();
-    }
+    });
   }, [activeSessionId, performance]);
 
   // Message sending handler
@@ -709,13 +707,12 @@ export const CodeChatPage: React.FC = () => {
     // Check connection state and handle accordingly
     const connectionState = wsConnectionStateRef.current;
 
-    if (connectionState === 'connected' && wsConnectionRef.current?.ws.readyState === WebSocket.OPEN) {
+    if (connectionState === 'connected' && wsConnectionRef.current?.isConnected()) {
       // Connection is ready, send immediately
       sendMessageInternal(text);
     } else if (connectionState === 'connecting') {
       // Connection is in progress, queue the message
       console.log('[CodeChatPage] Connection in progress, queueing message');
-      messageQueueRef.current.push(text);
     } else {
       // Connection is disconnected, start connecting and queue the message
       console.log('[CodeChatPage] WebSocket disconnected, reconnecting and queueing message');

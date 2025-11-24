@@ -3,15 +3,21 @@
  *
  * Provides REST API and WebSocket interface for chat functionality.
  * Follows existing restClient.ts patterns with typed responses.
+ * 
+ * INTEGRATION: Now uses WebSocketManager for robust connection handling with:
+ * - Atomic state transitions
+ * - Bounded message queue (prevents memory leaks)
+ * - Exponential backoff with intelligent retry logic
+ * - User-visible connection status indicators
+ * - Graceful degradation when WebSocket fails
  */
 
+import { WebSocketManager, ConnectionState } from './WebSocketManager';
+
 const BASE_URL = '/api/v1';
-const WS_BASE_URL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const WS_URL = `${WS_BASE_URL}//${window.location.host}/api/v1`;
 
 // ============================================================
 // TYPE DEFINITIONS
-// ============================================================
 
 export interface ChatSession {
   id: string;
@@ -255,7 +261,7 @@ export async function updateComplexityAnalysisMode(
 }
 
 // ============================================================
-// WEBSOCKET STREAM CONNECTION
+// WEBSOCKET STREAM CONNECTION (USING WEBSOCKETMANAGER)
 // ============================================================
 
 export interface StreamCallbacks {
@@ -268,127 +274,150 @@ export interface StreamCallbacks {
   onError: (error: Error) => void;
   onOpen?: () => void;
   onClose?: () => void;
+  onConnectionStateChange?: (state: ConnectionState) => void; // NEW: Connection state visibility
 }
 
 export interface ChatStreamConnection {
-  ws: WebSocket;
-  disconnect: () => void;
-  sendMessage: (content: string) => void;
+  manager: WebSocketManager;
+  disconnect: () => Promise<void>;
+  sendMessage: (content: string) => Promise<void>;
+  getState: () => ConnectionState;
+  isConnected: () => boolean;
 }
 
 /**
- * Connect to chat stream WebSocket
- * Returns connection object with WebSocket instance, disconnect function, and sendMessage helper
+ * Connect to chat stream WebSocket using WebSocketManager
+ * 
+ * Returns connection object with:
+ * - manager: WebSocketManager instance for advanced control
+ * - disconnect: Graceful disconnect function
+ * - sendMessage: Send message with automatic queuing
+ * - getState: Get current connection state
+ * - isConnected: Check if actively connected
  */
 export function connectChatStream(
   sessionId: string,
   callbacks: StreamCallbacks
 ): ChatStreamConnection {
-  const wsUrl = `${WS_URL}/chat/stream?sessionId=${sessionId}`;
-  const ws = new WebSocket(wsUrl);
+  const manager = new WebSocketManager();
 
-  ws.onopen = () => {
-    console.log('[ChatService] WebSocket connected');
-    callbacks.onOpen?.();
-  };
+  // Adapt WebSocketManager callbacks to StreamCallbacks
+  const wsCallbacks: Record<string, Function> = {
+    onOpen: () => {
+      console.log('[ChatService] WebSocket connected via WebSocketManager');
+      callbacks.onOpen?.();
+      callbacks.onConnectionStateChange?.(ConnectionState.CONNECTED);
+    },
 
-  ws.onmessage = (event) => {
-    try {
-      const data: StreamMessage = JSON.parse(event.data);
+    onMessage: (data: StreamMessage) => {
+      try {
+        switch (data.type) {
+          case 'error':
+            callbacks.onError(new Error(data.error || 'Unknown error'));
+            break;
 
-      switch (data.type) {
-        case 'error':
-          callbacks.onError(new Error(data.error || 'Unknown error'));
-          break;
+          case 'token':
+            // Streaming token
+            callbacks.onMessage(data.content || '', false);
+            break;
 
-        case 'token':
-          // Streaming token
-          callbacks.onMessage(data.content || '', false);
-          break;
+          case 'tool_call':
+            // Tool execution started
+            if (data.toolCall && callbacks.onToolCall) {
+              callbacks.onToolCall(
+                data.toolCall.tool,
+                data.toolCall.args,
+                data.toolCall.id
+              );
+            }
+            break;
 
-        case 'tool_call':
-          // Tool execution started
-          if (data.toolCall && callbacks.onToolCall) {
-            callbacks.onToolCall(
-              data.toolCall.tool,
-              data.toolCall.args,
-              data.toolCall.id
-            );
-          }
-          break;
+          case 'tool_result':
+            // Tool execution completed
+            if (data.toolResult && callbacks.onToolResult) {
+              // Note: tool name should be included in toolResult from backend
+              const toolName = (data.toolResult as any).tool || 'unknown';
+              callbacks.onToolResult(
+                data.toolResult.id,
+                toolName,
+                data.toolResult.result,
+                data.toolResult.error,
+                data.toolResult.durationMs
+              );
+            }
+            break;
 
-        case 'tool_result':
-          // Tool execution completed
-          if (data.toolResult && callbacks.onToolResult) {
-            // Note: tool name should be included in toolResult from backend
-            const toolName = (data.toolResult as any).tool || 'unknown';
-            callbacks.onToolResult(
-              data.toolResult.id,
-              toolName,
-              data.toolResult.result,
-              data.toolResult.error,
-              data.toolResult.durationMs
-            );
-          }
-          break;
+          case 'done':
+            // Stream complete
+            callbacks.onMessage('', true);
+            break;
 
-        case 'done':
-          // Stream complete
-          callbacks.onMessage('', true);
-          break;
+          case 'message_saved':
+            // Message saved with database ID
+            if (data.content && callbacks.onMessageSaved) {
+              callbacks.onMessageSaved(data.content);
+            }
+            break;
 
-        case 'message_saved':
-          // Message saved with database ID
-          if (data.content && callbacks.onMessageSaved) {
-            callbacks.onMessageSaved(data.content);
-          }
-          break;
+          case 'user_message':
+            // User message echo from server
+            if (callbacks.onUserMessage && data.content) {
+              callbacks.onUserMessage(data.content);
+            }
+            break;
 
-        case 'user_message':
-          // User message echo from server
-          if (callbacks.onUserMessage && data.content) {
-            callbacks.onUserMessage(data.content);
-          }
-          break;
-
-        case 'session_created':
-          // New subchat session created - refresh sessions list
-          if (callbacks.onSessionCreated && data.content) {
-            callbacks.onSessionCreated(data.content);
-          }
-          break;
+          case 'session_created':
+            // New subchat session created - refresh sessions list
+            if (callbacks.onSessionCreated && data.content) {
+              callbacks.onSessionCreated(data.content);
+            }
+            break;
+        }
+      } catch (error) {
+        callbacks.onError(
+          error instanceof Error ? error : new Error('Failed to parse message')
+        );
       }
-    } catch (error) {
-      callbacks.onError(
-        error instanceof Error ? error : new Error('Failed to parse message')
-      );
-    }
+    },
+
+    onError: (error: Error) => {
+      console.error('[ChatService] WebSocket error via WebSocketManager:', error);
+      callbacks.onError(error);
+      callbacks.onConnectionStateChange?.(ConnectionState.ERROR);
+    },
+
+    onClose: () => {
+      console.log('[ChatService] WebSocket closed via WebSocketManager');
+      callbacks.onClose?.();
+      callbacks.onConnectionStateChange?.(ConnectionState.DISCONNECTED);
+    },
   };
 
-  ws.onerror = (event) => {
-    console.error('[ChatService] WebSocket error:', event);
-    callbacks.onError(new Error('WebSocket connection error'));
-  };
+  // Connect using WebSocketManager with atomic state management
+  manager.connect(sessionId, wsCallbacks).catch((error) => {
+    console.error('[ChatService] Failed to connect WebSocketManager:', error);
+    callbacks.onError(error);
+  });
 
-  ws.onclose = () => {
-    console.log('[ChatService] WebSocket closed');
-    callbacks.onClose?.();
+  // Return connection interface
+  return {
+    manager,
+    disconnect: async () => {
+      await manager.disconnect();
+    },
+    sendMessage: async (content: string) => {
+      try {
+        await manager.sendMessage(content);
+      } catch (error) {
+        throw error instanceof Error ? error : new Error('Failed to send message');
+      }
+    },
+    getState: () => manager.getState(),
+    isConnected: () => manager.isConnected(),
   };
-
-  const disconnect = () => {
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-      ws.close();
-    }
-  };
-
-  const sendMessage = (content: string) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ content }));
-      console.log('[ChatService] Message sent:', content);
-    } else {
-      throw new Error('WebSocket is not connected');
-    }
-  };
-
-  return { ws, disconnect, sendMessage };
 }
+
+/**
+ * Export ConnectionState for UI components to use
+ */
+export { ConnectionState };

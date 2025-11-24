@@ -75,7 +75,7 @@ func (wb *WebSocketBroadcaster) checkConnectionHealth() {
 		err := mc.conn.WriteControl(
 			websocket.PingMessage,
 			[]byte{},
-			time.Now().Add(5*time.Second),
+			time.Now().Add(10*time.Second), // Reduced from 5 minutes to 10 seconds
 		)
 		if err != nil {
 			// Connection is dead

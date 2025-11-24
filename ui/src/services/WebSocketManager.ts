@@ -34,6 +34,8 @@ export class WebSocketManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
+  private readonly MAX_QUEUE_SIZE = 100;
+  private readonly QUEUE_TIMEOUT = 30000; // 30 seconds
 
   // Lock for atomic state transitions
   private stateLock: Promise<void> = Promise.resolve();
@@ -75,6 +77,13 @@ export class WebSocketManager {
   async sendMessage(content: string): Promise<void> {
     return new Promise((resolve, reject) => {
       this.withQueueLock(async () => {
+        // Check queue size before adding
+        if (this.messageQueue.length >= this.MAX_QUEUE_SIZE) {
+          console.warn('[WSManager] Message queue full (max 100), rejecting message');
+          reject(new Error('Message queue full - connection unstable'));
+          return;
+        }
+
         if (this.state !== ConnectionState.CONNECTED) {
           // Queue message for later
           this.messageQueue.push({ content, timestamp: Date.now(), resolve, reject });
@@ -85,9 +94,10 @@ export class WebSocketManager {
             const index = this.messageQueue.findIndex(m => m.content === content);
             if (index !== -1) {
               const msg = this.messageQueue.splice(index, 1)[0];
-              msg.reject(new Error('Send timeout - connection not established'));
+              console.warn('[WSManager] Message queue timeout after 30s, rejecting:', content.substring(0, 50));
+              msg.reject(new Error('Message queue timeout - connection not established within 30 seconds'));
             }
-          }, 10000); // 10 second timeout
+          }, this.QUEUE_TIMEOUT); // 30 second timeout
           return;
         }
 
