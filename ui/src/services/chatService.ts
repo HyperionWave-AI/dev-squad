@@ -10,9 +10,12 @@
  * - Exponential backoff with intelligent retry logic
  * - User-visible connection status indicators
  * - Graceful degradation when WebSocket fails
+ * - Correlation IDs for end-to-end request tracing
  */
 
 import { WebSocketManager, ConnectionState } from './WebSocketManager';
+import { getCorrelationId, addCorrelationIdToHeaders } from '@/utils/correlationId';
+import { retryWithBackoff, DEFAULT_RETRY_CONFIG } from '@/utils/retry';
 
 const BASE_URL = '/api/v1';
 
@@ -97,21 +100,31 @@ export interface StreamMessage {
 // ============================================================
 
 /**
- * Generic fetch wrapper with error handling
+ * Generic fetch wrapper with error handling and correlation IDs
  */
 async function fetchJSON<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
   const url = `${BASE_URL}${endpoint}`;
+  const correlationId = getCorrelationId();
 
   try {
+    const baseHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    // Merge options headers if they exist
+    if (options?.headers) {
+      const optionsHeaders = new Headers(options.headers);
+      optionsHeaders.forEach((value, key) => {
+        baseHeaders[key] = value;
+      });
+    }
+
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers: addCorrelationIdToHeaders(baseHeaders),
     });
 
     if (!response.ok) {
@@ -123,6 +136,7 @@ async function fetchJSON<T>(
       } catch {
         errorMessage = errorText || `HTTP ${response.status}`;
       }
+      console.error(`[${correlationId}] API Error:`, errorMessage);
       throw new Error(`API Error: ${errorMessage}`);
     }
 
@@ -291,7 +305,7 @@ export interface ChatStreamConnection {
  * Returns connection object with:
  * - manager: WebSocketManager instance for advanced control
  * - disconnect: Graceful disconnect function
- * - sendMessage: Send message with automatic queuing
+ * - sendMessage: Send message with automatic queuing and retry logic
  * - getState: Get current connection state
  * - isConnected: Check if actively connected
  */
@@ -300,11 +314,12 @@ export function connectChatStream(
   callbacks: StreamCallbacks
 ): ChatStreamConnection {
   const manager = new WebSocketManager();
+  const correlationId = getCorrelationId();
 
   // Adapt WebSocketManager callbacks to StreamCallbacks
   const wsCallbacks: Record<string, Function> = {
     onOpen: () => {
-      console.log('[ChatService] WebSocket connected via WebSocketManager');
+      console.log(`[${correlationId}] WebSocket connected via WebSocketManager`);
       callbacks.onOpen?.();
       callbacks.onConnectionStateChange?.(ConnectionState.CONNECTED);
     },
@@ -381,13 +396,13 @@ export function connectChatStream(
     },
 
     onError: (error: Error) => {
-      console.error('[ChatService] WebSocket error via WebSocketManager:', error);
+      console.error(`[${correlationId}] WebSocket error via WebSocketManager:`, error);
       callbacks.onError(error);
       callbacks.onConnectionStateChange?.(ConnectionState.ERROR);
     },
 
     onClose: () => {
-      console.log('[ChatService] WebSocket closed via WebSocketManager');
+      console.log(`[${correlationId}] WebSocket closed via WebSocketManager`);
       callbacks.onClose?.();
       callbacks.onConnectionStateChange?.(ConnectionState.DISCONNECTED);
     },
@@ -395,11 +410,11 @@ export function connectChatStream(
 
   // Connect using WebSocketManager with atomic state management
   manager.connect(sessionId, wsCallbacks).catch((error) => {
-    console.error('[ChatService] Failed to connect WebSocketManager:', error);
+    console.error(`[${correlationId}] Failed to connect WebSocketManager:`, error);
     callbacks.onError(error);
   });
 
-  // Return connection interface
+  // Return connection interface with retry-aware sendMessage
   return {
     manager,
     disconnect: async () => {
@@ -407,7 +422,17 @@ export function connectChatStream(
     },
     sendMessage: async (content: string) => {
       try {
-        await manager.sendMessage(content);
+        // Retry with exponential backoff for transient errors
+        await retryWithBackoff(
+          () => manager.sendMessage(content),
+          DEFAULT_RETRY_CONFIG,
+          (attempt, error, nextDelayMs) => {
+            console.warn(
+              `[${correlationId}] Message send failed (attempt ${attempt}), retrying in ${nextDelayMs}ms:`,
+              error.message
+            );
+          }
+        );
       } catch (error) {
         throw error instanceof Error ? error : new Error('Failed to send message');
       }

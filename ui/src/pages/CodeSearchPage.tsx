@@ -5,7 +5,7 @@ import { FolderManager } from '../components/organisms/FolderManager';
 import { IndexStatusDisplay } from '../components/organisms/IndexStatusDisplay';
 import { FileInspector } from '../components/organisms/FileInspector';
 import { PageHeader } from '../components/organisms/PageHeader';
-import ErrorBoundary from '../components/organisms/ErrorBoundary';
+import { ErrorBoundary } from '../components/organisms/ErrorBoundary';
 import { codeIndexService } from '../services/codeIndexService';
 import type { CodeResult, IndexedFolder, IndexStatus, FolderConfig, SearchOptions } from '../types/codeSearch';
 import { Code2 } from 'lucide-react';

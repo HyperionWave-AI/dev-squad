@@ -95,7 +95,6 @@ export const CodeChatPage: React.FC = () => {
   // Error state
   const [error, setError] = useState<string | null>(null);
 
-  // Connection status state
   // Performance monitoring
   const performance = useStreamingPerformance();
 
