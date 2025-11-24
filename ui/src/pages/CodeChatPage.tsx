@@ -20,6 +20,7 @@ import { ProgressTracker, type TrackableEvent } from '@/components/organisms/Pro
 import { MetricsDashboard } from '@/components/organisms/MetricsDashboard';
 import { ConversationModeToggle } from '@/components/molecules/ConversationModeToggle';
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
+import { usePluginRegistry } from '@/hooks/usePluginRegistry';
 import {
   createSession,
   getSessions,
@@ -80,6 +81,14 @@ export const CodeChatPage: React.FC = () => {
   // Complexity analysis mode state
   const [complexityAnalysisMode, setComplexityAnalysisMode] = useState(false);
 
+  // Plugin registry hook (currently unused but available for future use)
+  const {
+    toggleErrorPrevention: _pluginToggleErrorPrevention,
+    toggleComplexityAnalysis: _pluginToggleComplexityAnalysis,
+    isErrorPreventionEnabled: _isErrorPreventionEnabled,
+    isComplexityAnalysisEnabled: _isComplexityAnalysisEnabled,
+  } = usePluginRegistry();
+
   // Error state
   const [error, setError] = useState<string | null>(null);
 
@@ -89,7 +98,7 @@ export const CodeChatPage: React.FC = () => {
   // Refs for WebSocket and streaming content
   const wsConnectionRef = useRef<ChatStreamConnection | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+
   // WebSocket connection state and message queue
   const wsConnectionStateRef = useRef<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const messageQueueRef = useRef<string[]>([]);

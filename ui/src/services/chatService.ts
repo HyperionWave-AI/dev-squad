@@ -48,6 +48,8 @@ export interface ChatMessage {
     error: string | null;
     durationMs: number;
   };
+  // Plugin metadata
+  metadata?: Record<string, any>;
 }
 
 export interface ToolCall {
@@ -63,6 +65,8 @@ export interface ToolResult {
   result: any;
   error: string | null;
   durationMs: number;
+  // Plugin metadata
+  metadata?: Record<string, any>;
 }
 
 export interface StreamMessage {
