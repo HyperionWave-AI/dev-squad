@@ -158,6 +158,14 @@ export class WebSocketManager {
   }
 
   /**
+   * Cleanup all resources (for memory leak prevention)
+   */
+  async cleanup(): Promise<void> {
+    await this.disconnect();
+    this.callbacks.clear();
+  }
+
+  /**
    * Get current state (thread-safe read)
    */
   getState(): ConnectionState {

@@ -19,6 +19,8 @@ import { PerformanceMonitor } from '@/components/organisms/PerformanceMonitor';
 import { ProgressTracker, type TrackableEvent } from '@/components/organisms/ProgressTracker';
 import { MetricsDashboard } from '@/components/organisms/MetricsDashboard';
 import { ConversationModeToggle } from '@/components/molecules/ConversationModeToggle';
+import { ConnectionStatusIndicator, type ConnectionStatus } from '@/components/molecules/ConnectionStatusIndicator';
+import { ErrorBoundary } from '@/components/molecules/ErrorBoundary';
 
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
 import { usePluginRegistry } from '@/hooks/usePluginRegistry';
@@ -33,7 +35,6 @@ import {
   connectChatStream,
   type ChatMessage as ChatMessageType,
   type ChatStreamConnection,
-  ConnectionState,
   type ToolCall,
   type ToolResult,
 } from '@/services/chatService';
@@ -95,6 +96,9 @@ export const CodeChatPage: React.FC = () => {
   // Error state
   const [error, setError] = useState<string | null>(null);
 
+  // Connection status state
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+
   // Performance monitoring
   const performance = useStreamingPerformance();
 
@@ -136,41 +140,7 @@ export const CodeChatPage: React.FC = () => {
     loadSessions();
   }, []);
 
-  // Auto-refresh messages for active session (Fix #2: Messages not appearing without refresh)
-  useEffect(() => {
-    if (!activeSessionId) return;
 
-    // Poll messages every 3 seconds for active session
-    const intervalId = setInterval(() => {
-      // Fix Bug #8: Smarter WebSocket health check - only reconnect if truly CLOSED
-      if (wsConnectionRef.current) {
-        const state = wsConnectionRef.current.getState();
-        // Only reconnect if connection is DISCONNECTED, not CONNECTING or DISCONNECTING
-        if (state === ConnectionState.DISCONNECTED) {
-          console.log('[CodeChatPage] WebSocket closed, reconnecting...');
-          // Poll messages when WebSocket is disconnected (not streaming)
-          if (!isStreaming && !streamingSessionId) {
-            console.log('[CodeChatPage] Polling messages - WebSocket disconnected (state: CLOSED)');
-            loadMessages(activeSessionId);
-          }
-        }
-      } else {
-        // No connection at all, establish one
-        console.log('[CodeChatPage] No WebSocket connection, establishing...');
-        connectWebSocket(activeSessionId);
-
-        // Poll messages when WebSocket doesn't exist (not streaming)
-        if (!isStreaming && !streamingSessionId) {
-          console.log('[CodeChatPage] Polling messages - No WebSocket connection exists');
-          loadMessages(activeSessionId);
-        }
-      }
-    }, 3000);
-
-    return () => clearInterval(intervalId);
-  }, [activeSessionId, isStreaming, streamingSessionId]);
-
-  // Connect WebSocket when active session changes
   useEffect(() => {
     if (activeSessionId) {
       connectWebSocket(activeSessionId);
@@ -187,6 +157,33 @@ export const CodeChatPage: React.FC = () => {
       }
     };
   }, [activeSessionId]);
+
+  // Cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      // Clear all state on unmount
+      setMessages([]);
+      setStreamingContent('');
+      setIsStreaming(false);
+      setStreamingSessionId(null);
+      setPendingToolCalls(new Set());
+      setStreamingToolCalls([]);
+      setStreamingToolResults(new Map());
+      
+      // Disconnect WebSocket
+      if (wsConnectionRef.current) {
+        wsConnectionRef.current.disconnect().catch(err => console.error('[CodeChatPage] Cleanup error:', err));
+        wsConnectionRef.current = null;
+      }
+      
+      // Clear refs
+      streamingContentRef.current = '';
+      currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
+      messageQueueRef.current = [];
+      
+      console.log('[CodeChatPage] Component unmounted, cleanup complete');
+    };
+  }, []);
 
   // Load error prevention mode and complexity analysis mode when session changes
   useEffect(() => {
@@ -232,41 +229,42 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
-  // Enhanced deduplication with O(n) complexity and ID reconciliation
+  // Efficient deduplication with O(n) complexity using Map-based lookup
   const deduplicateMessages = (messages: ChatMessageType[]): ChatMessageType[] => {
     const messageMap = new Map<string, ChatMessageType>();
-    const optimisticToDatabaseMap = new Map<string, string>(); // optimistic ID → database ID
-
-    // First pass: identify optimistic → database ID mappings
+    
+    // Single pass: deduplicate by ID, preferring database IDs over optimistic ones
     for (const msg of messages) {
-      if (msg.role === 'user' && msg.id.startsWith('msg-')) {
-        // Find corresponding database version of this optimistic message
-        const dbVersion = messages.find(m =>
-          m.role === 'user' &&
-          !m.id.startsWith('msg-') &&
-          m.content === msg.content &&
-          m.sessionId === msg.sessionId &&
-          Math.abs(new Date(m.timestamp).getTime() - new Date(msg.timestamp).getTime()) < 5000
-        );
-        if (dbVersion) {
-          optimisticToDatabaseMap.set(msg.id, dbVersion.id);
+      const existingMsg = messageMap.get(msg.id);
+      
+      // Skip if we already have this exact ID
+      if (existingMsg) {
+        continue;
+      }
+      
+      // For optimistic messages (msg-*), check if we have a database version
+      if (msg.id.startsWith('msg-')) {
+        // Look for a database version with matching content and timestamp
+        let hasDatabaseVersion = false;
+        for (const [, existingMsg] of messageMap) {
+          if (
+            existingMsg.role === msg.role &&
+            existingMsg.content === msg.content &&
+            existingMsg.sessionId === msg.sessionId &&
+            !existingMsg.id.startsWith('msg-') &&
+            Math.abs(new Date(existingMsg.timestamp).getTime() - new Date(msg.timestamp).getTime()) < 5000
+          ) {
+            hasDatabaseVersion = true;
+            break;
+          }
+        }
+        // Skip optimistic message if database version exists
+        if (hasDatabaseVersion) {
+          continue;
         }
       }
-    }
-
-    // Second pass: deduplicate with ID reconciliation (O(n))
-    for (const msg of messages) {
-      // If this is an optimistic message that has a database version, skip it
-      if (optimisticToDatabaseMap.has(msg.id)) {
-        continue; // Skip optimistic version, keep database version
-      }
-
-      const effectiveId = msg.id;
-
-      // Always prefer database messages over optimistic ones
-      if (!messageMap.has(effectiveId) || !msg.id.startsWith('msg-')) {
-        messageMap.set(effectiveId, msg);
-      }
+      
+      messageMap.set(msg.id, msg);
     }
 
     // Return sorted by timestamp
@@ -344,6 +342,7 @@ export const CodeChatPage: React.FC = () => {
     
     // Reset connection state
     wsConnectionStateRef.current = 'connecting';
+    setConnectionStatus('connecting');
 
     // 4. Reset all streaming refs and state
     streamingContentRef.current = '';
@@ -361,32 +360,16 @@ export const CodeChatPage: React.FC = () => {
           return;
         }
 
-        // RACE CONDITION FIX: Verify streamingContent belongs to current session
-        // Store session ID with content to prevent stale closure bugs
-        if (!streamingContentRef.current.startsWith(`[${sessionId}]:`)) {
-          // First message for this session - prefix with session ID
-          if (!done) {
-            streamingContentRef.current = `[${sessionId}]:`;
-          }
+        // Verify we're still streaming for the correct session
+        if (sessionId !== activeSessionIdRef.current) {
+          console.log('[CodeChatPage] Message for different session, ignoring');
+          return;
         }
 
         if (done) {
           // Stream complete - save final AI message if there's any remaining content
-          // Extract content after session ID prefix
-          const prefixedContent = streamingContentRef.current;
-          const sessionPrefix = `[${sessionId}]:`;
-
-          // Verify content belongs to this session before using it
-          if (!prefixedContent.startsWith(sessionPrefix)) {
-            console.warn('[CodeChatPage] RACE CONDITION DETECTED: Content belongs to different session, discarding');
-            streamingContentRef.current = '';
-            setStreamingContent('');
-            setIsStreaming(false);
-            setStreamingSessionId(null);
-            return;
-          }
-
-          const finalContent = prefixedContent.substring(sessionPrefix.length);
+          // Use content directly (no session ID prefix needed)
+          const finalContent = streamingContentRef.current;
           const tools = currentMessageToolsRef.current;
 
           if (finalContent || tools.toolCalls.length > 0) {
@@ -423,12 +406,9 @@ export const CodeChatPage: React.FC = () => {
           // Stop performance monitoring
           performance.stopMonitoring();
         } else {
-          // Accumulate streaming content (with session ID prefix for race condition safety)
+          // Accumulate streaming content
           streamingContentRef.current += content;
-          // Display content without session ID prefix
-          const sessionPrefix = `[${sessionId}]:`;
-          const displayContent = streamingContentRef.current.substring(sessionPrefix.length);
-          setStreamingContent(displayContent);
+          setStreamingContent(streamingContentRef.current);
           setIsStreaming(true);
 
           // Debug: Log streaming state updates
@@ -447,12 +427,7 @@ export const CodeChatPage: React.FC = () => {
         console.log(`[CodeChatPage] 🔧 Tool: ${tool}`);
 
         // If we have accumulated content before the tool call, save it as a separate message
-        // Extract content without session ID prefix
-        const sessionPrefix = `[${sessionId}]:`;
-        const contentWithPrefix = streamingContentRef.current;
-        const content = contentWithPrefix.startsWith(sessionPrefix)
-          ? contentWithPrefix.substring(sessionPrefix.length)
-          : contentWithPrefix;
+        const content = streamingContentRef.current;
 
         if (content.trim()) {
           const messageBeforeToolCall: ChatMessageType = {
@@ -465,8 +440,8 @@ export const CodeChatPage: React.FC = () => {
           setMessages((prev) => [...prev, messageBeforeToolCall]);
           console.log('[CodeChatPage] Saved message before tool call');
 
-          // Clear streaming content for next message (keep session prefix)
-          streamingContentRef.current = sessionPrefix;
+          // Clear streaming content for next message
+          streamingContentRef.current = '';
           setStreamingContent('');
         }
 
@@ -553,6 +528,7 @@ export const CodeChatPage: React.FC = () => {
       },
       onError: (err: Error) => {
         setError(`Connection error: ${err.message}`);
+        setConnectionStatus('error');
         setIsStreaming(false);
         streamingContentRef.current = '';
         setStreamingContent('');
@@ -560,12 +536,14 @@ export const CodeChatPage: React.FC = () => {
         // Attempt reconnect after 3 seconds
         reconnectTimeoutRef.current = setTimeout(() => {
           console.log('[CodeChatPage] Attempting to reconnect...');
+          setConnectionStatus('connecting');
           connectWebSocket(sessionId);
         }, 3000);
       },
       onOpen: () => {
         console.log('[CodeChatPage] WebSocket connected');
         wsConnectionStateRef.current = 'connected';
+        setConnectionStatus('connected');
         setError(null);
         
         // Process any queued messages
@@ -581,6 +559,7 @@ export const CodeChatPage: React.FC = () => {
       onClose: () => {
         console.log('[CodeChatPage] WebSocket disconnected');
         wsConnectionStateRef.current = 'disconnected';
+        setConnectionStatus('disconnected');
       },
       onSessionCreated: (subchatId: string) => {
         console.log('[CodeChatPage] New subchat created, refreshing sessions list', subchatId);
@@ -776,7 +755,13 @@ export const CodeChatPage: React.FC = () => {
   // Backend handles STOP, MODIFY, CLARIFY, STATUS, CONTINUE categories
 
   return (
-    <div className="flex h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+    <ErrorBoundary
+      onError={(error, errorInfo) => {
+        console.error('[CodeChatPage] Error boundary caught:', error, errorInfo);
+        setError(`Application error: ${error.message}`);
+      }}
+    >
+      <div className="flex h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
       {/* Left Sidebar - Session List */}
       <div className="w-80 shrink-0 backdrop-blur-md bg-white/70 dark:bg-gray-800/70 border-r border-white/30 dark:border-gray-700/30">
         <SessionList
@@ -797,9 +782,12 @@ export const CodeChatPage: React.FC = () => {
         {activeSessionId && (
           <div className="shrink-0 px-6 py-3 border-b border-gray-200 dark:border-gray-700 bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm">
             <div className="flex items-center justify-between">
-              <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                {sessions.find((s) => s.id === activeSessionId)?.title || 'Chat'}
-              </h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  {sessions.find((s) => s.id === activeSessionId)?.title || 'Chat'}
+                </h1>
+                <ConnectionStatusIndicator status={connectionStatus} />
+              </div>
               <div className="flex items-center gap-3">
                 <ConversationModeToggle showLabel={true} />
 
@@ -1020,6 +1008,7 @@ export const CodeChatPage: React.FC = () => {
         </>
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 
