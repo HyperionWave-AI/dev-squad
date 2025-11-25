@@ -46,6 +46,61 @@ export interface ParsedMetrics {
   systemHealth: 'healthy' | 'degraded' | 'unhealthy';
 }
 
+// ============================================================================
+// Phase 1 Metrics Types
+// ============================================================================
+
+export interface ProviderMetrics {
+  provider: string; // "openai" or "anthropic"
+  totalCalls: number;
+  totalTokens: number;
+  totalCost: number;
+  models: Record<string, ModelMetrics>;
+}
+
+export interface ModelMetrics {
+  model: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+}
+
+export interface ToolMetrics {
+  toolName: string;
+  executionCount: number;
+  successCount: number;
+  failureCount: number;
+  averageExecutionTimeMs: number;
+  totalExecutionTimeMs: number;
+}
+
+export interface CacheMetrics {
+  toolName: string;
+  cacheHits: number;
+  cacheMisses: number;
+  hitRate: number;
+}
+
+export interface DailyCostBreakdown {
+  date: string; // YYYY-MM-DD format
+  totalCost: number;
+  costByProvider: Record<string, number>;
+  costByModel: Record<string, number>;
+}
+
+export interface Phase1Metrics {
+  timestamp: string;
+  providers: ProviderMetrics[];
+  tools: ToolMetrics[];
+  cache: CacheMetrics[];
+  dailyCosts: DailyCostBreakdown[];
+  totalCost: number;
+  totalCalls: number;
+  totalTokens: number;
+  averageCostPerCall: number;
+}
+
 interface MetricLine {
   name: string;
   value: number;
@@ -148,6 +203,87 @@ export function parsePrometheusMetrics(text: string): ParsedMetrics {
 }
 
 /**
+ * Parse Phase 1 metrics from backend API response
+ * @param data Raw API response data
+ * @returns Structured Phase 1 metrics object
+ */
+export function parsePhase1Metrics(data: any): Phase1Metrics {
+  try {
+    // Ensure we have valid data
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid metrics data');
+    }
+
+    // Parse providers
+    const providers: ProviderMetrics[] = (data.providers || []).map((p: any) => ({
+      provider: p.provider || 'unknown',
+      totalCalls: p.totalCalls || 0,
+      totalTokens: p.totalTokens || 0,
+      totalCost: p.totalCost || 0,
+      models: p.models || {},
+    }));
+
+    // Parse tools
+    const tools: ToolMetrics[] = (data.tools || []).map((t: any) => ({
+      toolName: t.toolName || 'unknown',
+      executionCount: t.executionCount || 0,
+      successCount: t.successCount || 0,
+      failureCount: t.failureCount || 0,
+      averageExecutionTimeMs: t.averageExecutionTimeMs || 0,
+      totalExecutionTimeMs: t.totalExecutionTimeMs || 0,
+    }));
+
+    // Parse cache metrics
+    const cache: CacheMetrics[] = (data.cache || []).map((c: any) => ({
+      toolName: c.toolName || 'unknown',
+      cacheHits: c.cacheHits || 0,
+      cacheMisses: c.cacheMisses || 0,
+      hitRate: c.hitRate || 0,
+    }));
+
+    // Parse daily costs
+    const dailyCosts: DailyCostBreakdown[] = (data.dailyCosts || []).map((d: any) => ({
+      date: d.date || new Date().toISOString().split('T')[0],
+      totalCost: d.totalCost || 0,
+      costByProvider: d.costByProvider || {},
+      costByModel: d.costByModel || {},
+    }));
+
+    // Calculate aggregates
+    const totalCost = providers.reduce((sum, p) => sum + p.totalCost, 0);
+    const totalCalls = providers.reduce((sum, p) => sum + p.totalCalls, 0);
+    const totalTokens = providers.reduce((sum, p) => sum + p.totalTokens, 0);
+    const averageCostPerCall = totalCalls > 0 ? totalCost / totalCalls : 0;
+
+    return {
+      timestamp: data.timestamp || new Date().toISOString(),
+      providers,
+      tools,
+      cache,
+      dailyCosts,
+      totalCost,
+      totalCalls,
+      totalTokens,
+      averageCostPerCall,
+    };
+  } catch (err) {
+    console.error('Failed to parse Phase 1 metrics:', err);
+    // Return empty metrics on error
+    return {
+      timestamp: new Date().toISOString(),
+      providers: [],
+      tools: [],
+      cache: [],
+      dailyCosts: [],
+      totalCost: 0,
+      totalCalls: 0,
+      totalTokens: 0,
+      averageCostPerCall: 0,
+    };
+  }
+}
+
+/**
  * Parse a single metric line
  * @param line Metric line from Prometheus format
  * @returns Parsed metric or null if invalid
@@ -229,10 +365,10 @@ function getMetricValue(
 /**
  * Format metric value for display
  * @param value Raw numeric value
- * @param type Value type (number, duration, percentage, bytes)
+ * @param type Value type (number, duration, percentage, bytes, currency)
  * @returns Formatted string
  */
-export function formatMetricValue(value: number, type: 'number' | 'duration' | 'percentage' | 'bytes'): string {
+export function formatMetricValue(value: number, type: 'number' | 'duration' | 'percentage' | 'bytes' | 'currency'): string {
   switch (type) {
     case 'number':
       if (value >= 1_000_000) {
@@ -263,6 +399,9 @@ export function formatMetricValue(value: number, type: 'number' | 'duration' | '
         return `${(value / 1_024).toFixed(2)}KB`;
       }
       return `${value}B`;
+
+    case 'currency':
+      return `$${value.toFixed(4)}`;
 
     default:
       return value.toString();

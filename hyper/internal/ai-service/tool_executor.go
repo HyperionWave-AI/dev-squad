@@ -185,7 +185,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		s.config.APIKey = s.originalAPIKey
 
 		// Recreate provider with original config
-		primaryProvider, err := NewChatProvider(s.config)
+		primaryProvider, err := NewChatProvider(s.config, nil)
 		if err != nil {
 			log.Printf("[Rate Limit Recovery] Failed to recreate primary provider, staying on fallback: %v", err)
 		} else {
@@ -593,7 +593,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 
 					// Recreate provider with fallback model
-					fallbackProvider, err := NewChatProvider(s.config)
+					fallbackProvider, err := NewChatProvider(s.config, nil)
 					if err != nil {
 						log.Printf("[ChatService] ERROR - RequestID: %s - Failed to create fallback provider: %v", requestID, err)
 						eventChan <- StreamEvent{Type: StreamEventError,

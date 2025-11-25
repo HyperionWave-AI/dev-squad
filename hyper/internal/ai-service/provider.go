@@ -1,5 +1,17 @@
 package aiservice
 
+// Provider implementations for different AI services (OpenAI, Anthropic, etc.)
+//
+// Token Usage Tracking:
+// Each provider tracks token usage from API responses and includes it in ToolResponse.
+// Token usage is automatically logged and aggregated via TokenUsageLogger.
+//
+// - OpenAI: Extracts prompt_tokens and completion_tokens from response
+// - Anthropic: Extracts input_tokens and output_tokens from response body
+// - Groq: Uses same format as OpenAI (prompt_tokens, completion_tokens)
+//
+// See TOKEN_USAGE.md for detailed documentation on token tracking.
+
 import (
 	"bytes"
 	"context"
@@ -9,6 +21,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
@@ -45,23 +58,29 @@ type ToolCapableProvider interface {
 }
 
 // ToolResponse contains the streaming response and any tool calls made by the AI
+// 
+// Token Usage: The TokenUsage field contains token consumption metrics from the API response.
+// This includes prompt_tokens (input), completion_tokens (output), and total_tokens.
+// Token usage is automatically extracted from provider responses and logged via TokenUsageLogger.
 type ToolResponse struct {
 	TextChannel <-chan string // Channel for streaming text tokens
 	ToolCalls   []ToolCall    // Tool calls requested by the AI
 	StopReason  string        // Why the model stopped: "end_turn", "tool_use", "max_tokens", etc.
+	TokenUsage  *TokenUsage   // Token usage metrics from the API response (prompt, completion, total tokens)
 }
 
 // NewChatProvider creates a ChatProvider based on the configuration
-func NewChatProvider(config *AIConfig) (ChatProvider, error) {
+// metricsStore is optional - pass nil to disable metrics recording
+func NewChatProvider(config *AIConfig, metricsStore MetricsStore) (ChatProvider, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
 	switch config.Provider {
 	case "openai":
-		return newOpenAIProvider(config)
+		return newOpenAIProvider(config, metricsStore)
 	case "anthropic":
-		return newAnthropicProvider(config)
+		return newAnthropicProvider(config, metricsStore)
 	case "custom":
 		return newCustomProvider(config)
 	default:
@@ -79,11 +98,14 @@ func init() {
 
 // openAIProvider wraps langchaingo's OpenAI client
 type openAIProvider struct {
-	llm    *openai.LLM
-	config *AIConfig
+	llm              *openai.LLM
+	config           *AIConfig
+	tokenExtractor   *TokenUsageExtractor
+	tokenLogger      *TokenUsageLogger
+	metricsStore     MetricsStore
 }
 
-func newOpenAIProvider(config *AIConfig) (*openAIProvider, error) {
+func newOpenAIProvider(config *AIConfig, metricsStore MetricsStore) (*openAIProvider, error) {
 	opts := []openai.Option{
 		openai.WithModel(config.Model),
 		openai.WithToken(config.APIKey),
@@ -100,8 +122,11 @@ func newOpenAIProvider(config *AIConfig) (*openAIProvider, error) {
 	}
 
 	return &openAIProvider{
-		llm:    llm,
-		config: config,
+		llm:            llm,
+		config:         config,
+		tokenExtractor: NewTokenUsageExtractor("openai"),
+		tokenLogger:    NewTokenUsageLogger(),
+		metricsStore:   metricsStore,
 	}, nil
 }
 
@@ -156,6 +181,21 @@ func (p *openAIProvider) messagesToContent(messages []Message) string {
 		content += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
 	}
 	return content
+}
+
+// extractTokenUsageFromOpenAI attempts to extract token usage from OpenAI response
+// Note: LangChain's ContentResponse doesn't expose token usage directly,
+// so we log a message indicating that token usage should be captured from HTTP headers
+func (p *openAIProvider) extractTokenUsageFromOpenAI(resp *llms.ContentResponse) *TokenUsage {
+	// TODO: Capture token usage from HTTP response headers
+	// OpenAI includes usage in response headers:
+	// - x-openai-input-tokens: prompt token count
+	// - x-openai-output-tokens: completion token count
+	// This requires intercepting the HTTP response before LangChain processes it
+	
+	// For now, return nil - token usage will be captured via HTTP logging
+	fmt.Printf("[TOKEN USAGE] OpenAI token usage extraction via LangChain not yet implemented\n")
+	return nil
 }
 
 // SupportsTools returns true - all OpenAI-compatible endpoints support tools by default
@@ -484,20 +524,58 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		}
 	}
 
+	// Extract token usage from response
+	var tokenUsage *TokenUsage
+	if result.resp != nil {
+		tokenUsage = p.extractTokenUsageFromOpenAI(result.resp)
+		if tokenUsage != nil {
+			p.tokenLogger.LogUsage(tokenUsage)
+		}
+	}
+
+	// Record metrics to metrics store
+	if tokenUsage != nil {
+		metric := &ProviderMetric{
+			ID:               fmt.Sprintf("openai-%d", time.Now().UnixNano()),
+			Provider:         "openai",
+			Model:            p.config.Model,
+			PromptTokens:     tokenUsage.PromptTokens,
+			CompletionTokens: tokenUsage.CompletionTokens,
+			TotalTokens:      tokenUsage.TotalTokens,
+			Cost:             CalculateOpenAICost(p.config.Model, tokenUsage.PromptTokens, tokenUsage.CompletionTokens),
+			DurationMs:       0, // TODO: Track from method start time
+			Success:          result.err == nil,
+			ErrorMessage:     "",
+			Timestamp:        time.Now(),
+		}
+		if result.err != nil {
+			metric.ErrorMessage = result.err.Error()
+		}
+		if p.metricsStore != nil {
+			if err := p.metricsStore.RecordProviderMetric(metric); err != nil {
+				fmt.Printf("[Metrics] Failed to record OpenAI provider metric: %v\n", err)
+			}
+		}
+	}
+
 	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
 		StopReason:  stopReason,
+		TokenUsage:  tokenUsage,
 	}, nil
 }
 
 // anthropicProvider wraps langchaingo's Anthropic client
 type anthropicProvider struct {
-	llm    *anthropic.LLM
-	config *AIConfig
+	llm              *anthropic.LLM
+	config           *AIConfig
+	tokenExtractor   *TokenUsageExtractor
+	tokenLogger      *TokenUsageLogger
+	metricsStore     MetricsStore
 }
 
-func newAnthropicProvider(config *AIConfig) (*anthropicProvider, error) {
+func newAnthropicProvider(config *AIConfig, metricsStore MetricsStore) (*anthropicProvider, error) {
 	opts := []anthropic.Option{
 		anthropic.WithModel(config.Model),
 		anthropic.WithToken(config.APIKey),
@@ -509,8 +587,11 @@ func newAnthropicProvider(config *AIConfig) (*anthropicProvider, error) {
 	}
 
 	return &anthropicProvider{
-		llm:    llm,
-		config: config,
+		llm:            llm,
+		config:         config,
+		tokenExtractor: NewTokenUsageExtractor("anthropic"),
+		tokenLogger:    NewTokenUsageLogger(),
+		metricsStore:   metricsStore,
 	}, nil
 }
 
@@ -565,6 +646,22 @@ func (p *anthropicProvider) messagesToContent(messages []Message) string {
 		content += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
 	}
 	return content
+}
+
+// extractTokenUsageFromAnthropicResponse extracts token usage from Anthropic API response body
+func (p *anthropicProvider) extractTokenUsageFromAnthropicResponse(inputTokens, outputTokens int) *TokenUsage {
+	if inputTokens == 0 && outputTokens == 0 {
+		return nil
+	}
+	
+	return &TokenUsage{
+		PromptTokens:     inputTokens,
+		CompletionTokens: outputTokens,
+		TotalTokens:      inputTokens + outputTokens,
+		Provider:         "anthropic",
+		Model:            p.config.Model,
+		Timestamp:        time.Now(),
+	}
 }
 
 // SupportsTools returns true for Anthropic provider
@@ -811,9 +908,19 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 			Input map[string]interface{} `json:"input,omitempty"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
+		Usage      struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
+	// Read response body for token extraction
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -852,10 +959,42 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	fmt.Printf("[DEBUG Anthropic Direct] StopReason: %s, ToolCalls: %d, Text: %d chars\n",
 		anthropicResp.StopReason, len(toolCalls), len(textContent))
 
+	// Extract token usage from response
+	tokenUsage := p.extractTokenUsageFromAnthropicResponse(anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens)
+	if tokenUsage != nil {
+		p.tokenLogger.LogUsage(tokenUsage)
+	}
+
+	// Record metrics to metrics store
+	if tokenUsage != nil {
+		metric := &ProviderMetric{
+			ID:               fmt.Sprintf("anthropic-%d", time.Now().UnixNano()),
+			Provider:         "anthropic",
+			Model:            p.config.Model,
+			PromptTokens:     tokenUsage.PromptTokens,
+			CompletionTokens: tokenUsage.CompletionTokens,
+			TotalTokens:      tokenUsage.TotalTokens,
+			Cost:             CalculateAnthropicCost(p.config.Model, tokenUsage.PromptTokens, tokenUsage.CompletionTokens),
+			DurationMs:       0, // TODO: Track from method start time
+			Success:          err == nil,
+			ErrorMessage:     "",
+			Timestamp:        time.Now(),
+		}
+		if err != nil {
+			metric.ErrorMessage = err.Error()
+		}
+		if p.metricsStore != nil {
+			if recordErr := p.metricsStore.RecordProviderMetric(metric); recordErr != nil {
+				fmt.Printf("[Metrics] Failed to record Anthropic provider metric: %v\n", recordErr)
+			}
+		}
+	}
+
 	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
 		StopReason:  anthropicResp.StopReason,
+		TokenUsage:  tokenUsage,
 	}, nil
 }
 

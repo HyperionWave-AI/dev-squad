@@ -559,6 +559,19 @@ func StartHTTPServer(
 		zap.String("deletePath", "/api/v1/tools/http/:id"))
 
 	// Register MCP server registry routes
+	// Initialize Phase 1 metrics store and handler
+	metricsStore := aiservice.NewInMemoryMetricsStore(10000)
+	metricsHandler := handlers.NewMetricsHandler(metricsStore, logger)
+	metricsGroup := r.Group("/api/v1/metrics")
+	{
+		metricsHandler.RegisterMetricsRoutes(metricsGroup)
+	}
+
+	logger.Info("Phase 1 Metrics API routes registered",
+		zap.String("phase1Path", "/api/v1/metrics/phase1"),
+		zap.String("providersPath", "/api/v1/metrics/providers/:provider"),
+		zap.String("toolsPath", "/api/v1/metrics/tools/:toolName"))
+
 	mcpServersHandler := handlers.NewMCPServersHandler(toolsStorage, toolsDiscoveryHandler, logger)
 	mcpServersGroup := r.Group("/api/v1/mcp/servers")
 	{

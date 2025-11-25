@@ -18,7 +18,7 @@ func NewTaskSummarizer(config *AIConfig) (*TaskSummarizer, error) {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
-	provider, err := NewChatProvider(config)
+	provider, err := NewChatProvider(config, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat provider: %w", err)
 	}

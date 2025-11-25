@@ -1342,13 +1342,12 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 	}
 
 	// Ordered defer chain (LIFO execution):
-	// 1. Close WebSocket (last resource cleanup)
-	defer conn.Close()
-	// 2. Stop ticker (after goroutines exit)
+	// Note: WebSocket close is handled by parent function's defer
+	// 1. Stop ticker (after goroutines exit)
 	defer ticker.Stop()
-	// 3. Wait for goroutines and close done channel
+	// 2. Wait for goroutines and close done channel
 	defer cleanup.Close()
-	// 4. Signal all goroutines to exit
+	// 3. Signal all goroutines to exit
 	defer func() {
 		// Ensure cleanup on panic
 		if r := recover(); r != nil {

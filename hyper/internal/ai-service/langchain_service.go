@@ -412,7 +412,7 @@ func (c *ToolResultCache) DeletePrefix(prefix string) int {
 // NewChatService creates a new ChatService with the given configuration
 // Creates an empty tool registry - use RegisterTool() or GetToolRegistry() to add tools
 func NewChatService(config *AIConfig) (*ChatService, error) {
-	provider, err := NewChatProvider(config)
+	provider, err := NewChatProvider(config, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -435,7 +435,7 @@ func NewChatService(config *AIConfig) (*ChatService, error) {
 // NewChatServiceWithTools creates a ChatService with a pre-configured tool registry
 // Useful when you want to inject a tool registry with pre-registered tools
 func NewChatServiceWithTools(config *AIConfig, toolRegistry *ToolRegistry) (*ChatService, error) {
-	provider, err := NewChatProvider(config)
+	provider, err := NewChatProvider(config, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider: %w", err)
 	}

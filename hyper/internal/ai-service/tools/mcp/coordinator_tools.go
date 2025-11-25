@@ -420,7 +420,7 @@ func (t *AnalyzeComplexityTool) Execute(ctx context.Context, input map[string]in
 
 	// Get AI config and create chat provider
 	config := t.aiService.GetConfig()
-	chatProvider, err := aiservice.NewChatProvider(config)
+	chatProvider, err := aiservice.NewChatProvider(config, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat provider: %w", err)
 	}
