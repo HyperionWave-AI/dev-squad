@@ -1094,8 +1094,23 @@ func checkRateLimit(userID string) bool {
 func incrementUserConnection(userID string) bool {
 	val, _ := userConnections.LoadOrStore(userID, new(int32))
 	count := val.(*int32)
+
+	// Check current count BEFORE incrementing to avoid leak
+	currentCount := atomic.LoadInt32(count)
+	if int(currentCount) >= maxConnectionsPerUser {
+		return false // Already at limit, don't increment
+	}
+
+	// Increment and verify we're still under limit
+	// (race condition: another goroutine might have incremented meanwhile)
 	newCount := atomic.AddInt32(count, 1)
-	return int(newCount) <= maxConnectionsPerUser
+	if int(newCount) > maxConnectionsPerUser {
+		// Rollback - we went over limit due to race
+		atomic.AddInt32(count, -1)
+		return false
+	}
+
+	return true
 }
 
 // decrementUserConnection decrements connection count for user

@@ -82,16 +82,51 @@ export class MessageHandler {
   deduplicateMessages(messages: ChatMessageType[]): ChatMessageType[] {
     const seenIds = new Set<string>();
     const deduplicated: ChatMessageType[] = [];
+    const optimisticToDatabase = new Map<string, string>(); // Track optimistic → database ID mappings
+    const contentHashes = new Map<string, ChatMessageType>(); // Track by content for optimistic vs DB dedup
 
     for (const message of messages) {
+      // Skip if we've already seen this exact ID
       if (!seenIds.has(message.id)) {
         seenIds.add(message.id);
+        
+        // For optimistic messages (msg-*), check if database version exists
+        if (message.id.startsWith('msg-')) {
+          const contentHash = this.createMessageHash(message);
+          const existingDbMsg = contentHashes.get(contentHash);
+          
+          // If we have a database version with same content, skip optimistic
+          if (existingDbMsg && !existingDbMsg.id.startsWith('msg-')) {
+            // Track the mapping for future reference
+            optimisticToDatabase.set(message.id, existingDbMsg.id);
+            continue; // Skip this optimistic message
+          }
+        } else {
+          // For database messages, store by content hash
+          const contentHash = this.createMessageHash(message);
+          contentHashes.set(contentHash, message);
+        }
+        
         deduplicated.push(message);
       }
     }
 
     return deduplicated;
   }
+
+  /**
+   * Create a hash of message content for deduplication
+   * Handles timestamp tolerance (5 second window) for optimistic vs database matching
+   */
+  private createMessageHash(message: ChatMessageType): string {
+    // Round timestamp to 5-second window for tolerance
+    const timestamp = Math.floor(new Date(message.timestamp).getTime() / 5000) * 5000;
+    // Hash based on role, content prefix, and timestamp window
+    return `${message.role}:${message.content.substring(0, 100)}:${timestamp}`;
+  }
+
+  /**
+   * Sort messages by timestamp
 
   /**
    * Sort messages by timestamp
