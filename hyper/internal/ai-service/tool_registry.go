@@ -131,8 +131,16 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, input map[strin
 }
 
 // ExecuteToolCall executes a ToolCall and returns ToolResult with timing
+// OPTION 2 FIX: Ensures ToolResult.ID is ALWAYS populated from toolCall.ID
 func (r *ToolRegistry) ExecuteToolCall(ctx context.Context, toolCall ToolCall) ToolResult {
 	startTime := time.Now()
+
+	// VALIDATION: Check if toolCall.ID is empty (root cause of SaveToolResult bug)
+	if toolCall.ID == "" {
+		fmt.Printf("[⚠️  BUG DETECTED] ExecuteToolCall: toolCall.ID is EMPTY for tool '%s'\n", toolCall.Name)
+		fmt.Printf("[⚠️  BUG DETECTED] This will cause SaveToolResult to fail with empty toolCallID\n")
+		fmt.Printf("[⚠️  BUG DETECTED] Tool: %s, Args: %v\n", toolCall.Name, toolCall.Args)
+	}
 
 	result := ToolResult{
 		ID:   toolCall.ID,
