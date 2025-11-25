@@ -18,6 +18,7 @@ import (
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/indexer"
+	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/parser"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
@@ -677,8 +678,25 @@ func main() {
 		logger.Fatal("Failed to initialize tools storage", zap.Error(err))
 	}
 
+	// Initialize code summarizer for search results
+	var codeSummarizer summarizer.CodeSummarizer
+	summarizerConfig := summarizer.LoadSummarizerConfig()
+	if summarizerConfig.Enabled {
+		llmSummarizer, err := summarizer.NewLLMSummarizer(summarizerConfig, logger)
+		if err != nil {
+			logger.Warn("Failed to initialize code summarizer, search results will not include summaries",
+				zap.Error(err))
+			// Continue without summarizer - graceful degradation
+		} else {
+			codeSummarizer = llmSummarizer
+			logger.Info("Code summarizer initialized successfully",
+				zap.String("model", summarizerConfig.Model),
+				zap.Int("maxTokens", summarizerConfig.MaxTokens))
+		}
+	}
+
 	// Initialize MCP handlers
-	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, logger)
+	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, codeSummarizer, qdrantClient, embeddingClient, fileWatcher, logger)
 
 	// Create MCP server with Implementation and ServerOptions
 	impl := &mcp.Implementation{

@@ -11,6 +11,7 @@ import (
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/scanner"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/utils"
 
@@ -23,6 +24,7 @@ import (
 // CodeToolsHandler handles MCP tool requests for code indexing
 type CodeToolsHandler struct {
 	codeIndexStorage *storage.CodeIndexStorage
+	summarizer       summarizer.CodeSummarizer
 	qdrantClient     *storage.QdrantClient
 	embeddingClient  embeddings.EmbeddingClient
 	fileScanner      *scanner.FileScanner
@@ -34,6 +36,7 @@ type CodeToolsHandler struct {
 // NewCodeToolsHandler creates a new code tools handler
 func NewCodeToolsHandler(
 	codeIndexStorage *storage.CodeIndexStorage,
+	codeSummarizer summarizer.CodeSummarizer,
 	qdrantClient *storage.QdrantClient,
 	embeddingClient embeddings.EmbeddingClient,
 	fileWatcher *watcher.FileWatcher,
@@ -41,6 +44,7 @@ func NewCodeToolsHandler(
 ) *CodeToolsHandler {
 	return &CodeToolsHandler{
 		codeIndexStorage: codeIndexStorage,
+		summarizer:       codeSummarizer,
 		qdrantClient:     qdrantClient,
 		embeddingClient:  embeddingClient,
 		fileScanner:      scanner.NewFileScanner(),
@@ -726,6 +730,9 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		zap.Int("estimatedTokens", cumulativeTokens),
 		zap.Bool("truncated", truncated))
 
+	// Apply code summarization to results (graceful degradation if fails)
+	results = h.summarizeResults(ctx, results)
+
 	// Build response with filtering metadata
 	response := map[string]interface{}{
 		"success":      true,
@@ -774,6 +781,70 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 			&mcp.TextContent{Text: string(jsonData)},
 		},
 	}, nil
+}
+
+// summarizeResults applies code summarization to search results
+// Implements graceful degradation: if summarization fails, returns results without summaries
+func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []storage.SearchResult) []storage.SearchResult {
+	if h.summarizer == nil {
+		h.logger.Debug("Summarizer not initialized, skipping summarization")
+		return results
+	}
+
+	const tokenBudget = 5000
+	var tokensUsed int
+
+	h.logger.Debug("Starting result summarization",
+		zap.Int("resultCount", len(results)),
+		zap.Int("tokenBudget", tokenBudget))
+
+	for i := range results {
+		// Check if we've exceeded token budget
+		if tokensUsed >= tokenBudget {
+			h.logger.Info("Summary token budget exhausted",
+				zap.Int("tokensUsed", tokensUsed),
+				zap.Int("resultsProcessed", i),
+				zap.Int("totalResults", len(results)))
+			break
+		}
+
+		// Build metadata for this result
+		metadata := summarizer.CodeMetadata{
+			FilePath:   results[i].FilePath,
+			Language:   results[i].Language,
+			NodeType:   results[i].NodeType,
+			NodeName:   results[i].NodeName,
+			Signature:  results[i].Signature,
+			DocContent: results[i].DocContent,
+			LineStart:  results[i].StartLine,
+			LineEnd:    results[i].EndLine,
+		}
+
+		// Attempt to summarize this result
+		summary, err := h.summarizer.Summarize(ctx, results[i].Content, metadata)
+		if err != nil {
+			h.logger.Warn("Failed to summarize result",
+				zap.String("filePath", results[i].FilePath),
+				zap.Int("startLine", results[i].StartLine),
+				zap.Error(err))
+			// Continue without summary for this result (graceful degradation)
+			continue
+		}
+
+		// Update result with summary information
+		results[i].Summary = summary.Text
+		results[i].SummaryType = summary.Type
+		results[i].SummaryTokens = summary.TokenCount
+
+		tokensUsed += summary.TokenCount
+
+		h.logger.Debug("Summarized result",
+			zap.String("filePath", results[i].FilePath),
+			zap.Int("summaryTokens", summary.TokenCount),
+			zap.Int("cumulativeTokens", tokensUsed))
+	}
+
+	return results
 }
 
 // handleStatus handles the code_index_status tool
