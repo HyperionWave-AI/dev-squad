@@ -805,6 +805,7 @@ func main() {
 				codeIndexStorage,
 				qdrantClient,
 				embeddingClient,
+				codeSummarizer,
 				fileWatcher,
 				mcpServer,
 				embeddedUI,

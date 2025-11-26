@@ -3105,6 +3105,34 @@ func convertToolResultToPlainEnglish(toolName string, output interface{}, errorM
 	case "coordinator_upsert_knowledge":
 		return "✓ Knowledge saved"
 
+	case "code_index_query":
+		// Summarize code search results
+		if resultMap, ok := output.(map[string]interface{}); ok {
+			// Extract result count
+			if results, ok := resultMap["results"].([]interface{}); ok {
+				count := len(results)
+				if count == 0 {
+					return "📄 Code search completed: No results found"
+				}
+				
+				// Build summary of first few results
+				summary := fmt.Sprintf("📄 Code search completed: Found %d result(s)", count)
+				if count > 0 && count <= 3 {
+					// For small result sets, show file names
+					for i, r := range results {
+						if i >= 3 { break }
+						if resultItem, ok := r.(map[string]interface{}); ok {
+							if filePath, ok := resultItem["filePath"].(string); ok {
+								summary += fmt.Sprintf("\n  • %s", filePath)
+							}
+						}
+					}
+				}
+				return summary
+			}
+		}
+		return "📄 Code search completed"
+
 	default:
 		return "✓ Tool completed"
 	}
@@ -4676,6 +4704,56 @@ func (t *ExecuteSubagentTool) summarizeToolResult(toolName string, output interf
 	case "apply_patch":
 		// Confirm patch without showing full diff
 		return "Patch applied successfully"
+
+	case "code_index_query":
+		// Summarize code search results with file metadata and key logic
+		var result map[string]interface{}
+		if err := json.Unmarshal([]byte(outputStr), &result); err == nil {
+			if results, ok := result["results"].([]interface{}); ok {
+				if len(results) == 0 {
+					return "Code search: No results found"
+				}
+
+				// Build concise summary of results
+				var summary strings.Builder
+				summary.WriteString(fmt.Sprintf("📄 Code search: Found %d result(s)\n", len(results)))
+
+				// Process first 3 results for detailed summary
+				for i, r := range results {
+					if i >= 3 { break }
+					if resultItem, ok := r.(map[string]interface{}); ok {
+						// Extract metadata
+						filePath := ""
+						if fp, ok := resultItem["filePath"].(string); ok {
+							filePath = fp
+						}
+						startLine := 0
+						if sl, ok := resultItem["startLine"].(float64); ok {
+							startLine = int(sl)
+						}
+						endLine := 0
+						if el, ok := resultItem["endLine"].(float64); ok {
+							endLine = int(el)
+						}
+						content := ""
+						if c, ok := resultItem["content"].(string); ok {
+							content = c
+						}
+
+						// Build result summary
+						summary.WriteString(fmt.Sprintf("\n%d. 📄 %s (lines %d-%d)\n", i+1, filePath, startLine, endLine))
+						
+						// Extract first meaningful line of code for context
+						if len(content) > 0 {
+							lines := strings.Split(content, "\n")
+							summary.WriteString(fmt.Sprintf("   Preview: %s\n", strings.TrimSpace(lines[0])))
+						}
+					}
+				}
+				return summary.String()
+			}
+		}
+		return "Code search completed"
 	}
 
 	// Default: truncate long outputs

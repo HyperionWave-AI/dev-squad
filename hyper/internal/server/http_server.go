@@ -22,6 +22,7 @@ import (
 	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/review"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/metrics"
 	"hyper/internal/middleware"
@@ -128,6 +129,7 @@ func StartHTTPServer(
 	codeIndexStorage *storage.CodeIndexStorage,
 	qdrantClient *storage.QdrantClient,
 	embeddingClient embeddings.EmbeddingClient,
+	codeSummarizer summarizer.CodeSummarizer,
 	fileWatcher *watcher.FileWatcher,
 	mcpServer *mcp.Server,
 	embeddedUI http.FileSystem,
@@ -239,7 +241,7 @@ func StartHTTPServer(
 	// NOW FULLY FUNCTIONAL with embedding and Qdrant clients injected
 	logger.Info("Registering code index tools (semantic code search and indexing)...")
 	beforeCount = len(toolRegistry.List())
-	if err := mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage, embeddingClient, qdrantClient, logger); err != nil {
+	if err := mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage, embeddingClient, qdrantClient, codeSummarizer, logger); err != nil {
 		logger.Error("Failed to register code index tools", zap.Error(err))
 		return err
 	}

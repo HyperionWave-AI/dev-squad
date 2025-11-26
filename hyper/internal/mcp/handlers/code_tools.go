@@ -787,14 +787,14 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 // Implements graceful degradation: if summarization fails, returns results without summaries
 func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []storage.SearchResult) []storage.SearchResult {
 	if h.summarizer == nil {
-		h.logger.Debug("Summarizer not initialized, skipping summarization")
+		h.logger.Info("Summarizer not initialized, skipping summarization")
 		return results
 	}
 
 	const tokenBudget = 5000
 	var tokensUsed int
 
-	h.logger.Debug("Starting result summarization",
+	h.logger.Info("Starting result summarization with LLM",
 		zap.Int("resultCount", len(results)),
 		zap.Int("tokenBudget", tokenBudget))
 
@@ -838,13 +838,26 @@ func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []stora
 
 		tokensUsed += summary.TokenCount
 
-		h.logger.Debug("Summarized result",
+		h.logger.Info("Summarized result successfully",
 			zap.String("filePath", results[i].FilePath),
+			zap.String("summaryPreview", truncateString(summary.Text, 100)),
 			zap.Int("summaryTokens", summary.TokenCount),
 			zap.Int("cumulativeTokens", tokensUsed))
 	}
 
+	h.logger.Info("Summarization complete",
+		zap.Int("totalResults", len(results)),
+		zap.Int("tokensUsed", tokensUsed))
+
 	return results
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // handleStatus handles the code_index_status tool

@@ -13,6 +13,7 @@ import (
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/mcp/summarizer"
 
 	"go.uber.org/zap"
 )
@@ -167,6 +168,7 @@ type CodeIndexSearchTool struct {
 	codeIndexStorage *storage.CodeIndexStorage
 	embeddingClient  embeddings.EmbeddingClient
 	qdrantClient     *storage.QdrantClient
+	summarizer       summarizer.CodeSummarizer
 	logger           *zap.Logger
 }
 
@@ -591,6 +593,9 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Int("chunkLines", chunkLines),
 		zap.Int("results", len(results)))
 
+	// Apply AI summarization to results (graceful degradation if unavailable)
+	results = t.summarizeResults(ctx, results)
+
 	// CRITICAL: Extract file paths into a prominent list so AI can't miss them
 	filePaths := make([]string, 0, len(results))
 	for _, result := range results {
@@ -821,6 +826,83 @@ func (t *CodeIndexRemoveFolderTool) Execute(ctx context.Context, input map[strin
 	}, nil
 }
 
+// summarizeResults applies AI-powered summarization to search results
+// Implements graceful degradation: if summarization fails, returns results without summaries
+func (t *CodeIndexSearchTool) summarizeResults(ctx context.Context, results []storage.SearchResult) []storage.SearchResult {
+	if t.summarizer == nil {
+		t.logger.Info("Summarizer not initialized, skipping summarization")
+		return results
+	}
+
+	const tokenBudget = 5000
+	var tokensUsed int
+
+	t.logger.Info("Starting result summarization with LLM",
+		zap.Int("resultCount", len(results)),
+		zap.Int("tokenBudget", tokenBudget))
+
+	for i := range results {
+		// Check if we've exceeded token budget
+		if tokensUsed >= tokenBudget {
+			t.logger.Info("Summary token budget exhausted",
+				zap.Int("tokensUsed", tokensUsed),
+				zap.Int("resultsProcessed", i),
+				zap.Int("totalResults", len(results)))
+			break
+		}
+
+		// Build metadata for this result
+		metadata := summarizer.CodeMetadata{
+			FilePath:   results[i].FilePath,
+			Language:   results[i].Language,
+			NodeType:   results[i].NodeType,
+			NodeName:   results[i].NodeName,
+			Signature:  results[i].Signature,
+			DocContent: results[i].DocContent,
+			LineStart:  results[i].StartLine,
+			LineEnd:    results[i].EndLine,
+		}
+
+		// Attempt to summarize this result
+		summary, err := t.summarizer.Summarize(ctx, results[i].Content, metadata)
+		if err != nil {
+			t.logger.Warn("Failed to summarize result",
+				zap.String("filePath", results[i].FilePath),
+				zap.Int("startLine", results[i].StartLine),
+				zap.Error(err))
+			// Continue without summary for this result (graceful degradation)
+			continue
+		}
+
+		// Update result with summary information
+		results[i].Summary = summary.Text
+		results[i].SummaryType = summary.Type
+		results[i].SummaryTokens = summary.TokenCount
+
+		tokensUsed += summary.TokenCount
+
+		t.logger.Info("Summarized result successfully",
+			zap.String("filePath", results[i].FilePath),
+			zap.String("summaryPreview", truncateForLog(summary.Text, 100)),
+			zap.Int("summaryTokens", summary.TokenCount),
+			zap.Int("cumulativeTokens", tokensUsed))
+	}
+
+	t.logger.Info("Summarization complete",
+		zap.Int("totalResults", len(results)),
+		zap.Int("tokensUsed", tokensUsed))
+
+	return results
+}
+
+// truncateForLog truncates a string for logging purposes
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 // RegisterCodeIndexTools registers code index tools with the tool registry
 // NOW REQUIRES: embedding client and Qdrant client for full search functionality
 func RegisterCodeIndexTools(
@@ -828,6 +910,7 @@ func RegisterCodeIndexTools(
 	codeIndexStorage *storage.CodeIndexStorage,
 	embeddingClient embeddings.EmbeddingClient,
 	qdrantClient *storage.QdrantClient,
+	codeSummarizer summarizer.CodeSummarizer,
 	logger *zap.Logger,
 ) error {
 	tools := []aiservice.ToolExecutor{
@@ -835,6 +918,7 @@ func RegisterCodeIndexTools(
 			codeIndexStorage: codeIndexStorage,
 			embeddingClient:  embeddingClient,
 			qdrantClient:     qdrantClient,
+			summarizer:       codeSummarizer,
 			logger:           logger,
 		},
 		&CodeIndexAddFolderTool{codeIndexStorage: codeIndexStorage},
