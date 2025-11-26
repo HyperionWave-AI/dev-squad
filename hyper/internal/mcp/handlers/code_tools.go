@@ -125,7 +125,7 @@ func (h *CodeToolsHandler) registerScan(server *mcp.Server) error {
 func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "code_index_search",
-		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Content can be retrieved as chunks (default) or full files. IMPORTANT: When retrieve='full', returns only the top 1 result to conserve context. Use chunk modes (chunk-s/m/l/xl) for multi-result exploration.",
+		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Content can be retrieved as chunks (default) or full files. IMPORTANT: When retrieve='full', returns only the top 1 result to conserve context. Use chunk modes (chunk-s/m/l/xl) for multi-result exploration. Response modes: 'summary' (~100-200 tokens), 'preview' (~300-500 tokens), 'full' (~500-2000 tokens).",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -156,6 +156,11 @@ func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 				"minScore": {
 					Type:        "number",
 					Description: "Optional: minimum similarity score threshold (0.0-1.0). Only results with score >= minScore will be returned. Default: 0.0 (no filtering). Higher values = stricter filtering (e.g., 0.5 = moderate, 0.9 = strict).",
+				},
+				"responseMode": {
+					Type:        "string",
+					Description: "Response mode: 'summary' (file path + line numbers only, ~100-200 tokens), 'preview' (summary + first 20 lines, ~300-500 tokens), or 'full' (complete code, ~500-2000 tokens). Default: 'summary'.",
+					Enum:        []interface{}{"summary", "preview", "full"},
 				},
 			},
 			Required: []string{"query"},
@@ -514,6 +519,18 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 	}
 	retrieveType, chunkLines, tshirtSize := utils.ParseRetrieveMode(retrieveModeParam)
 
+	// Parse and validate responseMode parameter (default: "summary")
+	responseMode := "summary"
+	if mode, ok := args["responseMode"].(string); ok {
+		responseMode = mode
+	}
+	// Validate responseMode
+	if responseMode != "summary" && responseMode != "preview" && responseMode != "full" {
+		return createCodeIndexErrorResult(fmt.Sprintf("responseMode must be 'summary', 'preview', or 'full', got: %s", responseMode)), nil
+	}
+
+	h.logger.Info("Response mode selected", zap.String("responseMode", responseMode))
+
 	// MCP Best Practice: Limit full file retrieval to top 1 result to conserve context
 	// Full mode returns entire file content which can be very large
 	// For exploring multiple results, users should use chunk modes (chunk-s/m/l/xl)
@@ -730,6 +747,9 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		zap.Int("estimatedTokens", cumulativeTokens),
 		zap.Bool("truncated", truncated))
 
+	// Apply response mode formatting (summary/preview/full)
+	results = h.applyResponseMode(results, responseMode)
+
 	// Apply code summarization to results (graceful degradation if fails)
 	results = h.summarizeResults(ctx, results)
 
@@ -737,6 +757,7 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 	response := map[string]interface{}{
 		"success":      true,
 		"query":        query,
+		"responseMode": responseMode,
 		"retrieveMode": retrieveModeParam,
 		"results":      results,
 		"count":        len(results),
@@ -774,6 +795,23 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		response["resultsFiltered"] = false
 	}
 
+	// Add token estimates for response mode
+	estimatedTokens := 0
+	for _, result := range results {
+		estimatedTokens += estimateResponseModeTokens(result, responseMode)
+	}
+	response["estimatedTokens"] = estimatedTokens
+	response["tokenEstimate"] = map[string]interface{}{
+		"mode":              responseMode,
+		"perResult":         estimateResponseModeTokens(storage.SearchResult{}, responseMode),
+		"totalEstimated":    estimatedTokens,
+		"breakdown": map[string]interface{}{
+			"summary": "~100-200 tokens per result",
+			"preview": "~300-500 tokens per result",
+			"full":    "~500-2000 tokens per result (varies by file size)",
+		},
+	}
+
 	jsonData, _ := json.Marshal(response)
 
 	return &mcp.CallToolResult{
@@ -781,6 +819,72 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 			&mcp.TextContent{Text: string(jsonData)},
 		},
 	}, nil
+}
+
+// applyResponseMode applies the selected response mode to search results
+// Modes:
+//   - summary: Returns only file path, line numbers, and metadata (~100-200 tokens)
+//   - preview: Returns summary + first 20 lines of code (~300-500 tokens)
+//   - full: Returns complete code content (~500-2000 tokens)
+func (h *CodeToolsHandler) applyResponseMode(results []storage.SearchResult, responseMode string) []storage.SearchResult {
+	if responseMode == "full" {
+		// Full mode: keep all content as-is
+		return results
+	}
+
+	processedResults := make([]storage.SearchResult, 0, len(results))
+
+	for _, result := range results {
+		processedResult := result
+
+		if responseMode == "summary" {
+			// Summary mode: remove content, keep only metadata
+			processedResult.Content = ""
+			h.logger.Debug("Applied summary mode",
+				zap.String("filePath", result.FilePath),
+				zap.Int("startLine", result.StartLine),
+				zap.Int("endLine", result.EndLine))
+
+		} else if responseMode == "preview" {
+			// Preview mode: keep first 20 lines of content
+			if len(result.Content) > 0 {
+				lines := strings.Split(result.Content, "\n")
+				maxLines := 20
+				if len(lines) > maxLines {
+					lines = lines[:maxLines]
+					processedResult.Content = strings.Join(lines, "\n") + "\n... (truncated)"
+				} else {
+					processedResult.Content = result.Content
+				}
+
+				h.logger.Debug("Applied preview mode",
+					zap.String("filePath", result.FilePath),
+					zap.Int("originalLines", len(strings.Split(result.Content, "\n"))),
+					zap.Int("previewLines", len(lines)))
+			}
+		}
+
+		processedResults = append(processedResults, processedResult)
+	}
+
+	h.logger.Info("Applied response mode to results",
+		zap.String("responseMode", responseMode),
+		zap.Int("resultCount", len(processedResults)))
+
+	return processedResults
+}
+
+// estimateResponseModeTokens estimates token count for a result based on response mode
+func estimateResponseModeTokens(result storage.SearchResult, responseMode string) int {
+	if responseMode == "summary" {
+		// Summary: ~100-200 tokens (just metadata)
+		return 150
+	} else if responseMode == "preview" {
+		// Preview: ~300-500 tokens (summary + 20 lines)
+		return 400
+	}
+	// Full: estimate from actual content
+	return estimateTokens(result.Content)
 }
 
 // summarizeResults applies code summarization to search results

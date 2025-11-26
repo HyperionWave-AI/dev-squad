@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,11 +16,19 @@ import (
 	"go.uber.org/zap"
 )
 
+// MCPRegistrySyncInterface defines the interface for syncing MCP tools to the ToolRegistry
+// This allows the ToolsDiscoveryHandler to refresh the registry when servers are added/removed
+type MCPRegistrySyncInterface interface {
+	SyncServerTools(ctx context.Context, serverName string) (int, error)
+	RemoveServerTools(serverName string) error
+}
+
 // ToolsDiscoveryHandler manages MCP tools discovery operations
 type ToolsDiscoveryHandler struct {
 	toolsStorage     storage.ToolsStorageInterface
 	metadataRegistry *ToolMetadataRegistry
 	mcpServer        *mcp.Server
+	registrySync     MCPRegistrySyncInterface
 	logger           *zap.Logger
 }
 
@@ -138,10 +147,30 @@ func (h *ToolsDiscoveryHandler) discoverLegacyTools(ctx context.Context, serverU
 	}
 	defer resp.Body.Close()
 
+	// Check HTTP status code before attempting JSON decoding
+	if resp.StatusCode != http.StatusOK {
+		// Read response body for error details
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		bodyPreview := string(bodyBytes)
+		if len(bodyPreview) > 500 {
+			bodyPreview = bodyPreview[:500] + "...[truncated]"
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("HTTP %d error from MCP server (failed to read response body: %w)", resp.StatusCode, readErr)
+		}
+		return nil, fmt.Errorf("HTTP %d error from MCP server: %s", resp.StatusCode, bodyPreview)
+	}
+
 	// Parse response
 	var rpcResp legacyJSONRPCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w", err)
+		// Read body for better error message
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyPreview := string(bodyBytes)
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200] + "...[truncated]"
+		}
+		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w (response body: %s)", err, bodyPreview)
 	}
 
 	// Check for JSON-RPC error
@@ -211,11 +240,33 @@ func (h *ToolsDiscoveryHandler) discoverLegacyResources(ctx context.Context, ser
 	}
 	defer resp.Body.Close()
 
+	// Check HTTP status code before attempting JSON decoding
+	if resp.StatusCode != http.StatusOK {
+		// Read response body for error details
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		bodyPreview := string(bodyBytes)
+		if len(bodyPreview) > 500 {
+			bodyPreview = bodyPreview[:500] + "...[truncated]"
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("HTTP %d error from MCP server (failed to read response body: %w)", resp.StatusCode, readErr)
+		}
+		return nil, fmt.Errorf("HTTP %d error from MCP server: %s", resp.StatusCode, bodyPreview)
+	}
+
 	// Parse response
 	var rpcResp legacyJSONRPCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w", err)
+		// Read body for better error message
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyPreview := string(bodyBytes)
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200] + "...[truncated]"
+		}
+		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w (response body: %s)", err, bodyPreview)
 	}
+
+	// Check for JSON-RPC error
 
 	// Check for JSON-RPC error
 	if rpcResp.Error != nil {
@@ -284,11 +335,33 @@ func (h *ToolsDiscoveryHandler) discoverLegacyPrompts(ctx context.Context, serve
 	}
 	defer resp.Body.Close()
 
+	// Check HTTP status code before attempting JSON decoding
+	if resp.StatusCode != http.StatusOK {
+		// Read response body for error details
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		bodyPreview := string(bodyBytes)
+		if len(bodyPreview) > 500 {
+			bodyPreview = bodyPreview[:500] + "...[truncated]"
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("HTTP %d error from MCP server (failed to read response body: %w)", resp.StatusCode, readErr)
+		}
+		return nil, fmt.Errorf("HTTP %d error from MCP server: %s", resp.StatusCode, bodyPreview)
+	}
+
 	// Parse response
 	var rpcResp legacyJSONRPCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w", err)
+		// Read body for better error message
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyPreview := string(bodyBytes)
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200] + "...[truncated]"
+		}
+		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w (response body: %s)", err, bodyPreview)
 	}
+
+	// Check for JSON-RPC error
 
 	// Check for JSON-RPC error
 	if rpcResp.Error != nil {
@@ -338,6 +411,11 @@ func NewToolsDiscoveryHandler(toolsStorage *storage.ToolsStorage, mcpServer *mcp
 // SetMetadataRegistry sets the metadata registry for tool indexing
 func (h *ToolsDiscoveryHandler) SetMetadataRegistry(registry *ToolMetadataRegistry) {
 	h.metadataRegistry = registry
+}
+
+// SetRegistrySync sets the registry sync service for auto-registering MCP tools
+func (h *ToolsDiscoveryHandler) SetRegistrySync(sync MCPRegistrySyncInterface) {
+	h.registrySync = sync
 }
 
 // addToolWithMetadata adds a tool to the server and registers it for indexing
@@ -1109,13 +1187,29 @@ func (h *ToolsDiscoveryHandler) HandleMCPAddServer(ctx context.Context, args map
 		}
 	}
 
+	// Sync tools to ToolRegistry for direct AI access
+	mcpToolsSynced := 0
+	if h.registrySync != nil {
+		synced, syncErr := h.registrySync.SyncServerTools(ctx, serverName)
+		if syncErr != nil {
+			h.logger.Warn("Failed to sync MCP tools to registry",
+				zap.String("serverName", serverName),
+				zap.Error(syncErr))
+		} else {
+			mcpToolsSynced = synced
+			h.logger.Info("MCP tools synced to registry",
+				zap.String("serverName", serverName),
+				zap.Int("count", synced))
+		}
+	}
+
 	resultText := fmt.Sprintf("Server '%s' added successfully!\n\n"+
-		"Tools: Discovered %d, stored %d\n"+
+		"Tools: Discovered %d, stored %d, synced to registry %d\n"+
 		"Resources: Discovered %d, stored %d\n"+
 		"Prompts: Discovered %d, stored %d\n\n"+
 		"Server URL: %s\nDescription: %s",
 		serverName,
-		len(tools), toolSuccessCount,
+		len(tools), toolSuccessCount, mcpToolsSynced,
 		len(resources), resourceSuccessCount,
 		len(prompts), promptSuccessCount,
 		serverURL, description)
@@ -1125,13 +1219,14 @@ func (h *ToolsDiscoveryHandler) HandleMCPAddServer(ctx context.Context, args map
 			&mcp.TextContent{Text: resultText},
 		},
 	}, map[string]interface{}{
-		"serverName":      serverName,
-		"toolCount":       toolSuccessCount,
-		"resourceCount":   resourceSuccessCount,
-		"promptCount":     promptSuccessCount,
-		"totalTools":      len(tools),
-		"totalResources":  len(resources),
-		"totalPrompts":    len(prompts),
+		"serverName":       serverName,
+		"toolCount":        toolSuccessCount,
+		"toolsSynced":      mcpToolsSynced,
+		"resourceCount":    resourceSuccessCount,
+		"promptCount":      promptSuccessCount,
+		"totalTools":       len(tools),
+		"totalResources":   len(resources),
+		"totalPrompts":     len(prompts),
 	}, nil
 }
 
@@ -1237,13 +1332,29 @@ func (h *ToolsDiscoveryHandler) HandleMCPRediscoverServer(ctx context.Context, a
 		// Don't fail the operation - tools/resources/prompts are already stored
 	}
 
+	// Sync tools to ToolRegistry for direct AI access
+	mcpToolsSynced := 0
+	if h.registrySync != nil {
+		synced, syncErr := h.registrySync.SyncServerTools(ctx, serverName)
+		if syncErr != nil {
+			h.logger.Warn("Failed to sync MCP tools to registry",
+				zap.String("serverName", serverName),
+				zap.Error(syncErr))
+		} else {
+			mcpToolsSynced = synced
+			h.logger.Info("MCP tools synced to registry",
+				zap.String("serverName", serverName),
+				zap.Int("count", synced))
+		}
+	}
+
 	resultText := fmt.Sprintf("Server '%s' rediscovered successfully!\n\n"+
-		"Tools: Discovered %d, stored %d\n"+
+		"Tools: Discovered %d, stored %d, synced to registry %d\n"+
 		"Resources: Discovered %d, stored %d\n"+
 		"Prompts: Discovered %d, stored %d\n\n"+
 		"Server URL: %s",
 		serverName,
-		len(tools), toolSuccessCount,
+		len(tools), toolSuccessCount, mcpToolsSynced,
 		len(resources), resourceSuccessCount,
 		len(prompts), promptSuccessCount,
 		server.ServerURL)
@@ -1253,13 +1364,14 @@ func (h *ToolsDiscoveryHandler) HandleMCPRediscoverServer(ctx context.Context, a
 			&mcp.TextContent{Text: resultText},
 		},
 	}, map[string]interface{}{
-		"serverName":      serverName,
-		"toolCount":       toolSuccessCount,
-		"resourceCount":   resourceSuccessCount,
-		"promptCount":     promptSuccessCount,
-		"totalTools":      len(tools),
-		"totalResources":  len(resources),
-		"totalPrompts":    len(prompts),
+		"serverName":       serverName,
+		"toolCount":        toolSuccessCount,
+		"toolsSynced":      mcpToolsSynced,
+		"resourceCount":    resourceSuccessCount,
+		"promptCount":      promptSuccessCount,
+		"totalTools":       len(tools),
+		"totalResources":   len(resources),
+		"totalPrompts":     len(prompts),
 	}, nil
 }
 
@@ -1277,6 +1389,18 @@ func (h *ToolsDiscoveryHandler) HandleMCPRemoveServer(ctx context.Context, args 
 		return createErrorResult(fmt.Sprintf("failed to get server: %s", err.Error())), nil, nil
 	}
 
+	// Remove tools from ToolRegistry first (before removing from storage)
+	if h.registrySync != nil {
+		if removeErr := h.registrySync.RemoveServerTools(serverName); removeErr != nil {
+			h.logger.Warn("Failed to remove MCP tools from registry",
+				zap.String("serverName", serverName),
+				zap.Error(removeErr))
+		} else {
+			h.logger.Info("MCP tools removed from registry",
+				zap.String("serverName", serverName))
+		}
+	}
+
 	// Remove all tools for this server
 	if err := h.toolsStorage.RemoveServerTools(ctx, serverName); err != nil {
 		return createErrorResult(fmt.Sprintf("failed to remove server tools: %s", err.Error())), nil, nil
@@ -1287,7 +1411,7 @@ func (h *ToolsDiscoveryHandler) HandleMCPRemoveServer(ctx context.Context, args 
 		return createErrorResult(fmt.Sprintf("failed to remove server: %s", err.Error())), nil, nil
 	}
 
-	resultText := fmt.Sprintf("Server '%s' removed successfully!\n\nServer URL: %s\nAll tools and metadata deleted from MongoDB and Qdrant.",
+	resultText := fmt.Sprintf("Server '%s' removed successfully!\n\nServer URL: %s\nAll tools and metadata deleted from MongoDB, Qdrant, and ToolRegistry.",
 		serverName, server.ServerURL)
 
 	return &mcp.CallToolResult{

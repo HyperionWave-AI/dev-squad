@@ -285,6 +285,20 @@ func StartHTTPServer(
 		zap.Int("filesystemTools", filesystemToolsCount))
 	logger.Info("All registered tools", zap.Strings("availableTools", allTools))
 
+	// Sync MCP tools from registered servers to ToolRegistry
+	// This allows AI to call MCP tools directly without using discover_tools + execute_tool
+	mcpRegistrySync := mcptools.NewMCPRegistrySync(toolRegistry, toolsStorage, logger)
+	mcpToolsCount, mcpSyncErr := mcpRegistrySync.SyncAllMCPTools(context.Background())
+	if mcpSyncErr != nil {
+		logger.Warn("Failed to sync some MCP tools", zap.Error(mcpSyncErr))
+	}
+	if mcpToolsCount > 0 {
+		logger.Info("MCP tools synced to registry", zap.Int("count", mcpToolsCount))
+	}
+
+	// Pass sync service to tools discovery handler for refresh on server changes
+	toolsDiscoveryHandler.SetRegistrySync(mcpRegistrySync)
+
 	// Create chat handlers
 	chatHandler := handlers.NewChatHandler(chatService, logger)
 	chatWebSocketHandler := handlers.NewChatWebSocketHandler(chatService, aiChatService, aiSettingsService, subchatStorage, logger)
