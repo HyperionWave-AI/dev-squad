@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -1040,4 +1041,213 @@ func (p *customProvider) SupportsTools() bool {
 // StreamChatWithTools is not supported for custom provider
 func (p *customProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
 	return nil, fmt.Errorf("tool calling not supported for custom provider")
+}
+
+// CodeResultSummarizer handles intelligent summarization of code search results
+// to reduce token usage while preserving critical information for AI decision-making
+type CodeResultSummarizer struct {
+	maxTokens int
+}
+
+// ResultMetadata contains extracted metadata from a code search result
+type ResultMetadata struct {
+	FilePath       string
+	LineNumber     int
+	FileType       string  // "ui", "backend", "test", "config", "other"
+	RelevanceScore float64 // 0.0 to 1.0
+	MatchType      string  // "exact", "partial", "contextual"
+	ContextHint    string  // Brief context about the match
+}
+
+// NewCodeResultSummarizer creates a new summarizer with token limit
+func NewCodeResultSummarizer(maxTokens int) *CodeResultSummarizer {
+	if maxTokens <= 0 {
+		maxTokens = 2000 // Default max tokens for summary
+	}
+	return &CodeResultSummarizer{
+		maxTokens: maxTokens,
+	}
+}
+
+// DetectFileType categorizes a file based on its path and extension
+func (s *CodeResultSummarizer) DetectFileType(filePath string) string {
+	lowerPath := strings.ToLower(filePath)
+
+	// Test files
+	if strings.Contains(lowerPath, "_test.go") || strings.Contains(lowerPath, ".test.tsx") ||
+		strings.Contains(lowerPath, ".test.ts") || strings.Contains(lowerPath, ".spec.ts") ||
+		strings.Contains(lowerPath, ".spec.tsx") {
+		return "test"
+	}
+
+	// UI files
+	if strings.Contains(lowerPath, "/ui/") || strings.Contains(lowerPath, "\\ui\\") {
+		if strings.HasSuffix(lowerPath, ".tsx") || strings.HasSuffix(lowerPath, ".jsx") ||
+			strings.HasSuffix(lowerPath, ".css") || strings.HasSuffix(lowerPath, ".scss") {
+			return "ui"
+		}
+	}
+
+	// Backend files
+	if strings.HasSuffix(lowerPath, ".go") {
+		return "backend"
+	}
+
+	// Config files
+	if strings.HasSuffix(lowerPath, ".yaml") || strings.HasSuffix(lowerPath, ".yml") ||
+		strings.HasSuffix(lowerPath, ".json") || strings.HasSuffix(lowerPath, ".env") ||
+		strings.HasSuffix(lowerPath, ".toml") {
+		return "config"
+	}
+
+	return "other"
+}
+
+// CalculateRelevanceScore determines how relevant a result is based on match quality
+func (s *CodeResultSummarizer) CalculateRelevanceScore(matchType string, hasContextHint bool) float64 {
+	score := 0.0
+
+	// Base score by match type
+	switch matchType {
+	case "exact":
+		score = 0.8
+	case "partial":
+		score = 0.5
+	case "contextual":
+		score = 0.3
+	default:
+		score = 0.2
+	}
+
+	// Bonus for context hint
+	if hasContextHint {
+		score += 0.15
+	}
+
+	// Cap at 1.0
+	if score > 1.0 {
+		score = 1.0
+	}
+
+	return score
+}
+
+// ExtractMetadata extracts metadata from a code search result
+func (s *CodeResultSummarizer) ExtractMetadata(result map[string]interface{}) *ResultMetadata {
+	metadata := &ResultMetadata{
+		MatchType: "contextual",
+	}
+
+	// Extract file path
+	if filePath, ok := result["filePath"].(string); ok {
+		metadata.FilePath = filePath
+		metadata.FileType = s.DetectFileType(filePath)
+	}
+
+	// Extract line number
+	if lineNum, ok := result["lineNumber"].(float64); ok {
+		metadata.LineNumber = int(lineNum)
+	} else if lineNum, ok := result["lineNumber"].(int); ok {
+		metadata.LineNumber = lineNum
+	}
+
+	// Extract match type if available
+	if matchType, ok := result["matchType"].(string); ok {
+		metadata.MatchType = matchType
+	}
+
+	// Extract context hint if available
+	if context, ok := result["context"].(string); ok {
+		if len(context) > 100 {
+			metadata.ContextHint = context[:100] + "..."
+		} else {
+			metadata.ContextHint = context
+		}
+	}
+
+	// Calculate relevance score
+	metadata.RelevanceScore = s.CalculateRelevanceScore(metadata.MatchType, metadata.ContextHint != "")
+
+	return metadata
+}
+
+// SummarizeResults generates an intelligent summary of code search results
+func (s *CodeResultSummarizer) SummarizeResults(results []interface{}) string {
+	if len(results) == 0 {
+		return "No results found."
+	}
+
+	// Extract metadata from all results
+	metadataList := make([]*ResultMetadata, 0, len(results))
+	for _, result := range results {
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			metadata := s.ExtractMetadata(resultMap)
+			if metadata.FilePath != "" {
+				metadataList = append(metadataList, metadata)
+			}
+		}
+	}
+
+	if len(metadataList) == 0 {
+		return "No valid results found."
+	}
+
+	// Sort by relevance score (highest first)
+	sort.Slice(metadataList, func(i, j int) bool {
+		return metadataList[i].RelevanceScore > metadataList[j].RelevanceScore
+	})
+
+	// Group by file type
+	categories := make(map[string][]*ResultMetadata)
+	for _, metadata := range metadataList {
+		categories[metadata.FileType] = append(categories[metadata.FileType], metadata)
+	}
+
+	// Build summary
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf("Found %d results in %d categories:\n\n", len(metadataList), len(categories)))
+
+	// Define category order for consistent output
+	categoryOrder := []string{"ui", "backend", "test", "config", "other"}
+
+	// Output each category
+	for _, category := range categoryOrder {
+		if items, exists := categories[category]; exists && len(items) > 0 {
+			// Format category name
+			categoryName := strings.ToUpper(category[:1]) + category[1:]
+			if category == "ui" {
+				categoryName = "UI Components"
+			} else if category == "backend" {
+				categoryName = "Backend Services"
+			} else if category == "test" {
+				categoryName = "Tests"
+			} else if category == "config" {
+				categoryName = "Configuration"
+			}
+
+			summary.WriteString(fmt.Sprintf("%s (%d files):\n", categoryName, len(items)))
+
+			// List files in this category
+			for _, item := range items {
+				scoreStr := fmt.Sprintf("%.2f", item.RelevanceScore)
+				if item.ContextHint != "" {
+					summary.WriteString(fmt.Sprintf("  • %s:%d - %s (score: %s)\n",
+						item.FilePath, item.LineNumber, item.ContextHint, scoreStr))
+				} else {
+					summary.WriteString(fmt.Sprintf("  • %s:%d (score: %s)\n",
+						item.FilePath, item.LineNumber, scoreStr))
+				}
+			}
+			summary.WriteString("\n")
+		}
+	}
+
+	// Add most relevant file recommendation
+	if len(metadataList) > 0 {
+		topResult := metadataList[0]
+		summary.WriteString(fmt.Sprintf("Most relevant: %s:%d (score: %.2f)\n",
+			topResult.FilePath, topResult.LineNumber, topResult.RelevanceScore))
+	}
+
+	return summary.String()
 }

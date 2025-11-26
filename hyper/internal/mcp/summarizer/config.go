@@ -9,35 +9,37 @@ import (
 )
 
 // LoadSummarizerConfig loads the summarizer configuration from environment variables
-// with sensible defaults. Environment variables:
+// with sensible defaults. Supports both SUMMARIZER_* and SUMMARY_* prefixes for flexibility.
 //
-// SUMMARIZER_ENABLED - Enable/disable the summarizer (default: true)
-// SUMMARIZER_MODEL - LLM model to use (default: "gpt-4")
-// SUMMARIZER_MAX_TOKENS - Maximum tokens for summaries (default: 500, max: 1000)
-// SUMMARIZER_CACHE_ENABLED - Enable/disable caching (default: true)
-// SUMMARIZER_FALLBACK_TO_HEURISTIC - Fallback to heuristic if LLM fails (default: true)
-// SUMMARIZER_CACHE_SIZE - Maximum cache entries (default: 1000)
-// SUMMARIZER_CACHE_TTL - Cache time-to-live in seconds (default: 3600)
-// SUMMARIZER_LLM_API_KEY - API key for LLM service (default: "")
-// SUMMARIZER_LLM_TIMEOUT - LLM request timeout in seconds (default: 30)
+// Environment variables (primary / alternative):
+//
+// SUMMARIZER_ENABLED / ENABLE_CODE_SUMMARIES - Enable/disable the summarizer (default: true)
+// SUMMARIZER_MODEL / SUMMARY_MODEL - LLM model to use (default: "claude")
+// SUMMARIZER_MAX_TOKENS / SUMMARY_MAX_TOKENS - Maximum tokens for summaries (default: 500, max: 1000)
+// SUMMARIZER_CACHE_ENABLED / SUMMARY_CACHE_ENABLED - Enable/disable caching (default: true)
+// SUMMARIZER_FALLBACK_TO_HEURISTIC / SUMMARY_FALLBACK_HEURISTIC - Fallback to heuristic if LLM fails (default: true)
+// SUMMARIZER_CACHE_SIZE / SUMMARY_CACHE_SIZE - Maximum cache entries (default: 1000)
+// SUMMARIZER_CACHE_TTL / SUMMARY_CACHE_TTL - Cache time-to-live in seconds (default: 3600)
+// SUMMARIZER_LLM_API_KEY / ANTHROPIC_API_KEY - API key for LLM service (default: "")
+// SUMMARIZER_LLM_TIMEOUT / SUMMARY_LLM_TIMEOUT - LLM request timeout in seconds (default: 30)
 // SUMMARIZER_TOKEN_BUDGET - Total token budget per request (default: 10000)
 // SUMMARIZER_TOKEN_PER_RESULT - Tokens allocated per result (default: 100)
-// SUMMARIZER_METRICS_ENABLED - Enable/disable metrics collection (default: false)
+// SUMMARIZER_METRICS_ENABLED / SUMMARY_METRICS_ENABLED - Enable/disable metrics collection (default: false)
 // SUMMARIZER_LOG_LEVEL - Log level (default: "info")
 func LoadSummarizerConfig() SummarizerConfig {
 	config := SummarizerConfig{
-		Enabled:              parseBool(os.Getenv("SUMMARIZER_ENABLED"), true),
-		Model:                parseString(os.Getenv("SUMMARIZER_MODEL"), "gpt-4"),
-		MaxTokens:            parseInt(os.Getenv("SUMMARIZER_MAX_TOKENS"), 500),
-		CacheEnabled:         parseBool(os.Getenv("SUMMARIZER_CACHE_ENABLED"), true),
-		FallbackToHeuristic:  parseBool(os.Getenv("SUMMARIZER_FALLBACK_TO_HEURISTIC"), true),
-		CacheSize:            parseInt(os.Getenv("SUMMARIZER_CACHE_SIZE"), 1000),
-		CacheTTL:             parseDuration(os.Getenv("SUMMARIZER_CACHE_TTL"), 3600*time.Second),
-		LLMAPIKey:            parseString(os.Getenv("SUMMARIZER_LLM_API_KEY"), ""),
-		LLMTimeout:           parseDuration(os.Getenv("SUMMARIZER_LLM_TIMEOUT"), 30*time.Second),
+		Enabled:              parseBool(getEnvWithFallback("SUMMARIZER_ENABLED", "ENABLE_CODE_SUMMARIES"), true),
+		Model:                parseString(getEnvWithFallback("SUMMARIZER_MODEL", "SUMMARY_MODEL"), "claude"),
+		MaxTokens:            parseInt(getEnvWithFallback("SUMMARIZER_MAX_TOKENS", "SUMMARY_MAX_TOKENS"), 500),
+		CacheEnabled:         parseBool(getEnvWithFallback("SUMMARIZER_CACHE_ENABLED", "SUMMARY_CACHE_ENABLED"), true),
+		FallbackToHeuristic:  parseBool(getEnvWithFallback("SUMMARIZER_FALLBACK_TO_HEURISTIC", "SUMMARY_FALLBACK_HEURISTIC"), true),
+		CacheSize:            parseInt(getEnvWithFallback("SUMMARIZER_CACHE_SIZE", "SUMMARY_CACHE_SIZE"), 1000),
+		CacheTTL:             parseDuration(getEnvWithFallback("SUMMARIZER_CACHE_TTL", "SUMMARY_CACHE_TTL"), 3600*time.Second),
+		LLMAPIKey:            parseString(getEnvWithFallback("SUMMARIZER_LLM_API_KEY", "ANTHROPIC_API_KEY"), ""),
+		LLMTimeout:           parseDuration(getEnvWithFallback("SUMMARIZER_LLM_TIMEOUT", "SUMMARY_LLM_TIMEOUT"), 30*time.Second),
 		TokenBudget:          parseInt(os.Getenv("SUMMARIZER_TOKEN_BUDGET"), 10000),
 		TokenPerResult:       parseInt(os.Getenv("SUMMARIZER_TOKEN_PER_RESULT"), 100),
-		MetricsEnabled:       parseBool(os.Getenv("SUMMARIZER_METRICS_ENABLED"), false),
+		MetricsEnabled:       parseBool(getEnvWithFallback("SUMMARIZER_METRICS_ENABLED", "SUMMARY_METRICS_ENABLED"), false),
 		LogLevel:             parseString(os.Getenv("SUMMARIZER_LOG_LEVEL"), "info"),
 	}
 
@@ -72,6 +74,14 @@ func LoadSummarizerConfig() SummarizerConfig {
 	}
 
 	return config
+}
+
+// getEnvWithFallback tries the primary env var, then falls back to alternative
+func getEnvWithFallback(primary, fallback string) string {
+	if value := os.Getenv(primary); value != "" {
+		return value
+	}
+	return os.Getenv(fallback)
 }
 
 // parseBool parses a boolean string value with a default fallback

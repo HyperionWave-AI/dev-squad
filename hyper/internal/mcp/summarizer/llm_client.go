@@ -394,13 +394,29 @@ func NewLLMClientFromConfig(config SummarizerConfig, logger *zap.Logger) (LLMCli
 	}
 
 	// Determine provider from model name
-	switch {
-	case config.Model == "gpt-4" || config.Model == "gpt-3.5-turbo":
-		return NewOpenAIClient(config.LLMAPIKey, config, logger)
-	case config.Model == "claude-3-opus" || config.Model == "claude-3-sonnet" || config.Model == "claude-3-haiku":
+	// Check if it's a Claude/Anthropic model
+	isClaude := config.Model == "claude" ||
+		config.Model == "claude-3-opus" ||
+		config.Model == "claude-3-sonnet" ||
+		config.Model == "claude-3-haiku" ||
+		config.Model == "claude-haiku-4-5-20251001" ||
+		len(config.Model) > 6 && config.Model[:6] == "claude"
+
+	if isClaude {
+		// Use claude-haiku-4-5 for summarization (fast and cost-effective)
+		// Override model to a valid Claude model name if just "claude" is specified
+		if config.Model == "claude" {
+			config.Model = "claude-haiku-4-5-20251001"
+		}
+		logger.Info("Creating Claude client for summarization",
+			zap.String("model", config.Model),
+		)
 		return NewClaudeClient(config.LLMAPIKey, config, logger)
-	default:
-		// Default to OpenAI for unknown models
-		return NewOpenAIClient(config.LLMAPIKey, config, logger)
 	}
+
+	// Default to OpenAI for gpt models or unknown
+	logger.Info("Creating OpenAI client for summarization",
+		zap.String("model", config.Model),
+	)
+	return NewOpenAIClient(config.LLMAPIKey, config, logger)
 }

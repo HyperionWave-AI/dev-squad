@@ -845,6 +845,39 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 					// Store in cache for future duplicate calls
 					resultCache.Set(signature, &result)
+
+					// CODE RESULT SUMMARIZATION: For code_index_search, intelligently summarize results
+					// to reduce token usage while preserving critical information for AI decision-making
+					if toolCall.Name == "code_index_search" && result.Error == "" {
+						// Extract results array from output
+						if outputMap, ok := result.Output.(map[string]interface{}); ok {
+							if resultsArray, hasResults := outputMap["results"].([]interface{}); hasResults && len(resultsArray) > 0 {
+								// Create summarizer and generate summary
+								summarizer := NewCodeResultSummarizer(2000) // Max 2000 tokens for summary
+								summary := summarizer.SummarizeResults(resultsArray)
+
+								// Log the summarization
+								originalSize := len(fmt.Sprintf("%v", resultsArray))
+								summarySize := len(summary)
+								reductionPercent := 100.0 * (1.0 - float64(summarySize)/float64(originalSize))
+
+								log.Printf("[Code Result Summarization] code_index_search: %d results summarized\n"+
+									"  Original size: %d bytes\n"+
+									"  Summary size: %d bytes\n"+
+									"  Token reduction: %.1f%%",
+									len(resultsArray), originalSize, summarySize, reductionPercent)
+
+								// Add summary to output for AI to see
+								outputMap["_summary"] = summary
+								outputMap["_summaryStats"] = map[string]interface{}{
+									"originalSize":    originalSize,
+									"summarySize":     summarySize,
+									"reductionPercent": reductionPercent,
+								}
+								result.Output = outputMap
+							}
+						}
+					}
 				}
 
 				// GPT FILE PATH VALIDATION: For code_index_search, validate file paths before proceeding

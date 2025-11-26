@@ -1152,6 +1152,7 @@ type ChatWebSocketHandler struct {
 	aiSettingsService AISettingsServiceInterface
 	subchatStorage    SubchatStorageInterface
 	logger            *zap.Logger
+	toolResultProcessor executor.ToolResultProcessorFunc
 	writeMutex        sync.Mutex // Protects concurrent WebSocket writes (ping + message streaming)
 }
 
@@ -1162,12 +1163,20 @@ type SubchatStorageInterface interface {
 
 // NewChatWebSocketHandler creates a new WebSocket handler with ai-service integration
 func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServiceInterface, aiSettingsService AISettingsServiceInterface, subchatStorage SubchatStorageInterface, logger *zap.Logger) *ChatWebSocketHandler {
+	// Create default tool result processor
+	defaultProcessor := func(toolName string, output interface{}) (string, bool, bool) {
+		// Default: stream and save all results
+		outputStr := fmt.Sprintf("%v", output)
+		return outputStr, true, true
+	}
+
 	return &ChatWebSocketHandler{
-		chatService:       chatService,
-		aiService:         aiService,
-		aiSettingsService: aiSettingsService,
-		subchatStorage:    subchatStorage,
-		logger:            logger,
+		chatService:         chatService,
+		aiService:           aiService,
+		aiSettingsService:   aiSettingsService,
+		subchatStorage:      subchatStorage,
+		logger:              logger,
+		toolResultProcessor: defaultProcessor,
 	}
 }
 
@@ -1966,9 +1975,13 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	}
 
 	// Step 9: Create tool result processor to handle size-aware processing
-	toolResultProcessor := func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
-		processed := h.processToolResultWithSizeLimit(toolName, output)
-		return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
+	// Use handler's processor or create a default one if not set
+	toolResultProcessor := h.toolResultProcessor
+	if toolResultProcessor == nil {
+		toolResultProcessor = func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
+			processed := h.processToolResultWithSizeLimit(toolName, output)
+			return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
+		}
 	}
 
 	// Step 10: Create executor config

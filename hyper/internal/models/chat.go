@@ -149,3 +149,75 @@ type ContextMetadata struct {
 	IsFull        bool      `json:"isFull"`
 	LastUpdated   time.Time `json:"lastUpdated"`
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRUCTURED TOOL RESULT PRESENTATION TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// KeyMatch represents a highlighted match within a result
+type KeyMatch struct {
+	Text      string `json:"text"`      // The matched text
+	LineNum   int    `json:"lineNum"`   // Line number where match appears
+	Context   string `json:"context"`   // Surrounding context (50 chars before/after)
+	Relevance float64 `json:"relevance"` // How relevant this match is (0-1)
+}
+
+// FileSummary provides a brief overview of a file's contents
+type FileSummary struct {
+	FilePath    string `json:"filePath"`    // Full path to the file
+	FileType    string `json:"fileType"`    // File extension/type (e.g., "go", "tsx", "json")
+	LineCount   int    `json:"lineCount"`   // Total lines in file
+	Description string `json:"description"` // Brief description of what file contains
+	Module      string `json:"module"`      // Module/package name if applicable
+}
+
+// StructuredResult represents a single search result with enhanced presentation
+type StructuredResult struct {
+	ID          string       `json:"id"`          // Unique result ID
+	FilePath    string       `json:"filePath"`    // File path
+	Score       float64      `json:"score"`       // Relevance score (0-1)
+	Text        string       `json:"text"`        // Full result text
+	KeyMatches  []KeyMatch   `json:"keyMatches"` // Highlighted key matches
+	Summary     FileSummary  `json:"summary"`     // File summary
+	Rank        int          `json:"rank"`        // Rank within group (1-based)
+	Priority    string       `json:"priority"`    // "high", "medium", "low"
+}
+
+// ResultGroup represents results grouped by file/module
+type ResultGroup struct {
+	GroupName   string              `json:"groupName"`   // File path or module name
+	GroupType   string              `json:"groupType"`   // "file", "module", "package"
+	ResultCount int                 `json:"resultCount"` // Number of results in group
+	AvgScore    float64             `json:"avgScore"`    // Average relevance score
+	Results     []StructuredResult  `json:"results"`     // Results in this group
+	Priority    string              `json:"priority"`    // "high", "medium", "low"
+}
+
+// PriorityRecommendation suggests which files to focus on
+type PriorityRecommendation struct {
+	Rank        int    `json:"rank"`        // Priority rank (1 = highest)
+	FilePath    string `json:"filePath"`    // Recommended file path
+	Reason      string `json:"reason"`      // Why this file is recommended
+	Score       float64 `json:"score"`      // Relevance score
+	MatchCount  int    `json:"matchCount"`  // Number of matches in this file
+	Confidence  float64 `json:"confidence"` // Confidence in recommendation (0-1)
+}
+
+// StructuredToolResultResponse represents the complete structured presentation
+type StructuredToolResultResponse struct {
+	// Summary statistics
+	TotalResults    int `json:"totalResults"`    // Total number of results
+	GroupCount      int `json:"groupCount"`      // Number of groups
+	HighPriorityCount int `json:"highPriorityCount"` // Count of high-priority results
+
+	// Organized results
+	Groups []ResultGroup `json:"groups"` // Results grouped by file/module
+
+	// AI decision support
+	Recommendations []PriorityRecommendation `json:"recommendations"` // Suggested files to focus on
+	
+	// Metadata
+	SearchQuery string `json:"searchQuery"` // Original search query
+	ExecutionTime int64 `json:"executionTime"` // Query execution time in ms
+	Timestamp   time.Time `json:"timestamp"`   // When results were generated
+}

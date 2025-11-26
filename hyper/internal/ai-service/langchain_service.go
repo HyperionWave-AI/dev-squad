@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
+
+	"go.uber.org/zap"
 )
 
 // ContextKey type for context keys
@@ -35,6 +38,151 @@ const (
 	StreamEventToolResult StreamEventType = "tool_result" // Tool execution result
 	StreamEventError      StreamEventType = "error"       // Error during processing
 )
+
+// ContextTracker tracks token usage and context size during AI execution
+type ContextTracker struct {
+	InputTokens      int // Tokens in the input messages
+	OutputTokens     int // Tokens in the AI response
+	ToolResultTokens int // Tokens in tool results before processing
+	ProcessedTokens  int // Tokens in tool results after processing
+	ContextSize      int // Total context size in bytes
+	StartTime        time.Time
+	EndTime          time.Time
+}
+
+// NewContextTracker creates a new context tracker
+func NewContextTracker() *ContextTracker {
+	return &ContextTracker{
+		StartTime: time.Now(),
+	}
+}
+
+// RecordInputTokens records the number of input tokens
+func (ct *ContextTracker) RecordInputTokens(count int) {
+	ct.InputTokens = count
+}
+
+// RecordOutputTokens records the number of output tokens
+func (ct *ContextTracker) RecordOutputTokens(count int) {
+	ct.OutputTokens = count
+}
+
+// RecordToolResultTokens records tokens in tool results before processing
+func (ct *ContextTracker) RecordToolResultTokens(count int) {
+	ct.ToolResultTokens = count
+}
+
+// RecordProcessedTokens records tokens in tool results after processing
+func (ct *ContextTracker) RecordProcessedTokens(count int) {
+	ct.ProcessedTokens = count
+}
+
+// RecordContextSize records the total context size
+func (ct *ContextTracker) RecordContextSize(size int) {
+	ct.ContextSize = size
+}
+
+// Complete marks the tracking as complete
+func (ct *ContextTracker) Complete() {
+	ct.EndTime = time.Now()
+}
+
+// GetTokenReduction calculates the token reduction percentage
+func (ct *ContextTracker) GetTokenReduction() float64 {
+	if ct.ToolResultTokens == 0 {
+		return 0
+	}
+	reduction := float64(ct.ToolResultTokens-ct.ProcessedTokens) / float64(ct.ToolResultTokens)
+	return reduction * 100
+}
+
+// GetDuration returns the duration of the tracking
+func (ct *ContextTracker) GetDuration() time.Duration {
+	if ct.EndTime.IsZero() {
+		return time.Since(ct.StartTime)
+	}
+	return ct.EndTime.Sub(ct.StartTime)
+}
+
+// LogMetrics logs the token usage metrics
+func (ct *ContextTracker) LogMetrics(logger interface{}, sessionID string) {
+	reduction := ct.GetTokenReduction()
+	duration := ct.GetDuration()
+	
+	// Log metrics - use reflection to handle different logger types
+	logMsg := fmt.Sprintf(
+		"Token Usage Metrics - Session: %s | Input: %d | Output: %d | Tool Results: %d → %d (%.1f%% reduction) | Context: %d bytes | Duration: %v",
+		sessionID,
+		ct.InputTokens,
+		ct.OutputTokens,
+		ct.ToolResultTokens,
+		ct.ProcessedTokens,
+		reduction,
+		ct.ContextSize,
+		duration,
+	)
+	
+	// Try to log with zap logger if available
+	if zapLogger, ok := logger.(*zap.Logger); ok {
+		zapLogger.Info(logMsg)
+	} else {
+		// Fallback to standard logging
+		log.Println(logMsg)
+	}
+}
+
+// GetMetricsMap returns metrics as a map for easy access
+func (ct *ContextTracker) GetMetricsMap() map[string]interface{} {
+	return map[string]interface{}{
+		"input_tokens":       ct.InputTokens,
+		"output_tokens":      ct.OutputTokens,
+		"tool_result_tokens": ct.ToolResultTokens,
+		"processed_tokens":   ct.ProcessedTokens,
+		"token_reduction":    ct.GetTokenReduction(),
+		"context_size":       ct.ContextSize,
+		"duration_ms":        ct.GetDuration().Milliseconds(),
+	}
+}
+
+// IsContextSizeExceeded checks if context size exceeds a threshold
+func (ct *ContextTracker) IsContextSizeExceeded(maxSize int) bool {
+	return ct.ContextSize > maxSize
+}
+
+// GetContextSizePercentage returns the context size as a percentage of max
+func (ct *ContextTracker) GetContextSizePercentage(maxSize int) float64 {
+	if maxSize == 0 {
+		return 0
+	}
+	return (float64(ct.ContextSize) / float64(maxSize)) * 100
+}
+
+// CalculateContextSize calculates the total context size from messages
+func CalculateContextSize(messages []Message) int {
+	totalSize := 0
+	for _, msg := range messages {
+		totalSize += len(msg.Content)
+		if msg.ToolCall != nil {
+			totalSize += len(msg.ToolCall.Name)
+			// Estimate args size
+			for k, v := range msg.ToolCall.Args {
+				totalSize += len(k) + len(fmt.Sprintf("%v", v))
+			}
+		}
+		if msg.ToolResult != nil {
+			totalSize += len(msg.ToolResult.Name)
+			totalSize += len(fmt.Sprintf("%v", msg.ToolResult.Output))
+			totalSize += len(msg.ToolResult.Error)
+		}
+	}
+	return totalSize
+}
+
+// ShouldApplySlidingWindow determines if sliding window should be applied
+func (ct *ContextTracker) ShouldApplySlidingWindow(maxSize int) bool {
+	return ct.ContextSize > (maxSize / 2) // Apply when at 50% of max
+}
+
 
 // StreamEvent represents a streaming event (token, tool call, or tool result)
 type StreamEvent struct {

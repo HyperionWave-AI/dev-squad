@@ -17,8 +17,8 @@ func TestLoadSummarizerConfigDefaults(t *testing.T) {
 		t.Error("Expected Enabled to be true by default")
 	}
 
-	if config.Model != "gpt-4" {
-		t.Errorf("Expected Model 'gpt-4', got %s", config.Model)
+	if config.Model != "claude" {
+		t.Errorf("Expected Model 'claude', got %s", config.Model)
 	}
 
 	if config.MaxTokens != 500 {
@@ -380,7 +380,7 @@ func TestLoadSummarizerConfigWithDefaults(t *testing.T) {
 
 	// When env vars are not set, LoadSummarizerConfig returns built-in defaults
 	// LoadSummarizerConfigWithDefaults only overrides if loaded value is zero/empty
-	// Since LoadSummarizerConfig returns "gpt-4" by default, it won't be overridden
+	// Since LoadSummarizerConfig returns "claude" by default, it won't be overridden
 	if config.Model == "" {
 		t.Errorf("Expected Model to be set, got empty string")
 	}

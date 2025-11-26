@@ -1252,27 +1252,38 @@ func (t *QueryKnowledgeTool) Execute(ctx context.Context, input map[string]inter
 		return nil, fmt.Errorf("failed to query knowledge: %w", err)
 	}
 
-	// Format results
-	type KnowledgeResult struct {
-		ID         string                 `json:"id"`
-		Collection string                 `json:"collection"`
-		Text       string                 `json:"text"`
-		Metadata   map[string]interface{} `json:"metadata,omitempty"`
-		Score      float64                `json:"score"`
-	}
-
-	formattedResults := make([]KnowledgeResult, len(results))
+	// Convert results to structured format for AI decision-making
+	// Step 1: Convert storage results to raw format
+	rawResults := make([]map[string]interface{}, len(results))
 	for i, result := range results {
-		formattedResults[i] = KnowledgeResult{
-			ID:         result.Entry.ID,
-			Collection: result.Entry.Collection,
-			Text:       result.Entry.Text,
-			Metadata:   result.Entry.Metadata,
-			Score:      result.Score,
+		rawResults[i] = map[string]interface{}{
+			"id":       result.Entry.ID,
+			"filePath": result.Entry.Collection, // Use collection as file path for grouping
+			"text":     result.Entry.Text,
+			"score":    result.Score,
 		}
 	}
 
-	return formattedResults, nil
+	// Step 2: Use ResultFormatter to create structured presentation
+	formatter := tools.NewResultFormatter()
+	startTime := time.Now()
+	structuredResponse := formatter.FormatSearchResults(
+		rawResults,
+		query,
+		int64(time.Since(startTime).Milliseconds()),
+	)
+
+	// Step 3: Add metadata from original results
+	// Attach original metadata to recommendations for reference
+	for i := range structuredResponse.Recommendations {
+		if i < len(results) {
+			// Store original metadata in a metadata field if needed
+			// This can be extended for more detailed metadata handling
+			_ = results[i].Entry.Metadata
+		}
+	}
+
+	return structuredResponse, nil
 }
 
 // UpsertKnowledgeTool implements the ToolExecutor interface
