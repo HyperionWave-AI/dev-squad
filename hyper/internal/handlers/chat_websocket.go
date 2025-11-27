@@ -1154,6 +1154,7 @@ type ChatWebSocketHandler struct {
 	chatService         ChatServiceInterface
 	aiService           AIServiceInterface
 	aiSettingsService   AISettingsServiceInterface
+	compactionOrchestrator *CompactionOrchestrator
 	subchatStorage      SubchatStorageInterface
 	logger              *zap.Logger
 	toolResultProcessor executor.ToolResultProcessorFunc
@@ -1178,14 +1179,23 @@ func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServi
 	// Initialize token-based result interceptor for intelligent deflection
 	resultInterceptor := NewToolResultInterceptor(logger)
 
+	// Initialize compaction orchestrator for adaptive context management
+	compactionOrchestrator := NewCompactionOrchestrator(
+		DefaultCompactionConfig(),
+		aiService,
+		chatService,
+		logger,
+	)
+
 	return &ChatWebSocketHandler{
-		chatService:         chatService,
-		aiService:           aiService,
-		aiSettingsService:   aiSettingsService,
-		subchatStorage:      subchatStorage,
-		logger:              logger,
-		toolResultProcessor: defaultProcessor,
-		resultInterceptor:   resultInterceptor,
+		chatService:            chatService,
+		compactionOrchestrator: compactionOrchestrator,
+		aiService:              aiService,
+		aiSettingsService:      aiSettingsService,
+		subchatStorage:         subchatStorage,
+		logger:                 logger,
+		toolResultProcessor:    defaultProcessor,
+		resultInterceptor:      resultInterceptor,
 	}
 }
 

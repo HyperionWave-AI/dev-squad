@@ -130,6 +130,62 @@ var (
 		Buckets: []float64{100, 500, 1000, 2000, 5000, 10000, 20000, 50000},
 	}, []string{"tool_name", "deflected"}) // deflected: true, false
 
+	// Context Compaction Metrics
+	CompactionOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hyperion_context_compaction_total",
+		Help: "Total number of context compaction operations",
+	}, []string{"session_type", "trigger"}) // trigger: tokens, size, both
+
+	CompactionTokensReduced = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "hyperion_compaction_tokens_reduced",
+		Help:    "Token count reduction per compaction operation",
+		Buckets: []float64{1000, 5000, 10000, 25000, 50000, 75000, 100000},
+	}, []string{"session_type"})
+
+	CompactionSizeReduced = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "hyperion_compaction_size_reduced_bytes",
+		Help:    "BSON size reduction per compaction operation in bytes",
+		Buckets: []float64{100000, 500000, 1000000, 2500000, 5000000, 10000000, 15000000}, // 100KB to 15MB
+	}, []string{"session_type"})
+
+	CompactionMessagesCompacted = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "hyperion_compaction_messages_compacted",
+		Help:    "Number of messages compacted per operation",
+		Buckets: []float64{5, 10, 20, 50, 100, 200, 500},
+	}, []string{"session_type"})
+
+	CompactionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "hyperion_compaction_duration_seconds",
+		Help:    "Duration of compaction operations including summary generation",
+		Buckets: prometheus.ExponentialBuckets(0.1, 2, 8), // 100ms to ~12s
+	}, []string{"session_type", "trigger"})
+
+	ContextTokenUsage = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "hyperion_context_token_usage",
+		Help: "Current token usage in context window",
+	}, []string{"session_id"})
+
+	ContextSizeUsage = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "hyperion_context_size_usage_bytes",
+		Help: "Current BSON size usage in bytes",
+	}, []string{"session_id"})
+
+	ContextTokenPercentage = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "hyperion_context_token_percentage",
+		Help: "Current token usage as percentage of context window (0-100)",
+	}, []string{"session_id"})
+
+	ContextSizePercentage = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "hyperion_context_size_percentage",
+		Help: "Current BSON size usage as percentage of MongoDB limit (0-100)",
+	}, []string{"session_id"})
+
+	CompactionSummaryTokens = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "hyperion_compaction_summary_tokens",
+		Help:    "Token count of generated summaries",
+		Buckets: []float64{100, 250, 500, 1000, 1500, 2000},
+	}, []string{"session_type"})
+
 	// HTTP Metrics
 	HTTPRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "http_requests_total",
@@ -218,6 +274,18 @@ func init() {
 	Registry.MustRegister(ToolResultDeflections)
 	Registry.MustRegister(ToolResultTokens)
 
+	// Register context compaction metrics
+	Registry.MustRegister(CompactionOperationsTotal)
+	Registry.MustRegister(CompactionTokensReduced)
+	Registry.MustRegister(CompactionSizeReduced)
+	Registry.MustRegister(CompactionMessagesCompacted)
+	Registry.MustRegister(CompactionDuration)
+	Registry.MustRegister(ContextTokenUsage)
+	Registry.MustRegister(ContextSizeUsage)
+	Registry.MustRegister(ContextTokenPercentage)
+	Registry.MustRegister(ContextSizePercentage)
+	Registry.MustRegister(CompactionSummaryTokens)
+
 	// Register HTTP metrics
 	Registry.MustRegister(HTTPRequestsTotal)
 	Registry.MustRegister(HTTPRequestDuration)
@@ -296,4 +364,45 @@ func RecordToolResultTokens(toolName string, tokens int, deflected bool) {
 		deflectedLabel = "true"
 	}
 	ToolResultTokens.WithLabelValues(toolName, deflectedLabel).Observe(float64(tokens))
+}
+
+// RecordCompaction records a compaction operation with all relevant metrics
+// sessionType: "chat", "subchat", etc.
+// trigger: "tokens", "size", "both"
+// tokensReduced: difference between original and compacted token count
+// sizeReduced: difference between original and compacted BSON size in bytes
+// messagesCompacted: number of messages that were compacted
+// duration: time taken for the compaction operation in seconds
+func RecordCompaction(sessionType, trigger string, tokensReduced, sizeReduced, messagesCompacted int, duration float64) {
+	CompactionOperationsTotal.WithLabelValues(sessionType, trigger).Inc()
+	CompactionTokensReduced.WithLabelValues(sessionType).Observe(float64(tokensReduced))
+	CompactionSizeReduced.WithLabelValues(sessionType).Observe(float64(sizeReduced))
+	CompactionMessagesCompacted.WithLabelValues(sessionType).Observe(float64(messagesCompacted))
+	CompactionDuration.WithLabelValues(sessionType, trigger).Observe(duration)
+}
+
+// RecordContextUsage records current context usage for a session
+// sessionID: unique identifier for the session
+// tokens: current token count
+// tokenPercentage: token usage as percentage of context window (0-100)
+// size: current BSON size in bytes
+// sizePercentage: BSON size usage as percentage of MongoDB limit (0-100)
+func RecordContextUsage(sessionID string, tokens int, tokenPercentage float64, size int, sizePercentage float64) {
+	ContextTokenUsage.WithLabelValues(sessionID).Set(float64(tokens))
+	ContextTokenPercentage.WithLabelValues(sessionID).Set(tokenPercentage)
+	ContextSizeUsage.WithLabelValues(sessionID).Set(float64(size))
+	ContextSizePercentage.WithLabelValues(sessionID).Set(sizePercentage)
+}
+
+// RecordCompactionSummary records the token count of a generated summary
+func RecordCompactionSummary(sessionType string, summaryTokens int) {
+	CompactionSummaryTokens.WithLabelValues(sessionType).Observe(float64(summaryTokens))
+}
+
+// ClearContextUsage removes context usage metrics for a session (e.g., when session ends)
+func ClearContextUsage(sessionID string) {
+	ContextTokenUsage.DeleteLabelValues(sessionID)
+	ContextTokenPercentage.DeleteLabelValues(sessionID)
+	ContextSizeUsage.DeleteLabelValues(sessionID)
+	ContextSizePercentage.DeleteLabelValues(sessionID)
 }
