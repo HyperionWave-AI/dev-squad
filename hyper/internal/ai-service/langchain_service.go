@@ -11,6 +11,7 @@ import (
 )
 
 // ContextKey type for context keys
+// ContextKey type for context keys
 type contextKey string
 
 const (
@@ -108,7 +109,7 @@ func (ct *ContextTracker) GetDuration() time.Duration {
 func (ct *ContextTracker) LogMetrics(logger interface{}, sessionID string) {
 	reduction := ct.GetTokenReduction()
 	duration := ct.GetDuration()
-	
+
 	// Log metrics - use reflection to handle different logger types
 	logMsg := fmt.Sprintf(
 		"Token Usage Metrics - Session: %s | Input: %d | Output: %d | Tool Results: %d → %d (%.1f%% reduction) | Context: %d bytes | Duration: %v",
@@ -121,7 +122,7 @@ func (ct *ContextTracker) LogMetrics(logger interface{}, sessionID string) {
 		ct.ContextSize,
 		duration,
 	)
-	
+
 	// Try to log with zap logger if available
 	if zapLogger, ok := logger.(*zap.Logger); ok {
 		zapLogger.Info(logMsg)
@@ -182,7 +183,6 @@ func CalculateContextSize(messages []Message) int {
 func (ct *ContextTracker) ShouldApplySlidingWindow(maxSize int) bool {
 	return ct.ContextSize > (maxSize / 2) // Apply when at 50% of max
 }
-
 
 // StreamEvent represents a streaming event (token, tool call, or tool result)
 type StreamEvent struct {
@@ -609,7 +609,49 @@ func (s *ChatService) GetToolRegistry() *ToolRegistry {
 	return s.toolRegistry
 }
 
+// calculateRemainingContext calculates the remaining context window available for tool results
+// Returns the number of tokens still available in the context window
+func (s *ChatService) calculateRemainingContext(messages []Message) int {
+	// Get max context window based on model provider
+	maxContextWindow := 128000 // Default for GPT models
+	if s.config.Provider == "anthropic" {
+		maxContextWindow = 200000 // Claude models have 200K context
+	}
+
+	// Override with config value if set
+	if s.config.ContextWindowSize > 0 {
+		maxContextWindow = s.config.ContextWindowSize
+	}
+
+	// Estimate tokens used by all messages
+	usedTokens := 0
+	for _, msg := range messages {
+		// Rough estimation: ~4 characters per token
+		usedTokens += len(msg.Content) / 4
+
+		// Add tokens for tool calls if present
+		if msg.ToolCall != nil {
+			usedTokens += len(msg.ToolCall.Name) / 4
+			usedTokens += len(fmt.Sprintf("%v", msg.ToolCall.Args)) / 4
+		}
+
+		// Add tokens for tool results if present
+		if msg.ToolResult != nil {
+			usedTokens += len(fmt.Sprintf("%v", msg.ToolResult.Output)) / 4
+		}
+	}
+
+	// Return remaining context, minimum 0
+	remaining := maxContextWindow - usedTokens
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // StreamChat sends messages to AI provider and streams the response (legacy text-only method)
+// For tool-enabled streaming, use StreamChatWithTools
+// Extracts user identity from context for logging and multi-tenancy
 // For tool-enabled streaming, use StreamChatWithTools
 // Extracts user identity from context for logging and multi-tenancy
 func (s *ChatService) StreamChat(ctx context.Context, messages []Message) (<-chan string, error) {

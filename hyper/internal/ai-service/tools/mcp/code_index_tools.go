@@ -12,12 +12,34 @@ import (
 	"hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/embeddings"
-	"hyper/internal/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/summarizer"
 
 	"go.uber.org/zap"
 )
+
+// Context-aware auto mode selection helpers (inlined to avoid import cycle with handlers)
+const (
+	defaultContextWindow     = 100000 // 100k tokens (Claude)
+	contextSafetyMargin      = 1000   // Reserved buffer
+	fullModeThreshold        = 50000  // > 50k tokens → full mode
+	previewModeThreshold     = 20000  // > 20k tokens → preview mode
+	defaultSystemPromptTokens = 2000
+	defaultMessagesTokens     = 5000
+)
+
+// selectResponseModeByContext determines response mode based on remaining context tokens
+func selectResponseModeByContext() string {
+	// Calculate remaining context: contextWindow - systemPrompt - messages - safetyMargin
+	remainingTokens := defaultContextWindow - defaultSystemPromptTokens - defaultMessagesTokens - contextSafetyMargin
+
+	if remainingTokens > fullModeThreshold {
+		return "full"
+	} else if remainingTokens > previewModeThreshold {
+		return "preview"
+	}
+	return "summary"
+}
 
 // Global cache for last code_index_search result (for auto-populating filesModified)
 var (
@@ -326,26 +348,16 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 	// 🔬 PHASE3: Context-Aware Auto Mode Selection
 	// If responseMode is "auto", determine the appropriate mode based on remaining context
 	if responseModeParam == "auto" {
-		// Create a TokenCounter with a reasonable context window (e.g., 100k for Claude)
-		// In a real scenario, this would come from the request context
-		tokenCounter := handlers.NewTokenCounter(100000)
-
-		// Estimate current context usage (simplified - in production this would be more accurate)
-		// For now, we'll assume a baseline usage
-		usage := handlers.ContextUsage{
-			SystemPromptTokens: 2000,  // Typical system prompt
-			MessagesTokens:     5000,  // Conversation history
-			ToolResultsTokens:  0,     // Will be populated by this tool
-		}
-
-		// Get the appropriate response mode based on remaining context
-		modeSelector := handlers.NewResponseModeSelector()
-		selectedMode := modeSelector.GetResponseMode(tokenCounter.CalculateRemainingContext(usage))
+		// Use inlined helper to select mode based on estimated remaining context
+		selectedMode := selectResponseModeByContext()
 		responseModeParam = selectedMode
+
+		// Calculate remaining for logging (same logic as selectResponseModeByContext)
+		remainingTokens := defaultContextWindow - defaultSystemPromptTokens - defaultMessagesTokens - contextSafetyMargin
 
 		t.logger.Info("🔬 PHASE3: Auto mode selection applied",
 			zap.String("selectedMode", selectedMode),
-			zap.Int("remainingTokens", tokenCounter.CalculateRemainingContext(usage)),
+			zap.Int("remainingTokens", remainingTokens),
 			zap.String("query", query))
 	}
 

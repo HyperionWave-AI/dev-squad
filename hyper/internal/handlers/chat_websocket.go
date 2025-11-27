@@ -1048,8 +1048,12 @@ var (
 	maxConnections    int64 = 1000 // Configurable via env: WS_MAX_CONNECTIONS
 
 	// Per-user connection tracking
-	userConnections     = sync.Map{} // map[userID]int
-	maxConnectionsPerUser = 2        // Max 2 concurrent connections per user
+	// Note: Set to 5 to allow for transient connection overlaps during:
+	// - React StrictMode double-mounts in development
+	// - Session switching (old connection closing while new one opens)
+	// - Browser tab refresh (old connections may linger briefly)
+	userConnections       = sync.Map{} // map[userID]int
+	maxConnectionsPerUser = 5          // Max 5 concurrent connections per user
 
 	// Per-user message rate limiting
 	userMessageRates = sync.Map{} // map[userID]*messageRateLimit
@@ -1147,13 +1151,14 @@ type AISettingsServiceInterface interface {
 
 // ChatWebSocketHandler handles WebSocket connections for real-time chat streaming
 type ChatWebSocketHandler struct {
-	chatService       ChatServiceInterface
-	aiService         AIServiceInterface
-	aiSettingsService AISettingsServiceInterface
-	subchatStorage    SubchatStorageInterface
-	logger            *zap.Logger
+	chatService         ChatServiceInterface
+	aiService           AIServiceInterface
+	aiSettingsService   AISettingsServiceInterface
+	subchatStorage      SubchatStorageInterface
+	logger              *zap.Logger
 	toolResultProcessor executor.ToolResultProcessorFunc
-	writeMutex        sync.Mutex // Protects concurrent WebSocket writes (ping + message streaming)
+	resultInterceptor   *ToolResultInterceptor // Token-based result deflection
+	writeMutex          sync.Mutex             // Protects concurrent WebSocket writes (ping + message streaming)
 }
 
 // SubchatStorageInterface defines the interface for subchat storage operations (system subagents)
@@ -1170,6 +1175,9 @@ func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServi
 		return outputStr, true, true
 	}
 
+	// Initialize token-based result interceptor for intelligent deflection
+	resultInterceptor := NewToolResultInterceptor(logger)
+
 	return &ChatWebSocketHandler{
 		chatService:         chatService,
 		aiService:           aiService,
@@ -1177,6 +1185,7 @@ func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServi
 		subchatStorage:      subchatStorage,
 		logger:              logger,
 		toolResultProcessor: defaultProcessor,
+		resultInterceptor:   resultInterceptor,
 	}
 }
 
@@ -1976,14 +1985,46 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 		allowedTools = nil
 	}
 
-	// Step 9: Create tool result processor to handle size-aware processing
-	// Use handler's processor or create a default one if not set
-	toolResultProcessor := h.toolResultProcessor
-	if toolResultProcessor == nil {
-		toolResultProcessor = func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
-			processed := h.processToolResultWithSizeLimit(toolName, output)
-			return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
+	// Step 9: Create tool result processor with token-based deflection + byte-based limits
+	// This combines:
+	// 1. Token-based interceptor (context-aware, per-tool limits, metrics)
+	// 2. Byte-based processor (hard size limits, truncation tiers)
+	remainingContext := h.calculateRemainingContext(systemPromptText, messages)
+	h.logger.Info("📊 Context budget calculated for tool result processing",
+		zap.Int("remainingContextTokens", remainingContext),
+		zap.Int("messageCount", len(messages)))
+
+	toolResultProcessor := func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
+		// PHASE 1: Token-based deflection (context-aware, per-tool limits)
+		if h.resultInterceptor != nil {
+			processedResult, deflection := h.resultInterceptor.CheckResult(toolName, output, remainingContext)
+			if deflection.WasDeflected {
+				// Record metrics
+				metrics.RecordToolResultDeflection(toolName)
+				metrics.RecordToolResultTokens(toolName, deflection.OriginalSize, true)
+
+				h.logger.Info("🛑 Tool result deflected by token-based interceptor",
+					zap.String("tool", toolName),
+					zap.Int("originalTokens", deflection.OriginalSize),
+					zap.Int("maxAllowed", deflection.MaxAllowed),
+					zap.Int("remainingContext", remainingContext))
+
+				// Return deflection message
+				return deflection.Message, false, true // Don't save full, do stream the message
+			}
+
+			// Record non-deflected result metrics
+			estimator := NewTokenEstimator()
+			tokens := estimator.EstimateTokens(processedResult)
+			metrics.RecordToolResultTokens(toolName, tokens, false)
+
+			// Update output for next phase
+			output = processedResult
 		}
+
+		// PHASE 2: Byte-based processing (hard size limits, truncation tiers)
+		processed := h.processToolResultWithSizeLimit(toolName, output)
+		return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
 	}
 
 	// Step 10: Create executor config
@@ -2208,6 +2249,34 @@ type ToolResultProcessed struct {
 	Tier             string // Size tier: "normal", "truncated", "suppressed", "error"
 	OriginalSize     int    // Original size in bytes
 	IsTruncated      bool   // Whether output was modified
+}
+
+// calculateRemainingContext estimates remaining context tokens based on conversation history
+// Uses the TokenEstimator from the interceptor for consistent token counting
+func (h *ChatWebSocketHandler) calculateRemainingContext(systemPrompt string, messages []models.ChatMessage) int {
+	// Default context window (Claude's context is ~100k tokens)
+	const defaultContextWindow = 100000
+	const safetyMargin = 5000 // Reserve for response and overhead
+
+	estimator := NewTokenEstimator()
+
+	// Estimate system prompt tokens
+	systemPromptTokens := estimator.EstimateTokens(systemPrompt)
+
+	// Estimate message history tokens
+	messagesTokens := 0
+	for _, msg := range messages {
+		messagesTokens += estimator.EstimateTokens(msg.Content)
+		// Add overhead for role/metadata (~10 tokens per message)
+		messagesTokens += 10
+	}
+
+	remaining := defaultContextWindow - systemPromptTokens - messagesTokens - safetyMargin
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	return remaining
 }
 
 // processToolResultWithSizeLimit checks tool result size and applies appropriate handling

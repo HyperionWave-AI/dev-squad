@@ -118,6 +118,18 @@ var (
 		Help: "Total number of AI API errors by type",
 	}, []string{"error_type"})
 
+	// Tool Result Deflection Metrics
+	ToolResultDeflections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hyperion_tool_result_deflections_total",
+		Help: "Total number of tool results deflected due to size exceeding token limits",
+	}, []string{"tool_name"})
+
+	ToolResultTokens = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "hyperion_tool_result_tokens",
+		Help:    "Token count distribution of tool results",
+		Buckets: []float64{100, 500, 1000, 2000, 5000, 10000, 20000, 50000},
+	}, []string{"tool_name", "deflected"}) // deflected: true, false
+
 	// HTTP Metrics
 	HTTPRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "http_requests_total",
@@ -202,6 +214,10 @@ func init() {
 	Registry.MustRegister(AITokensConsumed)
 	Registry.MustRegister(AIErrors)
 
+	// Register tool result deflection metrics
+	Registry.MustRegister(ToolResultDeflections)
+	Registry.MustRegister(ToolResultTokens)
+
 	// Register HTTP metrics
 	Registry.MustRegister(HTTPRequestsTotal)
 	Registry.MustRegister(HTTPRequestDuration)
@@ -266,4 +282,18 @@ func RecordMongoDBQuery(operation, collection string, duration float64, err erro
 	if err != nil {
 		MongoDBQueryErrors.WithLabelValues(operation, collection).Inc()
 	}
+}
+
+// RecordToolResultDeflection records a tool result deflection event
+func RecordToolResultDeflection(toolName string) {
+	ToolResultDeflections.WithLabelValues(toolName).Inc()
+}
+
+// RecordToolResultTokens records token count for a tool result
+func RecordToolResultTokens(toolName string, tokens int, deflected bool) {
+	deflectedLabel := "false"
+	if deflected {
+		deflectedLabel = "true"
+	}
+	ToolResultTokens.WithLabelValues(toolName, deflectedLabel).Observe(float64(tokens))
 }
