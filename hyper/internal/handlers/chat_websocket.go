@@ -1632,7 +1632,8 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 			systemPromptText = subagent.SystemPrompt
 			h.logger.Info("Using system subagent prompt",
 				zap.String("sessionId", sessionID.Hex()),
-				zap.String("subagentName", *session.ActiveSubagentName))
+				zap.String("subagentName", *session.ActiveSubagentName),
+				zap.String("promptPrefix", systemPromptText[:min(200, len(systemPromptText))]))
 		} else {
 			h.logger.Warn("Failed to fetch system subagent, falling back to default prompt",
 				zap.String("subagentName", *session.ActiveSubagentName),
@@ -1642,10 +1643,11 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 		// Using user-created subagent - fetch subagent's prompt from AI settings
 		subagent, err := h.aiSettingsService.GetSubagent(ctx, *session.ActiveSubagentID, companyID)
 		if err == nil && subagent != nil {
-			systemPromptText = subagent.SystemPrompt
+			systemPromptText = storage.BaseSubagentPrompt + "\n\n## YOUR SPECIALIZATION\n\n" + subagent.SystemPrompt
 			h.logger.Info("Using user subagent prompt",
 				zap.String("subagentId", session.ActiveSubagentID.Hex()),
-				zap.String("subagentName", subagent.Name))
+				zap.String("subagentName", subagent.Name),
+				zap.String("promptPrefix", systemPromptText[:min(200, len(systemPromptText))]))
 		} else {
 			h.logger.Warn("Failed to fetch user subagent, falling back to system prompt", zap.Error(err))
 		}

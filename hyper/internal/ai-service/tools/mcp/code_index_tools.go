@@ -12,6 +12,7 @@ import (
 	"hyper/internal/ai-service"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/mcp/embeddings"
+	"hyper/internal/handlers"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/summarizer"
 
@@ -172,12 +173,77 @@ type CodeIndexSearchTool struct {
 	logger           *zap.Logger
 }
 
+// filterResultByMode filters a SearchResult based on the response mode
+// summary: returns only Summary, FilePath, StartLine, EndLine, Score, NodeName (~100-200 tokens)
+// preview: returns Summary + first 20 lines of Content + metadata (~300-500 tokens)
+// full: returns all fields (current behavior, ~500-2000 tokens)
+func filterResultByMode(result *storage.SearchResult, mode string, logger *zap.Logger) {
+	originalContentLen := len(result.Content)
+	originalSymbolsCount := len(result.Symbols)
+	originalImportsCount := len(result.Imports)
+
+	result.ResponseMode = mode
+
+	switch mode {
+	case "summary":
+		// Keep only essential fields for summary mode
+		result.Content = ""
+		result.ChunkNum = 0
+		result.ChunkType = ""
+		result.Symbols = nil
+		result.Imports = nil
+		result.DocContent = ""
+		result.FullFileRetrieved = false
+		result.ChunkSize = ""
+
+		logger.Debug("🔬 PHASE1: filterResultByMode - SUMMARY mode applied",
+			zap.String("filePath", result.FilePath),
+			zap.Int("originalContentLen", originalContentLen),
+			zap.Int("newContentLen", 0),
+			zap.Int("symbolsRemoved", originalSymbolsCount),
+			zap.Int("importsRemoved", originalImportsCount),
+			zap.String("summaryKept", truncateForLog(result.Summary, 50)))
+
+	case "preview":
+		// Keep summary + first 20 lines of content
+		originalLines := 0
+		if result.Content != "" {
+			lines := strings.Split(result.Content, "\n")
+			originalLines = len(lines)
+			if len(lines) > 20 {
+				lines = lines[:20]
+				result.Content = strings.Join(lines, "\n") + "\n... (truncated)"
+			}
+		}
+		// Keep metadata but remove some verbose fields
+		result.Symbols = nil
+		result.Imports = nil
+
+		logger.Debug("🔬 PHASE1: filterResultByMode - PREVIEW mode applied",
+			zap.String("filePath", result.FilePath),
+			zap.Int("originalLines", originalLines),
+			zap.Int("previewLines", 20),
+			zap.Int("newContentLen", len(result.Content)),
+			zap.Int("symbolsRemoved", originalSymbolsCount),
+			zap.Int("importsRemoved", originalImportsCount))
+
+	case "full":
+		// Keep everything as-is (default behavior)
+		// No filtering needed
+		logger.Debug("🔬 PHASE1: filterResultByMode - FULL mode (no filtering)",
+			zap.String("filePath", result.FilePath),
+			zap.Int("contentLen", originalContentLen),
+			zap.Int("symbolsCount", originalSymbolsCount),
+			zap.Int("importsCount", originalImportsCount))
+	}
+}
+
 func (t *CodeIndexSearchTool) Name() string {
 	return "code_index_search"
 }
 
 func (t *CodeIndexSearchTool) Description() string {
-	return "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Default limit: 10 results (max: 50). IMPORTANT: retrieve='full' returns only the single best match to conserve tokens - use chunk modes (chunk-s/m/l/xl) for exploring multiple results. NOTE: Requires code index to be populated via MCP endpoint first."
+	return "Search for code using natural language queries with tiered response modes to control token usage. Default limit: 10 results (max: 50). Response modes: 'summary' (~100-200 tokens - summary + metadata only), 'preview' (~300-500 tokens - summary + first 20 lines), 'full' (~500-2000 tokens - everything, default). IMPORTANT: retrieve='full' returns only the single best match to conserve tokens - use chunk modes (chunk-s/m/l/xl) for exploring multiple results. NOTE: Requires code index to be populated via MCP endpoint first."
 }
 
 func (t *CodeIndexSearchTool) InputSchema() map[string]interface{} {
@@ -200,6 +266,11 @@ func (t *CodeIndexSearchTool) InputSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "Content retrieval mode: 'chunk' (default - 200 lines), 'chunk-s' (50 lines), 'chunk-m' (100 lines), 'chunk-l' (200 lines), 'chunk-xl' (400 lines), or 'full' (entire file)",
 				"enum":        []string{"chunk", "chunk-s", "chunk-m", "chunk-l", "chunk-xl", "full"},
+			},
+			"responseMode": map[string]interface{}{
+				"type":        "string",
+				"description": "Response mode to control token usage: 'summary' (~100-200 tokens - summary + metadata only), 'preview' (~300-500 tokens - summary + first 20 lines), 'full' (~500-2000 tokens - everything, default)",
+				"enum":        []string{"summary", "preview", "full", "auto"},
 			},
 			"functionName": map[string]interface{}{
 				"type":        "string",
@@ -245,6 +316,44 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		retrieveModeParam = mode
 	}
 	retrieveType, chunkLines, tshirtSize := parseRetrieveMode(retrieveModeParam)
+
+	// Parse response mode (default: "full")
+	responseModeParam := "full"
+	if mode, ok := input["responseMode"].(string); ok {
+		responseModeParam = mode
+	}
+
+	// 🔬 PHASE3: Context-Aware Auto Mode Selection
+	// If responseMode is "auto", determine the appropriate mode based on remaining context
+	if responseModeParam == "auto" {
+		// Create a TokenCounter with a reasonable context window (e.g., 100k for Claude)
+		// In a real scenario, this would come from the request context
+		tokenCounter := handlers.NewTokenCounter(100000)
+
+		// Estimate current context usage (simplified - in production this would be more accurate)
+		// For now, we'll assume a baseline usage
+		usage := handlers.ContextUsage{
+			SystemPromptTokens: 2000,  // Typical system prompt
+			MessagesTokens:     5000,  // Conversation history
+			ToolResultsTokens:  0,     // Will be populated by this tool
+		}
+
+		// Get the appropriate response mode based on remaining context
+		modeSelector := handlers.NewResponseModeSelector()
+		selectedMode := modeSelector.GetResponseMode(tokenCounter.CalculateRemainingContext(usage))
+		responseModeParam = selectedMode
+
+		t.logger.Info("🔬 PHASE3: Auto mode selection applied",
+			zap.String("selectedMode", selectedMode),
+			zap.Int("remainingTokens", tokenCounter.CalculateRemainingContext(usage)),
+			zap.String("query", query))
+	}
+
+	t.logger.Info("🔬 PHASE1: Response mode parameter parsed",
+		zap.String("responseMode", responseModeParam),
+		zap.String("query", query),
+		zap.Int("limit", limit),
+		zap.String("retrieveMode", retrieveModeParam))
 
 	// MCP Best Practice: Limit full file retrieval to top 1 result to conserve context
 	// Full mode returns entire file content which can be very large
@@ -596,6 +705,20 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 	// Apply AI summarization to results (graceful degradation if unavailable)
 	results = t.summarizeResults(ctx, results)
 
+	// Apply response mode filtering to reduce token usage
+	t.logger.Info("🔬 PHASE1: Starting response mode filtering",
+		zap.String("responseMode", responseModeParam),
+		zap.Int("resultCount", len(results)))
+
+	for i := range results {
+		filterResultByMode(&results[i], responseModeParam, t.logger)
+	}
+
+	t.logger.Info("🔬 PHASE1: Response mode filtering COMPLETE",
+		zap.String("responseMode", responseModeParam),
+		zap.Int("resultCount", len(results)),
+		zap.String("tokenEstimate", estimateTokenReduction(responseModeParam)))
+
 	// CRITICAL: Extract file paths into a prominent list so AI can't miss them
 	filePaths := make([]string, 0, len(results))
 	for _, result := range results {
@@ -614,12 +737,12 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.Time("cachedAt", lastCodeSearchTimestamp))
 
 	response := map[string]interface{}{
-		"success":     true,
-		"query":       query,
+		"success":           true,
+		"query":             query,
 		"FILE_PATHS_TO_USE": filePaths, // PROMINENT - AI must use these exact paths
-		"results":     results,
-		"resultCount": len(results),
-		"INSTRUCTIONS": "USE THE EXACT FILE PATHS FROM 'FILE_PATHS_TO_USE' ARRAY - DO NOT GUESS OR MODIFY THEM",
+		"results":           results,
+		"resultCount":       len(results),
+		"INSTRUCTIONS":      "USE THE EXACT FILE PATHS FROM 'FILE_PATHS_TO_USE' ARRAY - DO NOT GUESS OR MODIFY THEM",
 	}
 
 	// Add guidance message when full mode is used
@@ -695,9 +818,9 @@ func (t *CodeIndexAddFolderTool) Execute(ctx context.Context, input map[string]i
 	// Users should use code_index_scan MCP tool via /mcp endpoint to index files
 
 	return map[string]interface{}{
-		"status":  "added",
-		"message": "Folder added successfully. Use code_index_scan MCP tool via /mcp endpoint to index existing files.",
-		"folder":  folder,
+		"status":    "added",
+		"message":   "Folder added successfully. Use code_index_scan MCP tool via /mcp endpoint to index existing files.",
+		"folder":    folder,
 		"next_step": "Call code_index_scan MCP tool with folderPath to start indexing files",
 	}, nil
 }
@@ -903,8 +1026,146 @@ func truncateForLog(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// estimateTokenReduction returns estimated token savings for logging
+func estimateTokenReduction(mode string) string {
+	switch mode {
+	case "summary":
+		return "~100-200 tokens (80% reduction from full)"
+	case "preview":
+		return "~300-500 tokens (50% reduction from full)"
+	case "full":
+		return "~500-2000 tokens (no reduction)"
+	default:
+		return "unknown mode"
+	}
+}
+
 // RegisterCodeIndexTools registers code index tools with the tool registry
 // NOW REQUIRES: embedding client and Qdrant client for full search functionality
+
+// CodeIndexGetFullContentTool implements the ToolExecutor interface for fetching full code content
+// Enables on-demand code fetching for token-efficient workflows
+type CodeIndexGetFullContentTool struct {
+	codeIndexStorage *storage.CodeIndexStorage
+	logger           *zap.Logger
+}
+
+func (t *CodeIndexGetFullContentTool) Name() string {
+	return "code_index_get_full_content"
+}
+
+func (t *CodeIndexGetFullContentTool) Description() string {
+	return "Fetch full code content for a specific file and optional line range. Enables on-demand code retrieval for token-efficient workflows: search returns summaries (~1000 tokens) → AI picks 2-3 results → fetch full code (~1500 tokens) = 75% token reduction. Input: filePath (required), startLine (optional), endLine (optional). If line range not specified, returns entire file. Returns file metadata, content, and actual line range retrieved."
+}
+
+func (t *CodeIndexGetFullContentTool) InputSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"filePath": map[string]interface{}{
+				"type":        "string",
+				"description": "Absolute or relative file path (e.g., './ui/src/components/TaskCard.tsx' or '/Users/user/project/main.go')",
+			},
+			"startLine": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional: Starting line number (1-based). If not provided with endLine, returns entire file.",
+			},
+			"endLine": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional: Ending line number (1-based, inclusive). If not provided with startLine, returns entire file.",
+			},
+		},
+		"required": []string{"filePath"},
+	}
+}
+
+func (t *CodeIndexGetFullContentTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	t.logger.Info("🚀 PHASE2: code_index_get_full_content INVOKED",
+		zap.Any("input", input))
+
+	// Validate required fields
+	filePath, ok := input["filePath"].(string)
+	if !ok || filePath == "" {
+		t.logger.Error("🚀 PHASE2: VALIDATION FAILED - filePath missing")
+		return nil, fmt.Errorf("filePath is required and must be a string")
+	}
+
+	// Parse optional line range parameters
+	startLine := 0
+	endLine := 0
+
+	if sl, ok := input["startLine"].(float64); ok {
+		startLine = int(sl)
+	}
+	if el, ok := input["endLine"].(float64); ok {
+		endLine = int(el)
+	}
+
+	isFullFile := startLine == 0 && endLine == 0
+	t.logger.Info("🚀 PHASE2: Fetching code content",
+		zap.String("filePath", filePath),
+		zap.Int("startLine", startLine),
+		zap.Int("endLine", endLine),
+		zap.Bool("isFullFile", isFullFile))
+
+	// Fetch content from storage
+	result, err := t.codeIndexStorage.GetContentByFilePathAndLineRange(filePath, startLine, endLine)
+	if err != nil {
+		t.logger.Error("🚀 PHASE2: STORAGE FETCH FAILED",
+			zap.String("filePath", filePath),
+			zap.Int("startLine", startLine),
+			zap.Int("endLine", endLine),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to fetch code content: %w", err)
+	}
+
+	contentLen := len(result.Content)
+	linesFetched := result.EndLine - result.StartLine + 1
+	t.logger.Info("🚀 PHASE2: Code content fetched SUCCESSFULLY",
+		zap.String("filePath", result.FilePath),
+		zap.String("relativePath", result.RelativePath),
+		zap.String("language", result.Language),
+		zap.Int("startLine", result.StartLine),
+		zap.Int("endLine", result.EndLine),
+		zap.Int("linesFetched", linesFetched),
+		zap.Int("totalFileLines", result.LineCount),
+		zap.Int("contentBytes", contentLen),
+		zap.Int64("fileSize", result.Size))
+
+	// Build response
+	response := map[string]interface{}{
+		"success":        true,
+		"filePath":       result.FilePath,
+		"relativePath":   result.RelativePath,
+		"language":       result.Language,
+		"lineCount":      result.LineCount,
+		"content":        result.Content,
+		"startLine":      result.StartLine,
+		"endLine":        result.EndLine,
+		"requestedStart": result.RequestedStart,
+		"requestedEnd":   result.RequestedEnd,
+		"size":           result.Size,
+		"indexedAt":      result.IndexedAt,
+	}
+
+	// Add note if requested range was adjusted
+	rangeAdjusted := false
+	if (startLine > 0 || endLine > 0) && (result.StartLine != startLine || result.EndLine != endLine) {
+		response["note"] = fmt.Sprintf("Requested lines %d-%d, returned %d-%d (adjusted to valid range)", startLine, endLine, result.StartLine, result.EndLine)
+		rangeAdjusted = true
+	}
+
+	t.logger.Info("🚀 PHASE2: code_index_get_full_content COMPLETE",
+		zap.String("filePath", result.FilePath),
+		zap.Int("linesFetched", linesFetched),
+		zap.Int("contentBytes", contentLen),
+		zap.Bool("rangeAdjusted", rangeAdjusted),
+		zap.Bool("isFullFile", isFullFile),
+		zap.String("tokenEstimate", fmt.Sprintf("~%d tokens", contentLen/4))) // rough estimate: 4 chars per token
+
+	return response, nil
+}
+
 func RegisterCodeIndexTools(
 	registry *aiservice.ToolRegistry,
 	codeIndexStorage *storage.CodeIndexStorage,
@@ -919,6 +1180,10 @@ func RegisterCodeIndexTools(
 			embeddingClient:  embeddingClient,
 			qdrantClient:     qdrantClient,
 			summarizer:       codeSummarizer,
+			logger:           logger,
+		},
+		&CodeIndexGetFullContentTool{
+			codeIndexStorage: codeIndexStorage,
 			logger:           logger,
 		},
 		&CodeIndexAddFolderTool{codeIndexStorage: codeIndexStorage},

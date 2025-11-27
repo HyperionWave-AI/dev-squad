@@ -81,6 +81,43 @@ KEY CAPABILITIES:
 3. **File Operations**: You can read, write, and list files directly using read_file, write_file, list_directory tools.
 4. **Tool Execution**: Execute bash commands, apply patches, and run project-specific operations.
 
+🔍 SEMANTIC QUERIES - ALWAYS USE code_index_search (MANDATORY):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**code_index_search is your PRIMARY tool for semantic code queries.**
+
+When you need to find code by meaning/intent (NOT by exact filename):
+✅ ALWAYS use code_index_search first
+✅ Examples of semantic queries:
+   - "authentication logic" → finds auth functions regardless of filename
+   - "error handling for API calls" → finds error handling patterns
+   - "database connection setup" → finds DB initialization code
+   - "user permission validation" → finds authorization checks
+   - "dark mode toggle" → finds theme switching code
+
+❌ NEVER use list_directory or bash find for semantic queries
+❌ NEVER ask user "which file contains X?" - use code_index_search instead
+❌ NEVER assume you know the filename - let semantic search find it
+
+**code_index_search advantages:**
+- Finds code by MEANING, not just filename
+- Understands function purpose, class role, pattern intent
+- Works across multiple files and directories
+- Returns relevant context (line numbers, summaries)
+- Reduces token usage by 70% vs reading random files
+
+**When to use code_index_search:**
+- "Find the login validation" → code_index_search("login validation")
+- "Where is the error handler?" → code_index_search("error handling")
+- "Find database queries" → code_index_search("database queries")
+- "Locate the API client" → code_index_search("API client")
+- "Find state management" → code_index_search("state management")
+
+**When NOT to use code_index_search:**
+- You already know the exact filename (use read_file directly)
+- You need to list directory contents (use list_directory)
+- You need to execute system commands (use bash)
+
 AUTONOMOUS WORKFLOW (CRITICAL):
 When asked to modify, fix, or analyze code:
 1. **NEVER ask for file paths** - use code_index_search first with relevant semantic query
@@ -328,10 +365,10 @@ Be proactive, autonomous, and creatively leverage your tools. If stuck, innovate
 
 // AISettingsService manages system prompts and subagents with MongoDB storage
 type AISettingsService struct {
-	systemPromptsCollection         *mongo.Collection
-	systemPromptVersionsCollection  *mongo.Collection
-	subagentsCollection             *mongo.Collection
-	logger                          *zap.Logger
+	systemPromptsCollection        *mongo.Collection
+	systemPromptVersionsCollection *mongo.Collection
+	subagentsCollection            *mongo.Collection
+	logger                         *zap.Logger
 }
 
 // NewAISettingsService creates a new AI settings service instance

@@ -7,6 +7,33 @@ import (
 	"strings"
 )
 
+// ResponseModeSelector determines the appropriate response mode based on context budget
+// Implements Phase 3: Context-Aware Auto Mode
+type ResponseModeSelector struct {
+	FullModeThreshold    int // Remaining context > this value → full mode (default: 50000)
+	PreviewModeThreshold int // Remaining context > this value → preview mode (default: 20000)
+	// Remaining context <= PreviewModeThreshold → summary mode
+}
+
+// NewResponseModeSelector creates a new response mode selector with default thresholds
+func NewResponseModeSelector() *ResponseModeSelector {
+	return &ResponseModeSelector{
+		FullModeThreshold:    50000,  // Full mode for > 50k tokens
+		PreviewModeThreshold: 20000,  // Preview mode for 20-50k tokens
+		// Summary mode for < 20k tokens
+	}
+}
+
+// GetResponseMode determines the response mode based on remaining context tokens
+func (rms *ResponseModeSelector) GetResponseMode(remainingTokens int) string {
+	if remainingTokens > rms.FullModeThreshold {
+		return "full"
+	} else if remainingTokens > rms.PreviewModeThreshold {
+		return "preview"
+	}
+	return "summary"
+}
+
 // ContextWindowConfig holds configuration for context window optimization
 type ContextWindowConfig struct {
 	ModelContextWindow int // Total tokens available (e.g., 8000 for GPT-4, 100000 for Claude)

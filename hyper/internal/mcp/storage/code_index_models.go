@@ -91,6 +91,7 @@ type SearchResult struct {
 	Summary       string `json:"summary,omitempty"`       // Generated summary of the code
 	SummaryType   string `json:"summaryType,omitempty"`   // Type of summary: "llm", "heuristic", "cached"
 	SummaryTokens int    `json:"summaryTokens,omitempty"` // Token count of the summary
+	ResponseMode  string `json:"responseMode,omitempty"` // Response mode used: "summary", "preview", or "full"
 }
 
 // IndexStatus represents the current status of the code index

@@ -349,6 +349,7 @@ export const SessionList: React.FC<SessionListProps> = ({
         </div>
       </div>
 
+
       {/* Sessions List */}
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
