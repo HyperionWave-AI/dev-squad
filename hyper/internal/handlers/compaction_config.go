@@ -1,5 +1,7 @@
 package handlers
 
+import "hyper/internal/models"
+
 // CompactionConfig defines thresholds for context compaction
 type CompactionConfig struct {
 	// Context window settings
@@ -22,7 +24,7 @@ type CompactionConfig struct {
 func DefaultCompactionConfig() *CompactionConfig {
 	return &CompactionConfig{
 		MaxContextTokens:        128000,
-		TriggerThreshold:        0.90,
+		TriggerThreshold:        0.90, // 90% of context window
 		TargetThreshold:         0.60,
 		SummaryBufferTokens:     2000,
 		PerMessageMaxTokens:     8000,
@@ -69,4 +71,5 @@ type CompactionResult struct {
 	MessagesKept      int               // Number of messages that were preserved
 	SummaryGenerated  bool              // Whether a summary was generated
 	Error             error             // Any error that occurred during compaction
+	Notification      *models.SystemNotification // Notification to send to frontend (nil if no compaction)
 }

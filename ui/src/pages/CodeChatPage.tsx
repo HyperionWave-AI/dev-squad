@@ -41,7 +41,9 @@ import {
   type ChatStreamConnection,
   type ToolCall,
   type ToolResult,
+  type SystemNotification,
 } from '@/services/chatService';
+import { showSystemNotification } from '@/services/notificationService';
 
 
 // Local interface for session display (matches SessionList expectations)
@@ -590,6 +592,10 @@ export const CodeChatPage: React.FC = () => {
         console.log('[CodeChatPage] New subchat created, refreshing sessions list', subchatId);
         // Refresh sessions list to show the new subchat
         loadSessions();
+      },
+      onSystemNotification: (notification: SystemNotification) => {
+        // Display toast notification for backend system events
+        showSystemNotification(notification);
       },
     });
 

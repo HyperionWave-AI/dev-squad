@@ -46,6 +46,10 @@ func (m *MockChatService) SaveToolResult(ctx context.Context, sessionID primitiv
 	return nil, nil
 }
 
+func (m *MockChatService) ArchiveMessages(ctx context.Context, sessionID primitive.ObjectID, messageIDs []primitive.ObjectID) error {
+	return nil
+}
+
 // MockAIService is a mock implementation of AIServiceInterface for testing
 type MockAIService struct{}
 
@@ -216,7 +220,7 @@ func TestCompactionOrchestratorCompactIfNeeded(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages)
+	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages, "test-company")
 
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -256,7 +260,7 @@ func TestDualTriggerCompaction_TokensOnly(t *testing.T) {
 	sessionID := primitive.NewObjectID()
 	ctx := context.Background()
 
-	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages)
+	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages, "test-company")
 
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -296,7 +300,7 @@ func TestDualTriggerCompaction_SizeOnly(t *testing.T) {
 	sessionID := primitive.NewObjectID()
 	ctx := context.Background()
 
-	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages)
+	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages, "test-company")
 
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -336,7 +340,7 @@ func TestDualTriggerCompaction_Both(t *testing.T) {
 	sessionID := primitive.NewObjectID()
 	ctx := context.Background()
 
-	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages)
+	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages, "test-company")
 
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -425,7 +429,7 @@ func TestCompactionE2E(t *testing.T) {
 		statsBefore["totalTokens"], statsBefore["shouldCompact"])
 
 	// Run compaction
-	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages)
+	result, err := orchestrator.CompactIfNeeded(ctx, sessionID, messages, "test-company")
 
 	if err != nil {
 		t.Fatalf("CompactIfNeeded failed: %v", err)

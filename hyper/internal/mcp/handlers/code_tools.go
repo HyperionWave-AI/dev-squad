@@ -751,7 +751,7 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 	results = h.applyResponseMode(results, responseMode)
 
 	// Apply code summarization to results (graceful degradation if fails)
-	results = h.summarizeResults(ctx, results)
+	results, summarizationStats := h.summarizeResults(ctx, results)
 
 	// Build response with filtering metadata
 	response := map[string]interface{}{
@@ -761,6 +761,15 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		"retrieveMode": retrieveModeParam,
 		"results":      results,
 		"count":        len(results),
+	}
+
+	// Add summarization metadata if any results were summarized
+	if summarizationStats.ResultsSummarized > 0 {
+		response["summarization"] = map[string]interface{}{
+			"enabled":           true,
+			"resultsSummarized": summarizationStats.ResultsSummarized,
+			"tokensUsed":        summarizationStats.TokensUsed,
+		}
 	}
 
 	// Add token limiting metadata if truncation occurred
@@ -887,12 +896,20 @@ func estimateResponseModeTokens(result storage.SearchResult, responseMode string
 	return estimateTokens(result.Content)
 }
 
+// SummarizationStats holds statistics about the summarization process
+type SummarizationStats struct {
+	ResultsSummarized int
+	TokensUsed        int
+}
+
 // summarizeResults applies code summarization to search results
 // Implements graceful degradation: if summarization fails, returns results without summaries
-func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []storage.SearchResult) []storage.SearchResult {
+func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []storage.SearchResult) ([]storage.SearchResult, SummarizationStats) {
+	stats := SummarizationStats{}
+
 	if h.summarizer == nil {
 		h.logger.Info("Summarizer not initialized, skipping summarization")
-		return results
+		return results, stats
 	}
 
 	const tokenBudget = 5000
@@ -941,6 +958,7 @@ func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []stora
 		results[i].SummaryTokens = summary.TokenCount
 
 		tokensUsed += summary.TokenCount
+		stats.ResultsSummarized++
 
 		h.logger.Info("Summarized result successfully",
 			zap.String("filePath", results[i].FilePath),
@@ -949,11 +967,14 @@ func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []stora
 			zap.Int("cumulativeTokens", tokensUsed))
 	}
 
+	stats.TokensUsed = tokensUsed
+
 	h.logger.Info("Summarization complete",
 		zap.Int("totalResults", len(results)),
+		zap.Int("resultsSummarized", stats.ResultsSummarized),
 		zap.Int("tokensUsed", tokensUsed))
 
-	return results
+	return results, stats
 }
 
 // truncateString truncates a string to maxLen characters

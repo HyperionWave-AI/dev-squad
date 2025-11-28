@@ -231,6 +231,34 @@ func (w *websocketSink) IsDisconnected() bool {
 	return w.disconnected
 }
 
+// SendSystemNotification sends a system notification through the WebSocket
+func (w *websocketSink) SendSystemNotification(notification models.SystemNotification) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil
+	}
+
+	msg := models.StreamMessage{
+		Type:         "system_notification",
+		Notification: &notification,
+	}
+
+	if err := w.handler.safeWriteJSON(w.conn, msg); err != nil {
+		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			w.logger.Debug("WebSocket client disconnected during system notification")
+			w.disconnected = true
+			return nil
+		}
+		w.logger.Warn("Failed to send system notification to WebSocket", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
 // DefaultSystemPrompt is the default system prompt for Chat coordinator (GPT models)
 // Exported for use by AI settings service
 const DefaultSystemPrompt = `⛔ CRITICAL: YOU ARE A COORDINATOR - NOT AN IMPLEMENTER ⛔
@@ -1133,6 +1161,7 @@ type ChatServiceInterface interface {
 	SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*models.ChatMessage, error)
 	SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, id, name string, args map[string]interface{}, companyID string) (*models.ChatMessage, error)
 	SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, id, name string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error)
+	ArchiveMessages(ctx context.Context, sessionID primitive.ObjectID, messageIDs []primitive.ObjectID) error
 }
 
 // AIServiceInterface defines the interface for AI service operations
@@ -1219,6 +1248,23 @@ func (h *ChatWebSocketHandler) safeWriteControl(conn *websocket.Conn, messageTyp
 	h.writeMutex.Lock()
 	defer h.writeMutex.Unlock()
 	return conn.WriteControl(messageType, data, deadline)
+}
+
+// sendSystemNotification sends a system notification to the WebSocket client
+// Used for compaction, deflection, and summarization events
+func (h *ChatWebSocketHandler) sendSystemNotification(conn *websocket.Conn, notification models.SystemNotification) {
+	if conn == nil {
+		return
+	}
+	msg := models.StreamMessage{
+		Type:         "system_notification",
+		Notification: &notification,
+	}
+	if err := h.safeWriteJSON(conn, msg); err != nil {
+		h.logger.Debug("Failed to send system notification (client may have disconnected)",
+			zap.String("category", notification.Category),
+			zap.Error(err))
+	}
 }
 
 // extractAuthFromContext extracts authentication from Gin context (set by JWT middleware)
@@ -1946,6 +1992,36 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 		zap.String("sessionId", sessionID.Hex()),
 		zap.Int("messageCount", len(messages)))
 
+	// Step 3.5: Check if compaction is needed and perform if necessary
+	compactionResult, compactionErr := h.compactionOrchestrator.CompactIfNeeded(ctx, sessionID, messages, companyID)
+	if compactionErr != nil {
+		h.logger.Warn("Compaction check failed (continuing without compaction)",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(compactionErr))
+	} else if compactionResult.WasCompacted {
+		h.logger.Info("Context compaction performed",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("messagesCompacted", compactionResult.MessagesCompacted),
+			zap.Int("originalTokens", compactionResult.OriginalTokens),
+			zap.Int("compactedTokens", compactionResult.CompactedTokens))
+
+		// Send compaction notification to frontend
+		if compactionResult.Notification != nil {
+			h.sendSystemNotification(conn, *compactionResult.Notification)
+		}
+
+		// Re-fetch messages after compaction
+		messages, err = h.chatService.GetSessionMessages(ctx, sessionID)
+		if err != nil {
+			h.logger.Error("Failed to retrieve messages after compaction", zap.Error(err))
+			h.sendError(conn, "Failed to retrieve conversation after compaction")
+			return
+		}
+		h.logger.Debug("Retrieved compacted conversation history",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("messageCount", len(messages)))
+	}
+
 	// Step 4: Convert MongoDB messages to LangChain format
 	langchainMessages := aiservice.ConvertToLangChainMessages(messages)
 
@@ -2005,6 +2081,41 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 		zap.Int("messageCount", len(messages)))
 
 	toolResultProcessor := func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
+		// PHASE 0: Check for code search summarization metadata and send notification
+		if toolName == "code_index_search" {
+			if resultMap, ok := output.(map[string]interface{}); ok {
+				if summarization, exists := resultMap["summarization"].(map[string]interface{}); exists {
+					if enabled, _ := summarization["enabled"].(bool); enabled {
+						resultsSummarized, _ := summarization["resultsSummarized"].(int)
+						// Handle float64 from JSON unmarshaling
+						if rs, ok := summarization["resultsSummarized"].(float64); ok {
+							resultsSummarized = int(rs)
+						}
+						tokensUsed, _ := summarization["tokensUsed"].(int)
+						if tu, ok := summarization["tokensUsed"].(float64); ok {
+							tokensUsed = int(tu)
+						}
+
+						h.logger.Info("📋 Code search results summarized",
+							zap.Int("resultsSummarized", resultsSummarized),
+							zap.Int("tokensUsed", tokensUsed))
+
+						outputSink.SendSystemNotification(models.SystemNotification{
+							Category: "summarization",
+							Title:    "Search Results Summarized",
+							Message:  fmt.Sprintf("Summarized %d code search results", resultsSummarized),
+							Severity: "info",
+							Metadata: map[string]interface{}{
+								"toolName":          toolName,
+								"resultsSummarized": resultsSummarized,
+								"tokensUsed":        tokensUsed,
+							},
+						})
+					}
+				}
+			}
+		}
+
 		// PHASE 1: Token-based deflection (context-aware, per-tool limits)
 		if h.resultInterceptor != nil {
 			processedResult, deflection := h.resultInterceptor.CheckResult(toolName, output, remainingContext)
@@ -2018,6 +2129,21 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 					zap.Int("originalTokens", deflection.OriginalSize),
 					zap.Int("maxAllowed", deflection.MaxAllowed),
 					zap.Int("remainingContext", remainingContext))
+
+				// Send deflection notification to frontend
+				overagePercent := float64(deflection.OriginalSize-deflection.MaxAllowed) / float64(deflection.MaxAllowed) * 100
+				outputSink.SendSystemNotification(models.SystemNotification{
+					Category: "deflection",
+					Title:    "Tool Result Deflected",
+					Message:  fmt.Sprintf("%s result exceeded token limit (%d tokens)", toolName, deflection.OriginalSize),
+					Severity: "warning",
+					Metadata: map[string]interface{}{
+						"toolName":   toolName,
+						"tokenCount": deflection.OriginalSize,
+						"limit":      deflection.MaxAllowed,
+						"overage":    fmt.Sprintf("%.1f%%", overagePercent),
+					},
+				})
 
 				// Return deflection message
 				return deflection.Message, false, true // Don't save full, do stream the message
@@ -2034,6 +2160,23 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 
 		// PHASE 2: Byte-based processing (hard size limits, truncation tiers)
 		processed := h.processToolResultWithSizeLimit(toolName, output)
+
+		// Send summarization notification for suppressed or truncated results
+		if processed.Tier == "suppressed" || processed.Tier == "truncated" {
+			outputSink.SendSystemNotification(models.SystemNotification{
+				Category: "summarization",
+				Title:    "Tool Result Condensed",
+				Message:  fmt.Sprintf("%s result condensed (%s tier)", toolName, processed.Tier),
+				Severity: "info",
+				Metadata: map[string]interface{}{
+					"toolName":     toolName,
+					"tier":         processed.Tier,
+					"originalSize": processed.OriginalSize,
+					"isTruncated":  processed.IsTruncated,
+				},
+			})
+		}
+
 		return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
 	}
 

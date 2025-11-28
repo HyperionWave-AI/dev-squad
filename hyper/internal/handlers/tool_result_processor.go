@@ -3,6 +3,8 @@ package handlers
 import (
 	"fmt"
 	"log"
+
+	"hyper/internal/models"
 )
 
 // ToolResultProcessor handles tool result processing with summarization
@@ -19,12 +21,13 @@ func NewToolResultProcessor() *ToolResultProcessor {
 
 // ProcessedToolResult represents a processed tool result
 type ProcessedToolResult struct {
-	OriginalResult interface{} // Full result
-	DisplayResult  interface{} // What to send to LLM
-	Summary        string      // Summary if used
-	WasSummarized  bool        // Whether summarization was applied
-	TokenCount     int         // Estimated tokens
-	Reason         string      // Why summarization was used
+	OriginalResult interface{}                // Full result
+	DisplayResult  interface{}                // What to send to LLM
+	Summary        string                     // Summary if used
+	WasSummarized  bool                       // Whether summarization was applied
+	TokenCount     int                        // Estimated tokens
+	Reason         string                     // Why summarization was used
+	Notification   *models.SystemNotification // Notification to send to frontend (nil if no summarization)
 }
 
 // ProcessToolResult processes a tool result with optional summarization
@@ -56,13 +59,30 @@ func (trp *ToolResultProcessor) ProcessToolResult(
 			(resultTokens * 100) / remainingContextTokens,
 		)
 
+		summaryTokens := trp.estimator.EstimateTokens(summary)
+		reductionPercent := float64(resultTokens-summaryTokens) / float64(resultTokens) * 100
+
 		log.Printf(
 			"[ToolResult] Summarized %s: %s (original: %d tokens, summary: %d tokens)",
 			toolName,
 			processed.Reason,
 			resultTokens,
-			trp.estimator.EstimateTokens(summary),
+			summaryTokens,
 		)
+
+		// Create notification for frontend display
+		processed.Notification = &models.SystemNotification{
+			Category: "summarization",
+			Title:    "Search Results Summarized",
+			Message:  fmt.Sprintf("Condensed %s results to save tokens", toolName),
+			Severity: "info",
+			Metadata: map[string]interface{}{
+				"toolName":       toolName,
+				"originalTokens": resultTokens,
+				"finalTokens":    summaryTokens,
+				"reduction":      fmt.Sprintf("%.0f%%", reductionPercent),
+			},
+		}
 	}
 
 	return processed

@@ -82,11 +82,21 @@ type SendMessageRequest struct {
 
 // StreamMessage represents a streaming AI response message
 type StreamMessage struct {
-	Type       string            `json:"type"` // "token", "tool_call", "tool_result", "tool_result_chunk", "done", "error", "session_created", "user_message", "message_saved"
-	Content    string            `json:"content,omitempty"` // For session_created: contains new session ID
-	Error      string            `json:"error,omitempty"`
-	ToolCall   *ToolCallEvent    `json:"toolCall,omitempty"`
-	ToolResult *ToolResultEvent  `json:"toolResult,omitempty"`
+	Type         string              `json:"type"` // "token", "tool_call", "tool_result", "tool_result_chunk", "done", "error", "session_created", "user_message", "message_saved", "system_notification"
+	Content      string              `json:"content,omitempty"` // For session_created: contains new session ID
+	Error        string              `json:"error,omitempty"`
+	ToolCall     *ToolCallEvent      `json:"toolCall,omitempty"`
+	ToolResult   *ToolResultEvent    `json:"toolResult,omitempty"`
+	Notification *SystemNotification `json:"notification,omitempty"` // For system events (compaction, deflection, summarization)
+}
+
+// SystemNotification represents background system events for frontend display
+type SystemNotification struct {
+	Category string                 `json:"category"` // "compaction", "deflection", "summarization"
+	Title    string                 `json:"title"`
+	Message  string                 `json:"message"`
+	Severity string                 `json:"severity"` // "info", "warning", "success"
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ToolCallEvent represents an AI tool call event

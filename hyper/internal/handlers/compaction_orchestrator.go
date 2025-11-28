@@ -71,6 +71,7 @@ func (o *CompactionOrchestrator) CompactIfNeeded(
 	ctx context.Context,
 	sessionID primitive.ObjectID,
 	messages []models.ChatMessage,
+	companyID string,
 ) (*CompactionResult, error) {
 	result := &CompactionResult{
 		OriginalTokens: o.compactor.estimator.EstimateTotalTokens(messages),
@@ -201,7 +202,7 @@ func (o *CompactionOrchestrator) CompactIfNeeded(
 		zap.Int("archivedCount", len(toCompact)))
 
 	// Save summary message
-	err = o.saveSummaryMessage(ctx, sessionID, summaryMsg)
+	err = o.saveSummaryMessage(ctx, sessionID, summaryMsg, companyID)
 	if err != nil {
 		o.logger.Error("Failed to save summary message", zap.Error(err))
 		result.Error = err
@@ -273,63 +274,87 @@ func (o *CompactionOrchestrator) CompactIfNeeded(
 		sizePercentage,
 	)
 
+	// Create notification for frontend display
+	result.Notification = &models.SystemNotification{
+		Category: "compaction",
+		Title:    "Context Compacted",
+		Message:  fmt.Sprintf("Archived %d messages to save context space", result.MessagesCompacted),
+		Severity: "info",
+		Metadata: map[string]interface{}{
+			"messagesArchived":      result.MessagesCompacted,
+			"trigger":               string(result.Trigger),
+			"tokenReductionPercent": tokenReduction,
+			"sizeReductionPercent":  sizeReduction,
+		},
+	}
+
 	return result, nil
 }
 
 // archiveMessages marks messages as archived in the database.
-// This is a placeholder implementation - the actual implementation would depend on
-// the ChatService interface and database schema.
+// Uses the ChatService.ArchiveMessages method to batch update messages.
 func (o *CompactionOrchestrator) archiveMessages(
 	ctx context.Context,
 	sessionID primitive.ObjectID,
 	messages []models.ChatMessage,
 ) error {
-	// In a production system, this would:
-	// 1. Update all messages in the slice to set IsArchived = true
-	// 2. Batch update in the database for efficiency
-	// 3. Handle partial failures gracefully
-	//
-	// For now, we log the operation and return nil.
-	// The actual implementation would be in the ChatService.
+	if len(messages) == 0 {
+		return nil
+	}
 
-	o.logger.Debug("Archiving messages",
+	// Extract message IDs for batch archival
+	messageIDs := make([]primitive.ObjectID, len(messages))
+	for i, msg := range messages {
+		messageIDs[i] = msg.ID
+	}
+
+	o.logger.Debug("Archiving messages via ChatService",
 		zap.String("sessionId", sessionID.Hex()),
-		zap.Int("count", len(messages)))
+		zap.Int("count", len(messageIDs)))
 
-	// TODO: Implement actual archiving in ChatService
-	// This would involve:
-	// - Batch update to set IsArchived = true for all message IDs
-	// - Handle database errors appropriately
-	// - Log any failures
+	// Call the actual ChatService method to archive messages
+	err := o.chatService.ArchiveMessages(ctx, sessionID, messageIDs)
+	if err != nil {
+		o.logger.Error("ChatService.ArchiveMessages failed",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("messageCount", len(messageIDs)),
+			zap.Error(err))
+		return fmt.Errorf("failed to archive messages: %w", err)
+	}
 
 	return nil
 }
 
 // saveSummaryMessage saves the summary message to the database.
-// This is a placeholder implementation - the actual implementation would depend on
-// the ChatService interface.
+// Uses the ChatService.SaveMessage method to insert the summary.
 func (o *CompactionOrchestrator) saveSummaryMessage(
 	ctx context.Context,
 	sessionID primitive.ObjectID,
 	summaryMsg *models.ChatMessage,
+	companyID string,
 ) error {
-	// In a production system, this would:
-	// 1. Insert the summary message into the database
-	// 2. Handle database errors appropriately
-	// 3. Return the saved message with database ID
-	//
-	// For now, we log the operation and return nil.
-	// The actual implementation would be in the ChatService.
-
-	o.logger.Debug("Saving summary message",
+	o.logger.Debug("Saving summary message via ChatService",
 		zap.String("sessionId", sessionID.Hex()),
-		zap.Int("summaryLength", len(summaryMsg.Content)))
+		zap.Int("summaryLength", len(summaryMsg.Content)),
+		zap.Int("originalMessageCount", summaryMsg.OriginalMessageCount))
 
-	// TODO: Implement actual save in ChatService
-	// This would involve:
-	// - Insert the summary message into the database
-	// - Set the ID field from the database response
-	// - Handle database errors appropriately
+	// Save the summary as a "summary" role message
+	// The role "summary" is used to distinguish it from regular system messages
+	savedMsg, err := o.chatService.SaveMessage(ctx, sessionID, "summary", summaryMsg.Content, companyID)
+	if err != nil {
+		o.logger.Error("ChatService.SaveMessage failed for summary",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
+		return fmt.Errorf("failed to save summary message: %w", err)
+	}
+
+	// Update the summaryMsg with the database-assigned ID
+	if savedMsg != nil {
+		summaryMsg.ID = savedMsg.ID
+		o.logger.Debug("Summary message saved successfully",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("messageId", savedMsg.ID.Hex()))
+	}
 
 	return nil
 }

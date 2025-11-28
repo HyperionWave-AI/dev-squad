@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import {
   MessageSquare,
   LayoutDashboard,
@@ -79,6 +80,14 @@ function App() {
 
   return (
     <ConversationModeProvider>
+      <Toaster
+        position="top-right"
+        richColors
+        expand={false}
+        duration={5000}
+        closeButton
+        theme={theme === 'dark' ? 'dark' : 'light'}
+      />
       <BrowserRouter basename="/ui">
         <Routes>
           <Route

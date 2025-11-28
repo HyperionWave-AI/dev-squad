@@ -78,8 +78,17 @@ export interface ToolResult {
   metadata?: Record<string, any>;
 }
 
+// System notification from backend (compaction, deflection, summarization events)
+export interface SystemNotification {
+  category: 'compaction' | 'deflection' | 'summarization';
+  title: string;
+  message: string;
+  severity: 'info' | 'warning' | 'success';
+  metadata?: Record<string, unknown>;
+}
+
 export interface StreamMessage {
-  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message' | 'session_created';
+  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message' | 'session_created' | 'system_notification';
   content?: string;
   toolCall?: {
     tool: string;
@@ -93,6 +102,7 @@ export interface StreamMessage {
     durationMs: number;
   };
   error?: string;
+  notification?: SystemNotification;
 }
 
 // ============================================================
@@ -350,6 +360,7 @@ export interface StreamCallbacks {
   onMessageSaved?: (databaseId: string) => void;
   onUserMessage?: (content: string) => void; // Bug #1 fix: handle user message echo
   onSessionCreated?: (subchatId: string) => void; // Event-driven session updates
+  onSystemNotification?: (notification: SystemNotification) => void; // Backend system events (compaction, deflection, summarization)
   onError: (error: Error) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -450,6 +461,13 @@ export function connectChatStream(
             // New subchat session created - refresh sessions list
             if (callbacks.onSessionCreated && data.content) {
               callbacks.onSessionCreated(data.content);
+            }
+            break;
+
+          case 'system_notification':
+            // System notification from backend (compaction, deflection, summarization)
+            if (data.notification && callbacks.onSystemNotification) {
+              callbacks.onSystemNotification(data.notification);
             }
             break;
         }
