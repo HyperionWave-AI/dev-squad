@@ -3,11 +3,13 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
-	"io"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"hyper/internal/mcp/storage"
 
@@ -43,15 +45,62 @@ func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	// Clone the request to avoid modifying the original
 	reqCopy := req.Clone(req.Context())
 
-	// Add custom headers
+	// Add custom headers with special handling for certain headers
 	for key, value := range h.headers {
 		if strValue, ok := value.(string); ok {
+			canonicalKey := strings.ToLower(key)
+
+			// Special handling for Accept header: merge with existing values
+			// The MCP SDK sets "Accept: application/json, text/event-stream" which is required
+			// by the MCP protocol. If custom headers include Accept, we need to merge values
+			// rather than overwrite to preserve SDK's required accept types.
+			if canonicalKey == "accept" {
+				existingAccept := reqCopy.Header.Get("Accept")
+				if existingAccept != "" {
+					// Parse existing accept values
+					existingValues := parseAcceptValues(existingAccept)
+					customValues := parseAcceptValues(strValue)
+
+					// Merge: add custom values that aren't already present
+					merged := existingValues
+					for _, cv := range customValues {
+						found := false
+						for _, ev := range existingValues {
+							if strings.EqualFold(ev, cv) {
+								found = true
+								break
+							}
+						}
+						if !found {
+							merged = append(merged, cv)
+						}
+					}
+					reqCopy.Header.Set("Accept", strings.Join(merged, ", "))
+				} else {
+					reqCopy.Header.Set(key, strValue)
+				}
+				continue
+			}
+
+			// For all other headers, use Set (replace)
 			reqCopy.Header.Set(key, strValue)
 		}
 	}
 
 	// Use base transport to execute the request
 	return h.base.RoundTrip(reqCopy)
+}
+
+// parseAcceptValues parses an Accept header value into individual media types
+func parseAcceptValues(accept string) []string {
+	var values []string
+	for _, part := range strings.Split(accept, ",") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
 }
 
 // createCustomHTTPClient creates an http.Client with custom headers support
@@ -66,6 +115,52 @@ func createCustomHTTPClient(headers map[string]interface{}) *http.Client {
 			base:    http.DefaultTransport,
 		},
 	}
+}
+
+// normalizeToolName extracts the original tool name from various naming conventions
+// It handles:
+// - "mcp_hyperion_{serverName}_{toolName}" -> "{toolName}"
+// - "mcp_{serverName}_{toolName}" -> "{toolName}"
+// - "{toolName}" -> "{toolName}" (unchanged)
+//
+// The function tries to extract the last part after known server name patterns
+func normalizeToolName(toolName string) string {
+	// If it doesn't start with "mcp_", return as-is
+	if !strings.HasPrefix(toolName, "mcp_") {
+		return toolName
+	}
+
+	// Remove "mcp_hyperion_" prefix if present (legacy naming)
+	name := toolName
+	if strings.HasPrefix(name, "mcp_hyperion_") {
+		name = strings.TrimPrefix(name, "mcp_hyperion_")
+	} else {
+		// Remove "mcp_" prefix
+		name = strings.TrimPrefix(name, "mcp_")
+	}
+
+	// Now we have "{serverName}_{toolName}"
+	// Common server name patterns to strip (they often end with "_mcp" or "_api")
+	// Examples:
+	// - "black_forest_labs_mcp_bfl_text_to_image" -> serverName="black_forest_labs_mcp", toolName="bfl_text_to_image"
+	// - "google_mcp_google_generate_image" -> serverName="google_mcp", toolName="google_generate_image"
+	// - "hedra_mcp_hedra_create_video" -> serverName="hedra_mcp", toolName="hedra_create_video"
+	// - "storage_api_list_directory" -> serverName="storage_api", toolName="list_directory"
+
+	// Look for "_mcp_" which separates serverName from toolName
+	if idx := strings.Index(name, "_mcp_"); idx != -1 {
+		// Return everything after "_mcp_"
+		return name[idx+5:] // Skip "_mcp_"
+	}
+
+	// Look for "_api_" which separates serverName from toolName (e.g., storage_api_list_directory)
+	if idx := strings.Index(name, "_api_"); idx != -1 {
+		// Return everything after "_api_"
+		return name[idx+5:] // Skip "_api_"
+	}
+
+	// If no pattern found, return the name as-is (might be original tool name)
+	return name
 }
 
 // truncateJSON safely truncates JSON to maxBytes for logging previews
@@ -267,8 +362,6 @@ func (h *ToolsDiscoveryHandler) discoverLegacyResources(ctx context.Context, ser
 	}
 
 	// Check for JSON-RPC error
-
-	// Check for JSON-RPC error
 	if rpcResp.Error != nil {
 		return nil, fmt.Errorf("JSON-RPC error: %s (code %d)", rpcResp.Error.Message, rpcResp.Error.Code)
 	}
@@ -360,8 +453,6 @@ func (h *ToolsDiscoveryHandler) discoverLegacyPrompts(ctx context.Context, serve
 		}
 		return nil, fmt.Errorf("failed to decode JSON-RPC response: %w (response body: %s)", err, bodyPreview)
 	}
-
-	// Check for JSON-RPC error
 
 	// Check for JSON-RPC error
 	if rpcResp.Error != nil {
@@ -719,12 +810,23 @@ func (h *ToolsDiscoveryHandler) HandleGetToolSchema(ctx context.Context, args ma
 
 // HandleExecuteTool handles the execute_tool tool call
 func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	// ============================================================
+	// 🔍 EXECUTE_TOOL DEBUG START
+	// ============================================================
+	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("🔍 EXECUTE_TOOL DEBUG - REQUEST RECEIVED")
+	fmt.Println(strings.Repeat("=", 80))
+
+	argsJSON, _ := json.MarshalIndent(args, "", "  ")
+	fmt.Printf("📥 RAW ARGS:\n%s\n", string(argsJSON))
+
 	h.logger.Info("execute_tool request started",
 		zap.String("argsPreview", truncateJSON(args, 200)))
 
 	// Extract toolName (required)
 	toolName, ok := args["toolName"].(string)
 	if !ok || toolName == "" {
+		fmt.Println("❌ ERROR: Missing or invalid toolName parameter")
 		h.logger.Warn("execute_tool failed: missing or invalid toolName parameter")
 		return createErrorResult("toolName parameter is required and must be a non-empty string"), nil, nil
 	}
@@ -732,26 +834,83 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 	// Extract args (required)
 	toolArgs, ok := args["args"].(map[string]interface{})
 	if !ok {
+		fmt.Printf("❌ ERROR: Missing or invalid args parameter for tool: %s\n", toolName)
 		h.logger.Warn("execute_tool failed: missing or invalid args parameter",
 			zap.String("toolName", toolName))
 		return createErrorResult("args parameter is required and must be a JSON object"), nil, nil
 	}
 
+	toolArgsJSON, _ := json.MarshalIndent(toolArgs, "", "  ")
+	fmt.Printf("🔧 TOOL NAME (original): %s\n", toolName)
+	fmt.Printf("📋 TOOL ARGS:\n%s\n", string(toolArgsJSON))
+
+	// Normalize tool name - handle different naming conventions
+	// Tools can be called with:
+	// 1. Original name: "bfl_text_to_image"
+	// 2. Namespaced (ToolRegistry): "mcp_black_forest_labs_mcp_bfl_text_to_image"
+	// 3. Hyperion-prefixed (legacy): "mcp_hyperion_black_forest_labs_mcp_bfl_text_to_image"
+	normalizedToolName := normalizeToolName(toolName)
+	fmt.Printf("🔧 TOOL NAME (normalized): %s\n", normalizedToolName)
+
 	h.logger.Info("executing tool",
 		zap.String("toolName", toolName),
+		zap.String("normalizedToolName", normalizedToolName),
 		zap.String("toolArgsPreview", truncateJSON(toolArgs, 200)))
 
 	// Look up the tool metadata to find which server it belongs to
-	toolMetadata, err := h.toolsStorage.GetToolSchema(ctx, toolName)
+	// Try multiple name variants in order of likelihood
+	var toolMetadata *storage.ToolMetadata
+	var err error
+	triedNames := []string{}
+
+	// Build list of name variants to try
+	nameVariants := []string{normalizedToolName}
+	if normalizedToolName != toolName {
+		nameVariants = append(nameVariants, toolName)
+	}
+
+	// Also try with server name prefix stripped differently
+	// e.g., "storage_api_list_files" -> try "storage_api_list_files" as well
+	if strings.HasPrefix(toolName, "mcp_hyperion_") {
+		withoutHyperion := strings.TrimPrefix(toolName, "mcp_hyperion_")
+		if withoutHyperion != normalizedToolName && withoutHyperion != toolName {
+			nameVariants = append(nameVariants, withoutHyperion)
+		}
+	} else if strings.HasPrefix(toolName, "mcp_") {
+		withoutMcp := strings.TrimPrefix(toolName, "mcp_")
+		if withoutMcp != normalizedToolName && withoutMcp != toolName {
+			nameVariants = append(nameVariants, withoutMcp)
+		}
+	}
+
+	// Try each variant
+	for _, variant := range nameVariants {
+		triedNames = append(triedNames, variant)
+		fmt.Printf("   Trying tool name variant: %s\n", variant)
+		toolMetadata, err = h.toolsStorage.GetToolSchema(ctx, variant)
+		if err == nil {
+			fmt.Printf("   ✅ Found tool with name: %s\n", variant)
+			break
+		}
+	}
+
 	if err != nil {
+		fmt.Printf("❌ ERROR: Tool not found. Tried names: %v\n", triedNames)
 		h.logger.Error("execute_tool failed: tool not found",
 			zap.String("toolName", toolName),
+			zap.String("normalizedToolName", normalizedToolName),
+			zap.Strings("triedNames", triedNames),
 			zap.Error(err))
-		return createErrorResult(fmt.Sprintf("tool not found: %s", err.Error())), nil, nil
+		return createErrorResult(fmt.Sprintf("tool not found: %s (tried: %v)", toolName, triedNames)), nil, nil
 	}
+
+	fmt.Printf("📦 TOOL METADATA:\n")
+	fmt.Printf("   - Server Name: %s\n", toolMetadata.ServerName)
+	fmt.Printf("   - Tool Description: %s\n", truncateJSON(toolMetadata.Description, 100))
 
 	// Check if this is a built-in tool (mcp-builtin server)
 	if toolMetadata.ServerName == "mcp-builtin" {
+		fmt.Println("❌ ERROR: Cannot execute built-in tool via execute_tool")
 		return createErrorResult(fmt.Sprintf(
 			"Tool '%s' is a built-in tool and cannot be executed via execute_tool. "+
 				"Built-in tools are directly available in your MCP client.",
@@ -762,6 +921,7 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 	// Get the server metadata to find the server URL and headers
 	serverMetadata, err := h.toolsStorage.GetServer(ctx, toolMetadata.ServerName)
 	if err != nil {
+		fmt.Printf("❌ ERROR: Server not found: %s - %v\n", toolMetadata.ServerName, err)
 		h.logger.Error("execute_tool failed: server not found",
 			zap.String("toolName", toolName),
 			zap.String("serverName", toolMetadata.ServerName),
@@ -769,14 +929,70 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 		return createErrorResult(fmt.Sprintf("failed to get server info: %s", err.Error())), nil, nil
 	}
 
+	fmt.Printf("🌐 SERVER METADATA:\n")
+	fmt.Printf("   - Server URL: %s\n", serverMetadata.ServerURL)
+	fmt.Printf("   - Server Description: %s\n", serverMetadata.Description)
+
+	// Log headers (mask sensitive values)
+	fmt.Println("🔑 HEADERS CONFIGURED FOR SERVER:")
+	if serverMetadata.Headers != nil {
+		for key, value := range serverMetadata.Headers {
+			if strVal, ok := value.(string); ok {
+				maskedValue := strVal
+				keyLower := strings.ToLower(key)
+				if strings.Contains(keyLower, "authorization") || strings.Contains(keyLower, "token") || strings.Contains(keyLower, "key") {
+					if len(strVal) > 20 {
+						maskedValue = strVal[:10] + "..." + strVal[len(strVal)-10:]
+					} else if len(strVal) > 5 {
+						maskedValue = strVal[:3] + "***"
+					}
+				}
+				fmt.Printf("   - %s: %s\n", key, maskedValue)
+			} else {
+				fmt.Printf("   - %s: (non-string value: %T)\n", key, value)
+			}
+		}
+	} else {
+		fmt.Println("   (no custom headers)")
+	}
+
+	// Check context timeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		fmt.Printf("⏱️  CONTEXT TIMEOUT: %v remaining (deadline: %v)\n", remaining.Round(time.Second), deadline.Format(time.RFC3339))
+		if remaining < 5*time.Minute {
+			fmt.Println("   ⚠️  WARNING: Context timeout may be too short for long-running tools like BFL image generation!")
+		}
+	} else {
+		fmt.Println("⏱️  CONTEXT TIMEOUT: No deadline set")
+	}
+
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println("📤 CALLING REMOTE MCP SERVER...")
+
+	// IMPORTANT: Use the original tool name from metadata (as registered on the MCP server)
+	// NOT the namespaced name that the AI uses (e.g., "mcp_hyperion_google_mcp_google_generate_image")
+	// The MCP server only knows the original name (e.g., "google_generate_image")
+	originalToolName := toolMetadata.ToolName
+	fmt.Printf("🔧 TOOL NAME (for MCP server): %s\n", originalToolName)
+
 	h.logger.Info("calling tool on remote MCP server",
 		zap.String("toolName", toolName),
+		zap.String("originalToolName", originalToolName),
 		zap.String("serverName", toolMetadata.ServerName),
 		zap.String("serverURL", serverMetadata.ServerURL))
 
 	// Execute the tool on the remote MCP server with custom headers
-	result, err := h.executeToolOnServer(ctx, serverMetadata.ServerURL, serverMetadata.Headers, toolName, toolArgs)
+	// Use originalToolName (as registered on MCP server), not the namespaced toolName
+	startTime := time.Now()
+	result, err := h.executeToolOnServer(ctx, serverMetadata.ServerURL, serverMetadata.Headers, originalToolName, toolArgs)
+	elapsed := time.Since(startTime)
+
+	fmt.Printf("⏱️  EXECUTION TIME: %v\n", elapsed.Round(time.Millisecond))
+
 	if err != nil {
+		fmt.Printf("❌ REMOTE EXECUTION ERROR: %v\n", err)
+		fmt.Println(strings.Repeat("=", 80))
 		h.logger.Error("execute_tool failed: remote execution error",
 			zap.String("toolName", toolName),
 			zap.String("serverName", toolMetadata.ServerName),
@@ -785,12 +1001,53 @@ func (h *ToolsDiscoveryHandler) HandleExecuteTool(ctx context.Context, args map[
 		return createErrorResult(fmt.Sprintf("failed to execute tool: %s", err.Error())), nil, nil
 	}
 
+	// Log raw result
+	fmt.Println("📥 RAW RESULT FROM MCP SERVER:")
+	if result != nil {
+		fmt.Printf("   - IsError: %v\n", result.IsError)
+		fmt.Printf("   - Content blocks: %d\n", len(result.Content))
+		for i, content := range result.Content {
+			fmt.Printf("   - Content[%d] type: %T\n", i, content)
+			if textContent, ok := content.(*mcp.TextContent); ok {
+				preview := textContent.Text
+				if len(preview) > 500 {
+					preview = preview[:500] + "...[truncated]"
+				}
+				fmt.Printf("     Text: %s\n", preview)
+			} else if imgContent, ok := content.(*mcp.ImageContent); ok {
+				fmt.Printf("     ImageContent: mimeType=%s, dataLen=%d bytes\n", imgContent.MIMEType, len(imgContent.Data))
+			} else if audioContent, ok := content.(*mcp.AudioContent); ok {
+				fmt.Printf("     AudioContent: mimeType=%s, dataLen=%d bytes\n", audioContent.MIMEType, len(audioContent.Data))
+			}
+		}
+		if result.StructuredContent != nil {
+			structuredJSON, _ := json.MarshalIndent(result.StructuredContent, "   ", "  ")
+			fmt.Printf("   - StructuredContent: %s\n", string(structuredJSON))
+		} else {
+			fmt.Println("   - StructuredContent: nil")
+		}
+	} else {
+		fmt.Println("   ⚠️  RESULT IS NIL!")
+	}
+
 	h.logger.Info("execute_tool completed successfully",
 		zap.String("toolName", toolName),
 		zap.String("serverName", toolMetadata.ServerName),
 		zap.String("resultPreview", truncateJSON(result, 200)))
 
 	extractedData := extractResultData(h, result)
+
+	fmt.Println("📤 EXTRACTED DATA FOR AI:")
+	extractedJSON, _ := json.MarshalIndent(extractedData, "", "  ")
+	extractedStr := string(extractedJSON)
+	if len(extractedStr) > 1000 {
+		extractedStr = extractedStr[:1000] + "...[truncated]"
+	}
+	fmt.Printf("%s\n", extractedStr)
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Println("🔍 EXECUTE_TOOL DEBUG END")
+	fmt.Println(strings.Repeat("=", 80) + "\n")
+
 	h.logger.Info("execute_tool returning extracted data",
 		zap.String("extractedDataPreview", truncateJSON(extractedData, 200)))
 
@@ -864,9 +1121,41 @@ func extractResultData(h *ToolsDiscoveryHandler, result *mcp.CallToolResult) int
 
 		var firstTextContent string
 		var firstJSONPrimitive interface{}
+		var mediaContents []map[string]interface{} // Collect image/audio content
 
 		// Iterate through ALL Content blocks to prioritize objects over primitives
 		for i, content := range result.Content {
+			// Handle ImageContent (e.g., from image generation tools)
+			if imageContent, ok := content.(*mcp.ImageContent); ok {
+				h.logger.Info("extractResultData: found ImageContent block",
+					zap.Int("blockIndex", i),
+					zap.String("mimeType", imageContent.MIMEType),
+					zap.Int("dataLength", len(imageContent.Data)))
+
+				mediaContents = append(mediaContents, map[string]interface{}{
+					"type":     "image",
+					"mimeType": imageContent.MIMEType,
+					"data":     base64.StdEncoding.EncodeToString(imageContent.Data),
+				})
+				continue
+			}
+
+			// Handle AudioContent (e.g., from audio generation tools)
+			if audioContent, ok := content.(*mcp.AudioContent); ok {
+				h.logger.Info("extractResultData: found AudioContent block",
+					zap.Int("blockIndex", i),
+					zap.String("mimeType", audioContent.MIMEType),
+					zap.Int("dataLength", len(audioContent.Data)))
+
+				mediaContents = append(mediaContents, map[string]interface{}{
+					"type":     "audio",
+					"mimeType": audioContent.MIMEType,
+					"data":     base64.StdEncoding.EncodeToString(audioContent.Data),
+				})
+				continue
+			}
+
+			// Handle TextContent
 			if textContent, ok := content.(*mcp.TextContent); ok && textContent.Text != "" {
 				text := textContent.Text
 				h.logger.Debug("extractResultData: found TextContent block",
@@ -916,10 +1205,26 @@ func extractResultData(h *ToolsDiscoveryHandler, result *mcp.CallToolResult) int
 						zap.Int("blockIndex", i),
 						zap.Error(err))
 				}
-			} else {
-				h.logger.Debug("extractResultData: Content block is not TextContent or is empty",
-					zap.Int("blockIndex", i),
-					zap.String("contentType", fmt.Sprintf("%T", content)))
+				continue
+			}
+
+			h.logger.Debug("extractResultData: Content block is unhandled type",
+				zap.Int("blockIndex", i),
+				zap.String("contentType", fmt.Sprintf("%T", content)))
+		}
+
+		// If we found media content (images/audio), return it
+		// This takes priority over text content for media-generating tools
+		if len(mediaContents) > 0 {
+			h.logger.Info("extractResultData: returning media content",
+				zap.Int("mediaCount", len(mediaContents)))
+			if len(mediaContents) == 1 {
+				// Single media item - return directly
+				return mediaContents[0]
+			}
+			// Multiple media items - return as array
+			return map[string]interface{}{
+				"media": mediaContents,
 			}
 		}
 
@@ -936,7 +1241,7 @@ func extractResultData(h *ToolsDiscoveryHandler, result *mcp.CallToolResult) int
 			return firstTextContent
 		}
 
-		h.logger.Debug("extractResultData: no TextContent found in any Content block")
+		h.logger.Debug("extractResultData: no usable content found in any Content block")
 	}
 
 	// Fallback to StructuredContent even if empty (maintain backward compatibility)
@@ -946,24 +1251,43 @@ func extractResultData(h *ToolsDiscoveryHandler, result *mcp.CallToolResult) int
 
 // executeToolOnServer executes a tool on a remote MCP server using the official SDK
 func (h *ToolsDiscoveryHandler) executeToolOnServer(ctx context.Context, serverURL string, headers map[string]interface{}, toolName string, toolArgs map[string]interface{}) (*mcp.CallToolResult, error) {
+	fmt.Println("   🔌 executeToolOnServer: Creating MCP client...")
+	fmt.Printf("   📍 Server URL: %s\n", serverURL)
+
 	// Create MCP client using official SDK
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "hyperion-mcp-discovery",
 		Version: "1.0.0",
 	}, nil)
 
+	// Create HTTP client with logging transport that also handles custom headers
+	httpClient := createLoggingHTTPClient(headers)
+
 	// Create transport with custom HTTP client that injects headers
 	transport := &mcp.StreamableClientTransport{
 		Endpoint:   serverURL,
-		HTTPClient: createCustomHTTPClient(headers),
+		HTTPClient: httpClient,
 	}
+
+	fmt.Println("   🔗 Connecting to MCP server...")
+	connectStart := time.Now()
 
 	// Connect to the remote MCP server
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
+		fmt.Printf("   ❌ Connection failed after %v: %v\n", time.Since(connectStart), err)
 		return nil, fmt.Errorf("failed to connect to MCP server: %w", err)
 	}
 	defer session.Close()
+
+	fmt.Printf("   ✅ Connected in %v\n", time.Since(connectStart))
+
+	// Log the tool call request
+	toolArgsJSON, _ := json.Marshal(toolArgs)
+	fmt.Printf("   📤 Calling tool: %s\n", toolName)
+	fmt.Printf("   📋 Tool arguments: %s\n", string(toolArgsJSON))
+
+	callStart := time.Now()
 
 	// Call the tool via the SDK
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
@@ -971,10 +1295,13 @@ func (h *ToolsDiscoveryHandler) executeToolOnServer(ctx context.Context, serverU
 		Arguments: toolArgs,
 	})
 
+	fmt.Printf("   ⏱️  Tool call completed in %v\n", time.Since(callStart))
+
 	// If we got a result, check if it's an error result
 	// MCP protocol: tool errors should be returned as results with IsError=true
 	// rather than Go errors
 	if result != nil {
+		fmt.Printf("   📥 Got result: IsError=%v, ContentBlocks=%d\n", result.IsError, len(result.Content))
 		// If the result has IsError=true, return it as-is (this is a tool execution error, not a connection error)
 		// Even if err != nil, the result takes precedence
 		return result, nil
@@ -982,11 +1309,96 @@ func (h *ToolsDiscoveryHandler) executeToolOnServer(ctx context.Context, serverU
 
 	// No result returned - this is a connection/protocol error
 	if err != nil {
+		fmt.Printf("   ❌ Tool call error (no result): %v\n", err)
 		return nil, fmt.Errorf("failed to call tool: %w", err)
 	}
 
 	// Shouldn't reach here, but handle gracefully
+	fmt.Println("   ⚠️  No result and no error - unexpected state")
 	return nil, fmt.Errorf("no result returned from tool call")
+}
+
+// loggingRoundTripper wraps an http.RoundTripper to log requests and responses
+type loggingRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	fmt.Println("   📡 HTTP REQUEST:")
+	fmt.Printf("      Method: %s\n", req.Method)
+	fmt.Printf("      URL: %s\n", req.URL.String())
+	fmt.Println("      Headers:")
+	for key, values := range req.Header {
+		for _, value := range values {
+			maskedValue := value
+			keyLower := strings.ToLower(key)
+			if strings.Contains(keyLower, "authorization") {
+				if len(value) > 30 {
+					maskedValue = value[:15] + "..." + value[len(value)-10:]
+				}
+			}
+			fmt.Printf("         %s: %s\n", key, maskedValue)
+		}
+	}
+
+	// Read and log request body if present
+	if req.Body != nil {
+		bodyBytes, err := io.ReadAll(req.Body)
+		if err == nil {
+			req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Reset body for actual request
+			bodyStr := string(bodyBytes)
+			if len(bodyStr) > 500 {
+				bodyStr = bodyStr[:500] + "...[truncated]"
+			}
+			fmt.Printf("      Body: %s\n", bodyStr)
+		}
+	}
+
+	startTime := time.Now()
+	resp, err := t.base.RoundTrip(req)
+	elapsed := time.Since(startTime)
+
+	if err != nil {
+		fmt.Printf("   ❌ HTTP ERROR after %v: %v\n", elapsed, err)
+		return resp, err
+	}
+
+	fmt.Println("   📡 HTTP RESPONSE:")
+	fmt.Printf("      Status: %s\n", resp.Status)
+	fmt.Printf("      Duration: %v\n", elapsed)
+	fmt.Println("      Headers:")
+	for key, values := range resp.Header {
+		for _, value := range values {
+			preview := value
+			if len(preview) > 100 {
+				preview = preview[:100] + "..."
+			}
+			fmt.Printf("         %s: %s\n", key, preview)
+		}
+	}
+
+	return resp, err
+}
+
+// createLoggingHTTPClient creates an HTTP client with logging and custom header support
+func createLoggingHTTPClient(headers map[string]interface{}) *http.Client {
+	// Build the transport chain: logging -> headers -> default
+	baseTransport := http.DefaultTransport
+
+	// Add header injection layer
+	headerTransport := &headerRoundTripper{
+		headers: headers,
+		base:    baseTransport,
+	}
+
+	// Add logging layer on top
+	loggingTransport := &loggingRoundTripper{
+		base: headerTransport,
+	}
+
+	return &http.Client{
+		Transport: loggingTransport,
+	}
 }
 
 // registerMCPAddServer registers the mcp_add_server tool

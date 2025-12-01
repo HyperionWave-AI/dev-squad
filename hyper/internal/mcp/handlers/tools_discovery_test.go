@@ -676,3 +676,208 @@ func TestExtractResultData(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractResultData_ImageContent tests that ImageContent blocks are properly extracted
+func TestExtractResultData_ImageContent(t *testing.T) {
+	tests := []struct {
+		name         string
+		result       *mcp.CallToolResult
+		expectType   string
+		expectFields map[string]interface{}
+		description  string
+	}{
+		{
+			name: "single image content",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.ImageContent{
+						MIMEType: "image/png",
+						Data:     []byte("fake-image-data"),
+					},
+				},
+			},
+			expectType: "map",
+			expectFields: map[string]interface{}{
+				"type":     "image",
+				"mimeType": "image/png",
+			},
+			description: "Should extract image content with type and mimeType",
+		},
+		{
+			name: "image content with text - image takes priority",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Text: "Image generated successfully",
+					},
+					&mcp.ImageContent{
+						MIMEType: "image/jpeg",
+						Data:     []byte("jpeg-data"),
+					},
+				},
+			},
+			expectType: "map",
+			expectFields: map[string]interface{}{
+				"type":     "image",
+				"mimeType": "image/jpeg",
+			},
+			description: "Image content should be returned even when text is present",
+		},
+		{
+			name: "multiple images returns media array",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.ImageContent{
+						MIMEType: "image/png",
+						Data:     []byte("image1"),
+					},
+					&mcp.ImageContent{
+						MIMEType: "image/jpeg",
+						Data:     []byte("image2"),
+					},
+				},
+			},
+			expectType: "media-array",
+			expectFields: map[string]interface{}{
+				"mediaCount": 2,
+			},
+			description: "Multiple images should be wrapped in media array",
+		},
+		{
+			name: "audio content",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.AudioContent{
+						MIMEType: "audio/mp3",
+						Data:     []byte("audio-data"),
+					},
+				},
+			},
+			expectType: "map",
+			expectFields: map[string]interface{}{
+				"type":     "audio",
+				"mimeType": "audio/mp3",
+			},
+			description: "Should extract audio content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := zap.NewNop()
+			handler := &ToolsDiscoveryHandler{
+				logger: logger,
+			}
+
+			result := extractResultData(handler, tt.result)
+
+			if tt.expectType == "map" {
+				resultMap, ok := result.(map[string]interface{})
+				assert.True(t, ok, "Result should be a map: %v", result)
+				for key, expected := range tt.expectFields {
+					assert.Equal(t, expected, resultMap[key], "Field %s should match", key)
+				}
+				// Verify data field exists and is non-empty for image/audio
+				if tt.expectFields["type"] == "image" || tt.expectFields["type"] == "audio" {
+					data, hasData := resultMap["data"]
+					assert.True(t, hasData, "Should have data field")
+					assert.NotEmpty(t, data, "Data should not be empty")
+				}
+			} else if tt.expectType == "media-array" {
+				resultMap, ok := result.(map[string]interface{})
+				assert.True(t, ok, "Result should be a map with media array")
+				media, hasMedia := resultMap["media"]
+				assert.True(t, hasMedia, "Should have media field")
+				mediaArr, ok := media.([]map[string]interface{})
+				assert.True(t, ok, "Media should be array of maps")
+				assert.Equal(t, tt.expectFields["mediaCount"], len(mediaArr), "Media count should match")
+			}
+		})
+	}
+}
+
+// TestNormalizeToolName tests the normalizeToolName function
+func TestNormalizeToolName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// MCP server tools with _mcp_ pattern
+		{
+			name:     "hyperion prefixed BFL tool",
+			input:    "mcp_hyperion_black_forest_labs_mcp_bfl_text_to_image",
+			expected: "bfl_text_to_image",
+		},
+		{
+			name:     "non-hyperion prefixed BFL tool",
+			input:    "mcp_black_forest_labs_mcp_bfl_text_to_image",
+			expected: "bfl_text_to_image",
+		},
+		{
+			name:     "google MCP tool",
+			input:    "mcp_google_mcp_google_generate_image",
+			expected: "google_generate_image",
+		},
+		{
+			name:     "hedra MCP tool",
+			input:    "mcp_hedra_mcp_hedra_create_video",
+			expected: "hedra_create_video",
+		},
+		// Storage API tools with _api_ pattern
+		{
+			name:     "storage API list directory",
+			input:    "mcp_hyperion_storage_api_list_directory",
+			expected: "list_directory",
+		},
+		{
+			name:     "storage API upload file",
+			input:    "mcp_hyperion_storage_api_upload_file",
+			expected: "upload_file",
+		},
+		{
+			name:     "storage API share public link",
+			input:    "mcp_hyperion_storage_api_share_public_link",
+			expected: "share_public_link",
+		},
+		{
+			name:     "non-hyperion storage API tool",
+			input:    "mcp_storage_api_list_directory",
+			expected: "list_directory",
+		},
+		// Original tool names (no normalization needed)
+		{
+			name:     "already original BFL tool name",
+			input:    "bfl_text_to_image",
+			expected: "bfl_text_to_image",
+		},
+		{
+			name:     "already original list directory",
+			input:    "list_directory",
+			expected: "list_directory",
+		},
+		// Edge cases
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only mcp prefix",
+			input:    "mcp_some_tool",
+			expected: "some_tool",
+		},
+		{
+			name:     "only mcp_hyperion prefix without pattern",
+			input:    "mcp_hyperion_simple_tool",
+			expected: "simple_tool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeToolName(tt.input)
+			assert.Equal(t, tt.expected, result, "normalizeToolName(%q) = %q, want %q", tt.input, result, tt.expected)
+		})
+	}
+}
