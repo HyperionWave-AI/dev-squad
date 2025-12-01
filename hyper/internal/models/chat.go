@@ -29,6 +29,7 @@ type ChatMessage struct {
 	SessionID           primitive.ObjectID `json:"sessionId" bson:"sessionId"`
 	Role                string             `json:"role" bson:"role"` // "user", "assistant", "system", "tool_call", "tool_result", "summary"
 	Content             string             `json:"content" bson:"content"`
+	IsPending           bool               `json:"isPending" bson:"isPending"`                         // Whether this message is still being processed (optimistic update)
 	Timestamp           time.Time          `json:"timestamp" bson:"timestamp"`
 	TokenCount          int                `json:"tokenCount" bson:"tokenCount"`                       // Estimated token count for this message
 	IsArchived          bool               `json:"isArchived" bson:"isArchived"`                       // Whether this message has been archived

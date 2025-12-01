@@ -1418,6 +1418,11 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // Reduced from 5 minutes to 30 seconds
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // Reduced from 5 minutes to 30 seconds
+		// Record pong received in health monitor
+		healthPool := GetHealthMonitorPool(h.logger)
+		if monitor, ok := healthPool.monitors.Load(sessionID.Hex()); ok {
+			monitor.(*ConnectionHealthMonitor).RecordPongReceived()
+		}
 		return nil
 	})
 	ticker := time.NewTicker(30 * time.Second)
@@ -1449,6 +1454,16 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 
 	// Processing state to prevent concurrent messages during AI response (using atomic for panic safety)
 	var isProcessing atomic.Bool
+
+	// Register health monitor for this connection
+	healthMonitor := NewConnectionHealthMonitor(conn, h.logger, &h.writeMutex)
+	healthPool := GetHealthMonitorPool(h.logger)
+	healthPool.Register(sessionID.Hex(), healthMonitor)
+	defer func() {
+		healthPool.Unregister(sessionID.Hex())
+	}()
+	h.logger.Info("Connection health monitor registered",
+		zap.String("sessionId", sessionID.Hex()))
 
 	// Goroutine for sending pings (tracked with WaitGroup)
 	cleanup.wg.Add(1)

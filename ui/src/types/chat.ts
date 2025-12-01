@@ -7,6 +7,7 @@ export interface Message {
   content: string;
   role: 'user' | 'assistant' | 'system';
   timestamp: string;
+  isPending?: boolean; // Whether this message is still being processed (optimistic update)
   metadata?: {
     tool?: string;
     [key: string]: any;

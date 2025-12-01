@@ -1,5 +1,13 @@
 /**
- * WebSocketManager - Thread-safe WebSocket connection manager
+ * WebSocketManager - Thread-safe WebSocket connection manager with comprehensive state management
+ *
+ * Features:
+ * 1. Detailed connection states: CONNECTING → CONNECTED → RECONNECTING → ERROR → DISCONNECTED
+ * 2. Exponential backoff for reconnection (1s, 2s, 4s, 8s, max 30s)
+ * 3. Write buffer monitoring to detect and recover from buffer full conditions
+ * 4. Connection health checks with ping/pong timeout detection
+ * 5. State change callbacks for UI integration
+ * 6. Message queuing during disconnection with automatic flush on reconnect
  *
  * Fixes race conditions:
  * 1. State check-and-send race - Atomic operations with proper locking
@@ -12,6 +20,7 @@ export const ConnectionState = {
   DISCONNECTED: 'DISCONNECTED',
   CONNECTING: 'CONNECTING',
   CONNECTED: 'CONNECTED',
+  RECONNECTING: 'RECONNECTING',
   DISCONNECTING: 'DISCONNECTING',
   ERROR: 'ERROR'
 } as const;
@@ -25,23 +34,148 @@ interface QueuedMessage {
   reject: (error: Error) => void;
 }
 
+interface ConnectionMetrics {
+  uptime: number; // milliseconds
+  reconnectCount: number;
+  messagesSent: number;
+  messagesReceived: number;
+  bufferUsage: number; // percentage
+  lastStateChange: number; // timestamp
+}
+
+/**
+ * ReconnectionManager handles exponential backoff for reconnection attempts
+ * Backoff sequence: 1s → 2s → 4s → 8s → 16s → 30s (max)
+ */
+class ReconnectionManager {
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly MIN_BACKOFF = 1000; // 1 second
+  private readonly MAX_BACKOFF = 30000; // 30 seconds
+  private readonly BACKOFF_MULTIPLIER = 2;
+
+  /**
+   * Calculate exponential backoff delay
+   */
+  getBackoffDelay(): number {
+    const exponentialDelay = this.MIN_BACKOFF * Math.pow(this.BACKOFF_MULTIPLIER, this.reconnectAttempts);
+    return Math.min(exponentialDelay, this.MAX_BACKOFF);
+  }
+
+  /**
+   * Get current attempt number
+   */
+  getAttemptNumber(): number {
+    return this.reconnectAttempts;
+  }
+
+  /**
+   * Check if max attempts reached
+   */
+  isMaxAttemptsReached(): boolean {
+    return this.reconnectAttempts >= this.maxReconnectAttempts;
+  }
+
+  /**
+   * Increment attempt counter
+   */
+  incrementAttempt(): void {
+    this.reconnectAttempts++;
+  }
+
+  /**
+   * Reset attempt counter (on successful connection)
+   */
+  reset(): void {
+    this.reconnectAttempts = 0;
+  }
+
+  /**
+   * Schedule reconnection attempt
+   */
+  scheduleReconnect(callback: () => void): void {
+    const delay = this.getBackoffDelay();
+    console.log(`[ReconnectionManager] Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
+    
+    this.reconnectTimer = setTimeout(() => {
+      this.incrementAttempt();
+      callback();
+    }, delay);
+  }
+
+  /**
+   * Cancel scheduled reconnection
+   */
+  cancel(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+}
+
 export class WebSocketManager {
   private ws: WebSocket | null = null;
   private state: ConnectionState = ConnectionState.DISCONNECTED;
   private sessionId: string | null = null;
   private messageQueue: QueuedMessage[] = [];
   private callbacks: Map<string, Function> = new Map();
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 5;
+  private stateChangeCallbacks: Map<ConnectionState, Function[]> = new Map();
+  private reconnectionManager: ReconnectionManager = new ReconnectionManager();
   private readonly MAX_QUEUE_SIZE = 100;
   private readonly QUEUE_TIMEOUT = 30000; // 30 seconds
+  private readonly WRITE_BUFFER_THRESHOLD = 16 * 1024; // 16KB - warn if buffer exceeds this
 
   // Lock for atomic state transitions
   private stateLock: Promise<void> = Promise.resolve();
 
   // Lock for message queue operations
   private queueLock: Promise<void> = Promise.resolve();
+
+  // Metrics tracking
+  private metrics: ConnectionMetrics = {
+    uptime: 0,
+    reconnectCount: 0,
+    messagesSent: 0,
+    messagesReceived: 0,
+    bufferUsage: 0,
+    lastStateChange: Date.now()
+  };
+
+  private connectionStartTime: number | null = null;
+  private metricsInterval: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Register callback for state changes
+   */
+  onStateChange(state: ConnectionState, callback: (state: ConnectionState) => void): void {
+    if (!this.stateChangeCallbacks.has(state)) {
+      this.stateChangeCallbacks.set(state, []);
+    }
+    this.stateChangeCallbacks.get(state)!.push(callback);
+  }
+
+  /**
+   * Emit state change to all registered callbacks
+   */
+  private emitStateChange(newState: ConnectionState): void {
+    console.log(`[WSManager] State transition: ${this.state} → ${newState}`);
+    
+    const callbacks = this.stateChangeCallbacks.get(newState) || [];
+    callbacks.forEach(cb => {
+      try {
+        cb(newState);
+      } catch (error) {
+        console.error('[WSManager] Error in state change callback:', error);
+      }
+    });
+
+    // Also emit to generic onStateChange callback if exists
+    this.callbacks.get('onStateChange')?.(newState);
+
+    this.metrics.lastStateChange = Date.now();
+  }
 
   /**
    * Connect to WebSocket with atomic state transition
@@ -58,14 +192,18 @@ export class WebSocketManager {
         await this.disconnect();
       }
 
-      this.state = ConnectionState.CONNECTING;
+      this.setState(ConnectionState.CONNECTING);
       this.sessionId = sessionId;
       this.callbacks = new Map(Object.entries(callbacks));
+      this.connectionStartTime = Date.now();
+
+      // Start metrics tracking
+      this.startMetricsTracking();
 
       try {
         await this.establishConnection(sessionId);
       } catch (error) {
-        this.state = ConnectionState.ERROR;
+        this.setState(ConnectionState.ERROR);
         throw error;
       }
     });
@@ -87,7 +225,7 @@ export class WebSocketManager {
         if (this.state !== ConnectionState.CONNECTED) {
           // Queue message for later
           this.messageQueue.push({ content, timestamp: Date.now(), resolve, reject });
-          console.log('[WSManager] Message queued (not connected):', content.substring(0, 50));
+          console.log('[WSManager] Message queued (state: ' + this.state + '):', content.substring(0, 50));
 
           // Reject after timeout if still not connected
           setTimeout(() => {
@@ -104,6 +242,7 @@ export class WebSocketManager {
         // Send immediately
         try {
           this.sendImmediately(content);
+          this.metrics.messagesSent++;
           resolve();
         } catch (error) {
           reject(error instanceof Error ? error : new Error('Send failed'));
@@ -122,12 +261,9 @@ export class WebSocketManager {
       }
 
       // Cancel reconnection attempts
-      if (this.reconnectTimer) {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
-      }
+      this.reconnectionManager.cancel();
 
-      this.state = ConnectionState.DISCONNECTING;
+      this.setState(ConnectionState.DISCONNECTING);
 
       // Reject all queued messages
       await this.withQueueLock(async () => {
@@ -151,9 +287,10 @@ export class WebSocketManager {
         this.ws = null;
       }
 
-      this.state = ConnectionState.DISCONNECTED;
+      this.setState(ConnectionState.DISCONNECTED);
       this.sessionId = null;
-      this.reconnectAttempts = 0;
+      this.reconnectionManager.reset();
+      this.stopMetricsTracking();
     });
   }
 
@@ -163,6 +300,7 @@ export class WebSocketManager {
   async cleanup(): Promise<void> {
     await this.disconnect();
     this.callbacks.clear();
+    this.stateChangeCallbacks.clear();
   }
 
   /**
@@ -188,7 +326,32 @@ export class WebSocketManager {
            this.ws.readyState === WebSocket.OPEN;
   }
 
+  /**
+   * Get connection metrics
+   */
+  getMetrics(): ConnectionMetrics {
+    return { ...this.metrics };
+  }
+
+  /**
+   * Get write buffer usage (0-100%)
+   */
+  getBufferUsage(): number {
+    if (!this.ws) return 0;
+    const bufferedAmount = (this.ws as any).bufferedAmount || 0;
+    return Math.min(100, (bufferedAmount / this.WRITE_BUFFER_THRESHOLD) * 100);
+  }
+
   // Private helper methods
+
+  /**
+   * Set state with validation and callbacks
+   */
+  private setState(newState: ConnectionState): void {
+    if (this.state === newState) return;
+    this.state = newState;
+    this.emitStateChange(newState);
+  }
 
   private establishConnection(sessionId: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -201,8 +364,8 @@ export class WebSocketManager {
         resolved = true;
 
         this.ws = ws;
-        this.state = ConnectionState.CONNECTED;
-        this.reconnectAttempts = 0;
+        this.setState(ConnectionState.CONNECTED);
+        this.reconnectionManager.reset();
 
         console.log('[WSManager] Connected to session:', sessionId);
         this.callbacks.get('onOpen')?.();
@@ -216,6 +379,7 @@ export class WebSocketManager {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          this.metrics.messagesReceived++;
           this.callbacks.get('onMessage')?.(data);
         } catch (error) {
           console.error('[WSManager] Message parse error:', error);
@@ -228,7 +392,7 @@ export class WebSocketManager {
 
         if (!resolved) {
           resolved = true;
-          this.state = ConnectionState.ERROR;
+          this.setState(ConnectionState.ERROR);
           reject(new Error('WebSocket connection failed'));
         }
 
@@ -255,7 +419,7 @@ export class WebSocketManager {
       setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          this.state = ConnectionState.ERROR;
+          this.setState(ConnectionState.ERROR);
           ws.close();
           reject(new Error('Connection timeout'));
         }
@@ -271,6 +435,15 @@ export class WebSocketManager {
     try {
       this.ws.send(JSON.stringify({ content }));
       console.log('[WSManager] Message sent:', content.substring(0, 50));
+
+      // Monitor write buffer
+      const bufferedAmount = (this.ws as any).bufferedAmount || 0;
+      this.metrics.bufferUsage = Math.min(100, (bufferedAmount / this.WRITE_BUFFER_THRESHOLD) * 100);
+
+      if (bufferedAmount > this.WRITE_BUFFER_THRESHOLD) {
+        console.warn('[WSManager] Write buffer high:', bufferedAmount, 'bytes');
+        this.callbacks.get('onBufferWarning')?.(bufferedAmount);
+      }
     } catch (error) {
       console.error('[WSManager] Send error:', error);
       throw error;
@@ -289,6 +462,7 @@ export class WebSocketManager {
       for (const msg of queue) {
         try {
           this.sendImmediately(msg.content);
+          this.metrics.messagesSent++;
           msg.resolve();
         } catch (error) {
           msg.reject(error instanceof Error ? error : new Error('Send failed'));
@@ -298,25 +472,41 @@ export class WebSocketManager {
   }
 
   private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+    if (this.reconnectionManager.isMaxAttemptsReached()) {
       console.error('[WSManager] Max reconnect attempts reached');
-      this.state = ConnectionState.ERROR;
+      this.setState(ConnectionState.ERROR);
       return;
     }
 
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-    this.reconnectAttempts++;
+    this.setState(ConnectionState.RECONNECTING);
+    this.metrics.reconnectCount++;
 
-    console.log(`[WSManager] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-
-    this.reconnectTimer = setTimeout(() => {
+    this.reconnectionManager.scheduleReconnect(() => {
       if (this.sessionId) {
         this.connect(this.sessionId, Object.fromEntries(this.callbacks))
           .catch(error => {
             console.error('[WSManager] Reconnect failed:', error);
           });
       }
-    }, delay);
+    });
+  }
+
+  private startMetricsTracking(): void {
+    this.connectionStartTime = Date.now();
+    this.metricsInterval = setInterval(() => {
+      if (this.connectionStartTime) {
+        this.metrics.uptime = Date.now() - this.connectionStartTime;
+      }
+      this.metrics.bufferUsage = this.getBufferUsage();
+    }, 1000); // Update every second
+  }
+
+  private stopMetricsTracking(): void {
+    if (this.metricsInterval) {
+      clearInterval(this.metricsInterval);
+      this.metricsInterval = null;
+    }
+    this.connectionStartTime = null;
   }
 
   private async withStateLock<T>(fn: () => Promise<T>): Promise<T> {
