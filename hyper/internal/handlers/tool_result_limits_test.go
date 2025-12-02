@@ -7,16 +7,17 @@ import (
 func TestDefaultToolResultLimits(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	if limits.DefaultMaxTokens != 5000 {
-		t.Errorf("DefaultMaxTokens: got %d, want 5000", limits.DefaultMaxTokens)
+	// Updated values for provider-agnostic operation
+	if limits.DefaultMaxTokens != 3000 {
+		t.Errorf("DefaultMaxTokens: got %d, want 3000", limits.DefaultMaxTokens)
 	}
 
-	if limits.ContextPercentLimit != 0.25 {
-		t.Errorf("ContextPercentLimit: got %f, want 0.25", limits.ContextPercentLimit)
+	if limits.ContextPercentLimit != 0.20 {
+		t.Errorf("ContextPercentLimit: got %f, want 0.20", limits.ContextPercentLimit)
 	}
 
-	if limits.MinTokenThreshold != 500 {
-		t.Errorf("MinTokenThreshold: got %d, want 500", limits.MinTokenThreshold)
+	if limits.MinTokenThreshold != 300 {
+		t.Errorf("MinTokenThreshold: got %d, want 300", limits.MinTokenThreshold)
 	}
 
 	if len(limits.ToolSpecificLimits) == 0 {
@@ -27,72 +28,72 @@ func TestDefaultToolResultLimits(t *testing.T) {
 func TestGetLimit_ToolSpecificLimit(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	// code_index_search has specific limit of 3000
+	// code_index_search has specific limit of 2000 (lowered for provider-agnostic)
 	limit := limits.GetLimit("code_index_search", 20000)
 
-	if limit != 3000 {
-		t.Errorf("code_index_search limit: got %d, want 3000", limit)
+	if limit != 2000 {
+		t.Errorf("code_index_search limit: got %d, want 2000", limit)
 	}
 }
 
 func TestGetLimit_DefaultLimit(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	// Unknown tool should use default
+	// Unknown tool should use default (3000)
 	limit := limits.GetLimit("unknown_tool", 20000)
 
-	if limit != 5000 {
-		t.Errorf("Unknown tool limit: got %d, want 5000", limit)
+	if limit != 3000 {
+		t.Errorf("Unknown tool limit: got %d, want 3000", limit)
 	}
 }
 
 func TestGetLimit_ContextPercentLimit(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	// With 10000 remaining context, 25% = 2500
-	// code_index_search has limit 3000, but context limit is 2500
-	// Should return min(3000, 2500) = 2500
+	// With 10000 remaining context, 20% = 2000
+	// code_index_search has limit 2000, context limit is also 2000
+	// Should return min(2000, 2000) = 2000
 	limit := limits.GetLimit("code_index_search", 10000)
 
-	if limit != 2500 {
-		t.Errorf("Context percent limit: got %d, want 2500", limit)
+	if limit != 2000 {
+		t.Errorf("Context percent limit: got %d, want 2000", limit)
 	}
 }
 
 func TestGetLimit_DefaultWithContextLimit(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	// With 10000 remaining context, 25% = 2500
-	// Unknown tool has default 5000, but context limit is 2500
-	// Should return min(5000, 2500) = 2500
+	// With 10000 remaining context, 20% = 2000
+	// Unknown tool has default 3000, but context limit is 2000
+	// Should return min(3000, 2000) = 2000
 	limit := limits.GetLimit("unknown_tool", 10000)
 
-	if limit != 2500 {
-		t.Errorf("Default with context limit: got %d, want 2500", limit)
+	if limit != 2000 {
+		t.Errorf("Default with context limit: got %d, want 2000", limit)
 	}
 }
 
 func TestGetLimit_ZeroRemainingContext(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	// With 0 remaining context, calculateContextLimit returns DefaultMaxTokens
-	// So min(5000, 5000) = 5000
+	// With 0 remaining context, calculateContextLimit returns DefaultMaxTokens (3000)
+	// So min(3000, 3000) = 3000
 	limit := limits.GetLimit("unknown_tool", 0)
 
-	if limit != 5000 {
-		t.Errorf("Zero remaining context: got %d, want 5000", limit)
+	if limit != 3000 {
+		t.Errorf("Zero remaining context: got %d, want 3000", limit)
 	}
 }
 
 func TestGetLimit_NegativeRemainingContext(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	// With negative remaining context, calculateContextLimit returns DefaultMaxTokens
-	// So min(5000, 5000) = 5000
+	// With negative remaining context, calculateContextLimit returns DefaultMaxTokens (3000)
+	// So min(3000, 3000) = 3000
 	limit := limits.GetLimit("unknown_tool", -1000)
 
-	if limit != 5000 {
-		t.Errorf("Negative remaining context: got %d, want 5000", limit)
+	if limit != 3000 {
+		t.Errorf("Negative remaining context: got %d, want 3000", limit)
 	}
 }
 
@@ -104,11 +105,11 @@ func TestCalculateContextLimit(t *testing.T) {
 		expected         int
 		name             string
 	}{
-		{10000, 2500, "10000 tokens * 0.25 = 2500"},
-		{20000, 5000, "20000 tokens * 0.25 = 5000"},
-		{4000, 1000, "4000 tokens * 0.25 = 1000"},
-		{0, 5000, "0 tokens returns DefaultMaxTokens (5000)"},
-		{-1000, 5000, "Negative context returns DefaultMaxTokens (5000)"},
+		{10000, 2000, "10000 tokens * 0.20 = 2000"},
+		{20000, 4000, "20000 tokens * 0.20 = 4000"},
+		{4000, 800, "4000 tokens * 0.20 = 800"},
+		{0, 3000, "0 tokens returns DefaultMaxTokens (3000)"},
+		{-1000, 3000, "Negative context returns DefaultMaxTokens (3000)"},
 	}
 
 	for _, tt := range tests {
@@ -149,8 +150,8 @@ func TestToolSpecificLimits_CodeTools(t *testing.T) {
 		toolName string
 		expected int
 	}{
-		{"code_index_search", 3000},
-		{"code_index_get_full_content", 6000},
+		{"code_index_search", 2000},
+		{"code_index_get_full_content", 4000},
 	}
 
 	for _, tt := range tests {
@@ -168,8 +169,8 @@ func TestToolSpecificLimits_FileOperations(t *testing.T) {
 		toolName string
 		expected int
 	}{
-		{"read_file", 8000},
-		{"file_read", 8000},
+		{"read_file", 6000},
+		{"file_read", 6000},
 	}
 
 	for _, tt := range tests {
@@ -184,8 +185,8 @@ func TestToolSpecificLimits_ShellCommands(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
 	limit := limits.GetLimit("bash", 100000)
-	if limit != 4000 {
-		t.Errorf("bash: got %d, want 4000", limit)
+	if limit != 3000 {
+		t.Errorf("bash: got %d, want 3000", limit)
 	}
 }
 
@@ -197,7 +198,11 @@ func TestToolSpecificLimits_KnowledgeTools(t *testing.T) {
 		expected int
 	}{
 		{"knowledge_find", 2000},
-		{"coordinator_list_agent_tasks", 2000},
+		{"coordinator_list_agent_tasks", 1500},
+		{"coordinator_list_human_tasks", 1500},
+		{"list_agent_tasks", 1500},
+		{"knowledge_query", 2000},
+		{"coordinator_query_knowledge", 2000},
 	}
 
 	for _, tt := range tests {
@@ -208,11 +213,20 @@ func TestToolSpecificLimits_KnowledgeTools(t *testing.T) {
 	}
 }
 
+func TestToolSpecificLimits_MCPTools(t *testing.T) {
+	limits := DefaultToolResultLimits()
+
+	limit := limits.GetLimit("execute_tool", 100000)
+	if limit != 3000 {
+		t.Errorf("execute_tool: got %d, want 3000", limit)
+	}
+}
+
 func TestGetLimit_AllToolsWithLowContext(t *testing.T) {
 	limits := DefaultToolResultLimits()
 
-	// With only 1000 tokens remaining, context limit is 250
-	// All tools should be capped at 250
+	// With only 1000 tokens remaining, context limit is 200 (20%)
+	// All tools should be capped at 200
 	remainingContext := 1000
 
 	tools := []string{
@@ -226,8 +240,8 @@ func TestGetLimit_AllToolsWithLowContext(t *testing.T) {
 
 	for _, tool := range tools {
 		limit := limits.GetLimit(tool, remainingContext)
-		if limit != 250 {
-			t.Errorf("%s with 1000 remaining: got %d, want 250", tool, limit)
+		if limit != 200 {
+			t.Errorf("%s with 1000 remaining: got %d, want 200", tool, limit)
 		}
 	}
 }
@@ -241,27 +255,49 @@ func TestGetLimit_RealWorldScenarios(t *testing.T) {
 		expected         int
 		name             string
 	}{
-		// Scenario 1: Plenty of context (25% = 25000, no cap)
-		{"code_index_search", 100000, 3000, "Code search with 100k context"},
-		{"read_file", 100000, 8000, "Read file with 100k context"},
+		// Scenario 1: Plenty of context (20% = 20000, no cap)
+		{"code_index_search", 100000, 2000, "Code search with 100k context"},
+		{"read_file", 100000, 6000, "Read file with 100k context"},
 
-		// Scenario 2: Limited context (25% = 5000)
-		{"code_index_search", 20000, 3000, "Code search with 20k context (25% = 5000, tool limit 3000)"},
-		{"read_file", 20000, 5000, "Read file with 20k context (25% = 5000, tool limit 8000, min = 5000)"},
+		// Scenario 2: Limited context (20% = 4000)
+		{"code_index_search", 20000, 2000, "Code search with 20k context (20% = 4000, tool limit 2000)"},
+		{"read_file", 20000, 4000, "Read file with 20k context (20% = 4000, tool limit 6000, min = 4000)"},
 
-		// Scenario 3: Very limited context (25% = 1000)
-		{"code_index_search", 4000, 1000, "Code search with 4k context (25% = 1000, tool limit 3000, min = 1000)"},
-		{"read_file", 4000, 1000, "Read file with 4k context (25% = 1000, tool limit 8000, min = 1000)"},
+		// Scenario 3: Very limited context (20% = 800)
+		{"code_index_search", 4000, 800, "Code search with 4k context (20% = 800, tool limit 2000, min = 800)"},
+		{"read_file", 4000, 800, "Read file with 4k context (20% = 800, tool limit 6000, min = 800)"},
 
-		// Scenario 4: Critical context (25% = 250)
-		{"bash", 1000, 250, "Bash with 1k context (25% = 250, tool limit 4000, min = 250)"},
-		{"unknown_tool", 1000, 250, "Unknown tool with 1k context (25% = 250, default 5000, min = 250)"},
+		// Scenario 4: Critical context (20% = 200)
+		{"bash", 1000, 200, "Bash with 1k context (20% = 200, tool limit 3000, min = 200)"},
+		{"unknown_tool", 1000, 200, "Unknown tool with 1k context (20% = 200, default 3000, min = 200)"},
 	}
 
 	for _, tt := range tests {
 		result := limits.GetLimit(tt.toolName, tt.remainingContext)
 		if result != tt.expected {
 			t.Errorf("%s: got %d, want %d", tt.name, result, tt.expected)
+		}
+	}
+}
+
+// TestProviderAgnosticLimits verifies that the limits are conservative enough
+// to work across different AI providers (Claude, GPT-4, Llama, etc.)
+func TestProviderAgnosticLimits(t *testing.T) {
+	limits := DefaultToolResultLimits()
+
+	// Verify conservative defaults
+	if limits.DefaultMaxTokens > 5000 {
+		t.Errorf("DefaultMaxTokens should be <= 5000 for provider compatibility, got %d", limits.DefaultMaxTokens)
+	}
+
+	if limits.ContextPercentLimit > 0.25 {
+		t.Errorf("ContextPercentLimit should be <= 0.25 for provider compatibility, got %f", limits.ContextPercentLimit)
+	}
+
+	// Verify all tool-specific limits are reasonable
+	for tool, limit := range limits.ToolSpecificLimits {
+		if limit > 10000 {
+			t.Errorf("Tool %s has limit %d which exceeds safe maximum of 10000", tool, limit)
 		}
 	}
 }

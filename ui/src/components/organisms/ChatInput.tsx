@@ -4,19 +4,22 @@
  * Chat input component with:
  * - Auto-resizing textarea
  * - Send button with loading state
+ * - Stop button to halt AI execution
  * - Enter key to send (Shift+Enter for new line)
  * - Disabled state support
  * - Character count display (optional)
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send } from 'lucide-react';
+import { Send, Square } from 'lucide-react';
 import { cn } from '@/utils';
 import { Button } from '@/components/atoms/Button';
 import { Textarea } from '@/components/atoms/Textarea';
 
 export interface ChatInputProps {
   onSendMessage: (message: string) => void;
+  onStopExecution?: () => void;
+  isStreaming?: boolean;
   disabled?: boolean;
   placeholder?: string;
   maxLength?: number;
@@ -26,6 +29,8 @@ export interface ChatInputProps {
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
+  onStopExecution,
+  isStreaming = false,
   disabled = false,
   placeholder = 'Type your message...',
   maxLength = 5000,
@@ -124,21 +129,37 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           )}
         </div>
 
-        {/* Send Button */}
-        <Button
-          onClick={handleSend}
-          disabled={!canSend}
-          variant="primary"
-          size="icon"
-          className="shrink-0"
-          aria-label="Send message"
-        >
-          {isSending ? (
-            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          ) : (
-            <Send className="w-5 h-5" />
-          )}
-        </Button>
+        {/* Stop Button - shown when streaming */}
+        {isStreaming && onStopExecution && (
+          <Button
+            onClick={onStopExecution}
+            variant="danger"
+            size="icon"
+            className="shrink-0"
+            aria-label="Stop execution"
+            title="Stop AI execution"
+          >
+            <Square className="w-4 h-4 fill-current" />
+          </Button>
+        )}
+
+        {/* Send Button - hidden when streaming */}
+        {!isStreaming && (
+          <Button
+            onClick={handleSend}
+            disabled={!canSend}
+            variant="primary"
+            size="icon"
+            className="shrink-0"
+            aria-label="Send message"
+          >
+            {isSending ? (
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Send className="w-5 h-5" />
+            )}
+          </Button>
+        )}
       </div>
 
       {/* Helper Text */}

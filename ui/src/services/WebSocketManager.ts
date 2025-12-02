@@ -252,6 +252,24 @@ export class WebSocketManager {
   }
 
   /**
+   * Send stop execution command to halt AI processing
+   * This sends immediately without queuing since it's a control command
+   */
+  sendStopExecution(): void {
+    if (this.state !== ConnectionState.CONNECTED || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WSManager] Cannot send stop - not connected');
+      return;
+    }
+
+    try {
+      this.sendImmediately('', 'stop');
+      console.log('[WSManager] Stop execution command sent');
+    } catch (error) {
+      console.error('[WSManager] Failed to send stop command:', error);
+    }
+  }
+
+  /**
    * Disconnect with atomic cleanup
    */
   async disconnect(): Promise<void> {
@@ -427,14 +445,15 @@ export class WebSocketManager {
     });
   }
 
-  private sendImmediately(content: string): void {
+  private sendImmediately(content: string, type?: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected');
     }
 
     try {
-      this.ws.send(JSON.stringify({ content }));
-      console.log('[WSManager] Message sent:', content.substring(0, 50));
+      const message = type ? { content, type } : { content };
+      this.ws.send(JSON.stringify(message));
+      console.log('[WSManager] Message sent:', type || 'message', content.substring(0, 50));
 
       // Monitor write buffer
       const bufferedAmount = (this.ws as any).bufferedAmount || 0;

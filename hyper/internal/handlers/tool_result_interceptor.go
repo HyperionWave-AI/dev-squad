@@ -2,16 +2,25 @@ package handlers
 
 import (
 	"fmt"
+
 	"go.uber.org/zap"
+	"hyper/internal/config"
 	"hyper/internal/metrics"
+)
+
+const (
+	// UniversalMaxResultBytes is a hard limit that works for ANY AI provider.
+	// 50KB is approximately 12-15k tokens, safe for all context windows.
+	// This provides a provider-agnostic safeguard before token-based checks.
+	UniversalMaxResultBytes = 50 * 1024
 )
 
 // DeflectionResult contains the result of interception
 type DeflectionResult struct {
 	WasDeflected bool   // Whether the result was deflected
 	Message      string // Deflection message with suggestions
-	OriginalSize int    // Original token count
-	MaxAllowed   int    // Maximum allowed tokens
+	OriginalSize int    // Original token count (or bytes for byte-based deflection)
+	MaxAllowed   int    // Maximum allowed tokens (or bytes for byte-based deflection)
 }
 
 // ToolResultInterceptor checks tool results and deflects oversized ones
@@ -39,7 +48,11 @@ func NewToolResultInterceptorWithLimits(limits *ToolResultLimits, logger *zap.Lo
 	}
 }
 
-// CheckResult evaluates if a tool result should be deflected
+// CheckResult evaluates if a tool result should be deflected.
+// It performs two checks in order:
+// 1. Universal byte-based check (provider-agnostic, hard limit)
+// 2. Token-based check (provider-specific, configurable)
+//
 // Returns: (processedResult, deflectionInfo)
 // If deflected, processedResult will be nil and deflectionInfo.WasDeflected will be true
 func (i *ToolResultInterceptor) CheckResult(
@@ -48,7 +61,31 @@ func (i *ToolResultInterceptor) CheckResult(
 	remainingContext int,
 ) (interface{}, *DeflectionResult) {
 
-	// Estimate tokens
+	// Convert result to string for size check
+	resultStr := fmt.Sprintf("%v", result)
+	resultBytes := len(resultStr)
+
+	// UNIVERSAL BYTE CHECK - works for ANY provider
+	// This is the first line of defense before token-based checks
+	if resultBytes > UniversalMaxResultBytes {
+		i.logger.Info("🛑 Tool result deflected - exceeds universal byte limit",
+			zap.String("tool", toolName),
+			zap.Int("resultBytes", resultBytes),
+			zap.Int("maxBytes", UniversalMaxResultBytes))
+
+		// Record metrics for deflected result
+		metrics.RecordToolResultDeflection(toolName)
+
+		// Return summarized result with byte-based message
+		return nil, &DeflectionResult{
+			WasDeflected: true,
+			Message:      i.buildByteLimitMessage(toolName, resultBytes, UniversalMaxResultBytes),
+			OriginalSize: resultBytes / 4, // Rough token estimate (4 chars per token)
+			MaxAllowed:   UniversalMaxResultBytes / 4,
+		}
+	}
+
+	// Estimate tokens for token-based check
 	tokens := i.estimator.EstimateTokens(result)
 
 	// Skip deflection for small results
@@ -59,7 +96,7 @@ func (i *ToolResultInterceptor) CheckResult(
 	// Get limit for this tool
 	maxAllowed := i.limits.GetLimit(toolName, remainingContext)
 
-	// Check if deflection needed
+	// Check if deflection needed based on tokens
 	if tokens > maxAllowed {
 		message := i.buildDeflectionMessage(toolName, tokens, maxAllowed, remainingContext)
 
@@ -91,6 +128,21 @@ func (i *ToolResultInterceptor) CheckResult(
 	metrics.RecordToolResultTokens(toolName, tokens, false)
 
 	return result, &DeflectionResult{WasDeflected: false}
+}
+
+// buildByteLimitMessage creates a helpful message when the universal byte limit is exceeded.
+// This provides provider-agnostic guidance since byte limits work across all AI providers.
+func (i *ToolResultInterceptor) buildByteLimitMessage(toolName string, resultBytes, maxBytes int) string {
+	return fmt.Sprintf(
+		"🛑 **Result Too Large** (%s, limit: %s)\n\n"+
+			"The result from `%s` exceeds the universal size limit.\n"+
+			"This limit ensures compatibility with all AI providers (Claude, GPT-4, Llama, etc.).\n\n"+
+			"%s",
+		config.FormatSize(resultBytes),
+		config.FormatSize(maxBytes),
+		toolName,
+		i.getToolSpecificSuggestions(toolName),
+	)
 }
 
 // buildDeflectionMessage creates a helpful deflection message with tool-specific suggestions

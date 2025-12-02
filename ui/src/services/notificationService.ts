@@ -5,6 +5,7 @@
  * - Context compaction (when context window is compressed)
  * - Tool result deflection (when large tool results are summarized)
  * - Message summarization (when old messages are summarized)
+ * - Execution stopped (when user stops AI execution)
  *
  * Uses the sonner toast library for non-blocking, auto-dismissing notifications.
  */
@@ -12,7 +13,7 @@
 import { toast } from 'sonner';
 
 export interface SystemNotification {
-  category: 'compaction' | 'deflection' | 'summarization';
+  category: 'compaction' | 'deflection' | 'summarization' | 'execution_stopped';
   title: string;
   message: string;
   severity: 'info' | 'warning' | 'success';
@@ -23,6 +24,7 @@ const ICONS: Record<SystemNotification['category'], string> = {
   compaction: '🗜️',
   deflection: '🛑',
   summarization: '📋',
+  execution_stopped: '⏹️',
 };
 
 const DURATION_MS: Record<SystemNotification['severity'], number> = {

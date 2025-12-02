@@ -116,6 +116,11 @@ func (m *MockOutputSink) IsDisconnected() bool {
 	return args.Bool(0)
 }
 
+func (m *MockOutputSink) SendMessageSaved(messageID string) error {
+	args := m.Called(messageID)
+	return args.Error(0)
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

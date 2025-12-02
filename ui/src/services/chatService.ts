@@ -78,9 +78,9 @@ export interface ToolResult {
   metadata?: Record<string, any>;
 }
 
-// System notification from backend (compaction, deflection, summarization events)
+// System notification from backend (compaction, deflection, summarization, execution_stopped events)
 export interface SystemNotification {
-  category: 'compaction' | 'deflection' | 'summarization';
+  category: 'compaction' | 'deflection' | 'summarization' | 'execution_stopped';
   title: string;
   message: string;
   severity: 'info' | 'warning' | 'success';
@@ -371,6 +371,7 @@ export interface ChatStreamConnection {
   manager: WebSocketManager;
   disconnect: () => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
+  stopExecution: () => void;
   getState: () => ConnectionState;
   isConnected: () => boolean;
 }
@@ -519,6 +520,9 @@ export function connectChatStream(
       } catch (error) {
         throw error instanceof Error ? error : new Error('Failed to send message');
       }
+    },
+    stopExecution: () => {
+      manager.sendStopExecution();
     },
     getState: () => manager.getState(),
     isConnected: () => manager.isConnected(),

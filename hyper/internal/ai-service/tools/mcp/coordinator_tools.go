@@ -1734,21 +1734,93 @@ func (t *ListHumanTasksTool) Name() string {
 }
 
 func (t *ListHumanTasksTool) Description() string {
-	return "List all human tasks from the coordinator database. Returns array of tasks with all fields."
+	return "List human tasks from the coordinator database with pagination. Use limit/offset for large task lists."
 }
 
 func (t *ListHumanTasksTool) InputSchema() map[string]interface{} {
 	return map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{},
+		"type": "object",
+		"properties": map[string]interface{}{
+			"status": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter by status (pending, in_progress, completed)",
+			},
+			"limit": map[string]interface{}{
+				"type":        "integer",
+				"description": "Maximum number of tasks to return (default: 20, max: 50)",
+				"default":     20,
+			},
+			"offset": map[string]interface{}{
+				"type":        "integer",
+				"description": "Number of tasks to skip for pagination",
+				"default":     0,
+			},
+		},
 	}
 }
 
+// maxListHumanTasksLimit is the hard limit to prevent massive results
+const maxListHumanTasksLimit = 50
+
 func (t *ListHumanTasksTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	tasks := t.storage.ListAllHumanTasks()
+	// Extract pagination params with defaults
+	limit := 20
+	if l, ok := input["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+	}
+	// ENFORCE max limit to prevent massive results
+	if limit > maxListHumanTasksLimit {
+		limit = maxListHumanTasksLimit
+	}
+
+	offset := 0
+	if o, ok := input["offset"].(float64); ok && o >= 0 {
+		offset = int(o)
+	}
+
+	// Get status filter if provided
+	statusFilter, _ := input["status"].(string)
+
+	// Get all tasks then apply filters and pagination
+	allTasks := t.storage.ListAllHumanTasks()
+
+	// Apply status filter if provided
+	var filteredTasks []*storage.HumanTask
+	for _, task := range allTasks {
+		if statusFilter == "" {
+			filteredTasks = append(filteredTasks, task)
+		} else if string(task.Status) == statusFilter {
+			filteredTasks = append(filteredTasks, task)
+		}
+	}
+
+	totalCount := len(filteredTasks)
+
+	// Apply pagination
+	start := offset
+	if start > totalCount {
+		start = totalCount
+	}
+	end := start + limit
+	if end > totalCount {
+		end = totalCount
+	}
+
+	var paginatedTasks []*storage.HumanTask
+	if start < totalCount {
+		paginatedTasks = filteredTasks[start:end]
+	} else {
+		paginatedTasks = []*storage.HumanTask{}
+	}
+
 	return map[string]interface{}{
-		"tasks": tasks,
-		"count": len(tasks),
+		"tasks":   paginatedTasks,
+		"count":   len(paginatedTasks),
+		"total":   totalCount,
+		"offset":  offset,
+		"limit":   limit,
+		"hasMore": end < totalCount,
+		"hint":    "Use offset parameter to fetch more tasks. Example: {\"offset\": 20, \"limit\": 20}",
 	}, nil
 }
 

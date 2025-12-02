@@ -78,7 +78,13 @@ type GetMessagesResponse struct {
 
 // SendMessageRequest represents a message sent from user
 type SendMessageRequest struct {
-	Content string `json:"content" binding:"required"`
+	Content string `json:"content"`
+	Type    string `json:"type,omitempty"` // "message" (default), "stop" (stop execution)
+}
+
+// IsStopRequest returns true if this is a stop execution request
+func (r *SendMessageRequest) IsStopRequest() bool {
+	return r.Type == "stop"
 }
 
 // StreamMessage represents a streaming AI response message

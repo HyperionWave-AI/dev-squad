@@ -527,30 +527,35 @@ export const CodeChatPage: React.FC = () => {
           return;
         }
 
-        // Bug #3 Fix: Properly replace optimistic message ID with database ID
-        console.log('[CodeChatPage] Message saved with database ID:', databaseId);
-        setMessages((prev) => {
-          // Find the most recent user message with optimistic ID
-          const optimisticIndex = prev.findIndex((_msg, idx) => {
-            // Search from end to find most recent
-            const reverseIdx = prev.length - 1 - idx;
-            return prev[reverseIdx].role === 'user' && prev[reverseIdx].id.startsWith('msg-');
-          });
+        // Check if this is an assistant message (format: "assistant:{id}")
+        const isAssistantMessage = databaseId.startsWith('assistant:');
+        const actualId = isAssistantMessage ? databaseId.substring('assistant:'.length) : databaseId;
+        const targetRole = isAssistantMessage ? 'assistant' : 'user';
 
-          if (optimisticIndex === -1) {
-            console.warn('[CodeChatPage] No optimistic message found to update');
+        console.log(`[CodeChatPage] ${targetRole} message saved with database ID:`, actualId);
+
+        setMessages((prev) => {
+          // Find the most recent message of the target role with optimistic ID
+          // Search from end (most recent) to beginning
+          let targetIndex = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === targetRole && prev[i].id.startsWith('msg-')) {
+              targetIndex = i;
+              break;
+            }
+          }
+
+          if (targetIndex === -1) {
+            console.warn(`[CodeChatPage] No optimistic ${targetRole} message found to update`);
             return prev;
           }
 
-          const actualIndex = prev.length - 1 - optimisticIndex;
-          console.log('[CodeChatPage] Updating message ID:', prev[actualIndex].id, '→', databaseId);
+          console.log(`[CodeChatPage] Updating ${targetRole} message ID:`, prev[targetIndex].id, '→', actualId);
 
           // Create new array with updated message (immutable update)
-          const updated = prev.map((msg, idx) =>
-            idx === actualIndex ? { ...msg, id: databaseId } : msg
+          return prev.map((msg, idx) =>
+            idx === targetIndex ? { ...msg, id: actualId } : msg
           );
-
-          return updated;
         });
       },
       onError: (err: Error) => {
@@ -596,6 +601,14 @@ export const CodeChatPage: React.FC = () => {
       onSystemNotification: (notification: SystemNotification) => {
         // Display toast notification for backend system events
         showSystemNotification(notification);
+
+        // Handle execution_stopped notification - reset streaming state
+        if (notification.category === 'execution_stopped') {
+          console.log('[CodeChatPage] 🛑 Execution stopped, resetting streaming state');
+          setIsStreaming(false);
+          streamingContentRef.current = '';
+          setStreamingContent('');
+        }
       },
     });
 
@@ -746,6 +759,27 @@ export const CodeChatPage: React.FC = () => {
       connectWebSocket(activeSessionId);
     }
   };
+
+  // Stop execution handler
+  const handleStopExecution = useCallback(() => {
+    console.log('[CodeChatPage] 🛑 Stop button clicked!', {
+      hasConnection: !!wsConnectionRef.current,
+      isStreaming,
+    });
+
+    if (!wsConnectionRef.current) {
+      console.log('[CodeChatPage] No WebSocket connection');
+      return;
+    }
+
+    if (!isStreaming) {
+      console.log('[CodeChatPage] Not streaming, nothing to stop');
+      return;
+    }
+
+    console.log('[CodeChatPage] 🛑 Calling stopExecution...');
+    wsConnectionRef.current.stopExecution();
+  }, [isStreaming]);
 
   // Toggle error prevention mode
   const toggleErrorPrevention = async () => {
@@ -1019,11 +1053,15 @@ export const CodeChatPage: React.FC = () => {
         {/* Chat Input */}
         <ChatInput
           onSendMessage={handleSendMessage}
-          disabled={!activeSessionId || isStreaming}
+          onStopExecution={handleStopExecution}
+          isStreaming={isStreaming}
+          disabled={!activeSessionId}
           placeholder={
             !activeSessionId
               ? 'Create a new chat to get started'
-              : 'Type your message...'
+              : isStreaming
+                ? 'AI is responding... Click stop to cancel'
+                : 'Type your message...'
           }
         />
       </div>

@@ -224,6 +224,34 @@ func (w *websocketSink) SendError(errorMsg string) error {
 	return nil
 }
 
+// SendMessageSaved implements executor.StreamOutputSink
+func (w *websocketSink) SendMessageSaved(messageID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil
+	}
+
+	savedMsg := models.StreamMessage{
+		Type:    "message_saved",
+		Content: messageID,
+	}
+
+	if err := w.handler.safeWriteJSON(w.conn, savedMsg); err != nil {
+		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			w.logger.Debug("WebSocket client disconnected during message_saved")
+			w.disconnected = true
+			return nil
+		}
+		w.logger.Warn("Failed to send message_saved", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
 // IsDisconnected implements executor.StreamOutputSink
 func (w *websocketSink) IsDisconnected() bool {
 	w.mu.Lock()
@@ -1455,6 +1483,10 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 	// Processing state to prevent concurrent messages during AI response (using atomic for panic safety)
 	var isProcessing atomic.Bool
 
+	// Cancel function for current AI execution (allows stop button to cancel)
+	var currentAICancelMu sync.Mutex
+	var currentAICancel context.CancelFunc
+
 	// Register health monitor for this connection
 	healthMonitor := NewConnectionHealthMonitor(conn, h.logger, &h.writeMutex)
 	healthPool := GetHealthMonitorPool(h.logger)
@@ -1484,17 +1516,57 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 		}
 	})
 
-	// Main message loop
+	// Channel for incoming messages (allows concurrent reading while AI processes)
+	type wsMessage struct {
+		data []byte
+		err  error
+	}
+	messageChan := make(chan wsMessage, 10)
+
+	// Goroutine for reading WebSocket messages (runs concurrently with message processing)
+	cleanup.wg.Add(1)
+	middleware.SafeGo(h.logger, func() {
+		defer cleanup.wg.Done()
+		defer close(messageChan)
+		for {
+			select {
+			case <-httpCtx.Done():
+				return
+			case <-cleanup.done:
+				return
+			default:
+				_, messageData, err := conn.ReadMessage()
+				select {
+				case messageChan <- wsMessage{data: messageData, err: err}:
+				case <-httpCtx.Done():
+					return
+				case <-cleanup.done:
+					return
+				}
+				if err != nil {
+					return // Exit read goroutine on error
+				}
+			}
+		}
+	})
+
+	// Main message processing loop
 	for {
 		select {
 		case <-httpCtx.Done():
 			h.logger.Info("HTTP context cancelled, closing WebSocket")
 			// done channel will be closed by defer
 			return
-		default:
-			// Read message from client
-			_, messageData, err := conn.ReadMessage()
-			if err != nil {
+
+		case msg, ok := <-messageChan:
+			if !ok {
+				// Channel closed, exit
+				return
+			}
+
+			// Handle read error
+			if msg.err != nil {
+				err := msg.err
 				// Check if this is an idle timeout (expected after task completion)
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					h.logger.Debug("WebSocket idle timeout - connection will close",
@@ -1530,6 +1602,8 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				return
 			}
 
+			messageData := msg.data
+
 			// Record message received and size
 			metrics.WebSocketMessagesReceived.Inc()
 			metrics.WebSocketMessageSize.Observe(float64(len(messageData)))
@@ -1551,6 +1625,52 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			var userMsg models.SendMessageRequest
 			if err := json.Unmarshal(messageData, &userMsg); err != nil {
 				h.sendError(conn, "Invalid message format")
+				continue
+			}
+
+			// Handle stop execution request (can be received while AI is processing!)
+			if userMsg.IsStopRequest() {
+				h.logger.Info("🛑 Stop execution request received",
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Bool("isProcessing", isProcessing.Load()))
+
+				if isProcessing.Load() {
+					// Cancel the current AI execution context
+					currentAICancelMu.Lock()
+					if currentAICancel != nil {
+						currentAICancel()
+						h.logger.Info("🛑 Stop execution - cancelled AI context",
+							zap.String("sessionId", sessionID.Hex()))
+					}
+					currentAICancelMu.Unlock()
+
+					// Also trigger interrupt via message notifier (for backward compatibility)
+					notifier := GetMessageNotifier(h.logger)
+					notifier.NotifyNewMessage(sessionID)
+
+					h.logger.Info("🛑 Stop execution requested by user",
+						zap.String("sessionId", sessionID.Hex()),
+						zap.String("userId", userID))
+
+					// Send stop confirmation notification
+					stopNotification := models.StreamMessage{
+						Type: "system_notification",
+						Notification: &models.SystemNotification{
+							Category: "execution_stopped",
+							Title:    "Execution Stopped",
+							Message:  "AI execution has been stopped by user request.",
+							Severity: "info",
+						},
+					}
+					if err := h.safeWriteJSON(conn, stopNotification); err != nil {
+						h.logger.Warn("Failed to send stop notification",
+							zap.String("sessionId", sessionID.Hex()),
+							zap.Error(err))
+					}
+				} else {
+					h.logger.Debug("Stop requested but no execution in progress",
+						zap.String("sessionId", sessionID.Hex()))
+				}
 				continue
 			}
 
@@ -1586,8 +1706,8 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				continue
 			}
 
-			// Process message in anonymous function with defer to ensure cleanup even on panic
-			func() {
+			// Process message in a goroutine to allow reading stop messages concurrently
+			go func(userMsg models.SendMessageRequest) {
 				defer isProcessing.Store(false)
 
 			// Emit user message to WebSocket immediately (before database save)
@@ -1658,10 +1778,26 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			}
 
 			// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
-			h.streamAIResponse(aiCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
+			// Create cancellable context for this AI execution (allows stop button to cancel)
+			aiExecCtx, aiExecCancel := context.WithCancel(aiCtx)
+
+			// Store the cancel function so stop handler can call it
+			currentAICancelMu.Lock()
+			currentAICancel = aiExecCancel
+			currentAICancelMu.Unlock()
+
+			// Ensure we clean up the cancel function after execution
+			defer func() {
+				currentAICancelMu.Lock()
+				currentAICancel = nil
+				currentAICancelMu.Unlock()
+				aiExecCancel() // Always call cancel to release resources
+			}()
+
+			h.streamAIResponse(aiExecCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
 
 			// Defer will reset isProcessing after response complete
-			}() // Close anonymous function with defer
+			}(userMsg) // Pass userMsg to goroutine
 		}
 	}
 }
@@ -2419,30 +2555,28 @@ type ToolResultProcessed struct {
 	IsTruncated      bool   // Whether output was modified
 }
 
-// calculateRemainingContext estimates remaining context tokens based on conversation history
-// Uses the TokenEstimator from the interceptor for consistent token counting
+// calculateRemainingContext estimates remaining context tokens based on conversation history.
+// Uses provider capabilities for accurate context window sizing across different AI providers.
+// The provider and model can be determined from session config for provider-specific limits.
 func (h *ChatWebSocketHandler) calculateRemainingContext(systemPrompt string, messages []models.ChatMessage) int {
-	// Default context window (Claude's context is ~100k tokens)
-	const defaultContextWindow = 100000
-	const safetyMargin = 5000 // Reserve for response and overhead
+	// Get provider capabilities (defaults work for any provider)
+	// TODO: In the future, pass provider/model from session config for provider-specific limits
+	// e.g., config.GetProviderCapabilities("anthropic", "claude-3-opus")
+	caps := config.DefaultProviderCapabilities()
 
-	estimator := NewTokenEstimator()
+	// Calculate bytes for system prompt
+	systemPromptBytes := len(systemPrompt)
 
-	// Estimate system prompt tokens
-	systemPromptTokens := estimator.EstimateTokens(systemPrompt)
-
-	// Estimate message history tokens
-	messagesTokens := 0
+	// Calculate bytes for message history
+	messagesBytes := 0
 	for _, msg := range messages {
-		messagesTokens += estimator.EstimateTokens(msg.Content)
-		// Add overhead for role/metadata (~10 tokens per message)
-		messagesTokens += 10
+		messagesBytes += len(msg.Content)
+		// Add overhead for role/metadata (~40 bytes per message)
+		messagesBytes += 40
 	}
 
-	remaining := defaultContextWindow - systemPromptTokens - messagesTokens - safetyMargin
-	if remaining < 0 {
-		remaining = 0
-	}
+	// Use provider capabilities to calculate remaining context
+	remaining := caps.CalculateRemainingContext(systemPromptBytes, messagesBytes)
 
 	return remaining
 }

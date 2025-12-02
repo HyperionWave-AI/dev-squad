@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	aiservice "hyper/internal/ai-service"
@@ -192,6 +193,11 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 					}
 				}
 
+				// Send done event so frontend knows streaming has stopped
+				if !e.config.OutputSink.IsDisconnected() {
+					e.config.OutputSink.SendDone()
+				}
+
 				// Return to allow caller to handle interrupt
 				return fullResponse, nil
 			default:
@@ -212,6 +218,11 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 				if _, err := e.chatService.SaveMessage(ctx, e.config.SessionID, "assistant", fullResponse, e.config.CompanyID); err != nil {
 					e.logger.Error("Failed to save response on context cancellation", zap.Error(err))
 				}
+			}
+
+			// Send done event so frontend knows streaming has stopped
+			if !e.config.OutputSink.IsDisconnected() {
+				e.config.OutputSink.SendDone()
 			}
 
 			return fullResponse, ctx.Err()
@@ -266,14 +277,12 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 		}
 	}
 
-	// Send completion signal if client still connected
-	if !e.config.OutputSink.IsDisconnected() {
-		e.config.OutputSink.SendDone()
-	}
-
-	// Save remaining AI response to database (if any)
+	// RACE CONDITION FIX: Save to database FIRST, then send signals
+	// Previous order: done -> save (broken: frontend refreshes before save completes)
+	// New order: save -> message_saved -> done (safe: message guaranteed in DB before done)
+	var savedMsgID string
 	if fullResponse != "" {
-		_, err = e.chatService.SaveMessage(ctx, e.config.SessionID, "assistant", fullResponse, e.config.CompanyID)
+		savedMsg, err := e.chatService.SaveMessage(ctx, e.config.SessionID, "assistant", fullResponse, e.config.CompanyID)
 		if err != nil {
 			e.logger.Error("Failed to save final AI response", zap.Error(err))
 			if !e.config.OutputSink.IsDisconnected() {
@@ -281,8 +290,21 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 			}
 			return fullResponse, fmt.Errorf("failed to save final response: %w", err)
 		}
+
+		// Extract message ID from saved message for frontend reconciliation
+		if savedMsg != nil {
+			if msgPtr, ok := (*savedMsg).(*interface{}); ok && msgPtr != nil {
+				// The interface wraps *models.ChatMessage, try to extract ID via reflection
+				// For safety, we'll use a type switch approach
+				savedMsgID = extractMessageID(*savedMsg)
+			} else {
+				savedMsgID = extractMessageID(*savedMsg)
+			}
+		}
+
 		e.logger.Debug("Saved final assistant text",
 			zap.String("sessionId", e.config.SessionID.Hex()),
+			zap.String("messageId", savedMsgID),
 			zap.Int("textLength", len(fullResponse)))
 
 		// If WebSocket was disconnected but message was saved, invoke callback to notify
@@ -294,6 +316,21 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 	} else {
 		e.logger.Debug("No remaining assistant text to save (all text saved before tool calls)",
 			zap.String("sessionId", e.config.SessionID.Hex()))
+	}
+
+	// Send message_saved event for assistant message (for frontend reconciliation)
+	if savedMsgID != "" && !e.config.OutputSink.IsDisconnected() {
+		// Format: "assistant:{messageId}" to distinguish from user messages
+		if err := e.config.OutputSink.SendMessageSaved("assistant:" + savedMsgID); err != nil {
+			e.logger.Warn("Failed to send message_saved event",
+				zap.String("sessionId", e.config.SessionID.Hex()),
+				zap.Error(err))
+		}
+	}
+
+	// Send completion signal LAST (after save is guaranteed)
+	if !e.config.OutputSink.IsDisconnected() {
+		e.config.OutputSink.SendDone()
 	}
 
 	// Record AI streaming metrics
@@ -483,4 +520,43 @@ func (e *StreamExecutor) handleToolResult(ctx context.Context, event *aiservice.
 	}
 
 	return nil
+}
+
+// extractMessageID extracts the hex ID from a saved message.
+// The saved message is wrapped in interface{} and may be *models.ChatMessage.
+// Uses reflection to safely extract the ID field.
+func extractMessageID(msg interface{}) string {
+	if msg == nil {
+		return ""
+	}
+
+	// Use reflection to get the ID field
+	val := reflect.ValueOf(msg)
+
+	// Handle pointer types
+	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return ""
+		}
+		val = val.Elem()
+	}
+
+	// Look for ID field (case-insensitive check for common patterns)
+	if val.Kind() == reflect.Struct {
+		idField := val.FieldByName("ID")
+		if idField.IsValid() {
+			// Check if it's a primitive.ObjectID (has Hex method)
+			if idField.Type().String() == "primitive.ObjectID" {
+				hexMethod := idField.MethodByName("Hex")
+				if hexMethod.IsValid() {
+					results := hexMethod.Call(nil)
+					if len(results) > 0 {
+						return results[0].String()
+					}
+				}
+			}
+		}
+	}
+
+	return ""
 }

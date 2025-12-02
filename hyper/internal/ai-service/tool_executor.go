@@ -357,6 +357,17 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		}
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
+			// CONTEXT CANCELLATION CHECK: Check at start of each iteration (stop button support)
+			select {
+			case <-ctx.Done():
+				log.Printf("[ChatService] Context cancelled during tool execution loop - RequestID: %s - iterations: %d, tool calls: %d",
+					requestID, iterationCount, toolCallCount)
+				eventChan <- StreamEvent{Type: StreamEventError, Error: "execution stopped by user"}
+				return
+			default:
+				// Context still active, continue
+			}
+
 			iterationCount++
 			debugLog("---------- ITERATION %d START ----------", iterationCount)
 			debugLog("Current tool call count: %d/%d", toolCallCount, maxToolCalls)
@@ -834,6 +845,17 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						result.Output = newOutput
 					}
 				} else {
+					// CONTEXT CANCELLATION CHECK: Before executing tool (stop button support)
+					select {
+					case <-ctx.Done():
+						log.Printf("[ChatService] Context cancelled before tool '%s' execution - RequestID: %s",
+							toolCall.Name, requestID)
+						eventChan <- StreamEvent{Type: StreamEventError, Error: "execution stopped by user"}
+						return
+					default:
+						// Context still active, continue
+					}
+
 					// Execute tool (no cached result available)
 					// Inject humanTaskId from workflowState into context for auto-population
 					toolCtx := ctx
@@ -1785,6 +1807,17 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 		}
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
+			// CONTEXT CANCELLATION CHECK: Check at start of each iteration (stop button support)
+			select {
+			case <-ctx.Done():
+				log.Printf("[ChatService] Context cancelled during tool execution loop (filtered) - RequestID: %s - iterations: %d, tool calls: %d",
+					requestID, iterationCount, toolCallCount)
+				eventChan <- StreamEvent{Type: StreamEventError, Error: "execution stopped by user"}
+				return
+			default:
+				// Context still active, continue
+			}
+
 			iterationCount++
 
 			// Calculate context size BEFORE applying sliding window
@@ -1999,6 +2032,17 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					}
 
 					if !isBlocked {
+						// CONTEXT CANCELLATION CHECK: Before executing tool (stop button support)
+						select {
+						case <-ctx.Done():
+							log.Printf("[ChatService] Context cancelled before tool '%s' execution (filtered) - RequestID: %s",
+								toolCall.Name, requestID)
+							eventChan <- StreamEvent{Type: StreamEventError, Error: "execution stopped by user"}
+							return
+						default:
+							// Context still active, continue
+						}
+
 						// Execute tool (no cached result available)
 						// Inject humanTaskId from workflowState into context for auto-population
 						toolCtx := ctx

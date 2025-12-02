@@ -40,6 +40,10 @@ type StreamOutputSink interface {
 	// SendError sends an error message to the output destination
 	SendError(errorMsg string) error
 
+	// SendMessageSaved sends the database ID of a saved message for frontend reconciliation.
+	// Format: "role:messageId" (e.g., "assistant:507f1f77bcf86cd799439011")
+	SendMessageSaved(messageID string) error
+
 	// IsDisconnected returns true if the client has disconnected
 	// Used to detect early termination and avoid unnecessary work
 	IsDisconnected() bool
@@ -212,6 +216,34 @@ func (w *WebSocketSink) SendError(errorMsg string) error {
 	return nil
 }
 
+// SendMessageSaved sends the message ID to the WebSocket client for frontend reconciliation
+func (w *WebSocketSink) SendMessageSaved(messageID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.disconnected {
+		return nil // Silent return if already disconnected
+	}
+
+	savedMsg := models.StreamMessage{
+		Type:    "message_saved",
+		Content: messageID,
+	}
+
+	if err := w.conn.WriteJSON(savedMsg); err != nil {
+		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+			w.logger.Debug("WebSocket client disconnected during message_saved")
+			w.disconnected = true
+			return nil
+		}
+		w.logger.Warn("Failed to send message_saved", zap.Error(err))
+		w.disconnected = true
+		return nil
+	}
+
+	return nil
+}
+
 // IsDisconnected returns true if the WebSocket client has disconnected
 func (w *WebSocketSink) IsDisconnected() bool {
 	w.mu.Lock()
@@ -286,6 +318,12 @@ func (p *ProgressNotificationSink) SendError(errorMsg string) error {
 	defer p.mu.Unlock()
 
 	p.notifier.EmitProgress(p.parentSessionID, "❌ Subchat error: "+errorMsg)
+	return nil
+}
+
+// SendMessageSaved is a no-op for subchat (progress notifications don't need reconciliation)
+func (p *ProgressNotificationSink) SendMessageSaved(messageID string) error {
+	// Subchat messages are saved to their own session, no frontend reconciliation needed
 	return nil
 }
 
