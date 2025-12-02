@@ -2178,16 +2178,21 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 
 	// Step 5: Inject system prompt as first message (if exists)
 	if systemPromptText != "" {
-	// Step 5: Inject session ID, company ID, error prevention mode, and complexity analysis mode into context for tool access
+	// Step 5: Inject session ID, company ID, error prevention mode, complexity analysis mode, and AI config into context for tool access
 	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
 	ctxWithCompany := context.WithValue(ctxWithSession, "companyID", companyID)
 	ctxWithErrorPrevention := context.WithValue(ctxWithCompany, "errorPreventionMode", session.ErrorPreventionMode)
 	ctxWithComplexityAnalysis := context.WithValue(ctxWithErrorPrevention, "complexityAnalysisMode", session.ComplexityAnalysisMode)
+	// Inject AI config for code summarizer to use current session's provider/model
+	// Use plain string key "aiConfig" to ensure cross-package compatibility (typed context keys don't match across packages)
+	ctxWithAIConfig := context.WithValue(ctxWithComplexityAnalysis, "aiConfig", h.aiService.GetConfig())
 
 	h.logger.Info("Context prepared for AI execution",
 		zap.String("sessionID", sessionID.Hex()),
 		zap.Bool("errorPreventionMode", session.ErrorPreventionMode),
-		zap.Bool("complexityAnalysisMode", session.ComplexityAnalysisMode))
+		zap.Bool("complexityAnalysisMode", session.ComplexityAnalysisMode),
+		zap.String("aiModel", h.aiService.GetConfig().Model),
+		zap.String("aiProvider", h.aiService.GetConfig().Provider))
 
 	// Step 6: Register for interrupt notifications (for prioritized interrupt handling)
 	notifier := GetMessageNotifier(h.logger)
@@ -2356,7 +2361,7 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	// Step 11: Create and execute the stream executor (with adapted chat service)
 	chatServiceAdapter := &chatServiceAdapter{service: h.chatService}
 	exec := executor.NewStreamExecutor(execConfig, chatServiceAdapter, h.aiService)
-	fullResponse, err := exec.Execute(ctxWithComplexityAnalysis, langchainMessages)
+	fullResponse, err := exec.Execute(ctxWithAIConfig, langchainMessages)
 
 	if err != nil {
 		h.logger.Error("AI execution failed", zap.Error(err))

@@ -19,6 +19,8 @@ const (
 	RequestIDKey contextKey = "requestID"
 	// IdentityKey is the context key for user identity
 	IdentityKey contextKey = "identity"
+	// AIConfigKey is the context key for AI configuration (used by code summarizer)
+	AIConfigKey contextKey = "aiConfig"
 )
 
 // Identity represents user identity extracted from JWT

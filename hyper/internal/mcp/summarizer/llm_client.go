@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,11 +33,12 @@ type ClaudeClient struct {
 	config     SummarizerConfig
 }
 
-// OpenAIClient implements LLMClient for OpenAI's API
+// OpenAIClient implements LLMClient for OpenAI's API (and OpenAI-compatible APIs like Groq, Ollama)
 type OpenAIClient struct {
 	apiKey     string
 	model      string
 	maxTokens  int
+	baseURL    string // Base URL for the API (default: https://api.openai.com/v1)
 	httpClient *http.Client
 	logger     *zap.Logger
 	config     SummarizerConfig
@@ -65,6 +67,7 @@ func NewClaudeClient(apiKey string, config SummarizerConfig, logger *zap.Logger)
 }
 
 // NewOpenAIClient creates a new OpenAI client for code summarization
+// Supports custom ProviderURL for OpenAI-compatible APIs (Groq, Ollama, etc.)
 func NewOpenAIClient(apiKey string, config SummarizerConfig, logger *zap.Logger) (*OpenAIClient, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
@@ -74,10 +77,23 @@ func NewOpenAIClient(apiKey string, config SummarizerConfig, logger *zap.Logger)
 		logger = zap.NewNop()
 	}
 
+	// Use custom ProviderURL if set, otherwise default to OpenAI
+	baseURL := config.ProviderURL
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	// Ensure baseURL doesn't have trailing slash
+	baseURL = strings.TrimSuffix(baseURL, "/")
+
+	logger.Debug("Creating OpenAI-compatible client",
+		zap.String("baseURL", baseURL),
+		zap.String("model", config.Model))
+
 	return &OpenAIClient{
 		apiKey:    apiKey,
 		model:     config.Model,
 		maxTokens: config.MaxTokens,
+		baseURL:   baseURL,
 		httpClient: &http.Client{
 			Timeout: config.LLMTimeout,
 		},
@@ -270,7 +286,7 @@ func (o *OpenAIClient) Summarize(ctx context.Context, code string, metadata Code
 	return "", fmt.Errorf("failed to summarize with OpenAI: %w", lastErr)
 }
 
-// summarizeWithRetry performs a single summarization request to OpenAI
+// summarizeWithRetry performs a single summarization request to OpenAI or OpenAI-compatible API
 func (o *OpenAIClient) summarizeWithRetry(ctx context.Context, prompt string, attempt int) (string, error) {
 	reqBody := map[string]interface{}{
 		"model": o.model,
@@ -289,7 +305,13 @@ func (o *OpenAIClient) summarizeWithRetry(ctx context.Context, prompt string, at
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	// Use baseURL (supports custom providers like Groq, Ollama)
+	apiURL := o.baseURL + "/chat/completions"
+	o.logger.Debug("Sending request to OpenAI-compatible API",
+		zap.String("url", apiURL),
+		zap.String("model", o.model))
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -384,6 +406,8 @@ Summary:`, metadata.Language, metadata.FilePath, metadata.NodeType, metadata.Nod
 }
 
 // NewLLMClientFromConfig creates an appropriate LLM client based on configuration
+// The client will use the EXACT model specified in config - no overrides.
+// This ensures summarization uses the same provider/model as the current session.
 func NewLLMClientFromConfig(config SummarizerConfig, logger *zap.Logger) (LLMClient, error) {
 	if !config.Enabled {
 		return nil, fmt.Errorf("summarizer is disabled")
@@ -403,11 +427,13 @@ func NewLLMClientFromConfig(config SummarizerConfig, logger *zap.Logger) (LLMCli
 		len(config.Model) > 6 && config.Model[:6] == "claude"
 
 	if isClaude {
-		// Use claude-haiku-4-5 for summarization (fast and cost-effective)
-		// Override model to a valid Claude model name if just "claude" is specified
+		// Use the exact model specified - only default if just "claude" is given
+		// This respects the current session's model choice
 		if config.Model == "claude" {
+			// Default to haiku for generic "claude" since it's cost-effective for summarization
 			config.Model = "claude-haiku-4-5-20251001"
 		}
+		// Otherwise use the exact model specified (e.g., claude-sonnet-4-20250514, claude-3-opus, etc.)
 		logger.Info("Creating Claude client for summarization",
 			zap.String("model", config.Model),
 		)
