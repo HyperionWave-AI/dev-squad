@@ -109,12 +109,20 @@ func (h *ChatHandler) ListUserSessions(c *gin.Context) {
 		return
 	}
 
+	h.logger.Info("📋 ListUserSessions CALLED",
+		zap.String("userId", userID),
+		zap.String("companyId", companyID))
+
 	sessions, err := h.chatService.GetUserSessions(c.Request.Context(), userID, companyID)
 	if err != nil {
-		h.logger.Error("Failed to list sessions", zap.Error(err))
+		h.logger.Error("❌ ListUserSessions FAILED", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list sessions"})
 		return
 	}
+
+	h.logger.Info("✅ ListUserSessions SUCCESS",
+		zap.String("userId", userID),
+		zap.Int("sessionCount", len(sessions)))
 
 	c.JSON(http.StatusOK, gin.H{
 		"sessions": sessions,
@@ -138,11 +146,33 @@ func (h *ChatHandler) GetSession(c *gin.Context) {
 		return
 	}
 
+	h.logger.Info("🔍 GetSession CALLED",
+		zap.String("sessionId", sessionIDStr),
+		zap.String("companyId", companyID))
+
 	session, err := h.chatService.GetSession(c.Request.Context(), sessionID, companyID)
 	if err != nil {
+		h.logger.Error("❌ GetSession FAILED",
+			zap.String("sessionId", sessionIDStr),
+			zap.Error(err))
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Handle pointer field for logging
+	activeSubagentName := ""
+	if session.ActiveSubagentName != nil {
+		activeSubagentName = *session.ActiveSubagentName
+	}
+	h.logger.Info("✅ GetSession SUCCESS",
+		zap.String("sessionId", sessionIDStr),
+		zap.String("title", session.Title),
+		zap.Bool("hasActiveSubagent", session.ActiveSubagentID != nil || (session.ActiveSubagentName != nil && *session.ActiveSubagentName != "")),
+		zap.String("activeSubagentName", activeSubagentName),
+		zap.Bool("errorPreventionMode", session.ErrorPreventionMode),
+		zap.Bool("complexityAnalysisMode", session.ComplexityAnalysisMode),
+		zap.Int("contextTokenCount", session.ContextTokenCount),
+		zap.Float64("contextPercentage", session.ContextPercentage))
 
 	c.JSON(http.StatusOK, gin.H{"session": session})
 }
@@ -323,12 +353,19 @@ func (h *ChatHandler) GetMessages(c *gin.Context) {
 
 	sessionIDStr := c.Param("id")
 
+	h.logger.Info("📬 GetMessages HANDLER CALLED",
+		zap.String("sessionId", sessionIDStr),
+		zap.String("userId", userID),
+		zap.String("companyId", companyID),
+		zap.String("limitParam", c.Query("limit")),
+		zap.String("offsetParam", c.Query("offset")))
+
 	// Handle special "default-session" identifier
 	var sessionID primitive.ObjectID
 	if sessionIDStr == "default-session" {
 		sessionID, err = h.getOrCreateDefaultSession(c, userID, companyID)
 		if err != nil {
-			h.logger.Error("Failed to get or create default session", zap.Error(err))
+			h.logger.Error("❌ GetMessages FAILED - default session error", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get default session"})
 			return
 		}
@@ -336,6 +373,9 @@ func (h *ChatHandler) GetMessages(c *gin.Context) {
 		// Parse as MongoDB ObjectID
 		sessionID, err = primitive.ObjectIDFromHex(sessionIDStr)
 		if err != nil {
+			h.logger.Error("❌ GetMessages FAILED - invalid session ID",
+				zap.String("sessionId", sessionIDStr),
+				zap.Error(err))
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session ID format. Use a valid ObjectID hex string or 'default-session'"})
 			return
 		}
@@ -360,11 +400,32 @@ func (h *ChatHandler) GetMessages(c *gin.Context) {
 		}
 	}
 
+	h.logger.Info("📬 GetMessages calling service",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int("limit", limit),
+		zap.Int("offset", offset))
+
 	response, err := h.chatService.GetMessages(c.Request.Context(), sessionID, companyID, limit, offset)
 	if err != nil {
+		h.logger.Error("❌ GetMessages HANDLER FAILED",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Build role breakdown for logging
+	roleCount := make(map[string]int)
+	for _, msg := range response.Messages {
+		roleCount[msg.Role]++
+	}
+
+	h.logger.Info("✅ GetMessages HANDLER SUCCESS",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int64("totalInDB", response.Total),
+		zap.Int("returnedCount", len(response.Messages)),
+		zap.Bool("hasMore", response.HasMore),
+		zap.Any("roleBreakdown", roleCount))
 
 	c.JSON(http.StatusOK, response)
 }

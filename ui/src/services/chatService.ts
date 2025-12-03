@@ -188,23 +188,43 @@ export async function getSessions(): Promise<ChatSession[]> {
 
 /**
  * Get messages for a specific chat session
+ * Fetches ALL messages by paginating until hasMore is false
  */
 export async function getMessages(
   sessionId: string,
-  limit: number = 50,
+  limit: number = 100,
   offset: number = 0
 ): Promise<ChatMessage[]> {
-  const queryParams = new URLSearchParams({
-    limit: limit.toString(),
-    offset: offset.toString(),
-  });
+  const allMessages: ChatMessage[] = [];
+  let currentOffset = offset;
+  let hasMore = true;
 
-  const response = await fetchJSON<{ messages: ChatMessage[] | null; total: number; hasMore: boolean }>(
-    `/chat/sessions/${sessionId}/messages?${queryParams}`,
-    { method: 'GET' }
-  );
+  // Paginate through all messages
+  while (hasMore) {
+    const queryParams = new URLSearchParams({
+      limit: limit.toString(),
+      offset: currentOffset.toString(),
+    });
 
-  return response.messages || [];
+    const response = await fetchJSON<{ messages: ChatMessage[] | null; total: number; hasMore: boolean }>(
+      `/chat/sessions/${sessionId}/messages?${queryParams}`,
+      { method: 'GET' }
+    );
+
+    const messages = response.messages || [];
+    allMessages.push(...messages);
+
+    hasMore = response.hasMore;
+    currentOffset += messages.length;
+
+    // Safety limit to prevent infinite loops
+    if (currentOffset > 10000) {
+      console.warn('[chatService] Reached safety limit of 10000 messages');
+      break;
+    }
+  }
+
+  return allMessages;
 }
 
 /**

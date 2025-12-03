@@ -1280,23 +1280,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					return
 				}
 
-				// Log tool execution with comprehensive response data (Claude optimization)
-				if result.Error != "" {
-					log.Printf("[ChatService] Tool '%s' failed - RequestID: %s - Error: %s - Duration: %dms",
-						result.Name, requestID, result.Error, result.DurationMs)
-					// Log complete error response for analysis
-					argsJSON, _ := json.Marshal(toolCall.Args)
-					log.Printf("[Tool Response - ERROR] Tool: %s | Args: %s | Error: %s",
-						result.Name, string(argsJSON), result.Error)
-				} else {
-					log.Printf("[ChatService] Tool '%s' succeeded - RequestID: %s - Duration: %dms",
-						result.Name, requestID, result.DurationMs)
-					// Log complete success response for analysis
-					argsJSON, _ := json.Marshal(toolCall.Args)
-					outputJSON, _ := json.Marshal(result.Output)
-					log.Printf("[Tool Response - SUCCESS] Tool: %s | Args: %s | Output: %s",
-						result.Name, string(argsJSON), string(outputJSON))
-				}
+				// Tool execution complete - no verbose logging needed
 
 				// Add assistant response to history (brief)
 				currentMessages = append(currentMessages, Message{
@@ -1852,37 +1836,8 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 			// 	}
 			// }
 
-			// Log iteration details with more info
-			log.Printf("[AI Processing - Filtered Tools] === ITERATION %d START ===", iterationCount)
-			log.Printf("[AI Processing - Filtered Tools] Iteration: %d, Request: %d chars, Context: %d chars, Tool calls so far: %d, Max iterations: %d",
-				iterationCount, contextSize, contextSize, toolCallCount, s.config.MaxIterations)
-
-			// DEBUG: Log context details before LLM API call
+			// Calculate context size before LLM API call
 			contextSize = calculateContextSize(currentMessages)
-
-			// LOG EXACT MESSAGES SENT TO AI
-			log.Printf("[DEBUG - AI Input] Sending %d messages to AI (iteration %d):", len(currentMessages), iterationCount)
-			for i, msg := range currentMessages {
-				contentPreview := msg.Content
-				if len(contentPreview) > 200 {
-					contentPreview = contentPreview[:200] + "..."
-				}
-
-				if msg.Role == "tool_result" && msg.ToolResult != nil {
-					outputPreview := fmt.Sprintf("%v", msg.ToolResult.Output)
-					if len(outputPreview) > 500 {
-						outputPreview = outputPreview[:500] + "..."
-					}
-					log.Printf("  [%d] Role: %s, ToolName: %s, ToolID: %s, Output: %s",
-						i, msg.Role, msg.ToolResult.Name, msg.ToolResult.ID, outputPreview)
-				} else if msg.Role == "tool_call" && msg.ToolCall != nil {
-					argsJSON, _ := json.Marshal(msg.ToolCall.Args)
-					log.Printf("  [%d] Role: %s, ToolName: %s, ToolID: %s, Args: %s",
-						i, msg.Role, msg.ToolCall.Name, msg.ToolCall.ID, string(argsJSON))
-				} else {
-					log.Printf("  [%d] Role: %s, Content: %s", i, msg.Role, contentPreview)
-				}
-			}
 
 			// Call provider with FILTERED tools
 			toolProvider := s.provider.(ToolCapableProvider)
@@ -1902,42 +1857,14 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				responseTokens++
 			}
 
-			// Log iteration response details
-			log.Printf("[AI Processing - Filtered] === ITERATION %d COMPLETE ===", iterationCount)
-			log.Printf("[AI Processing - Filtered] Iteration: %d complete, Response: %d tokens, Tool calls requested: %d",
-				iterationCount, responseTokens, len(response.ToolCalls))
-
-			// DEBUG: Check if responseText contains tool JSON (FILTERED PATH)
-			if strings.Contains(responseText, `[{"id":"`) {
-				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] ⚠️  WARNING: responseText contains tool JSON!")
-				preview := responseText
-				if len(preview) > 300 {
-					preview = preview[:300] + "..."
-				}
-				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] responseText preview: %s", preview)
-			} else {
-				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] ✓ responseText is clean (no tool JSON)")
-				preview := responseText
-				if len(preview) > 200 {
-					preview = preview[:200] + "..."
-				}
-				log.Printf("[DEBUG TOOL_EXECUTOR FILTERED] responseText preview: %s", preview)
-			}
-
 			// Check stop reason to determine if turn has ended
 			// According to Claude API docs, stop_reason is the ONLY authoritative flag
 			if response.StopReason == "end_turn" {
-				log.Printf("[AI Processing - Filtered] 🏁 AI ENDED TURN - stop_reason=end_turn (natural completion)")
-				log.Printf("[ChatService - Filtered] Stream complete - RequestID: %s - StopReason: end_turn - Total iterations: %d, Tool calls: %d",
-					requestID, iterationCount, toolCallCount)
 				return
 			}
 
-			// If we get here with 0 tool calls and stop_reason != "end_turn", something is wrong
+			// If we get here with 0 tool calls and stop_reason != "end_turn", treat as end turn
 			if len(response.ToolCalls) == 0 {
-				log.Printf("[AI Processing - Filtered] WARNING: StopReason=%s but no tool calls - treating as end turn", response.StopReason)
-				log.Printf("[ChatService - Filtered] Stream complete - RequestID: %s - StopReason: %s (fallback) - Total iterations: %d, Tool calls: %d",
-					requestID, response.StopReason, iterationCount, toolCallCount)
 				return
 			}
 
@@ -2060,23 +1987,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					// Send tool result event
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
-				// Log tool execution with comprehensive response data (Claude optimization)
-				if result.Error != "" {
-					log.Printf("[ChatService - Filtered] Tool '%s' failed - RequestID: %s - Error: %s - Duration: %dms",
-						result.Name, requestID, result.Error, result.DurationMs)
-					// Log complete error response for analysis
-					argsJSON, _ := json.Marshal(toolCall.Args)
-					log.Printf("[Tool Response - ERROR - Filtered] Tool: %s | Args: %s | Error: %s",
-						result.Name, string(argsJSON), result.Error)
-				} else {
-					log.Printf("[ChatService - Filtered] Tool '%s' succeeded - RequestID: %s - Duration: %dms",
-						result.Name, requestID, result.DurationMs)
-					// Log complete success response for analysis
-					argsJSON, _ := json.Marshal(toolCall.Args)
-					outputJSON, _ := json.Marshal(result.Output)
-					log.Printf("[Tool Response - SUCCESS - Filtered] Tool: %s | Args: %s | Output: %s",
-						result.Name, string(argsJSON), string(outputJSON))
-				}
+				// Tool execution complete - errors handled in circuit breaker below
 
 				// CRITICAL: Track CONSECUTIVE failed tool calls - stop on 3+ consecutive identical failures
 				// This allows: compile → error → fix → compile (normal flow)

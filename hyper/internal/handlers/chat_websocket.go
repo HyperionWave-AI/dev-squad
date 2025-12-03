@@ -1392,10 +1392,18 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 		decrementUserConnection(userID)
 	}()
 
-	h.logger.Info("WebSocket connection established",
+	// Handle pointer field for logging
+	activeSubagentName := ""
+	if session.ActiveSubagentName != nil {
+		activeSubagentName = *session.ActiveSubagentName
+	}
+	h.logger.Info("🔌 WebSocket CONNECTED",
 		zap.String("sessionId", sessionID.Hex()),
 		zap.String("userId", userID),
-		zap.Int64("totalConnections", atomic.LoadInt64(&activeConnections)))
+		zap.Int64("totalConnections", atomic.LoadInt64(&activeConnections)),
+		zap.String("sessionTitle", session.Title),
+		zap.Bool("hasActiveSubagent", session.ActiveSubagentID != nil || (session.ActiveSubagentName != nil && *session.ActiveSubagentName != "")),
+		zap.String("activeSubagentName", activeSubagentName))
 
 	// Register WebSocket connection for broadcasting (e.g., session_created events)
 	broadcaster := GetWebSocketBroadcaster(h.logger)
@@ -1554,7 +1562,10 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 	for {
 		select {
 		case <-httpCtx.Done():
-			h.logger.Info("HTTP context cancelled, closing WebSocket")
+			h.logger.Info("🔌 WebSocket DISCONNECTING - HTTP context cancelled",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Bool("wasProcessing", isProcessing.Load()),
+				zap.String("reason", "HTTP context cancelled (page navigation/refresh)"))
 			// done channel will be closed by defer
 			return
 
@@ -1569,9 +1580,10 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				err := msg.err
 				// Check if this is an idle timeout (expected after task completion)
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					h.logger.Debug("WebSocket idle timeout - connection will close",
+					h.logger.Info("🔌 WebSocket DISCONNECTING - idle timeout",
 						zap.String("sessionId", sessionID.Hex()),
 						zap.Duration("timeout", 300*time.Second),
+						zap.Bool("wasProcessing", isProcessing.Load()),
 						zap.String("reason", "No activity from client (user reviewing response)"))
 					// done channel will be closed by defer
 					return
@@ -1588,13 +1600,26 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 					websocket.CloseAbnormalClosure,    // 1006: abnormal closure
 					websocket.CloseNormalClosure,      // 1000: normal closure
 					websocket.CloseNoStatusReceived) { // 1005: no status (browser refresh/close)
-					h.logger.Debug("Client disconnected from WebSocket",
+					closeCode := "unknown"
+					if websocket.IsCloseError(err, websocket.CloseGoingAway) {
+						closeCode = "1001-GoingAway (navigation)"
+					} else if websocket.IsCloseError(err, websocket.CloseAbnormalClosure) {
+						closeCode = "1006-AbnormalClosure"
+					} else if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+						closeCode = "1000-NormalClosure"
+					} else if websocket.IsCloseError(err, websocket.CloseNoStatusReceived) {
+						closeCode = "1005-NoStatus (refresh/close)"
+					}
+					h.logger.Info("🔌 WebSocket DISCONNECTED - client closed",
 						zap.String("sessionId", sessionID.Hex()),
-						zap.String("reason", err.Error()))
+						zap.String("closeCode", closeCode),
+						zap.Bool("wasProcessing", isProcessing.Load()),
+						zap.String("rawError", err.Error()))
 				} else {
 					// Truly unexpected network error
-					h.logger.Warn("WebSocket unexpected network error",
+					h.logger.Warn("🔌 WebSocket DISCONNECTED - network error",
 						zap.String("sessionId", sessionID.Hex()),
+						zap.Bool("wasProcessing", isProcessing.Load()),
 						zap.Error(err),
 						zap.String("errorType", fmt.Sprintf("%T", err)))
 				}
@@ -1706,9 +1731,21 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				continue
 			}
 
+			// 🎬 LOG: Starting message processing
+			h.logger.Info("🎬 STREAMING STARTED - processing user message",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.String("userId", userID),
+				zap.Int("contentLength", len(userMsg.Content)),
+				zap.Bool("isProcessing", true))
+
 			// Process message in a goroutine to allow reading stop messages concurrently
 			go func(userMsg models.SendMessageRequest) {
-				defer isProcessing.Store(false)
+				defer func() {
+					isProcessing.Store(false)
+					h.logger.Info("🎬 STREAMING ENDED - processing complete",
+						zap.String("sessionId", sessionID.Hex()),
+						zap.Bool("isProcessing", false))
+				}()
 
 			// Emit user message to WebSocket immediately (before database save)
 			userMsgEvent := models.StreamMessage{

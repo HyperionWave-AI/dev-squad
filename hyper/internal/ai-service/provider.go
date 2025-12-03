@@ -207,78 +207,6 @@ func (p *openAIProvider) SupportsTools() bool {
 
 // StreamChatWithTools implements tool calling for OpenAI using LangChain
 func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
-	// DEBUG: Log all messages BEFORE sending to AI
-	fmt.Printf("\n[DEBUG PRE-AI REQUEST] ========================================\n")
-	fmt.Printf("[DEBUG PRE-AI REQUEST] Total messages: %d\n", len(messages))
-	totalSize := 0
-	for i, msg := range messages {
-		var msgSize int
-
-		// Calculate size based on what's ACTUALLY sent to AI
-		if msg.Role == "tool_result" && msg.ToolResult != nil {
-			// For tool results, measure the actual output
-			if msg.ToolResult.Error != "" {
-				msgSize = len(msg.ToolResult.Error)
-			} else {
-				switch v := msg.ToolResult.Output.(type) {
-				case string:
-					msgSize = len(v)
-				default:
-					// Marshal to JSON to get size
-					if jsonBytes, err := json.Marshal(v); err == nil {
-						msgSize = len(jsonBytes)
-					}
-				}
-			}
-		} else if msg.Role == "tool_call" && msg.ToolCall != nil {
-			// For tool calls, measure the args
-			if argsJSON, err := json.Marshal(msg.ToolCall.Args); err == nil {
-				msgSize = len(argsJSON) + len(msg.Content)
-			} else {
-				msgSize = len(msg.Content)
-			}
-		} else {
-			// For other messages (user, assistant, system), Content is correct
-			msgSize = len(msg.Content)
-		}
-
-		totalSize += msgSize
-
-		// Preview (first 250 chars)
-		preview := msg.Content
-		if len(preview) > 250 {
-			preview = preview[:250] + "..."
-		}
-
-		// Log based on message type
-		if msg.Role == "tool_call" && msg.ToolCall != nil {
-			argsJSON, _ := json.Marshal(msg.ToolCall.Args)
-			fmt.Printf("[DEBUG PRE-AI MSG %d] Role: %s, ToolName: %s, ToolID: %s, Size: %d bytes\n",
-				i, msg.Role, msg.ToolCall.Name, msg.ToolCall.ID, msgSize)
-			fmt.Printf("  Args: %s\n", string(argsJSON))
-			if msg.Content != "" {
-				fmt.Printf("  Content: %s\n", preview)
-			}
-		} else if msg.Role == "tool_result" && msg.ToolResult != nil {
-			fmt.Printf("[DEBUG PRE-AI MSG %d] Role: %s, ToolName: %s, ToolID: %s, Size: %d bytes\n",
-				i, msg.Role, msg.ToolResult.Name, msg.ToolResult.ID, msgSize)
-			if msg.ToolResult.Error != "" {
-				fmt.Printf("  Error: %s\n", msg.ToolResult.Error)
-			} else {
-				outputPreview := fmt.Sprintf("%v", msg.ToolResult.Output)
-				if len(outputPreview) > 250 {
-					outputPreview = outputPreview[:250] + "..."
-				}
-				fmt.Printf("  Output: %s\n", outputPreview)
-			}
-		} else {
-			fmt.Printf("[DEBUG PRE-AI MSG %d] Role: %s, Size: %d bytes\n", i, msg.Role, msgSize)
-			fmt.Printf("  Content: %s\n", preview)
-		}
-	}
-	fmt.Printf("[DEBUG PRE-AI REQUEST] Total content size: %d bytes\n", totalSize)
-	fmt.Printf("[DEBUG PRE-AI REQUEST] ========================================\n\n")
-
 	// Helper function for JSON marshaling
 	mustMarshalJSON := func(v interface{}) string {
 		if v == nil {
@@ -293,9 +221,7 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 
 	// Convert messages to LangChain MessageContent format
 	msgContents := make([]llms.MessageContent, 0, len(messages))
-	for i, msg := range messages {
-		fmt.Printf("[DEBUG MESSAGE CONVERSION %d] Role: %s\n", i, msg.Role)
-
+	for _, msg := range messages {
 		switch msg.Role {
 		case "user":
 			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
@@ -314,7 +240,6 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 				// Add text content if present
 				if msg.Content != "" {
 					parts = append(parts, llms.TextPart(msg.Content))
-					fmt.Printf("  [DEBUG] Added TextPart: %d bytes\n", len(msg.Content))
 				}
 
 				// Add ToolCall part
@@ -327,18 +252,15 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 					},
 				}
 				parts = append(parts, toolCallPart)
-				fmt.Printf("  [DEBUG] Added ToolCall part: ID=%s, Name=%s\n", msg.ToolCall.ID, msg.ToolCall.Name)
 
 				msgContent := llms.MessageContent{
 					Role:  llms.ChatMessageTypeAI,
 					Parts: parts,
 				}
 				msgContents = append(msgContents, msgContent)
-				fmt.Printf("  [DEBUG] Created MessageContent with %d parts\n", len(parts))
 			} else {
 				// Fallback if no ToolCall data
 				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeAI, msg.Content))
-				fmt.Printf("  [DEBUG] Fallback: using TextParts\n")
 			}
 
 		case "tool_result":
@@ -348,7 +270,6 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 				var resultContent string
 				if msg.ToolResult.Error != "" {
 					resultContent = msg.ToolResult.Error
-					fmt.Printf("  [DEBUG] ToolResult error: %s\n", msg.ToolResult.Error)
 				} else {
 					switch v := msg.ToolResult.Output.(type) {
 					case string:
@@ -361,11 +282,10 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 							resultContent = fmt.Sprintf("%v", v)
 						}
 					}
-					fmt.Printf("  [DEBUG] ToolResult output: %d bytes\n", len(resultContent))
 				}
 
 				msgContent := llms.MessageContent{
-					Role: llms.ChatMessageTypeTool,  // FIXED: Use Tool role, not Human
+					Role: llms.ChatMessageTypeTool, // FIXED: Use Tool role, not Human
 					Parts: []llms.ContentPart{
 						llms.ToolCallResponse{
 							ToolCallID: msg.ToolResult.ID,
@@ -375,11 +295,9 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 					},
 				}
 				msgContents = append(msgContents, msgContent)
-				fmt.Printf("  [DEBUG] Created ToolCallResponse with Tool role: ToolCallID=%s, Name=%s\n", msg.ToolResult.ID, msg.ToolResult.Name)
 			} else {
 				// Fallback if no ToolResult data
 				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
-				fmt.Printf("  [DEBUG] Fallback: using TextParts\n")
 			}
 
 		default:
@@ -473,40 +391,6 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		choice := result.resp.Choices[0]
 		stopReason = choice.StopReason // Capture stop reason from LangChain
 
-		// DEBUG: Log complete response structure from LangChain
-		fmt.Printf("\n[DEBUG LANGCHAIN RESPONSE] ========================================\n")
-		fmt.Printf("[DEBUG LANGCHAIN] Total Choices: %d\n", len(result.resp.Choices))
-		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content: '%s'\n", choice.Content)
-		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - Content Length: %d bytes\n", len(choice.Content))
-		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - StopReason: '%s'\n", choice.StopReason)
-		fmt.Printf("[DEBUG LANGCHAIN] Choice 0 - ToolCalls Count: %d\n", len(choice.ToolCalls))
-
-		// Log each tool call in the choice
-		if len(choice.ToolCalls) > 0 {
-			for i, tc := range choice.ToolCalls {
-				fmt.Printf("[DEBUG LANGCHAIN ToolCall %d]\n", i)
-				fmt.Printf("  ID: '%s'\n", tc.ID)
-				fmt.Printf("  Type: '%s'\n", tc.Type)
-				if tc.FunctionCall != nil {
-					fmt.Printf("  FunctionCall.Name: '%s'\n", tc.FunctionCall.Name)
-					fmt.Printf("  FunctionCall.Arguments: '%s'\n", tc.FunctionCall.Arguments)
-					fmt.Printf("  FunctionCall.Arguments Length: %d bytes\n", len(tc.FunctionCall.Arguments))
-				}
-			}
-		}
-
-		// Check if Content field contains the tool call JSON (this is the bug!)
-		if strings.Contains(choice.Content, `[{"id":"`) {
-			fmt.Printf("[DEBUG LANGCHAIN] ⚠️  WARNING: Content field contains tool call JSON!\n")
-			previewLen := 200
-			if len(choice.Content) < previewLen {
-				previewLen = len(choice.Content)
-			}
-			fmt.Printf("[DEBUG LANGCHAIN] Content preview: %s...\n", choice.Content[:previewLen])
-		}
-
-		fmt.Printf("[DEBUG LANGCHAIN RESPONSE] ========================================\n\n")
-
 		// Check ToolCalls array first (preferred - has real IDs from AI)
 		if len(choice.ToolCalls) > 0 {
 			for _, tc := range choice.ToolCalls {
@@ -518,7 +402,6 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 							Name: tc.FunctionCall.Name,
 							Args: args,
 						})
-						fmt.Printf("[DEBUG OpenAI] Extracted tool call: %s (id=%s)\n", tc.FunctionCall.Name, tc.ID)
 					}
 				}
 			}
@@ -776,10 +659,8 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 				toolResultID := sanitizeToolID(msg.ToolResult.ID)
 				if !includedToolUseIDs[toolResultID] {
 					// Skip this tool_result because its tool_call was filtered out
-					fmt.Printf("[DEBUG] Skipped tool_result ID: %s (no matching tool_use)\n", toolResultID)
 					continue
 				}
-				// fmt.Printf("[DEBUG] Including tool_result ID: %s (has matching tool_use)\n", toolResultID)
 			}
 
 			// Format tool_result (user message with tool result) for Anthropic
@@ -824,10 +705,6 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 			"content": content,
 		})
 	}
-
-	// Debug: Show summary of tool_use/tool_result filtering
-	fmt.Printf("[DEBUG] Message filtering complete: %d total messages, %d included tool_use IDs\n",
-		len(apiMessages), len(includedToolUseIDs))
 
 	// Convert tools to Anthropic format
 	apiTools := make([]map[string]interface{}, 0, len(tools))
@@ -945,7 +822,6 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 				Name: block.Name,
 				Args: block.Input,
 			})
-			fmt.Printf("[DEBUG] Extracted tool call: %s (id=%s)\n", block.Name, block.ID)
 		}
 	}
 
@@ -956,9 +832,6 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		}
 		close(textChan)
 	}()
-
-	fmt.Printf("[DEBUG Anthropic Direct] StopReason: %s, ToolCalls: %d, Text: %d chars\n",
-		anthropicResp.StopReason, len(toolCalls), len(textContent))
 
 	// Extract token usage from response
 	tokenUsage := p.extractTokenUsageFromAnthropicResponse(anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens)

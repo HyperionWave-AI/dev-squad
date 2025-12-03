@@ -310,21 +310,34 @@ func (s *ChatService) DeleteSession(ctx context.Context, sessionID primitive.Obj
 
 // GetMessages retrieves messages for a session with pagination
 func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.ObjectID, companyID string, limit, offset int) (*models.GetMessagesResponse, error) {
+	// 📤 LOG: Entry point for GetMessages
+	s.logger.Info("📤 GetMessages CALLED",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int("limit", limit),
+		zap.Int("offset", offset),
+		zap.String("companyId", companyID))
+
 	// Verify session exists and user has access
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
+		s.logger.Error("❌ GetMessages FAILED - session not found",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
 		return nil, err
 	}
 
 	// Filter out system_internal messages (scaffold/enforcement messages not meant for end users)
 	filter := bson.M{
-		"sessionId": sessionID,
-		"role": bson.M{"$ne": "system_internal"},
+		"sessionId":  sessionID,
+		"role":       bson.M{"$ne": "system_internal"},
 		"isArchived": bson.M{"$ne": true},
 	}
 	// Count total user-visible messages
 	total, err := s.messagesCollection.CountDocuments(ctx, filter)
 	if err != nil {
+		s.logger.Error("❌ GetMessages FAILED - count error",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
 		return nil, fmt.Errorf("failed to count messages: %w", err)
 	}
 
@@ -336,12 +349,18 @@ func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.Objec
 
 	cursor, err := s.messagesCollection.Find(ctx, filter, opts)
 	if err != nil {
+		s.logger.Error("❌ GetMessages FAILED - query error",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
 		return nil, fmt.Errorf("failed to query messages: %w", err)
 	}
 	defer cursor.Close(ctx)
 
 	var messages []models.ChatMessage
 	if err := cursor.All(ctx, &messages); err != nil {
+		s.logger.Error("❌ GetMessages FAILED - decode error",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
 		return nil, fmt.Errorf("failed to decode messages: %w", err)
 	}
 
@@ -352,6 +371,20 @@ func (s *ChatService) GetMessages(ctx context.Context, sessionID primitive.Objec
 		Offset:   offset,
 		HasMore:  int64(offset+len(messages)) < total,
 	}
+
+	// ✅ LOG: Successful fetch with details
+	roleCount := make(map[string]int)
+	for _, msg := range messages {
+		roleCount[msg.Role]++
+	}
+	s.logger.Info("✅ GetMessages SUCCESS",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.Int64("totalInDB", total),
+		zap.Int("returnedCount", len(messages)),
+		zap.Int("limit", limit),
+		zap.Int("offset", offset),
+		zap.Bool("hasMore", response.HasMore),
+		zap.Any("roleBreakdown", roleCount))
 
 	return response, nil
 }
@@ -366,14 +399,35 @@ func (s *ChatService) SaveMessage(ctx context.Context, sessionID primitive.Objec
 		metrics.RecordChatMessage(role, time.Since(startTime).Seconds())
 	}()
 
+	// 📨 LOG: Entry point for SaveMessage
+	contentPreview := content
+	if len(contentPreview) > 100 {
+		contentPreview = contentPreview[:100] + "..."
+	}
+	s.logger.Info("📨 SaveMessage CALLED",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("role", role),
+		zap.Int("contentLength", len(content)),
+		zap.String("contentPreview", contentPreview),
+		zap.String("companyId", companyID))
+
 	// Layer 3: Validate content size (defense in depth)
 	if len(content) > config.MaxContentBytes {
+		s.logger.Error("❌ SaveMessage REJECTED - content too large",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("role", role),
+			zap.Int("contentLength", len(content)),
+			zap.Int("maxBytes", config.MaxContentBytes))
 		return nil, fmt.Errorf("message content exceeds maximum size of %d bytes (got %d bytes)", config.MaxContentBytes, len(content))
 	}
 
 	// Verify session exists and user has access (outside transaction)
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
+		s.logger.Error("❌ SaveMessage FAILED - session not found",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("role", role),
+			zap.Error(err))
 		return nil, err
 	}
 
@@ -408,8 +462,21 @@ func (s *ChatService) SaveMessage(ctx context.Context, sessionID primitive.Objec
 	})
 
 	if err != nil {
+		s.logger.Error("❌ SaveMessage TRANSACTION FAILED",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("role", role),
+			zap.String("messageId", message.ID.Hex()),
+			zap.Error(err))
 		return nil, err
 	}
+
+	// ✅ LOG: Successful save
+	s.logger.Info("✅ SaveMessage SUCCESS - message saved to DB",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("messageId", message.ID.Hex()),
+		zap.String("role", role),
+		zap.Int("contentLength", len(content)),
+		zap.Duration("duration", time.Since(startTime)))
 
 	return message, nil
 }
@@ -439,19 +506,42 @@ func (s *ChatService) GetSessionMessages(ctx context.Context, sessionID primitiv
 // SaveToolCall saves a tool call message to the database
 // Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, args map[string]interface{}, companyID string) (*models.ChatMessage, error) {
+	startTime := time.Now()
+
+	// 🔧 LOG: Entry point for SaveToolCall
+	s.logger.Info("🔧 SaveToolCall CALLED",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("toolCallId", toolCallID),
+		zap.String("toolName", toolName),
+		zap.Int("argsCount", len(args)),
+		zap.String("companyId", companyID))
+
 	// Layer 3: Validate tool call args size (defense in depth)
 	// Tool results can be larger, but tool calls (user input) should be limited
 	argsBytes, err := bson.Marshal(args)
 	if err != nil {
+		s.logger.Error("❌ SaveToolCall FAILED - args marshal error",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.Error(err))
 		return nil, fmt.Errorf("failed to validate tool call args: %w", err)
 	}
 	if len(argsBytes) > config.MaxContentBytes {
+		s.logger.Error("❌ SaveToolCall REJECTED - args too large",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.Int("argsSize", len(argsBytes)),
+			zap.Int("maxBytes", config.MaxContentBytes))
 		return nil, fmt.Errorf("tool call args exceed maximum size of %d bytes (got %d bytes)", config.MaxContentBytes, len(argsBytes))
 	}
 
 	// Verify session exists and user has access (outside transaction)
 	_, err = s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
+		s.logger.Error("❌ SaveToolCall FAILED - session not found",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.Error(err))
 		return nil, err
 	}
 
@@ -491,8 +581,21 @@ func (s *ChatService) SaveToolCall(ctx context.Context, sessionID primitive.Obje
 	})
 
 	if err != nil {
+		s.logger.Error("❌ SaveToolCall TRANSACTION FAILED",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.String("messageId", message.ID.Hex()),
+			zap.Error(err))
 		return nil, err
 	}
+
+	// ✅ LOG: Successful save
+	s.logger.Info("✅ SaveToolCall SUCCESS - tool call saved to DB",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("messageId", message.ID.Hex()),
+		zap.String("toolCallId", toolCallID),
+		zap.String("toolName", toolName),
+		zap.Duration("duration", time.Since(startTime)))
 
 	return message, nil
 }
@@ -500,6 +603,24 @@ func (s *ChatService) SaveToolCall(ctx context.Context, sessionID primitive.Obje
 // SaveToolResult saves a tool result message to the database
 // Uses transaction to ensure message insert and session update are atomic
 func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, output interface{}, errorMsg string, durationMs int64, companyID string) (*models.ChatMessage, error) {
+	startTime := time.Now()
+
+	// 📥 LOG: Entry point for SaveToolResult
+	outputSize := 0
+	if output != nil {
+		if outputBytes, err := bson.Marshal(bson.M{"output": output}); err == nil {
+			outputSize = len(outputBytes)
+		}
+	}
+	s.logger.Info("📥 SaveToolResult CALLED",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("toolCallId", toolCallID),
+		zap.String("toolName", toolName),
+		zap.Int("outputSize", outputSize),
+		zap.String("errorMsg", errorMsg),
+		zap.Int64("durationMs", durationMs),
+		zap.String("companyId", companyID))
+
 	// Layer 3: Validate tool result output size (defense in depth)
 	// Tool results can be larger than user messages (10MB limit vs 1MB)
 	if output != nil {
@@ -508,9 +629,18 @@ func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.Ob
 		tempDoc := bson.M{"output": output}
 		outputBytes, err := bson.Marshal(tempDoc)
 		if err != nil {
+			s.logger.Error("❌ SaveToolResult FAILED - output marshal error",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.String("toolName", toolName),
+				zap.Error(err))
 			return nil, fmt.Errorf("failed to validate tool result output: %w", err)
 		}
 		if len(outputBytes) > config.MaxToolResultBytes {
+			s.logger.Error("❌ SaveToolResult REJECTED - output too large",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.String("toolName", toolName),
+				zap.Int("outputSize", len(outputBytes)),
+				zap.Int("maxBytes", config.MaxToolResultBytes))
 			return nil, fmt.Errorf("tool result output exceeds maximum size of %d bytes (got %d bytes)", config.MaxToolResultBytes, len(outputBytes))
 		}
 	}
@@ -518,6 +648,10 @@ func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.Ob
 	// Verify session exists and user has access (outside transaction)
 	_, err := s.GetSession(ctx, sessionID, companyID)
 	if err != nil {
+		s.logger.Error("❌ SaveToolResult FAILED - session not found",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.Error(err))
 		return nil, err
 	}
 
@@ -531,12 +665,6 @@ func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.Ob
 	if toolCallID == "" {
 		s.logger.Error("🚨 BUG DETECTED: SaveToolResult called with EMPTY toolCallID!",
 			zap.String("sessionId", sessionID.Hex()),
-			zap.String("toolName", toolName),
-			zap.Int64("durationMs", durationMs))
-	} else {
-		s.logger.Info("💾 SaveToolResult preparing to save",
-			zap.String("sessionId", sessionID.Hex()),
-			zap.String("toolCallID", toolCallID),
 			zap.String("toolName", toolName),
 			zap.Int64("durationMs", durationMs))
 	}
@@ -579,8 +707,22 @@ func (s *ChatService) SaveToolResult(ctx context.Context, sessionID primitive.Ob
 	})
 
 	if err != nil {
+		s.logger.Error("❌ SaveToolResult TRANSACTION FAILED",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.String("messageId", message.ID.Hex()),
+			zap.Error(err))
 		return nil, err
 	}
+
+	// ✅ LOG: Successful save
+	s.logger.Info("✅ SaveToolResult SUCCESS - tool result saved to DB",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("messageId", message.ID.Hex()),
+		zap.String("toolCallId", toolCallID),
+		zap.String("toolName", toolName),
+		zap.Int("outputSize", outputSize),
+		zap.Duration("duration", time.Since(startTime)))
 
 	return message, nil
 }
