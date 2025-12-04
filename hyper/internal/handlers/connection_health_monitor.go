@@ -6,12 +6,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"hyper/internal/metrics"
+
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
 
+// DisconnectCallback is called when the health monitor decides to disconnect a client
+// PHASE 7: Actual disconnection mechanism
+type DisconnectCallback func(reason string)
+
 // ConnectionHealthMonitor tracks WebSocket connection health with ping/pong timeouts
 // and detects write buffer issues
+// PHASE 7: Added actual disconnection mechanism via callback
 type ConnectionHealthMonitor struct {
 	conn                *websocket.Conn
 	logger              *zap.Logger
@@ -33,6 +40,11 @@ type ConnectionHealthMonitor struct {
 	writeCount            atomic.Int64 // Number of writes recorded
 	consecutiveSlowWrites atomic.Int64 // Count of consecutive slow writes (>1s)
 	lastWriteLatencyMs    atomic.Int64 // Most recent write latency in milliseconds
+
+	// PHASE 7: Disconnection mechanism
+	onDisconnect      DisconnectCallback // Callback to trigger actual disconnection
+	disconnectOnce    sync.Once          // Ensure disconnect is only called once
+	sessionID         string             // Session ID for logging
 }
 
 // HealthStatus represents the current health status of a connection
@@ -56,15 +68,24 @@ type HealthStatus struct {
 }
 
 // NewConnectionHealthMonitor creates a new health monitor for a WebSocket connection
+// PHASE 7: Deprecated - use NewConnectionHealthMonitorWithCallback instead
 func NewConnectionHealthMonitor(conn *websocket.Conn, logger *zap.Logger, writeMutex *sync.Mutex) *ConnectionHealthMonitor {
+	return NewConnectionHealthMonitorWithCallback(conn, logger, writeMutex, "", nil)
+}
+
+// NewConnectionHealthMonitorWithCallback creates a new health monitor with disconnect callback
+// PHASE 7: Added sessionID and onDisconnect callback for actual disconnection
+func NewConnectionHealthMonitorWithCallback(conn *websocket.Conn, logger *zap.Logger, writeMutex *sync.Mutex, sessionID string, onDisconnect DisconnectCallback) *ConnectionHealthMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	monitor := &ConnectionHealthMonitor{
-		conn:       conn,
-		logger:     logger,
-		writeMutex: writeMutex,
-		ctx:        ctx,
-		cancel:     cancel,
+		conn:         conn,
+		logger:       logger,
+		writeMutex:   writeMutex,
+		ctx:          ctx,
+		cancel:       cancel,
+		sessionID:    sessionID,
+		onDisconnect: onDisconnect,
 	}
 
 	monitor.isHealthy.Store(true)
@@ -189,95 +210,199 @@ func (m *ConnectionHealthMonitor) SetDisconnectReason(reason string) {
 	m.disconnectReason = reason
 }
 
+// triggerDisconnect triggers the actual disconnection of the WebSocket connection
+// PHASE 7: This method actually closes the connection and calls the callback
+func (m *ConnectionHealthMonitor) triggerDisconnect(reason string) {
+	m.disconnectOnce.Do(func() {
+		m.isHealthy.Store(false)
+		m.SetDisconnectReason(reason)
+
+		m.logger.Warn("Health monitor triggering disconnection",
+			zap.String("sessionId", m.sessionID),
+			zap.String("reason", reason),
+			zap.Int64("pingsSent", m.pingsSent.Load()),
+			zap.Int64("pongsReceived", m.pongsReceived.Load()),
+			zap.Int("bufferUsage", m.estimateBufferUsage()))
+
+		// Record metric for health-triggered disconnection
+		metrics.WebSocketSlowClients.WithLabelValues(reason).Inc()
+
+		// Close the WebSocket connection with appropriate close code
+		m.writeMutex.Lock()
+		closeMsg := websocket.FormatCloseMessage(websocket.CloseGoingAway, "Connection unhealthy: "+reason)
+		_ = m.conn.WriteControl(websocket.CloseMessage, closeMsg, time.Now().Add(5*time.Second))
+		_ = m.conn.Close()
+		m.writeMutex.Unlock()
+
+		// Call the disconnect callback to notify the handler
+		if m.onDisconnect != nil {
+			m.onDisconnect(reason)
+		}
+	})
+}
+
+// ForceDisconnect allows external callers to trigger disconnection
+// PHASE 7: For use by circuit breaker or other components
+func (m *ConnectionHealthMonitor) ForceDisconnect(reason string) {
+	m.triggerDisconnect(reason)
+}
+
+// Health monitor timing constants
+// PHASE 7 FIX: Properly aligned timing to prevent premature disconnection
+const (
+	// pingInterval is how often we send WebSocket ping frames
+	// Reduced from 30s to 15s for faster detection of dead connections
+	pingInterval = 15 * time.Second
+
+	// healthCheckInterval is how often we check connection health metrics
+	healthCheckInterval = 5 * time.Second
+
+	// pongTimeout is how long we wait for a pong after sending a ping
+	// Must be less than pingInterval to detect issues before next ping
+	pongTimeout = 10 * time.Second
+
+	// minPingsBeforeRateCheck is the minimum pings sent before checking response rate
+	// Prevents false positives on new connections
+	minPingsBeforeRateCheck = 3
+)
+
 // monitorLoop runs the health check loop
+// PHASE 7: Now actually disconnects unhealthy connections
+// PHASE 7 FIX: Fixed timing to send first ping immediately and only check
+// pong timeout after at least one ping has been sent
 func (m *ConnectionHealthMonitor) monitorLoop() {
 	defer m.wg.Done()
 
-	// Ping ticker - send ping every 30 seconds
-	pingTicker := time.NewTicker(30 * time.Second)
+	// PHASE 7 FIX: Send first ping immediately on connection start
+	// This establishes a baseline for pong timeout checks
+	if err := m.sendPing(); err != nil {
+		m.logger.Warn("Failed to send initial ping - triggering disconnect",
+			zap.String("sessionId", m.sessionID),
+			zap.Error(err))
+		m.triggerDisconnect("ping_write_failed")
+		return
+	}
+
+	// Ping ticker - send ping at regular intervals
+	pingTicker := time.NewTicker(pingInterval)
 	defer pingTicker.Stop()
 
-	// Health check ticker - check health every 5 seconds
-	healthCheckTicker := time.NewTicker(5 * time.Second)
+	// Health check ticker - check health metrics regularly
+	healthCheckTicker := time.NewTicker(healthCheckInterval)
 	defer healthCheckTicker.Stop()
-
-	// Pong timeout - 10 seconds to receive pong after sending ping
-	const pongTimeout = 10 * time.Second
 
 	for {
 		select {
 		case <-m.ctx.Done():
-			m.logger.Debug("Connection health monitor stopped")
+			m.logger.Debug("Connection health monitor stopped",
+				zap.String("sessionId", m.sessionID))
 			return
 
 		case <-pingTicker.C:
-			// Send ping
-			m.writeMutex.Lock()
-			err := m.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second))
-			m.writeMutex.Unlock()
-
-			if err != nil {
-				m.isHealthy.Store(false)
-				m.logger.Warn("Failed to send ping",
-					zap.Error(err),
-					zap.String("reason", "write_error"))
-				m.SetDisconnectReason("ping_write_failed")
+			if err := m.sendPing(); err != nil {
+				m.logger.Warn("Failed to send ping - triggering disconnect",
+					zap.String("sessionId", m.sessionID),
+					zap.Error(err))
+				m.triggerDisconnect("ping_write_failed")
 				return
 			}
-
-			m.pingsSent.Add(1)
-			m.logger.Debug("Ping sent",
-				zap.Int64("pingsSent", m.pingsSent.Load()))
 
 		case <-healthCheckTicker.C:
-			// Check if we've received a pong recently
-			lastPongMs := m.lastPongTime.Load()
-			lastPongTime := time.UnixMilli(lastPongMs)
-			timeSinceLastPong := time.Since(lastPongTime)
-
-			if timeSinceLastPong > pongTimeout {
-				m.isHealthy.Store(false)
-				m.logger.Warn("Connection unhealthy - pong timeout",
-					zap.Duration("timeSinceLastPong", timeSinceLastPong),
-					zap.Duration("timeout", pongTimeout),
-					zap.Int64("pingsSent", m.pingsSent.Load()),
-					zap.Int64("pongsReceived", m.pongsReceived.Load()))
-				m.SetDisconnectReason("pong_timeout")
-				return
+			if m.performHealthCheck() {
+				return // Connection was disconnected
 			}
-
-			// Check pong response rate
-			pingsSent := m.pingsSent.Load()
-			pongsReceived := m.pongsReceived.Load()
-
-			if pingsSent > 5 {
-				responseRate := float64(pongsReceived) / float64(pingsSent)
-				if responseRate < 0.5 {
-					m.isHealthy.Store(false)
-					m.logger.Warn("Connection unhealthy - low pong response rate",
-						zap.Float64("responseRate", responseRate),
-						zap.Int64("pingsSent", pingsSent),
-						zap.Int64("pongsReceived", pongsReceived))
-					m.SetDisconnectReason("low_pong_response_rate")
-					return
-				}
-			}
-
-			// Check write buffer usage
-			bufferUsage := m.estimateBufferUsage()
-			if bufferUsage > 80 {
-				m.logger.Warn("Connection unhealthy - high write buffer usage",
-					zap.Int("bufferUsage", bufferUsage))
-				m.SetDisconnectReason("write_buffer_full")
-				return
-			}
-
-			m.logger.Debug("Connection health check passed",
-				zap.Duration("timeSinceLastPong", timeSinceLastPong),
-				zap.Int("bufferUsage", bufferUsage),
-				zap.Float64("pongResponseRate", float64(pongsReceived)/float64(pingsSent)*100))
 		}
 	}
+}
+
+// sendPing sends a WebSocket ping frame and tracks it
+// PHASE 7 FIX: Extracted to reusable method for initial ping and regular pings
+func (m *ConnectionHealthMonitor) sendPing() error {
+	m.writeMutex.Lock()
+	err := m.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second))
+	m.writeMutex.Unlock()
+
+	if err != nil {
+		return err
+	}
+
+	m.pingsSent.Add(1)
+	// Update lastPongTime expectation - we now expect a pong within pongTimeout
+	m.logger.Debug("Ping sent",
+		zap.String("sessionId", m.sessionID),
+		zap.Int64("pingsSent", m.pingsSent.Load()))
+	return nil
+}
+
+// performHealthCheck runs all health checks and returns true if connection was disconnected
+// PHASE 7 FIX: Only checks pong timeout after pings have been sent
+func (m *ConnectionHealthMonitor) performHealthCheck() bool {
+	pingsSent := m.pingsSent.Load()
+	pongsReceived := m.pongsReceived.Load()
+
+	// Get timing info
+	lastPongMs := m.lastPongTime.Load()
+	lastPongTime := time.UnixMilli(lastPongMs)
+	timeSinceLastPong := time.Since(lastPongTime)
+
+	// PHASE 7 FIX: Only check pong timeout if we've sent at least one ping
+	// This prevents false positive disconnections on new connections
+	if pingsSent > 0 && timeSinceLastPong > pongTimeout {
+		// Additional check: if we've received at least one pong, the connection was working
+		// Only disconnect if we've missed multiple pongs (pingsSent - pongsReceived > 1)
+		missedPongs := pingsSent - pongsReceived
+		if missedPongs > 1 {
+			m.logger.Warn("Connection unhealthy - pong timeout - triggering disconnect",
+				zap.String("sessionId", m.sessionID),
+				zap.Duration("timeSinceLastPong", timeSinceLastPong),
+				zap.Duration("timeout", pongTimeout),
+				zap.Int64("pingsSent", pingsSent),
+				zap.Int64("pongsReceived", pongsReceived),
+				zap.Int64("missedPongs", missedPongs))
+			m.triggerDisconnect("pong_timeout")
+			return true
+		}
+	}
+
+	// Check pong response rate (only after enough samples)
+	if pingsSent >= minPingsBeforeRateCheck {
+		responseRate := float64(pongsReceived) / float64(pingsSent)
+		if responseRate < 0.5 {
+			m.logger.Warn("Connection unhealthy - low pong response rate - triggering disconnect",
+				zap.String("sessionId", m.sessionID),
+				zap.Float64("responseRate", responseRate),
+				zap.Int64("pingsSent", pingsSent),
+				zap.Int64("pongsReceived", pongsReceived))
+			m.triggerDisconnect("low_pong_response_rate")
+			return true
+		}
+	}
+
+	// Check write buffer usage
+	bufferUsage := m.estimateBufferUsage()
+	if bufferUsage > 80 {
+		m.logger.Warn("Connection unhealthy - high write buffer usage - triggering disconnect",
+			zap.String("sessionId", m.sessionID),
+			zap.Int("bufferUsage", bufferUsage))
+		m.triggerDisconnect("write_buffer_full")
+		return true
+	}
+
+	// Calculate safe pong response rate for logging (avoid division by zero)
+	var pongResponseRate float64
+	if pingsSent > 0 {
+		pongResponseRate = float64(pongsReceived) / float64(pingsSent) * 100
+	}
+
+	m.logger.Debug("Connection health check passed",
+		zap.String("sessionId", m.sessionID),
+		zap.Duration("timeSinceLastPong", timeSinceLastPong),
+		zap.Int("bufferUsage", bufferUsage),
+		zap.Int64("pingsSent", pingsSent),
+		zap.Int64("pongsReceived", pongsReceived),
+		zap.Float64("pongResponseRate", pongResponseRate))
+
+	return false
 }
 
 // estimateBufferUsage estimates the write buffer usage as a percentage (0-100)

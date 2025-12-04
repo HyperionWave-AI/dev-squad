@@ -14,6 +14,7 @@ type ProgressEvent struct {
 
 // ProgressNotifier manages progress notifications for subchat execution
 // PHASE 2: Uses SafeChannel to prevent double-close panics
+// PHASE 8: Increased buffer size and added statistics
 type ProgressNotifier struct {
 	mu       sync.RWMutex
 	channels map[string]*SafeChannel[ProgressEvent]
@@ -50,10 +51,13 @@ func (pn *ProgressNotifier) RegisterSession(sessionID primitive.ObjectID) <-chan
 			zap.String("sessionId", sessionKey))
 	}
 
-	// Create new safe channel
-	safeCh := NewSafeChannel[ProgressEvent](10)
+	// PHASE 8: Create new safe channel with configured buffer size
+	// Uses ProgressNotifierBufferSize from message_notifier.go for consistency
+	safeCh := NewSafeChannel[ProgressEvent](ProgressNotifierBufferSize)
 	pn.channels[sessionKey] = safeCh
-	pn.logger.Info("Registered session for progress notifications", zap.String("sessionId", sessionKey))
+	pn.logger.Info("Registered session for progress notifications",
+		zap.String("sessionId", sessionKey),
+		zap.Int("bufferSize", ProgressNotifierBufferSize))
 	return safeCh.Chan()
 }
 
@@ -73,6 +77,7 @@ func (pn *ProgressNotifier) UnregisterSession(sessionID primitive.ObjectID) {
 
 // EmitProgress emits a progress event to a specific session
 // PHASE 2: Uses SafeChannel.Send for safe, non-blocking send
+// PHASE 8: Enhanced logging with statistics
 func (pn *ProgressNotifier) EmitProgress(sessionID primitive.ObjectID, message string) {
 	pn.mu.RLock()
 	defer pn.mu.RUnlock()
@@ -86,13 +91,64 @@ func (pn *ProgressNotifier) EmitProgress(sessionID primitive.ObjectID, message s
 			return
 		}
 
+		// PHASE 8: Track statistics for monitoring
 		if safeCh.Send(ProgressEvent{Message: message}) {
 			pn.logger.Debug("Emitted progress event",
 				zap.String("sessionId", sessionKey),
-				zap.String("message", message))
+				zap.String("message", message),
+				zap.Int64("sentCount", safeCh.SentCount()))
 		} else {
-			pn.logger.Warn("Progress channel full or closed, dropping event",
-				zap.String("sessionId", sessionKey))
+			// PHASE 8: Log warning with statistics for visibility
+			pn.logger.Warn("Progress channel full, dropping event",
+				zap.String("sessionId", sessionKey),
+				zap.String("message", message),
+				zap.Int64("droppedCount", safeCh.DroppedCount()),
+				zap.Int("bufferSize", safeCh.BufferSize()),
+				zap.Int("currentLen", safeCh.Len()))
 		}
 	}
+}
+
+// PHASE 8: Statistics methods for monitoring
+
+// ProgressNotifierStats contains aggregate statistics for all progress channels
+type ProgressNotifierStats struct {
+	ActiveSessions int                         // Number of active progress channels
+	SessionStats   map[string]SafeChannelStats // Per-session statistics
+	TotalSent      int64                       // Total events sent across all sessions
+	TotalDropped   int64                       // Total events dropped across all sessions
+}
+
+// GetStats returns aggregate statistics for all progress channels
+// PHASE 8: Provides visibility into progress notification health
+func (pn *ProgressNotifier) GetStats() ProgressNotifierStats {
+	pn.mu.RLock()
+	defer pn.mu.RUnlock()
+
+	stats := ProgressNotifierStats{
+		ActiveSessions: len(pn.channels),
+		SessionStats:   make(map[string]SafeChannelStats),
+	}
+
+	for sessionKey, safeCh := range pn.channels {
+		channelStats := safeCh.Stats()
+		stats.SessionStats[sessionKey] = channelStats
+		stats.TotalSent += channelStats.SentCount
+		stats.TotalDropped += channelStats.DroppedCount
+	}
+
+	return stats
+}
+
+// GetSessionStats returns statistics for a specific session
+// PHASE 8: Per-session visibility
+func (pn *ProgressNotifier) GetSessionStats(sessionID primitive.ObjectID) (SafeChannelStats, bool) {
+	pn.mu.RLock()
+	defer pn.mu.RUnlock()
+
+	sessionKey := sessionID.Hex()
+	if safeCh, exists := pn.channels[sessionKey]; exists {
+		return safeCh.Stats(), true
+	}
+	return SafeChannelStats{}, false
 }

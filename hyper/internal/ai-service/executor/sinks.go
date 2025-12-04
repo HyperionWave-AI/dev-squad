@@ -2,12 +2,20 @@ package executor
 
 import (
 	"sync"
+	"time"
 
 	"hyper/internal/models"
 
 	"github.com/gorilla/websocket"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
+)
+
+// PHASE 1: Write deadline constant for WebSocket writes
+const (
+	// writeTimeout is the maximum time to wait for a WebSocket write to complete.
+	// Prevents goroutines from hanging indefinitely on slow/unresponsive clients.
+	writeTimeout = 30 * time.Second
 )
 
 // ProgressNotifierInterface defines the interface for progress notifications.
@@ -71,7 +79,21 @@ func NewWebSocketSink(conn *websocket.Conn, logger *zap.Logger) *WebSocketSink {
 	}
 }
 
+// writeWithDeadline writes JSON to WebSocket with a deadline to prevent indefinite blocking.
+// PHASE 1: All WebSocket writes should use this method to ensure timeouts.
+func (w *WebSocketSink) writeWithDeadline(msg interface{}) error {
+	// Set write deadline to prevent hanging on slow clients
+	if err := w.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		w.logger.Warn("Failed to set write deadline", zap.Error(err))
+		// Continue anyway - deadline failure shouldn't block writes
+	}
+	defer w.conn.SetWriteDeadline(time.Time{}) // Clear deadline after write
+
+	return w.conn.WriteJSON(msg)
+}
+
 // SendToken sends a token to the WebSocket client
+// PHASE 1: Uses writeWithDeadline to prevent indefinite blocking
 func (w *WebSocketSink) SendToken(content string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -85,7 +107,7 @@ func (w *WebSocketSink) SendToken(content string) error {
 		Content: content,
 	}
 
-	if err := w.conn.WriteJSON(streamMsg); err != nil {
+	if err := w.writeWithDeadline(streamMsg); err != nil {
 		// Check if this is a normal disconnection
 		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 			w.logger.Debug("WebSocket client disconnected during token streaming")
@@ -101,6 +123,7 @@ func (w *WebSocketSink) SendToken(content string) error {
 }
 
 // SendToolCall sends a tool call event to the WebSocket client
+// PHASE 1: Uses writeWithDeadline to prevent indefinite blocking
 func (w *WebSocketSink) SendToolCall(toolName, toolID string, args map[string]interface{}) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -118,7 +141,7 @@ func (w *WebSocketSink) SendToolCall(toolName, toolID string, args map[string]in
 		},
 	}
 
-	if err := w.conn.WriteJSON(streamMsg); err != nil {
+	if err := w.writeWithDeadline(streamMsg); err != nil {
 		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 			w.logger.Debug("WebSocket client disconnected during tool call streaming")
 			w.disconnected = true
@@ -133,6 +156,7 @@ func (w *WebSocketSink) SendToolCall(toolName, toolID string, args map[string]in
 }
 
 // SendToolResult sends a tool result event to the WebSocket client
+// PHASE 1: Uses writeWithDeadline to prevent indefinite blocking
 func (w *WebSocketSink) SendToolResult(toolID, result, errorMsg string, durationMs int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -151,7 +175,7 @@ func (w *WebSocketSink) SendToolResult(toolID, result, errorMsg string, duration
 		},
 	}
 
-	if err := w.conn.WriteJSON(streamMsg); err != nil {
+	if err := w.writeWithDeadline(streamMsg); err != nil {
 		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 			w.logger.Debug("WebSocket client disconnected during tool result streaming")
 			w.disconnected = true
@@ -166,6 +190,7 @@ func (w *WebSocketSink) SendToolResult(toolID, result, errorMsg string, duration
 }
 
 // SendDone sends completion signal to the WebSocket client
+// PHASE 1: Uses writeWithDeadline to prevent indefinite blocking
 func (w *WebSocketSink) SendDone() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -179,7 +204,7 @@ func (w *WebSocketSink) SendDone() error {
 		Content: "",
 	}
 
-	if err := w.conn.WriteJSON(doneMsg); err != nil {
+	if err := w.writeWithDeadline(doneMsg); err != nil {
 		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 			w.logger.Debug("WebSocket client disconnected before completion message")
 			w.disconnected = true
@@ -194,6 +219,7 @@ func (w *WebSocketSink) SendDone() error {
 }
 
 // SendError sends an error message to the WebSocket client
+// PHASE 1: Uses writeWithDeadline to prevent indefinite blocking
 func (w *WebSocketSink) SendError(errorMsg string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -207,7 +233,7 @@ func (w *WebSocketSink) SendError(errorMsg string) error {
 		Content: errorMsg,
 	}
 
-	if err := w.conn.WriteJSON(errMsg); err != nil {
+	if err := w.writeWithDeadline(errMsg); err != nil {
 		w.logger.Warn("Failed to send error message", zap.Error(err))
 		w.disconnected = true
 		return nil
@@ -217,6 +243,7 @@ func (w *WebSocketSink) SendError(errorMsg string) error {
 }
 
 // SendMessageSaved sends the message ID to the WebSocket client for frontend reconciliation
+// PHASE 1: Uses writeWithDeadline to prevent indefinite blocking
 func (w *WebSocketSink) SendMessageSaved(messageID string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -230,7 +257,7 @@ func (w *WebSocketSink) SendMessageSaved(messageID string) error {
 		Content: messageID,
 	}
 
-	if err := w.conn.WriteJSON(savedMsg); err != nil {
+	if err := w.writeWithDeadline(savedMsg); err != nil {
 		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 			w.logger.Debug("WebSocket client disconnected during message_saved")
 			w.disconnected = true

@@ -68,6 +68,12 @@ var (
 		Help: "Total number of clients disconnected due to slow performance",
 	}, []string{"reason"}) // reason: consecutive_slow_writes, queue_depth_exceeded
 
+	// PHASE 5 Circuit Breaker: Track circuit breaker state changes
+	WebSocketCircuitBreakerTrips = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "chat_websocket_circuit_breaker_trips_total",
+		Help: "Total number of times circuit breaker blocked a request due to slow client",
+	})
+
 	// Message Validation Metrics (from our new feature!)
 	MessageValidationRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "chat_message_validation_rejections_total",
@@ -275,6 +281,7 @@ func init() {
 	Registry.MustRegister(WebSocketWriteLatency)
 	Registry.MustRegister(WebSocketSlowWrites)
 	Registry.MustRegister(WebSocketSlowClients)
+	Registry.MustRegister(WebSocketCircuitBreakerTrips)
 
 	// Register validation metrics
 	Registry.MustRegister(MessageValidationRejections)

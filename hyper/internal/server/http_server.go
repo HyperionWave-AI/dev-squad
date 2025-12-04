@@ -527,8 +527,8 @@ func StartHTTPServer(
 	subagentHandler := handlers.NewSubagentHandler(subchatStorage, chatService, logger)
 
 	// Initialize rate limiter for subchat creation (10 requests per minute per user)
-	subchatRateLimiter := middleware.NewRateLimiter(10, time.Minute, logger)
-	logger.Info("🚦 Rate limiter initialized", zap.Int("maxRequests", 10), zap.Duration("per", time.Minute))
+	// PHASE 3: Uses distributed (Redis) rate limiter if REDIS_URL is set, otherwise in-memory
+	subchatRateLimiter := middleware.NewDistributedRateLimiter(10, time.Minute, logger)
 
 	// Register subchat routes with rate limiting on POST
 	subchatGroup := r.Group("/api/v1/subchats")
