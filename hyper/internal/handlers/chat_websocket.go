@@ -297,6 +297,131 @@ const (
 	MaxQueueDepthWarnings = 10
 )
 
+// SECURITY: Frame rate limiting constants to prevent DoS attacks
+const (
+	// frameRateLimit is the maximum frames per second allowed per connection
+	frameRateLimit = 60.0
+	// frameRateBurst is the token bucket burst size (allows brief spikes)
+	frameRateBurst = 100.0
+	// frameRateRefillInterval is how often tokens are refilled
+	frameRateRefillInterval = time.Second
+	// frameRateMaxViolations is how many violations before disconnection
+	frameRateMaxViolations = 3
+)
+
+// FrameRateLimiter implements token bucket rate limiting for WebSocket frames
+// SECURITY: Prevents clients from flooding the server with high-frequency frames
+type FrameRateLimiter struct {
+	tokens     float64
+	lastRefill time.Time
+	violations int
+	mu         sync.Mutex
+	sessionID  string
+	logger     *zap.Logger
+}
+
+// NewFrameRateLimiter creates a new frame rate limiter for a connection
+func NewFrameRateLimiter(sessionID string, logger *zap.Logger) *FrameRateLimiter {
+	return &FrameRateLimiter{
+		tokens:     frameRateBurst,
+		lastRefill: time.Now(),
+		sessionID:  sessionID,
+		logger:     logger,
+	}
+}
+
+// Allow checks if a frame is allowed under the rate limit
+// Returns true if allowed, false if rate limited
+// SECURITY: Uses token bucket algorithm for smooth rate limiting
+func (f *FrameRateLimiter) Allow() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(f.lastRefill)
+
+	// Refill tokens based on elapsed time
+	tokensToAdd := elapsed.Seconds() * frameRateLimit
+	newTokens := f.tokens + tokensToAdd
+	if newTokens > frameRateBurst {
+		f.tokens = frameRateBurst
+	} else {
+		f.tokens = newTokens
+	}
+	f.lastRefill = now
+
+	// Check if we have tokens available
+	if f.tokens >= 1.0 {
+		f.tokens -= 1.0
+		return true
+	}
+
+	// Rate limited - record violation
+	f.violations++
+	f.logger.Warn("SECURITY: Frame rate limit exceeded",
+		zap.String("sessionId", f.sessionID),
+		zap.Int("violations", f.violations),
+		zap.Float64("tokensRemaining", f.tokens))
+
+	return false
+}
+
+// ShouldDisconnect returns true if too many rate limit violations occurred
+// SECURITY: Disconnect abusive clients after repeated violations
+func (f *FrameRateLimiter) ShouldDisconnect() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.violations >= frameRateMaxViolations
+}
+
+// GetViolations returns the current violation count
+func (f *FrameRateLimiter) GetViolations() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.violations
+}
+
+// SECURITY PHASE 3: Redundant session ownership validation
+// validateSessionOwnership performs a belt-and-suspenders validation of session ownership
+// This is called AFTER the initial validation in HandleChatWebSocket for defense in depth
+// Returns error if validation fails (session not found, ownership mismatch, or company mismatch)
+func (h *ChatWebSocketHandler) validateSessionOwnership(ctx context.Context, sessionID primitive.ObjectID, userID, companyID string) error {
+	// Fresh database query (not from cache) to verify session still exists and belongs to user
+	session, err := h.chatService.GetSession(ctx, sessionID, companyID)
+	if err != nil {
+		// SECURITY: Log detailed error server-side, return generic error
+		h.logger.Warn("SECURITY: Session ownership validation failed - session fetch error",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("userId", userID),
+			zap.Error(err))
+		return fmt.Errorf("session validation failed")
+	}
+
+	// Verify user still owns this session
+	if session.UserID != userID {
+		// SECURITY: Potential unauthorized access - log as warning
+		h.logger.Warn("SECURITY: Session ownership validation failed - user mismatch",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("requestUserId", userID),
+			zap.String("sessionOwnerId", session.UserID))
+		metrics.WebSocketOwnershipViolations.Inc()
+		return fmt.Errorf("session ownership mismatch")
+	}
+
+	// Verify company still matches
+	if session.CompanyID != companyID {
+		// SECURITY: Cross-company access attempt - log as warning
+		h.logger.Warn("SECURITY: Session ownership validation failed - company mismatch",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("requestCompanyId", companyID),
+			zap.String("sessionCompanyId", session.CompanyID))
+		metrics.WebSocketOwnershipViolations.Inc()
+		return fmt.Errorf("session company mismatch")
+	}
+
+	return nil
+}
+
 // PHASE 3 Backpressure: SlowClientDetector tracks client write performance
 type SlowClientDetector struct {
 	consecutiveSlowWrites int
@@ -1430,6 +1555,23 @@ const (
 	SlowWriteThreshold = 1 * time.Second
 )
 
+// SECURITY: Generic error messages to prevent information leakage
+// These constants ensure consistent, non-revealing error responses
+const (
+	// errInvalidRequest is returned for all request validation failures
+	// Intentionally vague to prevent session ID enumeration attacks
+	errInvalidRequest = "Invalid request"
+
+	// errUnauthorized is returned for authentication failures
+	errUnauthorized = "Unauthorized"
+
+	// errServiceUnavailable is returned for capacity issues
+	errServiceUnavailable = "Service temporarily unavailable"
+
+	// errTooManyRequests is returned for rate limiting
+	errTooManyRequests = "Too many requests"
+)
+
 // Production Rate Limiting & Connection Management
 var (
 	// Global connection counter (atomic for thread-safety)
@@ -1754,33 +1896,58 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 	// Extract authentication from context (set by middleware)
 	userID, companyID, err := h.extractAuthFromContext(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: " + err.Error()})
+		// SECURITY: Log detailed error server-side, return generic error to client
+		h.logger.Warn("WebSocket auth failed",
+			zap.Error(err),
+			zap.String("remoteAddr", c.ClientIP()))
+		c.JSON(http.StatusUnauthorized, gin.H{"error": errUnauthorized})
 		return
 	}
 
 	// Get session ID from query
+	// SECURITY: All session validation failures return the same generic error
+	// to prevent session ID enumeration attacks
 	sessionIDStr := c.Query("sessionId")
 	if sessionIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing sessionId parameter"})
+		h.logger.Debug("WebSocket request missing sessionId",
+			zap.String("userId", userID),
+			zap.String("remoteAddr", c.ClientIP()))
+		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidRequest})
 		return
 	}
 
 	sessionID, err := primitive.ObjectIDFromHex(sessionIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid sessionId"})
+		// SECURITY: Don't reveal that the format was invalid
+		h.logger.Debug("WebSocket request with invalid sessionId format",
+			zap.String("sessionIdStr", sessionIDStr),
+			zap.String("userId", userID),
+			zap.String("remoteAddr", c.ClientIP()))
+		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidRequest})
 		return
 	}
 
 	// Verify session exists and user has access
 	session, err := h.chatService.GetSession(c.Request.Context(), sessionID, companyID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found or access denied"})
+		// SECURITY: Don't reveal whether session exists or access denied
+		h.logger.Debug("WebSocket session access failed",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("userId", userID),
+			zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidRequest})
 		return
 	}
 
 	// Verify session belongs to user
 	if session.UserID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: session belongs to different user"})
+		// SECURITY: Log potential unauthorized access attempt, return generic error
+		h.logger.Warn("WebSocket session ownership mismatch - potential unauthorized access",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("requestUserId", userID),
+			zap.String("sessionOwnerId", session.UserID),
+			zap.String("remoteAddr", c.ClientIP()))
+		c.JSON(http.StatusBadRequest, gin.H{"error": errInvalidRequest})
 		return
 	}
 
@@ -1790,7 +1957,7 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 		h.logger.Warn("Connection rejected - global limit reached",
 			zap.Int64("activeConnections", currentConnections),
 			zap.Int64("maxConnections", maxConnections))
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Server at capacity, please try again later"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": errServiceUnavailable})
 		return
 	}
 
@@ -1799,7 +1966,7 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 		h.logger.Warn("Connection rejected - user limit reached",
 			zap.String("userId", userID),
 			zap.Int("maxPerUser", maxConnectionsPerUser))
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many concurrent connections"})
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": errTooManyRequests})
 		return
 	}
 
@@ -1884,6 +2051,23 @@ func (sc *StreamCleanup) Close() {
 
 // handleMessages manages the WebSocket message loop with processing state
 func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx context.Context, conn *websocket.Conn, sessionID primitive.ObjectID, userID, companyID string) {
+	// SECURITY PHASE 3: Redundant session ownership validation (belt and suspenders)
+	// This is called AFTER the initial validation in HandleChatWebSocket for defense in depth
+	// Even though we validated above, validate again before starting message processing
+	if err := h.validateSessionOwnership(httpCtx, sessionID, userID, companyID); err != nil {
+		h.logger.Warn("SECURITY: Redundant session validation failed - closing connection",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.String("userId", userID),
+			zap.Error(err))
+		// Send error to client and close (using generic error for security)
+		errMsg := models.StreamMessage{
+			Type:  "error",
+			Error: errInvalidRequest,
+		}
+		h.safeWriteJSON(conn, errMsg)
+		return
+	}
+
 	// Set read deadline for ping/pong (5 minutes to allow users time to review responses)
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // Reduced from 5 minutes to 30 seconds
 	conn.SetPongHandler(func(string) error {
@@ -1983,6 +2167,9 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 	}
 	messageChan := make(chan wsMessage, 10)
 
+	// SECURITY: Frame rate limiter to prevent DoS attacks via high-frequency frames
+	frameRateLimiter := NewFrameRateLimiter(sessionID.Hex(), h.logger)
+
 	// Goroutine for reading WebSocket messages (runs concurrently with message processing)
 	cleanup.wg.Add(1)
 	middleware.SafeGo(h.logger, func() {
@@ -1996,6 +2183,21 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				return
 			default:
 				_, messageData, err := conn.ReadMessage()
+
+				// SECURITY: Apply frame rate limiting
+				if !frameRateLimiter.Allow() {
+					// Check if we should disconnect due to repeated violations
+					if frameRateLimiter.ShouldDisconnect() {
+						h.logger.Warn("SECURITY: Disconnecting client due to repeated frame rate violations",
+							zap.String("sessionId", sessionID.Hex()),
+							zap.Int("violations", frameRateLimiter.GetViolations()))
+						cleanup.Close()
+						return
+					}
+					// Skip this frame but continue reading (allow client to recover)
+					continue
+				}
+
 				select {
 				case messageChan <- wsMessage{data: messageData, err: err}:
 				case <-httpCtx.Done():

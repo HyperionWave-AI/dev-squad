@@ -74,6 +74,12 @@ var (
 		Help: "Total number of times circuit breaker blocked a request due to slow client",
 	})
 
+	// SECURITY PHASE 3: Session ownership validation failures
+	WebSocketOwnershipViolations = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "chat_websocket_ownership_violations_total",
+		Help: "Total number of session ownership validation failures (potential unauthorized access attempts)",
+	})
+
 	// Message Validation Metrics (from our new feature!)
 	MessageValidationRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "chat_message_validation_rejections_total",
@@ -282,6 +288,7 @@ func init() {
 	Registry.MustRegister(WebSocketSlowWrites)
 	Registry.MustRegister(WebSocketSlowClients)
 	Registry.MustRegister(WebSocketCircuitBreakerTrips)
+	Registry.MustRegister(WebSocketOwnershipViolations)
 
 	// Register validation metrics
 	Registry.MustRegister(MessageValidationRejections)
