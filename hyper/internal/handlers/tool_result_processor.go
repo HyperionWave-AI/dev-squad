@@ -2,113 +2,52 @@ package handlers
 
 import (
 	"fmt"
-	"log"
-
-	"hyper/internal/models"
+	"strings"
 )
 
-// ToolResultProcessor handles tool result processing with summarization
-type ToolResultProcessor struct {
-	estimator *TokenEstimator
+// ToolResultProcessed holds the processed tool result with metadata
+type ToolResultProcessed struct {
+	OutputStr      string // Processed output string (may be truncated or suppressed message)
+	ShouldStream   bool   // Whether to stream to WebSocket client
+	ShouldSaveFull bool   // Whether to save full content to database
+	Tier           string // Size tier: "normal", "truncated", "suppressed", "error"
+	OriginalSize   int    // Original size in bytes
+	IsTruncated    bool   // Whether output was modified
 }
 
-// NewToolResultProcessor creates a new processor
-func NewToolResultProcessor() *ToolResultProcessor {
-	return &ToolResultProcessor{
-		estimator: NewTokenEstimator(),
-	}
-}
+// extractToolResultSummary generates concise metadata for suppressed tool results
+func extractToolResultSummary(toolName string, output interface{}) string {
+	switch toolName {
+	case "read_file", "file_read", "mcp__hyper__read_file":
+		if str, ok := output.(string); ok {
+			lines := strings.Count(str, "\n")
+			words := len(strings.Fields(str))
+			return fmt.Sprintf("**File Stats:** %d lines, ~%d words", lines, words)
+		}
 
-// ProcessedToolResult represents a processed tool result
-type ProcessedToolResult struct {
-	OriginalResult interface{}                // Full result
-	DisplayResult  interface{}                // What to send to LLM
-	Summary        string                     // Summary if used
-	WasSummarized  bool                       // Whether summarization was applied
-	TokenCount     int                        // Estimated tokens
-	Reason         string                     // Why summarization was used
-	Notification   *models.SystemNotification // Notification to send to frontend (nil if no summarization)
-}
+	case "grep", "search_code", "code_index_search", "mcp__hyper__grep":
+		if str, ok := output.(string); ok {
+			matches := strings.Count(str, "\n")
+			return fmt.Sprintf("**Search Results:** %d matches found", matches)
+		}
 
-// ProcessToolResult processes a tool result with optional summarization
-func (trp *ToolResultProcessor) ProcessToolResult(
-	toolName string,
-	toolResult interface{},
-	remainingContextTokens int,
-) ProcessedToolResult {
+	case "bash", "execute_command", "mcp__hyper__bash":
+		if str, ok := output.(string); ok {
+			lines := strings.Count(str, "\n")
+			return fmt.Sprintf("**Command Output:** %d lines", lines)
+		}
 
-	// Estimate tokens for this result
-	resultTokens := trp.estimator.EstimateTokens(toolResult)
-
-	processed := ProcessedToolResult{
-		OriginalResult: toolResult,
-		DisplayResult:  toolResult,
-		TokenCount:     resultTokens,
-		WasSummarized:  false,
-	}
-
-	// Check if we should use summary
-	if trp.estimator.ShouldUseSummary(resultTokens, remainingContextTokens) {
-		summary := extractToolResultSummary(toolName, toolResult)
-		processed.DisplayResult = summary
-		processed.Summary = summary
-		processed.WasSummarized = true
-		processed.Reason = fmt.Sprintf(
-			"Result too large (%d tokens, %d%% of remaining context)",
-			resultTokens,
-			(resultTokens * 100) / remainingContextTokens,
-		)
-
-		summaryTokens := trp.estimator.EstimateTokens(summary)
-		reductionPercent := float64(resultTokens-summaryTokens) / float64(resultTokens) * 100
-
-		log.Printf(
-			"[ToolResult] Summarized %s: %s (original: %d tokens, summary: %d tokens)",
-			toolName,
-			processed.Reason,
-			resultTokens,
-			summaryTokens,
-		)
-
-		// Create notification for frontend display
-		processed.Notification = &models.SystemNotification{
-			Category: "summarization",
-			Title:    "Search Results Summarized",
-			Message:  fmt.Sprintf("Condensed %s results to save tokens", toolName),
-			Severity: "info",
-			Metadata: map[string]interface{}{
-				"toolName":       toolName,
-				"originalTokens": resultTokens,
-				"finalTokens":    summaryTokens,
-				"reduction":      fmt.Sprintf("%.0f%%", reductionPercent),
-			},
+	case "list_files", "glob", "mcp__hyper__glob":
+		// Handle array output
+		if arr, ok := output.([]interface{}); ok {
+			return fmt.Sprintf("**Files Found:** %d items", len(arr))
+		}
+		// Handle string output (newline-separated)
+		if str, ok := output.(string); ok {
+			items := strings.Count(str, "\n")
+			return fmt.Sprintf("**Files Found:** %d items", items)
 		}
 	}
 
-	return processed
-}
-
-// ProcessMultipleToolResults processes multiple tool results and tracks total tokens
-func (trp *ToolResultProcessor) ProcessMultipleToolResults(
-	toolResults map[string]interface{},
-	remainingContextTokens int,
-) map[string]ProcessedToolResult {
-
-	processed := make(map[string]ProcessedToolResult)
-	currentRemaining := remainingContextTokens
-
-	for toolName, result := range toolResults {
-		pr := trp.ProcessToolResult(toolName, result, currentRemaining)
-		processed[toolName] = pr
-
-		// Update remaining context
-		displayTokens := trp.estimator.EstimateTokens(pr.DisplayResult)
-		currentRemaining -= displayTokens
-
-		if currentRemaining < 0 {
-			currentRemaining = 0
-		}
-	}
-
-	return processed
+	return "**Output:** Too large to display"
 }
