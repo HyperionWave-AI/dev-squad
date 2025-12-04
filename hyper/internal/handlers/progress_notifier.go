@@ -13,9 +13,10 @@ type ProgressEvent struct {
 }
 
 // ProgressNotifier manages progress notifications for subchat execution
+// PHASE 2: Uses SafeChannel to prevent double-close panics
 type ProgressNotifier struct {
 	mu       sync.RWMutex
-	channels map[string]chan ProgressEvent
+	channels map[string]*SafeChannel[ProgressEvent]
 	logger   *zap.Logger
 }
 
@@ -28,7 +29,7 @@ var (
 func GetProgressNotifier(logger *zap.Logger) *ProgressNotifier {
 	progressNotifierOnce.Do(func() {
 		progressNotifierInstance = &ProgressNotifier{
-			channels: make(map[string]chan ProgressEvent),
+			channels: make(map[string]*SafeChannel[ProgressEvent]),
 			logger:   logger,
 		}
 	})
@@ -36,48 +37,62 @@ func GetProgressNotifier(logger *zap.Logger) *ProgressNotifier {
 }
 
 // RegisterSession registers a session to receive progress notifications
+// PHASE 2: Uses SafeChannel for safe closing
 func (pn *ProgressNotifier) RegisterSession(sessionID primitive.ObjectID) <-chan ProgressEvent {
 	pn.mu.Lock()
 	defer pn.mu.Unlock()
 
 	sessionKey := sessionID.Hex()
-	// Close existing channel if it exists
-	if existingCh, exists := pn.channels[sessionKey]; exists {
-		close(existingCh)
+	// PHASE 2: Safe close existing channel if it exists (uses sync.Once - no panic)
+	if existingSC, exists := pn.channels[sessionKey]; exists {
+		existingSC.Close()
+		pn.logger.Debug("Closed existing progress channel for session",
+			zap.String("sessionId", sessionKey))
 	}
 
-	// Create new buffered channel
-	progressCh := make(chan ProgressEvent, 10)
-	pn.channels[sessionKey] = progressCh
+	// Create new safe channel
+	safeCh := NewSafeChannel[ProgressEvent](10)
+	pn.channels[sessionKey] = safeCh
 	pn.logger.Info("Registered session for progress notifications", zap.String("sessionId", sessionKey))
-	return progressCh
+	return safeCh.Chan()
 }
 
 // UnregisterSession unregisters a session from receiving progress notifications
+// PHASE 2: Uses SafeChannel for safe closing
 func (pn *ProgressNotifier) UnregisterSession(sessionID primitive.ObjectID) {
 	pn.mu.Lock()
 	defer pn.mu.Unlock()
 
 	sessionKey := sessionID.Hex()
-	if ch, exists := pn.channels[sessionKey]; exists {
-		close(ch)
+	if safeCh, exists := pn.channels[sessionKey]; exists {
+		safeCh.Close() // PHASE 2: Safe close - uses sync.Once, no panic on double close
 		delete(pn.channels, sessionKey)
 		pn.logger.Info("Unregistered session from progress notifications", zap.String("sessionId", sessionKey))
 	}
 }
 
 // EmitProgress emits a progress event to a specific session
+// PHASE 2: Uses SafeChannel.Send for safe, non-blocking send
 func (pn *ProgressNotifier) EmitProgress(sessionID primitive.ObjectID, message string) {
 	pn.mu.RLock()
 	defer pn.mu.RUnlock()
 
 	sessionKey := sessionID.Hex()
-	if ch, exists := pn.channels[sessionKey]; exists {
-		select {
-		case ch <- ProgressEvent{Message: message}:
-			pn.logger.Debug("Emitted progress event", zap.String("sessionId", sessionKey), zap.String("message", message))
-		default:
-			pn.logger.Warn("Progress channel full, dropping event", zap.String("sessionId", sessionKey))
+	if safeCh, exists := pn.channels[sessionKey]; exists {
+		// PHASE 2: Check if closed before sending (prevents send on closed channel)
+		if safeCh.IsClosed() {
+			pn.logger.Debug("Progress channel already closed, skipping emit",
+				zap.String("sessionId", sessionKey))
+			return
+		}
+
+		if safeCh.Send(ProgressEvent{Message: message}) {
+			pn.logger.Debug("Emitted progress event",
+				zap.String("sessionId", sessionKey),
+				zap.String("message", message))
+		} else {
+			pn.logger.Warn("Progress channel full or closed, dropping event",
+				zap.String("sessionId", sessionKey))
 		}
 	}
 }

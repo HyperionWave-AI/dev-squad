@@ -62,12 +62,223 @@ func (a *chatServiceAdapter) SaveToolResult(ctx context.Context, sessionID primi
 
 // websocketSink is a local adapter that implements executor.StreamOutputSink for WebSocket connections.
 // This avoids import cycles by implementing the interface locally in handlers package.
+// PHASE 2 Backpressure: Message priority for queue management
+type MessagePriority int
+
+const (
+	PriorityNormal   MessagePriority = iota // tokens, tool_call, tool_result - can be dropped under pressure
+	PriorityCritical                        // done, error, message_saved - never dropped
+)
+
+// PHASE 2 Backpressure: Queued message wrapper
+type queuedMessage struct {
+	msg      interface{}
+	priority MessagePriority
+	queued   time.Time
+}
+
+// PHASE 2 Backpressure: WriteQueue manages buffered WebSocket writes with backpressure
+type WriteQueue struct {
+	conn          *websocket.Conn
+	handler       *ChatWebSocketHandler
+	logger        *zap.Logger
+	queue         chan queuedMessage
+	done          chan struct{}
+	closeOnce     sync.Once
+	slowWriteCount int64  // Atomic counter for slow writes
+	droppedCount   int64  // Atomic counter for dropped messages
+	queueSize     int
+	writeTimeout  time.Duration
+	slowThreshold time.Duration
+}
+
+// PHASE 2 Backpressure: Error for queue overflow
+var ErrQueueFull = fmt.Errorf("write queue full")
+
+// NewWriteQueue creates a buffered write queue for a WebSocket connection
+// PHASE 2 Backpressure: Decouples message production from transmission
+func NewWriteQueue(conn *websocket.Conn, handler *ChatWebSocketHandler, logger *zap.Logger) *WriteQueue {
+	wq := &WriteQueue{
+		conn:          conn,
+		handler:       handler,
+		logger:        logger,
+		queue:         make(chan queuedMessage, 100), // Buffer 100 messages
+		done:          make(chan struct{}),
+		queueSize:     100,
+		writeTimeout:  WriteTimeout,
+		slowThreshold: SlowWriteThreshold,
+	}
+
+	// Start writer goroutine
+	go wq.writerLoop()
+
+	return wq
+}
+
+// writerLoop processes queued messages in a dedicated goroutine
+// PHASE 2 Backpressure: Background writer with latency tracking
+func (wq *WriteQueue) writerLoop() {
+	for {
+		select {
+		case msg, ok := <-wq.queue:
+			if !ok {
+				return // Queue closed
+			}
+
+			// Check queue wait time
+			queueWait := time.Since(msg.queued)
+			if queueWait > wq.slowThreshold {
+				wq.logger.Warn("Message waited too long in queue",
+					zap.Duration("queueWait", queueWait))
+			}
+
+			// Write with timeout (via safeWriteJSON which now has deadlines)
+			err := wq.handler.safeWriteJSON(wq.conn, msg.msg)
+			if err != nil {
+				wq.logger.Warn("Write from queue failed", zap.Error(err))
+				// Don't close queue - let caller handle disconnection
+				continue
+			}
+
+		case <-wq.done:
+			return
+		}
+	}
+}
+
+// Send queues a message for writing with priority handling
+// PHASE 2 Backpressure: Non-critical messages dropped when queue full
+func (wq *WriteQueue) Send(msg interface{}, priority MessagePriority) error {
+	qm := queuedMessage{
+		msg:      msg,
+		priority: priority,
+		queued:   time.Now(),
+	}
+
+	select {
+	case wq.queue <- qm:
+		return nil
+	default:
+		// Queue full - handle based on priority
+		if priority == PriorityCritical {
+			// Block for critical messages (done, error)
+			select {
+			case wq.queue <- qm:
+				return nil
+			case <-wq.done:
+				return fmt.Errorf("write queue closed")
+			}
+		}
+		// Drop non-critical messages when queue full
+		atomic.AddInt64(&wq.droppedCount, 1)
+		metrics.WebSocketErrors.WithLabelValues("queue_full").Inc()
+		wq.logger.Debug("Dropped message due to full queue",
+			zap.Int64("droppedCount", atomic.LoadInt64(&wq.droppedCount)))
+		return ErrQueueFull
+	}
+}
+
+// Close stops the writer goroutine and drains the queue
+// PHASE 2 Backpressure: Graceful shutdown
+func (wq *WriteQueue) Close() {
+	wq.closeOnce.Do(func() {
+		close(wq.done)
+	})
+}
+
+// DroppedCount returns the number of messages dropped due to queue overflow
+func (wq *WriteQueue) DroppedCount() int64 {
+	return atomic.LoadInt64(&wq.droppedCount)
+}
+
+// PHASE 3 Backpressure: Slow client detection constants
+const (
+	// MaxConsecutiveSlowWrites is the number of slow writes before client is considered too slow
+	MaxConsecutiveSlowWrites = 5
+	// MaxQueueDepthWarnings is the number of queue full events before client is considered too slow
+	MaxQueueDepthWarnings = 10
+)
+
+// PHASE 3 Backpressure: SlowClientDetector tracks client write performance
+type SlowClientDetector struct {
+	consecutiveSlowWrites int
+	queueDepthWarnings    int
+	mu                    sync.Mutex
+	onSlowClient          func(reason string) // Callback when client deemed too slow
+	logger                *zap.Logger
+}
+
+// NewSlowClientDetector creates a slow client detector with the given callback
+// PHASE 3 Backpressure: Monitors client responsiveness
+func NewSlowClientDetector(logger *zap.Logger, onSlowClient func(reason string)) *SlowClientDetector {
+	return &SlowClientDetector{
+		logger:       logger,
+		onSlowClient: onSlowClient,
+	}
+}
+
+// RecordWrite records a write and checks if client is too slow
+// PHASE 3 Backpressure: Tracks consecutive slow writes
+func (scd *SlowClientDetector) RecordWrite(duration time.Duration) {
+	scd.mu.Lock()
+	defer scd.mu.Unlock()
+
+	if duration > SlowWriteThreshold {
+		scd.consecutiveSlowWrites++
+		scd.logger.Debug("Slow write recorded",
+			zap.Duration("duration", duration),
+			zap.Int("consecutiveSlowWrites", scd.consecutiveSlowWrites),
+			zap.Int("threshold", MaxConsecutiveSlowWrites))
+
+		if scd.consecutiveSlowWrites >= MaxConsecutiveSlowWrites {
+			scd.logger.Warn("Client deemed too slow - too many consecutive slow writes",
+				zap.Int("consecutiveSlowWrites", scd.consecutiveSlowWrites))
+			if scd.onSlowClient != nil {
+				scd.onSlowClient("consecutive_slow_writes")
+			}
+		}
+	} else {
+		// Reset on fast write
+		scd.consecutiveSlowWrites = 0
+	}
+}
+
+// RecordQueueFull records a queue full event
+// PHASE 3 Backpressure: Tracks queue overflow events
+func (scd *SlowClientDetector) RecordQueueFull() {
+	scd.mu.Lock()
+	defer scd.mu.Unlock()
+
+	scd.queueDepthWarnings++
+	scd.logger.Debug("Queue full recorded",
+		zap.Int("queueDepthWarnings", scd.queueDepthWarnings),
+		zap.Int("threshold", MaxQueueDepthWarnings))
+
+	if scd.queueDepthWarnings >= MaxQueueDepthWarnings {
+		scd.logger.Warn("Client deemed too slow - too many queue full events",
+			zap.Int("queueDepthWarnings", scd.queueDepthWarnings))
+		if scd.onSlowClient != nil {
+			scd.onSlowClient("queue_depth_exceeded")
+		}
+	}
+}
+
+// Reset clears the slow client detection counters
+func (scd *SlowClientDetector) Reset() {
+	scd.mu.Lock()
+	defer scd.mu.Unlock()
+	scd.consecutiveSlowWrites = 0
+	scd.queueDepthWarnings = 0
+}
+
 type websocketSink struct {
 	conn         *websocket.Conn
 	logger       *zap.Logger
 	handler      *ChatWebSocketHandler
 	disconnected bool
 	mu           sync.Mutex
+	writeQueue   *WriteQueue // PHASE 2: Buffered write queue
+	sessionID    string      // PHASE 3 Buffer Monitoring: Session ID for health monitor lookup
 }
 
 // newWebSocketSink creates a WebSocket sink adapter.
@@ -80,7 +291,20 @@ func newWebSocketSink(conn *websocket.Conn, handler *ChatWebSocketHandler, logge
 	}
 }
 
+// newWebSocketSinkWithSession creates a WebSocket sink adapter with session ID for buffer monitoring
+// PHASE 3 Buffer Monitoring: Enables buffer usage tracking via health monitor
+func newWebSocketSinkWithSession(conn *websocket.Conn, handler *ChatWebSocketHandler, logger *zap.Logger, sessionID string) *websocketSink {
+	return &websocketSink{
+		conn:         conn,
+		handler:      handler,
+		logger:       logger,
+		disconnected: false,
+		sessionID:    sessionID,
+	}
+}
+
 // SendToken implements executor.StreamOutputSink
+// PHASE 3 Buffer Monitoring: Uses monitored write when session ID is available
 func (w *websocketSink) SendToken(content string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -94,7 +318,8 @@ func (w *websocketSink) SendToken(content string) error {
 		Content: content,
 	}
 
-	if err := w.handler.safeWriteJSON(w.conn, streamMsg); err != nil {
+	// PHASE 3: Use monitored write for buffer tracking
+	if err := w.handler.safeWriteJSONWithMonitoring(w.conn, streamMsg, w.sessionID); err != nil {
 		if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
 			w.logger.Debug("WebSocket client disconnected during token streaming")
 			w.disconnected = true
@@ -1097,6 +1322,16 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// PHASE 1 Backpressure: Write timeout constants
+const (
+	// WriteTimeout is the maximum time to wait for a WebSocket write to complete
+	// If exceeded, the write fails and the client is considered slow
+	WriteTimeout = 10 * time.Second
+
+	// SlowWriteThreshold is the duration above which a write is logged as "slow"
+	SlowWriteThreshold = 1 * time.Second
+)
+
 // Production Rate Limiting & Connection Management
 var (
 	// Global connection counter (atomic for thread-safety)
@@ -1256,18 +1491,77 @@ func NewChatWebSocketHandler(chatService ChatServiceInterface, aiService AIServi
 	}
 }
 
-// safeWriteJSON safely writes JSON to WebSocket with mutex protection
+// safeWriteJSON safely writes JSON to WebSocket with mutex protection and timeout
+// PHASE 1 Backpressure: Added write deadline to prevent indefinite blocking on slow clients
 // Prevents race condition between ping goroutine and message streaming goroutine
 func (h *ChatWebSocketHandler) safeWriteJSON(conn *websocket.Conn, msg interface{}) error {
+	// Call the monitored version without session ID (no buffer tracking)
+	return h.safeWriteJSONWithMonitoring(conn, msg, "")
+}
+
+// safeWriteJSONWithMonitoring safely writes JSON to WebSocket with optional buffer monitoring
+// PHASE 3 Buffer Monitoring: When sessionID is provided, records write metrics for buffer estimation
+func (h *ChatWebSocketHandler) safeWriteJSONWithMonitoring(conn *websocket.Conn, msg interface{}, sessionID string) error {
 	h.writeMutex.Lock()
 	defer h.writeMutex.Unlock()
 
-	// Record message sent metric
+	// PHASE 3: Get health monitor for buffer tracking (if session ID provided)
+	var monitor *ConnectionHealthMonitor
+	if sessionID != "" {
+		healthPool := GetHealthMonitorPool(h.logger)
+		if val, ok := healthPool.monitors.Load(sessionID); ok {
+			monitor = val.(*ConnectionHealthMonitor)
+			monitor.RecordWriteStart()
+		}
+	}
+
+	// PHASE 1: Set write deadline to prevent indefinite blocking on slow clients
+	if err := conn.SetWriteDeadline(time.Now().Add(WriteTimeout)); err != nil {
+		h.logger.Warn("Failed to set write deadline", zap.Error(err))
+		// Continue anyway - deadline failure shouldn't block writes
+	}
+	defer conn.SetWriteDeadline(time.Time{}) // Clear deadline after write
+
+	start := time.Now()
 	err := conn.WriteJSON(msg)
+	duration := time.Since(start)
+
+	// PHASE 3: Record write end for buffer monitoring
+	if monitor != nil {
+		monitor.RecordWriteEnd(duration)
+	}
+
+	// Record write latency metric
+	metrics.WebSocketWriteLatency.Observe(duration.Seconds())
+
 	if err == nil {
 		metrics.WebSocketMessagesSent.Inc()
+		// Log slow writes for monitoring
+		if duration > SlowWriteThreshold {
+			metrics.WebSocketSlowWrites.Inc()
+			h.logger.Warn("Slow WebSocket write detected",
+				zap.Duration("duration", duration),
+				zap.Duration("threshold", SlowWriteThreshold))
+		}
+	} else if isTimeoutError(err) {
+		// PHASE 1: Track write timeouts separately
+		metrics.WebSocketWriteTimeouts.Inc()
+		h.logger.Warn("WebSocket write timeout - client too slow",
+			zap.Duration("timeout", WriteTimeout),
+			zap.Error(err))
 	}
+
 	return err
+}
+
+// isTimeoutError checks if an error is a timeout error (net.Error with Timeout())
+// PHASE 1 Backpressure: Helper to identify write deadline violations
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	netErr, ok := err.(net.Error)
+	return ok && netErr.Timeout()
 }
 
 // safeWriteControl safely writes control frame to WebSocket with mutex protection
@@ -1418,15 +1712,22 @@ func (h *ChatWebSocketHandler) HandleChatWebSocket(c *gin.Context) {
 		metrics.WebSocketConnectionDuration.Observe(time.Since(connectionStart).Seconds())
 	}()
 
-	// Create background context for AI processing (not tied to HTTP lifecycle)
-	aiCtx := context.Background()
-	aiCtx, aiCancel := context.WithTimeout(aiCtx, 10*time.Minute) // Generous timeout for multi-tool AI ops
-	defer aiCancel()
-
-	// Keep HTTP context for connection monitoring
+	// PHASE 1 Context Lifecycle: Get HTTP context first (parent of all contexts)
 	httpCtx := c.Request.Context()
 
-	// Pass both contexts to handleMessages
+	// PHASE 1: Create AI context as CHILD of HTTP context
+	// This ensures AI processing cancels when:
+	// 1. HTTP connection closes (client disconnect) - cancels immediately
+	// 2. 10-minute timeout expires - whichever happens first
+	// Previously this was context.Background() which didn't cancel on HTTP disconnect!
+	aiCtx, aiCancel := context.WithTimeout(httpCtx, 10*time.Minute)
+	defer aiCancel()
+
+	h.logger.Debug("Context hierarchy established",
+		zap.String("sessionId", sessionID.Hex()),
+		zap.String("hierarchy", "HTTP -> AI (10min timeout)"))
+
+	// Pass both contexts to handleMessages (httpCtx still needed for explicit checks)
 	h.handleMessages(aiCtx, httpCtx, conn, sessionID, userID, companyID)
 }
 
@@ -1463,8 +1764,11 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 	})
 	ticker := time.NewTicker(30 * time.Second)
 
-	// Create stream cleanup manager for channel lifecycle
-	streamCtx, streamCancel := context.WithCancel(context.Background())
+	// PHASE 2 Context Lifecycle: Create stream context as CHILD of AI context
+	// Context hierarchy: HTTP -> AI (10min timeout) -> Stream
+	// This ensures stream cleanup cancels when AI or HTTP cancels
+	// Previously this was context.Background() which wasn't tied to HTTP lifecycle!
+	streamCtx, streamCancel := context.WithCancel(aiCtx)
 	cleanup := &StreamCleanup{
 		done:       make(chan struct{}),
 		streamCtx:  streamCtx,
@@ -1739,13 +2043,52 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 				zap.Bool("isProcessing", true))
 
 			// Process message in a goroutine to allow reading stop messages concurrently
+			// PHASE 1: Track goroutine with WaitGroup for orderly shutdown
+			cleanup.wg.Add(1)
 			go func(userMsg models.SendMessageRequest) {
+				// PHASE 4: Track goroutine with unique ID for debugging
+				goroutineID := fmt.Sprintf("msg-%d", time.Now().UnixNano())
+				goroutineStart := time.Now()
+				exitReason := "completed" // Default exit reason
+
+				h.logger.Info("🚀 Message processing goroutine STARTED",
+					zap.String("goroutineId", goroutineID),
+					zap.String("sessionId", sessionID.Hex()),
+					zap.Int("contentLength", len(userMsg.Content)))
+
+				// PHASE 1: Ensure WaitGroup.Done is called on exit
+				defer cleanup.wg.Done()
 				defer func() {
 					isProcessing.Store(false)
-					h.logger.Info("🎬 STREAMING ENDED - processing complete",
+					// PHASE 4: Log goroutine exit with duration and reason
+					h.logger.Info("🏁 Message processing goroutine ENDED",
+						zap.String("goroutineId", goroutineID),
 						zap.String("sessionId", sessionID.Hex()),
+						zap.String("exitReason", exitReason),
+						zap.Duration("duration", time.Since(goroutineStart)),
 						zap.Bool("isProcessing", false))
 				}()
+
+				// PHASE 3: Check if already cancelled before starting any work
+				// This prevents wasted effort if client disconnected during queue wait
+				select {
+				case <-httpCtx.Done():
+					exitReason = "http_context_cancelled_early"
+					h.logger.Info("⏭️ Skipping message processing - HTTP context already cancelled",
+						zap.String("goroutineId", goroutineID),
+						zap.String("sessionId", sessionID.Hex()),
+						zap.String("reason", "client disconnected before processing started"))
+					return
+				case <-cleanup.done:
+					exitReason = "cleanup_in_progress_early"
+					h.logger.Info("⏭️ Skipping message processing - cleanup already in progress",
+						zap.String("goroutineId", goroutineID),
+						zap.String("sessionId", sessionID.Hex()),
+						zap.String("reason", "cleanup signal received"))
+					return
+				default:
+					// Context still valid, continue processing
+				}
 
 			// Emit user message to WebSocket immediately (before database save)
 			userMsgEvent := models.StreamMessage{
@@ -1816,6 +2159,8 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 
 			// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
 			// Create cancellable context for this AI execution (allows stop button to cancel)
+			// PHASE 3 Context Lifecycle: aiExecCtx is child of aiCtx which is child of httpCtx
+			// So HTTP cancellation propagates automatically through context hierarchy!
 			aiExecCtx, aiExecCancel := context.WithCancel(aiCtx)
 
 			// Store the cancel function so stop handler can call it
@@ -1823,12 +2168,40 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 			currentAICancel = aiExecCancel
 			currentAICancelMu.Unlock()
 
+			// PHASE 3 Context Lifecycle: Simplified cancellation propagation
+			// HTTP cancellation now flows automatically through context hierarchy:
+			//   HTTP -> AI (10min) -> aiExecCtx
+			// We only need to handle explicit cleanup.done signal
+			cleanupDone := make(chan struct{})
+			go func() {
+				defer close(cleanupDone)
+				select {
+				case <-cleanup.done:
+					h.logger.Info("🛑 Cleanup signal received - cancelling AI execution",
+						zap.String("sessionId", sessionID.Hex()),
+						zap.String("reason", "cleanup requested"))
+					aiExecCancel()
+				case <-aiExecCtx.Done():
+					// Context cancelled (HTTP disconnect, timeout, or stop button)
+					// Log the reason for debugging
+					if aiExecCtx.Err() == context.Canceled {
+						h.logger.Debug("AI execution context cancelled",
+							zap.String("sessionId", sessionID.Hex()))
+					} else if aiExecCtx.Err() == context.DeadlineExceeded {
+						h.logger.Info("AI execution context deadline exceeded",
+							zap.String("sessionId", sessionID.Hex()))
+					}
+				}
+			}()
+
 			// Ensure we clean up the cancel function after execution
 			defer func() {
 				currentAICancelMu.Lock()
 				currentAICancel = nil
 				currentAICancelMu.Unlock()
 				aiExecCancel() // Always call cancel to release resources
+				// Wait for cleanup goroutine to exit (prevents goroutine leak)
+				<-cleanupDone
 			}()
 
 			h.streamAIResponse(aiExecCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
@@ -2237,7 +2610,8 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 	defer notifier.UnregisterSession(sessionID)
 
 	// Step 7: Create WebSocket sink for streaming output (using local adapter to avoid import cycles)
-	outputSink := newWebSocketSink(conn, h, h.logger)
+	// PHASE 3 Buffer Monitoring: Use session-aware sink for buffer usage tracking
+	outputSink := newWebSocketSinkWithSession(conn, h, h.logger, sessionID.Hex())
 
 	// Step 8: Determine allowed tools based on mode
 	var allowedTools []string

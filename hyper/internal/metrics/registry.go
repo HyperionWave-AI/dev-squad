@@ -45,6 +45,29 @@ var (
 		Help: "Total number of WebSocket errors by type",
 	}, []string{"error_type"})
 
+	// PHASE 1 Backpressure: Write timeout and latency metrics
+	WebSocketWriteTimeouts = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "chat_websocket_write_timeouts_total",
+		Help: "Total number of WebSocket write timeouts (slow clients)",
+	})
+
+	WebSocketWriteLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "chat_websocket_write_latency_seconds",
+		Help:    "Latency distribution of WebSocket writes",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0}, // 1ms to 10s
+	})
+
+	WebSocketSlowWrites = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "chat_websocket_slow_writes_total",
+		Help: "Total number of WebSocket writes taking more than 1 second",
+	})
+
+	// PHASE 3 Backpressure: Slow client disconnection metrics
+	WebSocketSlowClients = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "chat_websocket_slow_clients_total",
+		Help: "Total number of clients disconnected due to slow performance",
+	}, []string{"reason"}) // reason: consecutive_slow_writes, queue_depth_exceeded
+
 	// Message Validation Metrics (from our new feature!)
 	MessageValidationRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "chat_message_validation_rejections_total",
@@ -248,6 +271,10 @@ func init() {
 	Registry.MustRegister(WebSocketMessageSize)
 	Registry.MustRegister(WebSocketConnectionDuration)
 	Registry.MustRegister(WebSocketErrors)
+	Registry.MustRegister(WebSocketWriteTimeouts)
+	Registry.MustRegister(WebSocketWriteLatency)
+	Registry.MustRegister(WebSocketSlowWrites)
+	Registry.MustRegister(WebSocketSlowClients)
 
 	// Register validation metrics
 	Registry.MustRegister(MessageValidationRejections)

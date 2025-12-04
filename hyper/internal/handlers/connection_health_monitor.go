@@ -26,6 +26,13 @@ type ConnectionHealthMonitor struct {
 	writeBufferWarnings atomic.Int64
 	disconnectReason    string
 	disconnectMutex     sync.Mutex
+
+	// PHASE 1 Buffer Monitoring: Metrics for actual buffer usage detection
+	pendingWrites         atomic.Int64 // Number of writes currently in progress
+	totalWriteLatencyMs   atomic.Int64 // Sum of write latencies for average calculation
+	writeCount            atomic.Int64 // Number of writes recorded
+	consecutiveSlowWrites atomic.Int64 // Count of consecutive slow writes (>1s)
+	lastWriteLatencyMs    atomic.Int64 // Most recent write latency in milliseconds
 }
 
 // HealthStatus represents the current health status of a connection
@@ -38,7 +45,14 @@ type HealthStatus struct {
 	PongResponseRate       float64 // percentage of pongs received
 	DisconnectReason       string
 	TimeSinceLastPong      time.Duration
-	EstimatedBufferUsage   int // percentage
+	EstimatedBufferUsage   int // percentage (0-100)
+
+	// PHASE 1 Buffer Monitoring: Detailed buffer metrics
+	PendingWrites         int64 // Number of writes currently in progress
+	AverageWriteLatencyMs int64 // Average write latency in milliseconds
+	ConsecutiveSlowWrites int64 // Count of consecutive slow writes
+	LastWriteLatencyMs    int64 // Most recent write latency
+	TotalWriteCount       int64 // Total number of writes recorded
 }
 
 // NewConnectionHealthMonitor creates a new health monitor for a WebSocket connection
@@ -90,6 +104,13 @@ func (m *ConnectionHealthMonitor) GetStatus() HealthStatus {
 	disconnectReason := m.disconnectReason
 	m.disconnectMutex.Unlock()
 
+	// PHASE 1: Calculate average write latency
+	writeCount := m.writeCount.Load()
+	avgWriteLatencyMs := int64(0)
+	if writeCount > 0 {
+		avgWriteLatencyMs = m.totalWriteLatencyMs.Load() / writeCount
+	}
+
 	return HealthStatus{
 		IsHealthy:            m.isHealthy.Load(),
 		LastPongTime:         lastPongTime,
@@ -100,6 +121,13 @@ func (m *ConnectionHealthMonitor) GetStatus() HealthStatus {
 		DisconnectReason:     disconnectReason,
 		TimeSinceLastPong:    timeSinceLastPong,
 		EstimatedBufferUsage: m.estimateBufferUsage(),
+
+		// PHASE 1 Buffer Monitoring: Include detailed buffer metrics
+		PendingWrites:         m.pendingWrites.Load(),
+		AverageWriteLatencyMs: avgWriteLatencyMs,
+		ConsecutiveSlowWrites: m.consecutiveSlowWrites.Load(),
+		LastWriteLatencyMs:    m.lastWriteLatencyMs.Load(),
+		TotalWriteCount:       writeCount,
 	}
 }
 
@@ -118,6 +146,40 @@ func (m *ConnectionHealthMonitor) RecordPongReceived() {
 // RecordWriteBufferWarning records a write buffer warning
 func (m *ConnectionHealthMonitor) RecordWriteBufferWarning() {
 	m.writeBufferWarnings.Add(1)
+}
+
+// PHASE 2 Buffer Monitoring: Write operation tracking methods
+
+// RecordWriteStart records the start of a write operation
+// Call this before starting a WebSocket write
+func (m *ConnectionHealthMonitor) RecordWriteStart() {
+	m.pendingWrites.Add(1)
+}
+
+// RecordWriteEnd records the completion of a write operation
+// Call this after a WebSocket write completes (success or failure)
+func (m *ConnectionHealthMonitor) RecordWriteEnd(duration time.Duration) {
+	m.pendingWrites.Add(-1)
+
+	latencyMs := duration.Milliseconds()
+	m.lastWriteLatencyMs.Store(latencyMs)
+	m.totalWriteLatencyMs.Add(latencyMs)
+	m.writeCount.Add(1)
+
+	// Track consecutive slow writes (> 1 second)
+	// This is a key indicator of buffer pressure
+	if duration > time.Second {
+		m.consecutiveSlowWrites.Add(1)
+		m.logger.Debug("Slow write recorded",
+			zap.Duration("duration", duration),
+			zap.Int64("consecutiveSlowWrites", m.consecutiveSlowWrites.Load()))
+	} else {
+		// Reset on fast write - client has recovered
+		if m.consecutiveSlowWrites.Load() > 0 {
+			m.consecutiveSlowWrites.Store(0)
+			m.logger.Debug("Slow write counter reset after fast write")
+		}
+	}
 }
 
 // SetDisconnectReason sets the reason for disconnection
@@ -218,14 +280,63 @@ func (m *ConnectionHealthMonitor) monitorLoop() {
 	}
 }
 
-// estimateBufferUsage estimates the write buffer usage as a percentage
-// This is a heuristic based on the bufferedAmount property
+// estimateBufferUsage estimates the write buffer usage as a percentage (0-100)
+// PHASE 2 Buffer Monitoring: Actual implementation based on write metrics
+//
+// This uses a heuristic based on multiple factors that indicate buffer pressure:
+// 1. Pending writes - more pending writes = more buffer pressure
+// 2. Average write latency - higher latency = slower client = more pressure
+// 3. Consecutive slow writes - sustained slow writes = definite pressure
+//
+// The gorilla/websocket library doesn't expose bufferedAmount directly,
+// so we infer buffer pressure from these observable metrics.
 func (m *ConnectionHealthMonitor) estimateBufferUsage() int {
-	// Get bufferedAmount from the underlying connection
-	// Note: This is a Go-specific property that may not be available on all platforms
-	// For now, we return 0 as a placeholder - in production, you'd need to
-	// track this through the write operations
-	return 0
+	pendingWrites := m.pendingWrites.Load()
+	consecutiveSlowWrites := m.consecutiveSlowWrites.Load()
+
+	// Calculate average write latency
+	avgLatencyMs := int64(0)
+	writeCount := m.writeCount.Load()
+	if writeCount > 0 {
+		avgLatencyMs = m.totalWriteLatencyMs.Load() / writeCount
+	}
+
+	// Calculate buffer usage as weighted sum of factors:
+	usage := 0
+
+	// Factor 1: Pending writes contribution (max 40%)
+	// Each pending write adds 10%, capped at 40%
+	// More pending writes = messages backing up in the write pipeline
+	pendingContrib := int(pendingWrites * 10)
+	if pendingContrib > 40 {
+		pendingContrib = 40
+	}
+	usage += pendingContrib
+
+	// Factor 2: Average latency contribution (max 30%)
+	// Every 200ms of average latency adds 5%
+	// High latency = client is slow to acknowledge writes
+	latencyContrib := int(avgLatencyMs / 200 * 5)
+	if latencyContrib > 30 {
+		latencyContrib = 30
+	}
+	usage += latencyContrib
+
+	// Factor 3: Consecutive slow writes contribution (max 50%)
+	// Each consecutive slow write adds 10%
+	// This is the strongest indicator of a slow client
+	slowContrib := int(consecutiveSlowWrites * 10)
+	if slowContrib > 50 {
+		slowContrib = 50
+	}
+	usage += slowContrib
+
+	// Cap at 100%
+	if usage > 100 {
+		usage = 100
+	}
+
+	return usage
 }
 
 // ConnectionHealthMonitorPool manages multiple health monitors for different connections
