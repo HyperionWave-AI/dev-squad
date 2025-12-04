@@ -178,6 +178,15 @@ export class WebSocketManager {
   }
 
   /**
+   * Update callbacks without reconnecting
+   * This is KEY for navigation - when component remounts, it updates callbacks
+   */
+  updateCallbacks(callbacks: Record<string, Function>): void {
+    this.callbacks = new Map(Object.entries(callbacks));
+    console.log('[WSManager] Callbacks updated without reconnecting');
+  }
+
+  /**
    * Connect to WebSocket with atomic state transition
    */
   async connect(sessionId: string, callbacks: Record<string, Function>): Promise<void> {
@@ -185,7 +194,9 @@ export class WebSocketManager {
       // Prevent concurrent connections
       if (this.state === ConnectionState.CONNECTING || this.state === ConnectionState.CONNECTED) {
         if (this.sessionId === sessionId) {
-          console.log('[WSManager] Already connected to session:', sessionId);
+          console.log('[WSManager] Already connected to session, updating callbacks:', sessionId);
+          // KEY FIX: Update callbacks even when already connected!
+          this.callbacks = new Map(Object.entries(callbacks));
           return;
         }
         // Different session - disconnect first
@@ -398,6 +409,9 @@ export class WebSocketManager {
         try {
           const data = JSON.parse(event.data);
           this.metrics.messagesReceived++;
+          if (data.type === 'token') {
+            console.log('[WSManager] 📥 Received token for session:', sessionId);
+          }
           this.callbacks.get('onMessage')?.(data);
         } catch (error) {
           console.error('[WSManager] Message parse error:', error);

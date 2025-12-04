@@ -27,6 +27,7 @@ import { ArchiveDialog } from '@/components/organisms/ArchiveDialog';
 import { useStreamingPerformance } from '@/hooks/useStreamingPerformance';
 import { usePluginRegistry } from '@/hooks/usePluginRegistry';
 import { useContextStatus } from '@/hooks/useContextStatus';
+import { useWebSocket, ConnectionState } from '@/contexts/WebSocketContext';
 import {
   createSession,
   getSessions,
@@ -36,9 +37,7 @@ import {
   updateErrorPreventionMode,
   updateComplexityAnalysisMode,
   archiveMessages,
-  connectChatStream,
   type ChatMessage as ChatMessageType,
-  type ChatStreamConnection,
   type ToolCall,
   type ToolResult,
   type SystemNotification,
@@ -126,14 +125,18 @@ export const CodeChatPage: React.FC = () => {
       stopPolling();
     }
   }, [activeSessionId, startPolling, stopPolling]);
-  // Refs for WebSocket and streaming content
-  const wsConnectionRef = useRef<ChatStreamConnection | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // WebSocket connection state and message queue
-  const wsConnectionStateRef = useRef<'disconnected' | 'connecting' | 'connected'>('disconnected');
-  const messageQueueRef = useRef<string[]>([]);
-  
+  // App-level WebSocket context (singleton - persists across navigation!)
+  const {
+    connect: wsConnect,
+    sendMessage: wsSendMessage,
+    stopExecution: wsStopExecution,
+    connectionState: wsConnectionState,
+    isConnected: wsIsConnected,
+    currentSessionId: wsCurrentSessionId,
+  } = useWebSocket();
+
+  // Refs for streaming content
   const streamingContentRef = useRef<string>('');
   const currentMessageToolsRef = useRef<{
     toolCalls: ToolCall[];
@@ -165,30 +168,61 @@ export const CodeChatPage: React.FC = () => {
   }, []);
 
 
-  // Connect to WebSocket when session changes
-  // Note: connectWebSocket is intentionally NOT in deps to avoid reconnecting on every render
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Sync WebSocket connection state to local connectionStatus
+  useEffect(() => {
+    const stateMap: Record<string, ConnectionStatus> = {
+      [ConnectionState.CONNECTED]: 'connected',
+      [ConnectionState.CONNECTING]: 'connecting',
+      [ConnectionState.RECONNECTING]: 'connecting',
+      [ConnectionState.DISCONNECTED]: 'disconnected',
+      [ConnectionState.DISCONNECTING]: 'disconnected',
+      [ConnectionState.ERROR]: 'error',
+    };
+    setConnectionStatus(stateMap[wsConnectionState] || 'disconnected');
+  }, [wsConnectionState]);
+
+  // DON'T auto-connect WebSocket when switching chats!
+  // WebSocket should only connect when:
+  // 1. Sending a message (connectWebSocket called in handleSendMessage)
+  // 2. There's an active stream for this session
+  // This prevents disconnecting from a streaming session when just viewing another chat's history
+
+  // Only connect WebSocket if this session is currently streaming or we don't have any connection
   useEffect(() => {
     if (activeSessionId) {
-      connectWebSocket(activeSessionId);
+      // Check if we should connect:
+      // - If not connected to anything, connect to view this session
+      // - If connected to THIS session already, just update callbacks
+      // - If connected to ANOTHER session that has active AI work, DON'T disconnect it!
+      const currentWsSession = wsCurrentSessionId;
+
+      // AI is "active" if streaming OR has pending tool calls OR has a streaming session marker
+      const isAiActive = isStreaming || pendingToolCalls.size > 0 || streamingSessionId !== null;
+
+      if (!currentWsSession) {
+        // No connection at all - connect to active session
+        console.log('[WS] 🔌 No connection, connecting to:', activeSessionId);
+        connectWebSocket(activeSessionId);
+      } else if (currentWsSession === activeSessionId) {
+        // Already connected to this session - just update callbacks
+        console.log('[WS] 🔄 Already connected to this session, updating callbacks');
+        connectWebSocket(activeSessionId);
+      } else if (!isAiActive) {
+        // Connected to different session but AI is NOT active - safe to switch
+        console.log('[WS] 🔀 AI not active, switching to:', activeSessionId);
+        connectWebSocket(activeSessionId);
+      } else {
+        // Connected to different session AND AI is active - DON'T disconnect!
+        console.log('[WS] ⏳ Keeping connection to active AI session:', currentWsSession, '(viewing:', activeSessionId, ')');
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, wsCurrentSessionId, isStreaming, pendingToolCalls.size, streamingSessionId]);
 
-    // Cleanup on session change or unmount
-    return () => {
-      if (wsConnectionRef.current) {
-        wsConnectionRef.current.disconnect().catch(err => console.error('[CodeChatPage] Error disconnecting:', err));
-        wsConnectionRef.current = null;
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-    };
-  }, [activeSessionId]);
-
-  // Cleanup on component unmount
+  // Cleanup streaming state on component unmount (but NOT WebSocket!)
   useEffect(() => {
     return () => {
-      // Clear all state on unmount
+      // Clear streaming state on unmount
       setMessages([]);
       setStreamingContent('');
       setIsStreaming(false);
@@ -196,19 +230,12 @@ export const CodeChatPage: React.FC = () => {
       setPendingToolCalls(new Set());
       setStreamingToolCalls([]);
       setStreamingToolResults(new Map());
-      
-      // Disconnect WebSocket
-      if (wsConnectionRef.current) {
-        wsConnectionRef.current.disconnect().catch(err => console.error('[CodeChatPage] Cleanup error:', err));
-        wsConnectionRef.current = null;
-      }
-      
+
       // Clear refs
       streamingContentRef.current = '';
       currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
-      messageQueueRef.current = [];
-      
-      console.log('[CodeChatPage] Component unmounted, cleanup complete');
+
+      console.log('[CodeChatPage] Component unmounted, streaming state cleared (WebSocket persists at app level)');
     };
   }, []);
 
@@ -302,8 +329,10 @@ export const CodeChatPage: React.FC = () => {
 
   // Load messages for a session
   const loadMessages = async (sessionId: string) => {
+    console.log('[WS] 📂 Loading messages from DB for session:', sessionId);
     try {
       const fetchedMessages = await getMessages(sessionId);
+      console.log('[WS] 📂 Loaded', fetchedMessages.length, 'messages from DB');
 
       // Bug #7 Fix: Convert toolResults from plain objects to Maps for consistency
       const normalizedMessages = fetchedMessages.map(msg => {
@@ -341,61 +370,42 @@ export const CodeChatPage: React.FC = () => {
     }
   };
 
-  // Connect to WebSocket for streaming
-  const connectWebSocket = useCallback((sessionId: string) => {
-    // Fix Bug #8: Guard against redundant connections
-    if (wsConnectionRef.current &&
-        wsConnectionRef.current.isConnected() &&
-        activeSessionIdRef.current === sessionId) {
-      console.log('[CodeChatPage] Already connected to session, skipping reconnect');
-      return;
-    }
-    // Bug #5 Fix: Proper connection cleanup before creating new connection
-    // 1. Clear any pending reconnection attempts
-    if (reconnectTimeoutRef.current) {
-      reconnectTimeoutRef.current = null;
+  // Connect to WebSocket for streaming using app-level context
+  // The WebSocket persists across navigation - only reconnects when session changes
+  const connectWebSocket = useCallback((sessionId: string, forceReset: boolean = false) => {
+    // Only reset streaming state if:
+    // 1. forceReset is true (explicit new message being sent)
+    // 2. OR this is NOT the session that's currently streaming (switching to idle session)
+    const isCurrentlyStreamingSession = streamingSessionId === sessionId;
+    const shouldReset = forceReset || (!isCurrentlyStreamingSession && !streamingSessionId);
+
+    if (isCurrentlyStreamingSession && !forceReset) {
+      // This IS the streaming session - preserve its state
+      console.log('[WS] Preserving streaming state for active session:', sessionId);
+    } else if (shouldReset) {
+      // Reset streaming state for new session or when sending new message
+      console.log('[WS] Resetting streaming state for session:', sessionId);
+      streamingContentRef.current = '';
+      currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
+      setPendingToolCalls(new Set());
+      setStreamingToolCalls([]);
+      setStreamingToolResults(new Map());
     }
 
-    // 2. Disconnect existing connection
-    if (wsConnectionRef.current) {
-      wsConnectionRef.current.disconnect().catch(err => console.error('[CodeChatPage] Error disconnecting:', err));
-      wsConnectionRef.current = null;
-    }
-
-    // 3. Reset streaming state for the session being disconnected
-    if (streamingSessionId === sessionId) {
-      setStreamingSessionId(null);
-    }
-    
-    // Reset connection state
-    wsConnectionStateRef.current = 'connecting';
-    setConnectionStatus('connecting');
-
-    // 4. Reset all streaming refs and state
-    streamingContentRef.current = '';
-    currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
-    setPendingToolCalls(new Set());
-    setStreamingToolCalls([]);
-    setStreamingToolResults(new Map());
-
-    // Connect to WebSocket
-    const connection = connectChatStream(sessionId, {
+    // Connect using app-level WebSocket context
+    // If already connected to same session, this just updates callbacks (no reconnect!)
+    wsConnect(sessionId, {
       onMessage: (content: string, done: boolean) => {
-        // Fix Bug #8: Use ref to avoid stale closure issues with React state
+        // IMPORTANT: Don't drop messages just because user is viewing a different session!
+        // Messages belong to the WebSocket session, not the viewed session
+        // Store them and show when user returns to this session
         if (sessionId !== activeSessionIdRef.current) {
-          console.log('[CodeChatPage] Message for different session, ignoring');
-          return;
-        }
-
-        // Verify we're still streaming for the correct session
-        if (sessionId !== activeSessionIdRef.current) {
-          console.log('[CodeChatPage] Message for different session, ignoring');
-          return;
+          console.log('[WS] 📬 Receiving message for background session:', sessionId, '(viewing:', activeSessionIdRef.current, ')');
+          // Continue processing - messages will be stored and shown when user returns
         }
 
         if (done) {
-          // Stream complete - save final AI message if there's any remaining content
-          // Use content directly (no session ID prefix needed)
+          // Stream complete - save final AI message
           const finalContent = streamingContentRef.current;
           const tools = currentMessageToolsRef.current;
 
@@ -420,12 +430,12 @@ export const CodeChatPage: React.FC = () => {
           console.log('[CodeChatPage] Refreshing sessions after AI response completion');
           loadSessions();
 
-          // Clear streaming state (Bug #2 fix: clear streamingSessionId)
+          // Clear streaming state
           streamingContentRef.current = '';
           currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
           setStreamingContent('');
           setIsStreaming(false);
-          setStreamingSessionId(null); // Clear streaming session tracker
+          setStreamingSessionId(null);
           setPendingToolCalls(new Set());
           setStreamingToolCalls([]);
           setStreamingToolResults(new Map());
@@ -433,15 +443,18 @@ export const CodeChatPage: React.FC = () => {
           // Stop performance monitoring
           stopMonitoring();
         } else {
-          // Accumulate streaming content
+          // Accumulate streaming content in ref (always - even for background sessions)
           streamingContentRef.current += content;
-          setStreamingContent(streamingContentRef.current);
-          setIsStreaming(true);
 
-          // Debug: Log streaming state updates
-          console.log(`[CodeChatPage] 📝 Content: ${streamingContentRef.current.length} bytes`);
+          // Only update UI state if this is the currently viewed session
+          if (sessionId === activeSessionIdRef.current) {
+            setStreamingContent(streamingContentRef.current);
+            setIsStreaming(true);
+          }
 
-          // Mark this session as streaming (Bug #2 fix)
+          console.log(`[CodeChatPage] 📝 Content: ${streamingContentRef.current.length} bytes (session: ${sessionId}, viewing: ${activeSessionIdRef.current})`);
+
+          // Mark this session as streaming (always track which session is streaming)
           if (!streamingSessionId) {
             setStreamingSessionId(sessionId);
           }
@@ -450,13 +463,15 @@ export const CodeChatPage: React.FC = () => {
           recordChunk(content);
         }
       },
-      onToolCall: (tool: string, args: Record<string, any>, id: string) => {
-        console.log(`[CodeChatPage] 🔧 Tool: ${tool}`);
+      onToolCall: (tool: string, args: Record<string, unknown>, id: string) => {
+        console.log(`[CodeChatPage] 🔧 Tool: ${tool} (session: ${sessionId}, viewing: ${activeSessionIdRef.current})`);
+
+        const isActiveSession = sessionId === activeSessionIdRef.current;
 
         // If we have accumulated content before the tool call, save it as a separate message
         const content = streamingContentRef.current;
 
-        if (content.trim()) {
+        if (content.trim() && isActiveSession) {
           const messageBeforeToolCall: ChatMessageType = {
             id: `msg-${Date.now()}`,
             sessionId,
@@ -466,26 +481,34 @@ export const CodeChatPage: React.FC = () => {
           };
           setMessages((prev) => [...prev, messageBeforeToolCall]);
           console.log('[CodeChatPage] Saved message before tool call');
+        }
 
-          // Clear streaming content for next message
-          streamingContentRef.current = '';
+        // Always clear the ref content after a tool call
+        streamingContentRef.current = '';
+        if (isActiveSession) {
           setStreamingContent('');
         }
 
         const toolCall: ToolCall = {
           id,
           tool,
-          args,
+          args: args as Record<string, any>,
           timestamp: new Date(),
         };
+
+        // Always update refs (for background sessions)
         currentMessageToolsRef.current.toolCalls.push(toolCall);
-        setPendingToolCalls((prev) => new Set(prev).add(id));
-        setStreamingToolCalls((prev) => [...prev, toolCall]);
+
+        // Only update UI state for active session
+        if (isActiveSession) {
+          setPendingToolCalls((prev) => new Set(prev).add(id));
+          setStreamingToolCalls((prev) => [...prev, toolCall]);
+        }
       },
       onToolResult: (
         id: string,
         tool: string,
-        result: any,
+        result: unknown,
         error: string | null,
         durationMs: number
       ) => {
@@ -497,37 +520,37 @@ export const CodeChatPage: React.FC = () => {
           durationMs,
         };
 
-        // Debug logging to diagnose tool result flow
         const resultSize = JSON.stringify(result).length;
         const hasErrorFlag = !!error;
-        console.log(`[CodeChatPage] ${hasErrorFlag ? '❌' : '✅'} ${tool} (${resultSize > 1024 ? Math.round(resultSize/1024) + 'KB' : resultSize + 'B'})`);
+        console.log(`[CodeChatPage] ${hasErrorFlag ? '❌' : '✅'} ${tool} (${resultSize > 1024 ? Math.round(resultSize/1024) + 'KB' : resultSize + 'B'}) (session: ${sessionId}, viewing: ${activeSessionIdRef.current})`);
 
+        // Always update refs (for background sessions)
         currentMessageToolsRef.current.toolResults.set(id, toolResult);
 
-        setPendingToolCalls((prev) => {
-          const updated = new Set(prev);
-          updated.delete(id);
-          return updated;
-        });
+        // Only update UI state for active session
+        if (sessionId === activeSessionIdRef.current) {
+          setPendingToolCalls((prev) => {
+            const updated = new Set(prev);
+            updated.delete(id);
+            return updated;
+          });
 
-        setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
+          setStreamingToolResults((prev) => new Map(prev).set(id, toolResult));
+        }
       },
       onMessageSaved: (databaseId: string) => {
-        // Check if this is a WebSocket disconnection notification (new backend feature)
+        // Check if this is a WebSocket disconnection notification
         if (databaseId.includes('AI response saved')) {
           console.log('[CodeChatPage] WebSocket disconnected but message saved - refetching messages');
-          // Refetch messages to get the complete AI response that was saved
-          if (activeSessionId) {
-            loadMessages(activeSessionId);
+          if (activeSessionIdRef.current) {
+            loadMessages(activeSessionIdRef.current);
           }
-          // Stop showing streaming state
           setIsStreaming(false);
           streamingContentRef.current = '';
           setStreamingContent('');
           return;
         }
 
-        // Check if this is an assistant message (format: "assistant:{id}")
         const isAssistantMessage = databaseId.startsWith('assistant:');
         const actualId = isAssistantMessage ? databaseId.substring('assistant:'.length) : databaseId;
         const targetRole = isAssistantMessage ? 'assistant' : 'user';
@@ -535,8 +558,6 @@ export const CodeChatPage: React.FC = () => {
         console.log(`[CodeChatPage] ${targetRole} message saved with database ID:`, actualId);
 
         setMessages((prev) => {
-          // Find the most recent message of the target role with optimistic ID
-          // Search from end (most recent) to beginning
           let targetIndex = -1;
           for (let i = prev.length - 1; i >= 0; i--) {
             if (prev[i].role === targetRole && prev[i].id.startsWith('msg-')) {
@@ -552,7 +573,6 @@ export const CodeChatPage: React.FC = () => {
 
           console.log(`[CodeChatPage] Updating ${targetRole} message ID:`, prev[targetIndex].id, '→', actualId);
 
-          // Create new array with updated message (immutable update)
           return prev.map((msg, idx) =>
             idx === targetIndex ? { ...msg, id: actualId } : msg
           );
@@ -560,49 +580,30 @@ export const CodeChatPage: React.FC = () => {
       },
       onError: (err: Error) => {
         setError(`Connection error: ${err.message}`);
-        setConnectionStatus('error');
         setIsStreaming(false);
         streamingContentRef.current = '';
         setStreamingContent('');
-
-        // Attempt reconnect after 3 seconds
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log('[CodeChatPage] Attempting to reconnect...');
-          setConnectionStatus('connecting');
-          connectWebSocket(sessionId);
-        }, 3000);
+        // WebSocketManager handles reconnection automatically
       },
       onOpen: () => {
         console.log('[CodeChatPage] WebSocket connected');
-        wsConnectionStateRef.current = 'connected';
-        setConnectionStatus('connected');
         setError(null);
-        
-        // Process any queued messages
-        if (messageQueueRef.current.length > 0) {
-          console.log(`[CodeChatPage] Processing ${messageQueueRef.current.length} queued messages`);
-          const queuedMessages = [...messageQueueRef.current];
-          messageQueueRef.current = [];
-          queuedMessages.forEach(message => {
-            sendMessageInternal(message);
-          });
-        }
       },
       onClose: () => {
         console.log('[CodeChatPage] WebSocket disconnected');
-        wsConnectionStateRef.current = 'disconnected';
-        setConnectionStatus('disconnected');
+      },
+      onReconnect: () => {
+        // Called when returning to same session - fetch any missed messages
+        console.log('[CodeChatPage] Reconnected to session, fetching any missed messages');
+        loadMessages(sessionId);
       },
       onSessionCreated: (subchatId: string) => {
         console.log('[CodeChatPage] New subchat created, refreshing sessions list', subchatId);
-        // Refresh sessions list to show the new subchat
         loadSessions();
       },
       onSystemNotification: (notification: SystemNotification) => {
-        // Display toast notification for backend system events
         showSystemNotification(notification);
 
-        // Handle execution_stopped notification - reset streaming state
         if (notification.category === 'execution_stopped') {
           console.log('[CodeChatPage] 🛑 Execution stopped, resetting streaming state');
           setIsStreaming(false);
@@ -610,10 +611,11 @@ export const CodeChatPage: React.FC = () => {
           setStreamingContent('');
         }
       },
+    }).catch((err) => {
+      console.error('[CodeChatPage] Failed to connect WebSocket:', err);
+      setError(`Failed to connect: ${err instanceof Error ? err.message : 'Unknown error'}`);
     });
-
-    wsConnectionRef.current = connection;
-  }, [activeSessionId, streamingSessionId, stopMonitoring, recordChunk]);
+  }, [wsConnect, streamingSessionId, stopMonitoring, recordChunk]);
 
   // Session management handlers
   const handleNewChat = async () => {
@@ -638,13 +640,47 @@ export const CodeChatPage: React.FC = () => {
   const handleSessionSelect = async (sessionId: string) => {
     if (sessionId !== activeSessionId) {
       setActiveSessionId(sessionId);
-      // Clear old messages and streaming state immediately before loading new session
+      // Clear old messages for the UI - but DON'T clear streamingSessionId!
+      // We need to track which session is actually streaming to prevent WebSocket disconnect
       setMessages([]);
-      setStreamingContent('');
-      setIsStreaming(false);
-      setStreamingToolCalls([]);
-      setStreamingToolResults(new Map());
-      setPendingToolCalls(new Set());
+
+      // Only clear streaming UI state if:
+      // 1. No active streaming at all (!streamingSessionId)
+      // 2. Switching to a DIFFERENT session than the one streaming (streamingSessionId !== sessionId)
+      // Do NOT clear if switching BACK to the streaming session!
+      if (!streamingSessionId) {
+        // No active streaming - safe to clear everything
+        setStreamingContent('');
+        setIsStreaming(false);
+        setStreamingToolCalls([]);
+        setStreamingToolResults(new Map());
+        setPendingToolCalls(new Set());
+        streamingContentRef.current = '';
+        currentMessageToolsRef.current = { toolCalls: [], toolResults: new Map() };
+      } else if (streamingSessionId !== sessionId) {
+        // Switching AWAY from streaming session - clear UI state but NOT refs
+        // The refs hold the accumulated content for the streaming session
+        setStreamingContent('');
+        setIsStreaming(false);
+        setStreamingToolCalls([]);
+        setStreamingToolResults(new Map());
+        setPendingToolCalls(new Set());
+        // DON'T clear refs - they hold data for the streaming session
+      } else {
+        // streamingSessionId === sessionId: switching BACK to streaming session
+        // Restore UI state from refs
+        setStreamingContent(streamingContentRef.current);
+        setIsStreaming(true);
+        setStreamingToolCalls(currentMessageToolsRef.current.toolCalls);
+        setStreamingToolResults(currentMessageToolsRef.current.toolResults);
+        setPendingToolCalls(new Set(
+          currentMessageToolsRef.current.toolCalls
+            .filter(tc => !currentMessageToolsRef.current.toolResults.has(tc.id))
+            .map(tc => tc.id)
+        ));
+      }
+
+      // Note: streamingSessionId is NOT cleared here - it tracks actual AI activity
       await loadMessages(sessionId);
     }
   };
@@ -689,9 +725,9 @@ export const CodeChatPage: React.FC = () => {
     setSessions((prev) => prev.map((s) => (s.id === sessionId ? sessionItem : s)));
   };
 
-  // Internal message sending function (used by queue processing)
+  // Internal message sending function
   const sendMessageInternal = useCallback((text: string) => {
-    if (!activeSessionId || !wsConnectionRef.current) return;
+    if (!activeSessionId) return;
 
     // Optimistically add user message
     const userMessage: ChatMessageType = {
@@ -712,15 +748,15 @@ export const CodeChatPage: React.FC = () => {
     resetMetrics();
     startMonitoring();
 
-    // Send message via WebSocket
-    wsConnectionRef.current.sendMessage(text).catch(err => {
+    // Send message via app-level WebSocket context
+    wsSendMessage(text).catch(err => {
       setError(err instanceof Error ? err.message : 'Failed to send message');
       setIsStreaming(false);
       setStreamingContent('');
       streamingContentRef.current = '';
       stopMonitoring();
     });
-  }, [activeSessionId, resetMetrics, startMonitoring, stopMonitoring]);
+  }, [activeSessionId, wsSendMessage, resetMetrics, startMonitoring, stopMonitoring]);
 
   // Memoized callbacks to prevent re-render loops
   const handleArchiveDialogOpen = useCallback(() => {
@@ -744,30 +780,29 @@ export const CodeChatPage: React.FC = () => {
     if (!activeSessionId || isStreaming) return;
 
     // Check connection state and handle accordingly
-    const connectionState = wsConnectionStateRef.current;
-
-    if (connectionState === 'connected' && wsConnectionRef.current?.isConnected()) {
+    if (wsIsConnected) {
       // Connection is ready, send immediately
       sendMessageInternal(text);
-    } else if (connectionState === 'connecting') {
-      // Connection is in progress, queue the message
-      console.log('[CodeChatPage] Connection in progress, queueing message');
+    } else if (wsConnectionState === ConnectionState.CONNECTING) {
+      // Connection is in progress, WebSocketManager will queue
+      console.log('[CodeChatPage] Connection in progress, sending (will be queued)');
+      sendMessageInternal(text);
     } else {
-      // Connection is disconnected, start connecting and queue the message
-      console.log('[CodeChatPage] WebSocket disconnected, reconnecting and queueing message');
-      messageQueueRef.current.push(text);
+      // Connection is disconnected, reconnect and send
+      console.log('[CodeChatPage] WebSocket disconnected, reconnecting...');
       connectWebSocket(activeSessionId);
+      sendMessageInternal(text);
     }
   };
 
   // Stop execution handler
   const handleStopExecution = useCallback(() => {
     console.log('[CodeChatPage] 🛑 Stop button clicked!', {
-      hasConnection: !!wsConnectionRef.current,
+      isConnected: wsIsConnected,
       isStreaming,
     });
 
-    if (!wsConnectionRef.current) {
+    if (!wsIsConnected) {
       console.log('[CodeChatPage] No WebSocket connection');
       return;
     }
@@ -778,8 +813,8 @@ export const CodeChatPage: React.FC = () => {
     }
 
     console.log('[CodeChatPage] 🛑 Calling stopExecution...');
-    wsConnectionRef.current.stopExecution();
-  }, [isStreaming]);
+    wsStopExecution();
+  }, [wsIsConnected, wsStopExecution, isStreaming]);
 
   // Toggle error prevention mode
   const toggleErrorPrevention = async () => {
@@ -986,7 +1021,9 @@ export const CodeChatPage: React.FC = () => {
               {(() => {
                 const activeSession = sessions.find((s) => s.id === activeSessionId);
                 const isProcessing = activeSession?.activeSubagentId != null;
-                const showIndicator = (isStreaming && !streamingContent) || isProcessing;
+                // Only show thinking indicator for THIS session, not when streaming in another session
+                const isStreamingThisSession = isStreaming && streamingSessionId === activeSessionId;
+                const showIndicator = (isStreamingThisSession && !streamingContent) || isProcessing;
 
                 if (!showIndicator) return null;
 
@@ -1010,8 +1047,8 @@ export const CodeChatPage: React.FC = () => {
                 );
               })()}
 
-              {/* Streaming Assistant Message */}
-              {isStreaming && (streamingContent || streamingToolCalls.length > 0) && (
+              {/* Streaming Assistant Message - only show if this is the streaming session */}
+              {isStreaming && streamingSessionId === activeSessionId && (streamingContent || streamingToolCalls.length > 0) && (
                 <ChatMessage
                   message={{
                     id: 'streaming',
@@ -1026,6 +1063,29 @@ export const CodeChatPage: React.FC = () => {
                   streamingToolCalls={streamingToolCalls}
                   streamingToolResults={streamingToolResults}
                 />
+              )}
+
+              {/* Indicator when viewing different session but AI is active elsewhere */}
+              {streamingSessionId && streamingSessionId !== activeSessionId && (
+                <div className="flex items-center gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <div className="flex-shrink-0">
+                    <div className="relative flex items-center justify-center w-6 h-6">
+                      <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse z-10" />
+                      <div className="absolute inset-0 w-3 h-3 bg-blue-500 rounded-full animate-ping opacity-75" />
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm text-blue-800 dark:text-blue-200">
+                      AI is responding in another chat.
+                      <button
+                        onClick={() => handleSessionSelect(streamingSessionId)}
+                        className="ml-2 underline hover:no-underline font-medium"
+                      >
+                        Switch to active chat
+                      </button>
+                    </p>
+                  </div>
+                </div>
               )}
 
               {/* Auto-scroll anchor */}
