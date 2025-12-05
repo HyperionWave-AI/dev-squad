@@ -8,6 +8,7 @@ import (
 	"time"
 
 	aiservice "hyper/internal/ai-service"
+	"hyper/internal/ai-service/executor"
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/handlers"
 	"hyper/internal/mcp/storage"
@@ -171,6 +172,61 @@ type ChatServiceInterface interface {
 // AISettingsServiceInterface defines methods needed from AI settings service
 type AISettingsServiceInterface interface {
 	GetSubagent(ctx context.Context, id primitive.ObjectID, companyID string) (*models.Subagent, error)
+}
+
+// chatServiceAdapter adapts ChatServiceInterface to executor.ChatServiceInterface.
+// The executor interface expects string output while our interface uses interface{}.
+type chatServiceAdapter struct {
+	service   ChatServiceInterface
+	sessionID primitive.ObjectID
+	companyID string
+}
+
+func (a *chatServiceAdapter) SaveMessage(ctx context.Context, sessionID primitive.ObjectID, role, content, companyID string) (*interface{}, error) {
+	msg, err := a.service.SaveMessage(ctx, sessionID, role, content, companyID)
+	if err != nil {
+		return nil, err
+	}
+	var result interface{} = msg
+	return &result, nil
+}
+
+func (a *chatServiceAdapter) SaveToolCall(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName string, args map[string]interface{}, companyID string) (*interface{}, error) {
+	msg, err := a.service.SaveToolCall(ctx, sessionID, toolCallID, toolName, args, companyID)
+	if err != nil {
+		return nil, err
+	}
+	var result interface{} = msg
+	return &result, nil
+}
+
+func (a *chatServiceAdapter) SaveToolResult(ctx context.Context, sessionID primitive.ObjectID, toolCallID, toolName, output, errorMsg string, durationMs int64, companyID string) (*interface{}, error) {
+	// Convert string output to interface{} for the underlying service
+	msg, err := a.service.SaveToolResult(ctx, sessionID, toolCallID, toolName, output, errorMsg, durationMs, companyID)
+	if err != nil {
+		return nil, err
+	}
+	var result interface{} = msg
+	return &result, nil
+}
+
+// progressNotifierAdapter adapts handlers.ProgressNotifier to executor.ProgressNotifierInterface
+type progressNotifierAdapter struct {
+	notifier *handlers.ProgressNotifier
+}
+
+func (p *progressNotifierAdapter) EmitProgress(sessionID primitive.ObjectID, message string) {
+	p.notifier.EmitProgress(sessionID, message)
+}
+
+// broadcasterAdapter adapts handlers.WebSocketBroadcaster to executor.WebSocketBroadcasterInterface
+// This allows SubchatOutputSink to broadcast directly to connected WebSocket clients
+type broadcasterAdapter struct {
+	broadcaster *handlers.WebSocketBroadcaster
+}
+
+func (b *broadcasterAdapter) BroadcastToSession(sessionID primitive.ObjectID, message models.StreamMessage) error {
+	return b.broadcaster.BroadcastToSession(sessionID, message)
 }
 
 func (t *ExecuteSubagentTool) Name() string {
@@ -720,6 +776,7 @@ func isSystemEnforcementMessage(content string) bool {
 }
 
 // executeSubagentInBackground runs the subagent AI streaming in a background goroutine
+// REFACTORED: Now uses StreamExecutor for clean, consistent execution (same as direct subagent chat)
 func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agentTask *storage.AgentTask, parentChatID string, companyID string) {
 	// Create a new background context with generous timeout for long-running tasks
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -861,923 +918,104 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 		zap.String("sessionId", chatSession.ID.Hex()),
 		zap.String("subchatId", subchatID))
 
-	// Create initial messages with SYSTEM prompt for phase isolation
-	messages := []aiservice.Message{
-		{
-			Role:    "system",
-			Content: systemPrompt, // EXECUTE phase constraints
-		},
-		{
-			Role:    "user",
-			Content: taskPrompt, // Task details only
-		},
-	}
+	// ============================================================================
+	// STREAMEXECUTOR-BASED EXECUTION (Clean, consistent with direct subagent chat)
+	// ============================================================================
 
 	// Define allowed tools for subagents (ONLY implementation tools, NO coordinator tools)
-	// This prevents subagents from calling coordinator tools and forces them to actually write code
-	// NOTE: code_index_search and list_directory are REMOVED - subagents are pure implementers, not explorers
-	// CRITICAL: list_directory removed - it enables exploration mode that contradicts WRITE-ONLY MODE
 	allowedTools := []string{
-		"read_file",                      // Read source files (ONLY files specified in task)
+		"read_file",                      // Read source files
 		"write_file",                     // Write/create files
 		"apply_patch",                    // Apply code patches
-		"bash",                           // Run commands, tests, syntax checks
+		"bash",                           // Run commands, tests
 		"coordinator_update_todo_status", // Update TODO status
-		"coordinator_upsert_knowledge",   // Store knowledge/decisions
+		"coordinator_upsert_knowledge",   // Save knowledge/decisions
+		"code_index_search",              // Search codebase (needed for context)
 	}
 
-	t.logger.Info("🔒 Filtering tools for subagent",
+	t.logger.Info("🔒 Configuring StreamExecutor with filtered tools",
 		zap.Int("allowedTools", len(allowedTools)),
 		zap.Strings("tools", allowedTools))
 
-	// Stream AI response with FILTERED tools (only implementation tools, no coordinator tools)
-	maxToolCalls := t.aiService.GetConfig().MaxToolCalls
-	aiStream, err := t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
+	// Create adapters for streaming
+	broadcaster := &broadcasterAdapter{
+		broadcaster: handlers.GetWebSocketBroadcaster(t.logger),
+	}
+	progressNotifier := &progressNotifierAdapter{
+		notifier: handlers.GetProgressNotifier(t.logger),
+	}
+
+	// Create output sink that sends to subchat session and notifies parent
+	// KEY FIX: Uses broadcaster for direct WebSocket streaming (no pre-registration needed)
+	outputSink := executor.NewSubchatOutputSink(
+		chatSession.ID,    // subchat session for real-time display
+		parentSessionID,   // parent session for progress notifications
+		broadcaster,       // WebSocket broadcaster for subchat streaming
+		progressNotifier,  // progress notifier for parent updates
+		agentTask.AgentName,
+		t.logger,
+	)
+
+	// Create chat service adapter for StreamExecutor
+	chatAdapter := &chatServiceAdapter{
+		service:   t.chatService,
+		sessionID: chatSession.ID,
+		companyID: finalCompanyID,
+	}
+
+	// Configure StreamExecutor
+	execConfig := executor.StreamConfig{
+		SessionID:    chatSession.ID,
+		CompanyID:    finalCompanyID,
+		SystemPrompt: systemPrompt,
+		AllowedTools: allowedTools,
+		OutputSink:   outputSink,
+		InterruptCh:  notifyCh,
+		Logger:       t.logger,
+	}
+
+	// Create and execute StreamExecutor (same as direct subagent chat!)
+	exec := executor.NewStreamExecutor(execConfig, chatAdapter, t.aiService)
+
+	// Create initial messages (note: system prompt is in execConfig, not in messages)
+	messages := []aiservice.Message{
+		{
+			Role:    "user",
+			Content: taskPrompt, // Task details only - system prompt injected by StreamExecutor
+		},
+	}
+
+	t.logger.Info("🚀 Executing subchat via StreamExecutor",
+		zap.String("subchatId", subchatID),
+		zap.String("agentName", agentTask.AgentName),
+		zap.Int("messageCount", len(messages)))
+
+	// Execute via StreamExecutor (clean, consistent with direct subagent chat)
+	fullResponse, err := exec.Execute(ctx, messages)
 	if err != nil {
-		t.logger.Error("Failed to start AI streaming for subagent",
+		t.logger.Error("StreamExecutor failed",
 			zap.String("subchatId", subchatID),
 			zap.Error(err))
 		handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat failed: %s", agentTask.AgentName))
-		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI streaming failed: %v", err))
+		t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Execution failed: %v", err))
 		return
 	}
 
-	// Process stream events and save to subchat
-	fullResponse := ""
-	toolCallCount := 0
-	completedTodos := 0
-	readFileCount := 0         // Track read_file calls (after 3 reads, MUST write)
-	hasWrittenAnyFile := false // Track if any write has occurred
-
-	// RUNTIME ENFORCEMENT: File content cache to prevent re-reads
-	fileContentCache := make(map[string]string)
-
-	// RUNTIME ENFORCEMENT: Execution scoring system
-	executionScore := 0
-
-	t.logger.Info("📡 Subagent AI stream started - processing events...",
-		zap.String("subchatId", subchatID),
-		zap.String("agentName", agentTask.AgentName))
+	// ============================================================================
+	// EXECUTION COMPLETED - Update task status
+	// ============================================================================
 
 	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
-	t.logger.Info("║ 🔄 PROCESSING AI STREAM EVENTS")
-	t.logger.Info("╚═══════════════════════════════════════════════════════════════════",
-		zap.String("subchatId", subchatID))
-
-	// Track stream state for interrupt handling
-	streamActive := true
-	fullSystemPrompt := systemPrompt // Store system prompt for message rebuilding on interrupt
-
-	for streamActive {
-		// ═══════════════════════════════════════════════════════════════════
-		// STAGE 1: PRIORITY CHECK FOR INTERRUPTS (NON-BLOCKING)
-		// ═══════════════════════════════════════════════════════════════════
-		// This ensures interrupts are ALWAYS checked before processing AI events,
-		// preventing starvation when AI is streaming rapidly.
-		var interruptReceived bool
-		select {
-		case <-notifyCh:
-			// USER MESSAGE INTERRUPT - PRIORITY HANDLING
-			t.logger.Info("💬 🔥 PRIORITY: User interrupt detected (pre-check)",
-				zap.String("sessionId", chatSession.ID.Hex()),
-				zap.String("subchatId", subchatID))
-			interruptReceived = true
-		default:
-			// No interrupt pending, proceed to normal event processing
-		}
-
-		// If interrupt was detected in priority check, handle it now
-		if interruptReceived {
-			// ═══════════════════════════════════════════════════════════════════
-			// INTERRUPT HANDLER
-			// ═══════════════════════════════════════════════════════════════════
-
-			// Drain current stream if active
-			if aiStream != nil {
-				go func() {
-					for range aiStream {
-						// discard remaining events
-					}
-				}()
-			}
-
-			// Fetch all messages including new user message
-			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
-			if err != nil {
-				t.logger.Error("Failed to fetch messages after interrupt", zap.Error(err))
-				continue
-			}
-
-			// Extract latest user message for categorization
-			var latestUserMessage string
-			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
-				if messagesResp.Messages[i].Role == "user" {
-					latestUserMessage = messagesResp.Messages[i].Content
-					break
-				}
-			}
-
-			// Categorize the interrupt to determine intent
-			category, guidance, err := t.categorizeInterrupt(ctx, latestUserMessage)
-			if err != nil {
-				t.logger.Warn("Failed to categorize interrupt, defaulting to CONTINUE",
-					zap.Error(err),
-					zap.String("userMessage", latestUserMessage))
-				category = "CONTINUE"
-				guidance = "Continue with your work but acknowledge the user's message if relevant"
-			}
-
-			t.logger.Info("🎯 Interrupt categorized",
-				zap.String("category", category),
-				zap.String("guidance", guidance),
-				zap.String("userMessage", latestUserMessage))
-
-			// Emit progress notification about interrupt
-			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID,
-				fmt.Sprintf("📨 User interrupt received: %s", category))
-
-			// Build interrupt-aware system prompt guidance based on category
-			var interruptGuidance string
-			switch category {
-			case "STOP":
-				interruptGuidance = fmt.Sprintf(`
-⚠️ CRITICAL: USER INTERRUPT - STOP CURRENT TASK
-The user has sent a message indicating they want to STOP the current task.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. IMMEDIATELY acknowledge the user's message in your FIRST response
-2. STOP all current work - do not make ANY tool calls until you respond
-3. Ask the user what they would like you to do instead
-4. DO NOT continue with the original task unless they explicitly say to continue
-
-Start your response with: "I've stopped the current task. [address their message directly]"
-`, latestUserMessage, guidance)
-
-			case "MODIFY":
-				interruptGuidance = fmt.Sprintf(`
-🔄 USER INTERRUPT - MODIFY APPROACH
-The user wants to modify or adjust the current approach.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. FIRST, acknowledge the user's request in your response (use text, not just tool calls)
-2. Explain how you'll adjust your approach based on their guidance
-3. THEN proceed with the modified approach using tool calls
-
-Start your response with: "I'll adjust my approach. [explain the changes]"
-`, latestUserMessage, guidance)
-
-			case "CLARIFY":
-				interruptGuidance = fmt.Sprintf(`
-❓ USER INTERRUPT - NEEDS CLARIFICATION
-The user has a question or needs clarification about your work.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. Answer their question directly and clearly in your FIRST response
-2. Do NOT make any tool calls before responding to their question
-3. After answering, ask if they want you to continue or adjust
-4. Wait for their response before making more tool calls
-
-Start your response by directly addressing their question.
-`, latestUserMessage, guidance)
-
-			case "STATUS":
-				interruptGuidance = fmt.Sprintf(`
-📊 USER INTERRUPT - STATUS CHECK
-The user is checking progress or giving encouragement.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. FIRST, give a brief status update (what you've completed, what's next)
-2. Acknowledge their message warmly
-3. THEN continue with your work
-
-Keep your status response brief (2-3 sentences) before continuing.
-`, latestUserMessage, guidance)
-
-			case "CONTINUE":
-				interruptGuidance = fmt.Sprintf(`
-✅ USER MESSAGE NOTED
-The user sent a message that doesn't require action changes.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-Briefly acknowledge their message if appropriate (1 sentence), then continue your work.
-`, latestUserMessage, guidance)
-
-			default:
-				interruptGuidance = fmt.Sprintf(`
-📨 USER MESSAGE RECEIVED
-User's message: "%s"
-
-Acknowledge the message and continue your work.
-`, latestUserMessage)
-			}
-
-			// Rebuild message context with interrupt-aware system prompt
-			messages = []aiservice.Message{
-				{Role: "system", Content: fullSystemPrompt + "\n\n" + interruptGuidance},
-			}
-			for _, msg := range messagesResp.Messages {
-				messages = append(messages, aiservice.Message{
-					Role:    msg.Role,
-					Content: msg.Content,
-				})
-			}
-
-			t.logger.Info("🔄 Resuming subagent with interrupt-aware context",
-				zap.Int("messageCount", len(messages)),
-				zap.String("category", category),
-				zap.String("sessionId", chatSession.ID.Hex()))
-
-			// Restart AI stream with updated, interrupt-aware context
-			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
-			if err != nil {
-				t.logger.Error("Failed to restart AI stream after interrupt", zap.Error(err))
-				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Stream restart failed: %v", err))
-				return
-			}
-
-			// Continue to next loop iteration to check for interrupts again
-			continue
-		}
-
-		// ═══════════════════════════════════════════════════════════════════
-		// STAGE 2: NORMAL EVENT PROCESSING (TIMEOUT, INTERRUPT BACKUP, AI EVENTS)
-		// ═══════════════════════════════════════════════════════════════════
-		select {
-		case <-ctx.Done():
-			t.logger.Warn("⏱️ Subagent execution cancelled by timeout",
-				zap.String("subchatId", subchatID))
-			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat timeout: %s", agentTask.AgentName))
-			t.handleExecutionFailure(agentTask.ID, "Execution timeout")
-			return
-
-		case <-notifyCh:
-			// USER MESSAGE INTERRUPT - BACKUP HANDLER (caught in stage 2 when priority check missed it)
-			t.logger.Info("💬 User interrupt detected (backup - caught in stage 2)",
-				zap.String("sessionId", chatSession.ID.Hex()),
-				zap.String("subchatId", subchatID))
-
-			// Drain current stream if active
-			if aiStream != nil {
-				go func() {
-					for range aiStream {
-						// discard remaining events
-					}
-				}()
-			}
-
-			// Fetch all messages including new user message
-			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
-			if err != nil {
-				t.logger.Error("Failed to fetch messages after interrupt", zap.Error(err))
-				continue
-			}
-
-			// Extract latest user message for categorization
-			var latestUserMessage string
-			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
-				if messagesResp.Messages[i].Role == "user" {
-					latestUserMessage = messagesResp.Messages[i].Content
-					break
-				}
-			}
-
-			// Categorize the interrupt to determine intent
-			category, guidance, err := t.categorizeInterrupt(ctx, latestUserMessage)
-			if err != nil {
-				t.logger.Warn("Failed to categorize interrupt, defaulting to CONTINUE",
-					zap.Error(err),
-					zap.String("userMessage", latestUserMessage))
-				category = "CONTINUE"
-				guidance = "Continue with your work but acknowledge the user's message if relevant"
-			}
-
-			t.logger.Info("🎯 Interrupt categorized",
-				zap.String("category", category),
-				zap.String("guidance", guidance),
-				zap.String("userMessage", latestUserMessage))
-
-			// Emit progress notification about interrupt
-			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID,
-				fmt.Sprintf("📨 User interrupt received: %s", category))
-
-			// Build interrupt-aware system prompt guidance based on category
-			var interruptGuidance string
-			switch category {
-			case "STOP":
-				interruptGuidance = fmt.Sprintf(`
-⚠️ CRITICAL: USER INTERRUPT - STOP CURRENT TASK
-The user has sent a message indicating they want to STOP the current task.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. IMMEDIATELY acknowledge the user's message in your FIRST response
-2. STOP all current work - do not make ANY tool calls until you respond
-3. Ask the user what they would like you to do instead
-4. DO NOT continue with the original task unless they explicitly say to continue
-
-Start your response with: "I've stopped the current task. [address their message directly]"
-`, latestUserMessage, guidance)
-
-			case "MODIFY":
-				interruptGuidance = fmt.Sprintf(`
-🔄 USER INTERRUPT - MODIFY APPROACH
-The user wants to modify or adjust the current approach.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. FIRST, acknowledge the user's request in your response (use text, not just tool calls)
-2. Explain how you'll adjust your approach based on their guidance
-3. THEN proceed with the modified approach using tool calls
-
-Start your response with: "I'll adjust my approach. [explain the changes]"
-`, latestUserMessage, guidance)
-
-			case "CLARIFY":
-				interruptGuidance = fmt.Sprintf(`
-❓ USER INTERRUPT - NEEDS CLARIFICATION
-The user has a question or needs clarification about your work.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. Answer their question directly and clearly in your FIRST response
-2. Do NOT make any tool calls before responding to their question
-3. After answering, ask if they want you to continue or adjust
-4. Wait for their response before making more tool calls
-
-Start your response by directly addressing their question.
-`, latestUserMessage, guidance)
-
-			case "STATUS":
-				interruptGuidance = fmt.Sprintf(`
-📊 USER INTERRUPT - STATUS CHECK
-The user is checking progress or giving encouragement.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-YOU MUST:
-1. FIRST, give a brief status update (what you've completed, what's next)
-2. Acknowledge their message warmly
-3. THEN continue with your work
-
-Keep your status response brief (2-3 sentences) before continuing.
-`, latestUserMessage, guidance)
-
-			case "CONTINUE":
-				interruptGuidance = fmt.Sprintf(`
-✅ USER MESSAGE NOTED
-The user sent a message that doesn't require action changes.
-
-User's message: "%s"
-
-AI Analysis: %s
-
-Briefly acknowledge their message if appropriate (1 sentence), then continue your work.
-`, latestUserMessage, guidance)
-
-			default:
-				interruptGuidance = fmt.Sprintf(`
-📨 USER MESSAGE RECEIVED
-User's message: "%s"
-
-Acknowledge the message and continue your work.
-`, latestUserMessage)
-			}
-
-			// Rebuild message context with interrupt-aware system prompt
-			messages = []aiservice.Message{
-				{Role: "system", Content: fullSystemPrompt + "\n\n" + interruptGuidance},
-			}
-			for _, msg := range messagesResp.Messages {
-				messages = append(messages, aiservice.Message{
-					Role:    msg.Role,
-					Content: msg.Content,
-				})
-			}
-
-			t.logger.Info("🔄 Resuming subagent with interrupt-aware context",
-				zap.Int("messageCount", len(messages)),
-				zap.String("category", category),
-				zap.String("sessionId", chatSession.ID.Hex()))
-
-			// Restart AI stream with updated, interrupt-aware context
-			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
-			if err != nil {
-				t.logger.Error("Failed to restart AI stream after interrupt", zap.Error(err))
-				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("Stream restart failed: %v", err))
-				return
-			}
-
-			// Continue to next loop iteration
-			continue
-
-		case event, ok := <-aiStream:
-			if !ok {
-				// Stream closed naturally
-				streamActive = false
-				break
-			}
-
-			switch event.Type {
-			case aiservice.StreamEventToken:
-				fullResponse += event.Content
-
-				// 📝 LOG EVERY TEXT TOKEN RECEIVED FROM AI
-				t.logger.Info("💬 AI TEXT TOKEN RECEIVED",
-					zap.String("subchatId", subchatID),
-					zap.String("sessionId", chatSession.ID.Hex()),
-					zap.String("content", event.Content),
-					zap.Int("contentLength", len(event.Content)),
-					zap.Bool("isSystemMessage", isSystemEnforcementMessage(event.Content)))
-
-				// Stream AI messages to progress channel (filter out system messages)
-				if event.Content != "" && !isSystemEnforcementMessage(event.Content) {
-					// Only emit substantive messages (not just whitespace or single characters)
-					trimmed := strings.TrimSpace(event.Content)
-					if len(trimmed) > 5 { // Only emit messages with substance
-						t.logger.Info("✅ EMITTING TEXT TO PROGRESS NOTIFIER",
-							zap.String("subchatId", subchatID),
-							zap.String("content", event.Content),
-							zap.Int("trimmedLength", len(trimmed)))
-
-						// 💾 SAVE TO DATABASE for persistence (so messages survive page refresh)
-						_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, finalCompanyID)
-						if err != nil {
-							t.logger.Warn("Failed to save streaming text chunk to database",
-								zap.String("subchatId", subchatID),
-								zap.String("sessionId", chatSession.ID.Hex()),
-								zap.Error(err))
-						} else {
-							t.logger.Debug("💾 Saved text chunk to database",
-								zap.String("subchatId", subchatID),
-								zap.String("sessionId", chatSession.ID.Hex()),
-								zap.Int("chunkLength", len(event.Content)))
-						}
-
-						// 📡 Send to WebSocket (CRITICAL: use subchat session, not parent!)
-						handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, event.Content)
-					} else {
-						t.logger.Info("⏭️ SKIPPING SHORT TEXT (< 5 chars)",
-							zap.String("subchatId", subchatID),
-							zap.String("content", event.Content),
-							zap.Int("trimmedLength", len(trimmed)))
-					}
-				} else {
-					t.logger.Info("🚫 FILTERED OUT (empty or system message)",
-						zap.String("subchatId", subchatID),
-						zap.String("content", event.Content))
-				}
-
-			case aiservice.StreamEventToolCall:
-				toolCallCount++
-
-				// 📊 COMPREHENSIVE LOGGING: Log every tool call (args truncated for brevity)
-				argsSummary := make(map[string]interface{})
-				for key, value := range event.ToolCall.Args {
-					if key == "content" || key == "output" {
-						// Truncate large content fields
-						if str, ok := value.(string); ok && len(str) > 100 {
-							argsSummary[key] = fmt.Sprintf("%s... (%d chars)", str[:100], len(str))
-						} else {
-							argsSummary[key] = value
-						}
-					} else {
-						argsSummary[key] = value
-					}
-				}
-				t.logger.Info("🔧 TOOL CALL",
-					zap.String("subchatId", subchatID),
-					zap.Int("callNumber", toolCallCount),
-					zap.String("toolName", event.ToolCall.Name),
-					zap.Any("args", argsSummary))
-
-				// Emit progress notification with plain English tool call description
-				plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)
-				handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishToolCall)
-
-				// RUNTIME ENFORCEMENT: Track read_file calls and apply scoring
-				if event.ToolCall.Name == "read_file" {
-					readFileCount++
-
-					// Check if this file was already read (duplicate read)
-					filePath := ""
-					if fp, ok := event.ToolCall.Args["file_path"].(string); ok {
-						filePath = fp
-					}
-
-					if _, alreadyRead := fileContentCache[filePath]; alreadyRead {
-						// Duplicate read - penalty
-						executionScore -= 5
-						t.logger.Warn("⚠️ DUPLICATE READ detected - scoring penalty",
-							zap.String("subchatId", subchatID),
-							zap.String("filePath", filePath),
-							zap.Int("score", executionScore))
-					} else {
-						// First read - small bonus
-						executionScore += 5
-						t.logger.Info("✅ First read of file - scoring bonus",
-							zap.String("subchatId", subchatID),
-							zap.String("filePath", filePath),
-							zap.Int("score", executionScore))
-					}
-
-					// RUNTIME ENFORCEMENT: Hard read limit - block reads after threshold
-					if readFileCount > 3 && !hasWrittenAnyFile {
-						executionScore -= 50
-						t.logger.Error("🚫 HARD LIMIT: Exceeded 3 reads without write - CRITICAL",
-							zap.String("subchatId", subchatID),
-							zap.Int("readFileCount", readFileCount),
-							zap.Int("score", executionScore))
-					}
-
-					// Penalty for exceeding 1 read without write (lowered threshold from 2 to 1)
-					if readFileCount > 1 && !hasWrittenAnyFile {
-						executionScore -= 20
-						t.logger.Warn("⚠️ Exceeded 1 read without write - large penalty (WRITE NOW)",
-							zap.String("subchatId", subchatID),
-							zap.Int("readFileCount", readFileCount),
-							zap.Int("score", executionScore))
-					}
-				}
-
-				// RUNTIME ENFORCEMENT: Track write operations and reward
-				if event.ToolCall.Name == "write_file" || event.ToolCall.Name == "apply_patch" {
-					hasWrittenAnyFile = true
-					readFileCount = 0    // Reset read counter after write
-					executionScore += 20 // Big reward for writing
-
-					t.logger.Info("✅ Write operation detected - BIG scoring bonus",
-						zap.String("subchatId", subchatID),
-						zap.String("toolName", event.ToolCall.Name),
-						zap.Int("score", executionScore))
-				}
-
-				// RUNTIME ENFORCEMENT: Reward TODO completion
-				if event.ToolCall.Name == "coordinator_update_todo_status" {
-					if status, ok := event.ToolCall.Args["status"].(string); ok && status == "completed" {
-						executionScore += 10
-						t.logger.Info("✅ TODO completed - scoring bonus",
-							zap.String("subchatId", subchatID),
-							zap.Int("score", executionScore))
-					}
-				}
-
-				// Penalty for duplicate tool calls
-				warning := progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
-				if warning != "" {
-					executionScore -= 10
-					t.logger.Warn("⚠️ Duplicate operation - scoring penalty",
-						zap.String("subchatId", subchatID),
-						zap.String("toolName", event.ToolCall.Name),
-						zap.Int("score", executionScore))
-				}
-
-				// Record file operation in progress tracker (for reporting only)
-				progressTracker.RecordOperation(event.ToolCall.Name, event.ToolCall.Args)
-
-				t.logger.Info("🔧 Subagent calling tool",
-					zap.String("subchatId", subchatID),
-					zap.String("agentName", agentTask.AgentName),
-					zap.String("toolName", event.ToolCall.Name),
-					zap.Int("toolCallNumber", toolCallCount))
-
-				// Save tool call to subchat messages
-				_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, finalCompanyID)
-				if err != nil {
-					t.logger.Error("Failed to save tool call",
-						zap.String("subchatId", subchatID),
-						zap.Error(err))
-				}
-
-				// Check if this is a todo status update - track completion
-				if event.ToolCall.Name == "coordinator_update_todo_status" {
-					if status, ok := event.ToolCall.Args["status"].(string); ok && status == "completed" {
-						completedTodos++
-						t.logger.Info("✅ TODO marked as completed",
-							zap.String("subchatId", subchatID),
-							zap.String("agentName", agentTask.AgentName),
-							zap.Int("completedCount", completedTodos),
-							zap.Int("totalTodos", len(agentTask.Todos)))
-					} else if status, ok := event.ToolCall.Args["status"].(string); ok && status == "in_progress" {
-						t.logger.Info("▶️ TODO started",
-							zap.String("subchatId", subchatID),
-							zap.String("agentName", agentTask.AgentName))
-					}
-				}
-
-			case aiservice.StreamEventToolResult:
-				// Emit progress notification with plain English tool result
-				plainEnglishResult := convertToolResultToPlainEnglish(event.ToolResult.Name, event.ToolResult.Output, event.ToolResult.Error)
-				handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishResult)
-
-				// Summarize tool result to prevent context bloat
-				var originalSize int
-				var summarizedOutput string
-
-				if event.ToolResult.Output != nil {
-					// Calculate original size for logging
-					if str, ok := event.ToolResult.Output.(string); ok {
-						originalSize = len(str)
-					} else {
-						outputBytes, _ := json.Marshal(event.ToolResult.Output)
-						originalSize = len(outputBytes)
-					}
-
-					// Apply summarization
-					summarizedOutput = t.summarizeToolResult(event.ToolResult.Name, event.ToolResult.Output)
-				}
-
-				// Use error message if tool call failed
-				if event.ToolResult.Error != "" {
-					summarizedOutput = fmt.Sprintf("Error: %s", event.ToolResult.Error)
-				}
-
-				// RUNTIME ENFORCEMENT: File content caching and duplicate read blocking
-				if event.ToolResult.Name == "read_file" && event.ToolResult.Error == "" {
-					// Cache the full content (not the summarized version)
-					if fullContent, ok := event.ToolResult.Output.(string); ok {
-						// Check if this is a duplicate read by checking cache
-						if len(fileContentCache) > 0 {
-							// RUNTIME ENFORCEMENT: Return cached summary instead of full content
-							summarizedOutput = fmt.Sprintf("⚠️ CACHED FILE CONTENT - DO NOT RE-READ\n\nThis file was already read. Content is cached. You MUST use the previous read content.\n\nSUMMARY: File contains %d characters across %d lines.\n\nYour next action MUST be write_file or apply_patch - NOT another read_file.\n\nCURRENT SCORE: %d points", len(fullContent), len(strings.Split(fullContent, "\n")), executionScore)
-
-							t.logger.Warn("🚫 Returning cached summary - blocking duplicate read",
-								zap.String("subchatId", subchatID),
-								zap.Int("score", executionScore))
-						} else {
-							// First read - cache the content but still return it
-							fileContentCache["last_read"] = fullContent
-							t.logger.Info("💾 Cached file content for enforcement",
-								zap.String("subchatId", subchatID),
-								zap.Int("contentSize", len(fullContent)))
-						}
-					}
-				}
-
-				// RUNTIME ENFORCEMENT: Inject forced write scaffold after 1 read without write (lowered from 2)
-				if readFileCount >= 1 && !hasWrittenAnyFile {
-					forceScaffold := fmt.Sprintf("\n\n╔══════════════════════════════════════════════════════════════╗\n║          FORCED WRITE SCAFFOLD - COMPLETE AND SUBMIT          ║\n╚══════════════════════════════════════════════════════════════╝\n\n🚨 WRITE-ONLY MODE ENFORCEMENT 🚨\n\nYou have read %d file(s). Reading phase is COMPLETE.\n\nYour NEXT tool call MUST be either:\n1. write_file - to create or modify a file\n2. apply_patch - to apply code changes\n\nYou are BLOCKED from calling read_file again.\n\nCURRENT EXECUTION SCORE: %d points\n\nSCORING:\n- Next write_file/apply_patch: +20 points ✅\n- Another read_file: -50 points ❌ (HARD LIMIT)\n\nIMPLEMENT NOW - DO NOT READ ANOTHER FILE.", readFileCount, executionScore)
-					summarizedOutput += forceScaffold
-
-					// Save scaffold as internal message (not visible to end user)
-					_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "system_internal", forceScaffold, finalCompanyID)
-					if err != nil {
-						t.logger.Warn("Failed to save forced scaffold message",
-							zap.String("subchatId", subchatID),
-							zap.Error(err))
-					}
-
-					t.logger.Warn("🔨 Injected FORCED WRITE SCAFFOLD",
-						zap.String("subchatId", subchatID),
-						zap.Int("readFileCount", readFileCount),
-						zap.Int("score", executionScore))
-				}
-
-				// RUNTIME ENFORCEMENT: Inject scoring message (visible to model)
-				scoringMessage := fmt.Sprintf("\n\n📊 EXECUTION SCORE: %d points\n", executionScore)
-				if executionScore >= 30 {
-					scoringMessage += "✅ EXCELLENT - On track for successful completion!\n"
-				} else if executionScore >= 10 {
-					scoringMessage += "⚠️ NEEDS WRITE - Read enough, now implement changes!\n"
-				} else if executionScore < 0 {
-					scoringMessage += "🚨 CRITICAL - Too many reads, not enough writes!\n"
-				}
-				summarizedOutput += scoringMessage
-
-				// Inject progress summary every 3 tool calls
-				if toolCallCount%3 == 0 && (len(progressTracker.FilesRead) > 0 || len(progressTracker.DirectoriesListed) > 0) {
-					progressSummary := progressTracker.GetProgressSummary()
-					summarizedOutput += progressSummary
-
-					t.logger.Info("📊 Injected progress summary with scoring",
-						zap.String("subchatId", subchatID),
-						zap.Int("score", executionScore))
-				}
-
-				// Log tool result with success/failure indicator and context size info
-				if event.ToolResult.Error != "" {
-					t.logger.Warn("❌ Tool call failed",
-						zap.String("subchatId", subchatID),
-						zap.String("toolName", event.ToolResult.Name),
-						zap.String("error", event.ToolResult.Error))
-				} else {
-					t.logger.Info("✓ Tool call completed",
-						zap.String("subchatId", subchatID),
-						zap.String("toolName", event.ToolResult.Name),
-						zap.Int64("durationMs", event.ToolResult.DurationMs),
-						zap.Int("originalSize", originalSize),
-						zap.Int("summarizedSize", len(summarizedOutput)))
-				}
-
-				_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, summarizedOutput, event.ToolResult.Error, event.ToolResult.DurationMs, finalCompanyID)
-				if err != nil {
-					t.logger.Error("Failed to save tool result",
-						zap.String("subchatId", subchatID),
-						zap.Error(err))
-				}
-
-			case aiservice.StreamEventError:
-				t.logger.Error("❌ AI service error during subagent execution",
-					zap.String("subchatId", subchatID),
-					zap.String("error", event.Error))
-				t.handleExecutionFailure(agentTask.ID, fmt.Sprintf("AI error: %s", event.Error))
-				return
-			}
-		}
-	}
-
-	// 📊 COMPREHENSIVE LOGGING: Final execution summary
-	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
-	t.logger.Info("║ 📊 FINAL EXECUTION SUMMARY",
+	t.logger.Info("║ ✅ SUBAGENT EXECUTION COMPLETED")
+	t.logger.Info("╠═══════════════════════════════════════════════════════════════════",
 		zap.String("subchatId", subchatID),
-		zap.String("agentName", agentTask.AgentName))
-	t.logger.Info("╠═══════════════════════════════════════════════════════════════════")
-	t.logger.Info("║ Tool Calls",
-		zap.Int("total", toolCallCount),
-		zap.Int("reads", readFileCount),
-		zap.Int("writes", len(progressTracker.FilesWritten)),
-		zap.Int("bash", len(progressTracker.BashCalls)))
-	t.logger.Info("║ TODOs",
-		zap.Int("completed", completedTodos),
-		zap.Int("total", len(agentTask.Todos)))
-	t.logger.Info("║ Score",
-		zap.Int("finalScore", executionScore),
-		zap.Bool("hasWritten", hasWrittenAnyFile))
-	t.logger.Info("║ Files",
-		zap.Int("filesRead", len(progressTracker.FilesRead)),
-		zap.Int("filesWritten", len(progressTracker.FilesWritten)),
-		zap.Int("directoriesListed", len(progressTracker.DirectoriesListed)))
+		zap.String("agentName", agentTask.AgentName),
+		zap.String("agentTaskId", agentTask.ID),
+		zap.Int("responseLength", len(fullResponse)))
 	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
 
-	// NOTE: We now save text chunks as they stream (lines 3073-3085), so we don't need to save
-	// the full response here. This prevents duplicate messages in the database.
-	// The fullResponse variable is still useful for logging and validation purposes.
-	t.logger.Info("📝 Text chunks already saved during streaming (no final save needed)",
-		zap.String("subchatId", subchatID),
-		zap.Int("totalResponseLength", len(fullResponse)))
-
-	// ========================================
-	// VALIDATION LAYER 1: File Modification Validation
-	// ========================================
-	var modifiedFiles []string
-	if len(agentTask.FilesModified) > 0 {
-		filesOK, files, validationErr := t.validateFileModifications(agentTask, progressTracker)
-		modifiedFiles = files
-
-		if !filesOK {
-			t.logger.Warn("❌ File modification validation FAILED",
-				zap.String("subchatId", subchatID),
-				zap.String("agentTaskId", agentTask.ID),
-				zap.Error(validationErr))
-
-			// Mark as BLOCKED instead of completed
-			blockReason := fmt.Sprintf("Validation failed: %v. Tool calls: %d, Claimed TODOs: %d/%d",
-				validationErr, toolCallCount, completedTodos, len(agentTask.Todos))
-
-			err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusBlocked, blockReason)
-			if err != nil {
-				t.logger.Error("Failed to update task status to blocked",
-					zap.String("agentTaskId", agentTask.ID),
-					zap.Error(err))
-			}
-
-			err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusFailed)
-			if err != nil {
-				t.logger.Error("Failed to update subchat status to failed",
-					zap.String("subchatId", subchatID),
-					zap.Error(err))
-			}
-
-			t.logger.Error("🚨 PHANTOM COMPLETION PREVENTED",
-				zap.String("subchatId", subchatID),
-				zap.String("agentTaskId", agentTask.ID),
-				zap.String("reason", "no files modified"))
-
-			// Send failure message to user
-			failureMessage := fmt.Sprintf("❌ **Task Blocked - File Validation Failed**\n\n**Reason:** %s\n\n**Tool Calls Made:** %d\n**TODOs Claimed:** %d/%d\n\nThe expected files were not modified. This might be because:\n- The file paths in the task don't match what was actually written\n- The tool used a different file path format\n- The changes were not actually applied\n\nPlease review the task and try again, or ask me for help!",
-				validationErr.Error(), toolCallCount, completedTodos, len(agentTask.Todos))
-
-			// Save failure message to database
-			_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", failureMessage, finalCompanyID)
-			if err != nil {
-				t.logger.Warn("Failed to save failure message to database",
-					zap.String("subchatId", subchatID),
-					zap.Error(err))
-			}
-
-			// Emit failure message to WebSocket
-			handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, failureMessage)
-			handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("❌ Subchat blocked: %s - %s", agentTask.AgentName, validationErr.Error()))
-
-			// Keep subchat alive for user to investigate or provide guidance
-			t.logger.Info("💬 Task blocked - waiting for user messages",
-				zap.String("subchatId", subchatID),
-				zap.String("sessionId", chatSession.ID.Hex()))
-			return
-		}
-
-		// Log proof of work
-		t.logger.Info("✅ File modification validation PASSED",
-			zap.String("subchatId", subchatID),
-			zap.String("agentTaskId", agentTask.ID),
-			zap.Strings("modifiedFiles", modifiedFiles))
-	}
-
-	// ========================================
-	// VALIDATION LAYER 2: TODO Completion Verification
-	// ========================================
-	if completedTodos < len(agentTask.Todos) {
-		t.logger.Warn("❌ TODO completion validation FAILED",
-			zap.String("subchatId", subchatID),
-			zap.String("agentTaskId", agentTask.ID),
-			zap.Int("completed", completedTodos),
-			zap.Int("total", len(agentTask.Todos)))
-
-		summaryNotes := fmt.Sprintf("Incomplete: %d/%d TODOs done, %d tool calls. Files modified: %v",
-			completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
-
-		err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusInProgress, summaryNotes)
-		if err != nil {
-			t.logger.Error("Failed to update task status to in_progress",
-				zap.String("agentTaskId", agentTask.ID),
-				zap.Error(err))
-		}
-
-		err = t.subchatStorage.UpdateSubchatStatus(subchatID, storage.SubchatStatusActive)
-		if err != nil {
-			t.logger.Error("Failed to update subchat status to active",
-				zap.String("subchatId", subchatID),
-				zap.Error(err))
-		}
-
-
-	// Send incomplete work message to user
-	incompleteMessage := fmt.Sprintf("⚠️ **Task Incomplete - More Work Needed**\n\n**Progress:** %d/%d TODOs completed\n**Tool Calls Made:** %d\n**Files Modified:** %v\n\nI've made progress but haven't completed all the TODOs yet. Would you like me to:\n1. Continue working on the remaining tasks\n2. Review what's been done so far\n3. Adjust the approach\n\nLet me know how you'd like to proceed!",
-		completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
-
-	// Save incomplete message to database
-	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", incompleteMessage, finalCompanyID)
-	if err != nil {
-		t.logger.Warn("Failed to save incomplete message to database",
-			zap.String("subchatId", subchatID),
-			zap.Error(err))
-	}
-
-	// Emit incomplete message to WebSocket for real-time display
-	handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, incompleteMessage)
-	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("⚠️ Subchat incomplete: %s - %d/%d TODOs done", agentTask.AgentName, completedTodos, len(agentTask.Todos)))
-
-	// Keep subchat alive for user to provide guidance
-	t.logger.Info("💬 Task incomplete - waiting for user messages",
-		zap.String("subchatId", subchatID),
-		zap.String("sessionId", chatSession.ID.Hex()),
-		zap.Int("completedTodos", completedTodos),
-		zap.Int("totalTodos", len(agentTask.Todos)))
-		return
-	}
-
-	// ========================================
-	// ALL VALIDATIONS PASSED - Safe to mark as completed
-	// ========================================
-	summaryNotes := fmt.Sprintf("✅ VALIDATED completion: %d/%d TODOs, %d tool calls, %d files modified: %v",
-		completedTodos, len(agentTask.Todos), toolCallCount, len(modifiedFiles), modifiedFiles)
-
-	t.logger.Info("🎉 Task completion validated successfully",
-		zap.String("subchatId", subchatID),
-		zap.String("agentTaskId", agentTask.ID),
-		zap.Int("toolCalls", toolCallCount),
-		zap.Int("completedTodos", completedTodos),
-		zap.Strings("filesModified", modifiedFiles))
-
+	// Mark task as completed
+	summaryNotes := fmt.Sprintf("✅ Completed via StreamExecutor. Response length: %d", len(fullResponse))
 	err = t.taskStorage.UpdateTaskStatus(agentTask.ID, storage.TaskStatusCompleted, summaryNotes)
 	if err != nil {
 		t.logger.Error("Failed to update task status to completed",
@@ -1793,227 +1031,26 @@ Acknowledge the message and continue your work.
 			zap.Error(err))
 	}
 
-	t.logger.Info("╔═══════════════════════════════════════════════════════════════════")
-	t.logger.Info("║ ✅ SUBAGENT EXECUTION COMPLETED SUCCESSFULLY")
-	t.logger.Info("╠═══════════════════════════════════════════════════════════════════",
-		zap.String("subchatId", subchatID),
-		zap.String("agentName", agentTask.AgentName),
-		zap.String("agentTaskId", agentTask.ID),
-		zap.Int("toolCalls", toolCallCount),
-		zap.Int("completedTodos", completedTodos),
-		zap.Int("totalTodos", len(agentTask.Todos)),
-		zap.Strings("filesModified", modifiedFiles))
-	t.logger.Info("╚═══════════════════════════════════════════════════════════════════")
-
-	t.logger.Info("🎉 Subagent execution completed successfully!",
-		zap.String("subchatId", subchatID),
-		zap.String("agentName", agentTask.AgentName),
-		zap.Int("toolCalls", toolCallCount),
-		zap.Int("completedTodos", completedTodos),
-		zap.Int("totalTodos", len(agentTask.Todos)))
-
-	// Send completion message to subchat WebSocket
-	completionMessage := fmt.Sprintf("✅ **Task Completed!**\n\n**Agent:** %s\n**TODOs Completed:** %d/%d\n**Tool Calls:** %d\n**Files Modified:** %v\n\nThe task has been successfully completed. You can ask me questions or request changes!",
-		agentTask.AgentName, completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
+	// Emit completion message
+	completionMessage := fmt.Sprintf("✅ **Task Completed!**\n\n**Agent:** %s\n\nThe task has been successfully completed. You can ask me questions or request changes!",
+		agentTask.AgentName)
 
 	// Save completion message to database
 	_, err = t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", completionMessage, finalCompanyID)
 	if err != nil {
-		t.logger.Warn("Failed to save completion message to database",
+		t.logger.Warn("Failed to save completion message",
 			zap.String("subchatId", subchatID),
 			zap.Error(err))
 	}
 
-	// Emit completion message to WebSocket
-	handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, completionMessage)
-	handlers.GetProgressNotifier(t.logger).EmitProgress(parentSessionID, fmt.Sprintf("✅ Subchat completed: %s", agentTask.AgentName))
-
-	t.logger.Info("💬 Task completed - now waiting for user messages",
+	t.logger.Info("🎉 Subagent execution completed successfully via StreamExecutor",
 		zap.String("subchatId", subchatID),
-		zap.String("sessionId", chatSession.ID.Hex()))
+		zap.String("agentName", agentTask.AgentName))
 
-	// KEEP SUBCHAT ALIVE: Instead of returning, wait for new user messages
-	// This allows the user to continue interacting with the agent after task completion
-	for {
-		select {
-		case <-ctx.Done():
-			t.logger.Info("⏱️ Context cancelled while waiting for user messages",
-				zap.String("subchatId", subchatID))
-			return
-
-		case <-notifyCh:
-			// USER MESSAGE RECEIVED AFTER COMPLETION
-			t.logger.Info("💬 User message received after task completion - resuming AI",
-				zap.String("sessionId", chatSession.ID.Hex()),
-				zap.String("subchatId", subchatID))
-
-			// Fetch all messages including new user message
-			messagesResp, err := t.chatService.GetMessages(ctx, chatSession.ID, finalCompanyID, 100, 0)
-			if err != nil {
-				t.logger.Error("Failed to fetch messages after completion", zap.Error(err))
-				continue
-			}
-
-			// Extract latest user message
-			var latestUserMessage string
-			for i := len(messagesResp.Messages) - 1; i >= 0; i-- {
-				if messagesResp.Messages[i].Role == "user" {
-					latestUserMessage = messagesResp.Messages[i].Content
-					break
-				}
-			}
-
-			t.logger.Info("🔄 Resuming AI after task completion with user question",
-				zap.String("userMessage", latestUserMessage),
-				zap.String("sessionId", chatSession.ID.Hex()))
-
-			// Build post-completion system prompt
-			postCompletionPrompt := fmt.Sprintf(`You are %s. You have successfully completed the assigned task.
-
-**Task Summary:**
-- Agent: %s
-- TODOs Completed: %d/%d
-- Tool Calls: %d
-- Files Modified: %v
-
-The user has sent you a new message. You should:
-1. Answer their question or address their request directly
-2. Use tools if needed to implement changes or gather information
-3. Be helpful and responsive
-4. If they want changes, implement them using the available tools
-
-You have access to all the same tools as before. You can read files, write files, run commands, etc.`,
-				agentTask.AgentName, agentTask.AgentName, completedTodos, len(agentTask.Todos), toolCallCount, modifiedFiles)
-
-			// Rebuild message context with post-completion system prompt
-			messages = []aiservice.Message{
-				{Role: "system", Content: postCompletionPrompt},
-			}
-			for _, msg := range messagesResp.Messages {
-				messages = append(messages, aiservice.Message{
-					Role:    msg.Role,
-					Content: msg.Content,
-				})
-			}
-
-			t.logger.Info("🚀 Starting new AI stream for post-completion conversation",
-				zap.Int("messageCount", len(messages)),
-				zap.String("sessionId", chatSession.ID.Hex()))
-
-			// Start new AI stream with updated context
-			aiStream, err = t.aiService.StreamChatWithToolsFiltered(ctx, messages, maxToolCalls, allowedTools)
-			if err != nil {
-				t.logger.Error("Failed to start AI stream after completion", zap.Error(err))
-				continue
-			}
-
-			// Process the new AI stream (reuse existing event processing logic)
-			// Reset counters for new conversation turn
-			fullResponse = ""
-
-			for {
-				select {
-				case <-ctx.Done():
-					t.logger.Warn("⏱️ Context cancelled during post-completion stream",
-						zap.String("subchatId", subchatID))
-					return
-
-				case <-notifyCh:
-					// Another interrupt during post-completion conversation
-					t.logger.Info("💬 Another user message during post-completion conversation",
-						zap.String("sessionId", chatSession.ID.Hex()))
-					// Drain current stream
-					if aiStream != nil {
-						go func() {
-							for range aiStream {
-								// discard remaining events
-							}
-						}()
-					}
-					// Break to outer loop to fetch and process new message
-					goto FETCH_NEW_MESSAGE
-
-				case event, ok := <-aiStream:
-					if !ok {
-						// Stream closed naturally
-						t.logger.Info("✅ Post-completion stream completed",
-							zap.String("subchatId", subchatID))
-						goto WAIT_FOR_NEXT_MESSAGE
-					}
-
-					switch event.Type {
-					case aiservice.StreamEventToken:
-						fullResponse += event.Content
-
-						// Stream AI messages to progress channel
-						if event.Content != "" && !isSystemEnforcementMessage(event.Content) {
-							trimmed := strings.TrimSpace(event.Content)
-							if len(trimmed) > 5 {
-								// Save to database
-								_, err := t.chatService.SaveMessage(ctx, chatSession.ID, "assistant", event.Content, finalCompanyID)
-								if err != nil {
-									t.logger.Warn("Failed to save streaming text chunk",
-										zap.String("subchatId", subchatID),
-										zap.Error(err))
-								}
-
-								// Send to WebSocket
-								handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, event.Content)
-							}
-						}
-
-					case aiservice.StreamEventToolCall:
-						t.logger.Info("🔧 Tool call in post-completion conversation",
-							zap.String("subchatId", subchatID),
-							zap.String("toolName", event.ToolCall.Name))
-
-						// Execute tool and emit progress
-						plainEnglishToolCall := convertToolCallToPlainEnglish(event.ToolCall.Name, event.ToolCall.Args)
-						handlers.GetProgressNotifier(t.logger).EmitProgress(chatSession.ID, plainEnglishToolCall)
-
-						// Save tool call
-						_, err := t.chatService.SaveToolCall(ctx, chatSession.ID, event.ToolCall.ID, event.ToolCall.Name, event.ToolCall.Args, finalCompanyID)
-						if err != nil {
-							t.logger.Error("Failed to save tool call", zap.Error(err))
-						}
-
-					case aiservice.StreamEventToolResult:
-						t.logger.Info("✓ Tool result in post-completion conversation",
-							zap.String("subchatId", subchatID),
-							zap.String("toolName", event.ToolResult.Name))
-
-						// Save tool result
-						var output interface{}
-						if event.ToolResult.Error != "" {
-							output = event.ToolResult.Error
-						} else {
-							output = event.ToolResult.Output
-						}
-						outputStr := t.summarizeToolResult(event.ToolResult.Name, output)
-
-						_, err := t.chatService.SaveToolResult(ctx, chatSession.ID, event.ToolResult.ID, event.ToolResult.Name, outputStr, event.ToolResult.Error, event.ToolResult.DurationMs, finalCompanyID)
-						if err != nil {
-							t.logger.Error("Failed to save tool result", zap.Error(err))
-						}
-
-					case aiservice.StreamEventError:
-						t.logger.Error("❌ AI service error during post-completion conversation",
-							zap.String("subchatId", subchatID),
-							zap.String("error", event.Error))
-						goto WAIT_FOR_NEXT_MESSAGE
-					}
-				}
-			}
-
-		FETCH_NEW_MESSAGE:
-			continue
-
-		WAIT_FOR_NEXT_MESSAGE:
-			continue
-		}
-	}
+	// Note: Post-completion conversation handling is now done by the StreamExecutor's
+	// interrupt handling mechanism, which is the same as direct subagent chat
+	_ = progressTracker // Suppress unused variable warning (tracker used for file operation logging)
 }
-
 // buildExecutionPhaseSystemPrompt creates a strict system prompt using OPERATIONAL enforcement language
 // Uses concrete "WRITE-ONLY MODE" instead of abstract "PHASE: EXECUTE" for better model compliance
 func (t *ExecuteSubagentTool) buildExecutionPhaseSystemPrompt() string {

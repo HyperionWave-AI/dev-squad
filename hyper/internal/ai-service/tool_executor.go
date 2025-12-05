@@ -205,30 +205,9 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			log.Printf("[DEBUG Context] Before LLM call - Messages: %d, Total size: %d chars, Tool result preview: %s",
 				len(currentMessages), contextSize, toolResultPreview)
 
-			// SMART TOOL FILTERING: Reduce token usage by 70% by sending only relevant tools
-			// This applies to ALL models to reduce rate limit issues
-			originalToolCount := len(tools)
-			relevantToolNames := filterToolsByWorkflowState(toolCallHistory)
-			filteredTools := s.toolRegistry.GetFilteredToolsForLangChain(relevantToolNames)
-
-			// Only apply smart filtering if it actually reduces the tool count
-			// Keep all tools if filtering would include most of them anyway (>30 tools)
-			if len(filteredTools) < originalToolCount && len(filteredTools) <= 30 {
-				tools = filteredTools
-				log.Printf("[Smart Tool Filter] Reduced from %d to %d tools (%.0f%% reduction) - Tool history: %d calls",
-					originalToolCount, len(tools), 100.0*(1.0-float64(len(tools))/float64(originalToolCount)), len(toolCallHistory))
-
-				// Log which tools are being sent for debugging
-				toolNames := make([]string, 0, len(tools))
-				for _, tool := range tools {
-					if tool.Function != nil {
-						toolNames = append(toolNames, tool.Function.Name)
-					}
-				}
-				log.Printf("[Smart Tool Filter] Sending tools: %v", toolNames)
-			} else {
-				log.Printf("[Smart Tool Filter] Keeping all %d tools (filtering not beneficial)", originalToolCount)
-			}
+			// NOTE: Smart Tool Filter REMOVED - main chat now has full tool access
+			// The coordinator should use discover_tools and delegate work to subchats
+			log.Printf("[Tool Access] Full tool access enabled - %d tools available", len(tools))
 
 			// PHASE 3: PRESCRIPTIVE STATE MACHINE - Only allow ONE tool per workflow step
 			// This forces ALL models into a linear workflow with zero ambiguity
@@ -919,14 +898,10 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						toolResultMsg = fmt.Sprintf("PERMANENT ERROR - Tool '%s' cannot be used in this context: %s. DO NOT retry this tool - it will not work.", result.Name, result.Error)
 					} else {
 						// ENHANCED ERROR GUIDANCE: Provide specific recovery instructions
+						// NOTE: Error guidance is included in tool result for AI to process,
+						// but NOT streamed to user UI (internal guidance only)
 						recoveryGuidance := getErrorRecoveryGuidance(result.Name, result.Error, toolCall.Args)
 						toolResultMsg = fmt.Sprintf("❌ ERROR in tool '%s': %s\n\n%s", result.Name, result.Error, recoveryGuidance)
-
-						// Also send error as visible message to user
-						eventChan <- StreamEvent{
-							Type:    StreamEventToken,
-							Content: fmt.Sprintf("\n\n⚠️  Tool Error: %s\n💡 %s\n\n", result.Error, recoveryGuidance),
-						}
 					}
 				} else {
 					// Marshal output to JSON for context
@@ -949,11 +924,10 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				}
 
 				// CRITICAL FIX: If we generated a loop warning, EMBED it in JSON result
+				// NOTE: Loop warning is included in tool result for AI to process,
+				// but NOT streamed to user UI (internal guidance only)
 				if loopWarning != "" {
 					log.Printf("[Loop Detection] %s", loopWarning)
-
-					// Send warning as a visible message to the user
-					eventChan <- StreamEvent{Type: StreamEventToken, Content: "\n\n" + loopWarning + "\n\n"}
 
 					// Try to embed warning into the JSON result instead of prepending as text
 					if strings.HasPrefix(toolResultMsg, fmt.Sprintf("Tool '%s' result: ", result.Name)) {

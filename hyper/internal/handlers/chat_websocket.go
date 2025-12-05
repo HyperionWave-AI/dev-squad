@@ -1165,6 +1165,18 @@ func (h *ChatWebSocketHandler) streamAIResponse(ctx context.Context, conn *webso
 		zap.String("sessionId", sessionID.Hex()),
 		zap.String("userMessage", userMessage))
 
+	// Send "streaming_started" event to trigger "AI is thinking" indicator immediately
+	// This tells the frontend to show the thinking indicator before any content arrives
+	streamingStartedMsg := models.StreamMessage{
+		Type:    "streaming_started",
+		Content: sessionID.Hex(), // Send session ID so frontend knows which session is streaming
+	}
+	if err := h.safeWriteJSON(conn, streamingStartedMsg); err != nil {
+		h.logger.Debug("Failed to send streaming_started event",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Error(err))
+	}
+
 	// Step 1: Get session to check for active subagent
 	session, err := h.chatService.GetSession(ctx, sessionID, companyID)
 	if err != nil {

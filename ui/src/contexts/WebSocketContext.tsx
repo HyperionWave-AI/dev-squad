@@ -26,6 +26,7 @@ export interface WebSocketCallbacks {
   onUserMessage?: (content: string) => void;
   onSessionCreated?: (subchatId: string) => void;
   onSystemNotification?: (notification: SystemNotification) => void;
+  onStreamingStarted?: (sessionId: string) => void; // Called when AI starts processing (shows "AI is thinking")
   onError?: (error: Error) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -166,6 +167,12 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
               if (data.notification) {
                 callbacksRef.current.onSystemNotification?.(data.notification);
               }
+              break;
+
+            case 'streaming_started':
+              // Trigger streaming state immediately (before any content arrives)
+              // This shows "AI is thinking" indicator right away
+              callbacksRef.current.onStreamingStarted?.(data.content || sessionId);
               break;
           }
         } catch (error) {

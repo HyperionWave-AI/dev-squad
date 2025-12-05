@@ -333,6 +333,56 @@ When ANY tool fails:
    Fix: Use EXACT paths from FILE_PATHS_TO_USE - do not type paths yourself!
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔄 TOOL RESULT DEFLECTION (LARGE RESULTS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When a tool result is TOO LARGE (>2000 tokens), the system will deflect it with a message like:
+"⚠️ Tool result deflected: Output too large (X tokens). Try more specific parameters."
+
+🚨 WHEN YOU SEE THIS MESSAGE, DO NOT STOP EXECUTION!
+
+Follow this recovery workflow:
+
+1. **Understand why it was deflected**: The result exceeded token limits
+2. **Narrow your query**: Use more specific parameters to get smaller results
+3. **Continue execution**: After getting a smaller result, proceed with your workflow
+
+📋 RECOVERY EXAMPLES:
+
+Example 1 - code_index_search deflected:
+   ❌ Your call: code_index_search({ query: "function", limit: 50 })
+   ⚠️ Deflected: "Output too large (5000 tokens)"
+
+   ✅ Recovery:
+   - Use more specific query: code_index_search({ query: "handleLogin authentication", limit: 10 })
+   - Or filter by file type: code_index_search({ query: "login", filePattern: "*.tsx", limit: 10 })
+   - Then continue with create_agent_task
+
+Example 2 - coordinator_list_agent_tasks deflected:
+   ❌ Your call: coordinator_list_agent_tasks({ limit: 100 })
+   ⚠️ Deflected: "Output too large"
+
+   ✅ Recovery:
+   - Reduce limit: coordinator_list_agent_tasks({ limit: 10 })
+   - Or filter by status: coordinator_list_agent_tasks({ status: "pending", limit: 20 })
+   - Then continue with your workflow
+
+Example 3 - file_read deflected:
+   ❌ Your call: file_read({ path: "/large/file.go" })
+   ⚠️ Deflected: "Output too large"
+
+   ✅ Recovery:
+   - Read specific lines: file_read({ path: "/large/file.go", startLine: 100, endLine: 200 })
+   - Or use code_index_search to find specific functions first
+   - Then continue with implementation
+
+🔑 KEY RULES FOR DEFLECTION:
+• NEVER stop execution when deflected - always try with different parameters
+• NEVER retry with the exact same parameters - that will fail again
+• ALWAYS narrow your query (smaller limit, more specific search, line ranges)
+• After recovery, continue with your original workflow (don't restart from step 1)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ QUICK DECISION TREE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -737,6 +787,56 @@ When ANY tool fails:
    Error: "path does not exist: ./ui/src/SettingsPage.tsx"
    Cause: You typed a file path instead of using FILE_PATHS_TO_USE array
    Fix: Use EXACT paths from FILE_PATHS_TO_USE - do not type paths yourself!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔄 TOOL RESULT DEFLECTION (LARGE RESULTS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When a tool result is TOO LARGE (>2000 tokens), the system will deflect it with a message like:
+"⚠️ Tool result deflected: Output too large (X tokens). Try more specific parameters."
+
+🚨 WHEN YOU SEE THIS MESSAGE, DO NOT STOP EXECUTION!
+
+Follow this recovery workflow:
+
+1. **Understand why it was deflected**: The result exceeded token limits
+2. **Narrow your query**: Use more specific parameters to get smaller results
+3. **Continue execution**: After getting a smaller result, proceed with your workflow
+
+📋 RECOVERY EXAMPLES:
+
+Example 1 - code_index_search deflected:
+   ❌ Your call: code_index_search({ query: "function", limit: 50 })
+   ⚠️ Deflected: "Output too large (5000 tokens)"
+
+   ✅ Recovery:
+   - Use more specific query: code_index_search({ query: "handleLogin authentication", limit: 10 })
+   - Or filter by file type: code_index_search({ query: "login", filePattern: "*.tsx", limit: 10 })
+   - Then continue with create_agent_task
+
+Example 2 - coordinator_list_agent_tasks deflected:
+   ❌ Your call: coordinator_list_agent_tasks({ limit: 100 })
+   ⚠️ Deflected: "Output too large"
+
+   ✅ Recovery:
+   - Reduce limit: coordinator_list_agent_tasks({ limit: 10 })
+   - Or filter by status: coordinator_list_agent_tasks({ status: "pending", limit: 20 })
+   - Then continue with your workflow
+
+Example 3 - file_read deflected:
+   ❌ Your call: file_read({ path: "/large/file.go" })
+   ⚠️ Deflected: "Output too large"
+
+   ✅ Recovery:
+   - Read specific lines: file_read({ path: "/large/file.go", startLine: 100, endLine: 200 })
+   - Or use code_index_search to find specific functions first
+   - Then continue with implementation
+
+🔑 KEY RULES FOR DEFLECTION:
+• NEVER stop execution when deflected - always try with different parameters
+• NEVER retry with the exact same parameters - that will fail again
+• ALWAYS narrow your query (smaller limit, more specific search, line ranges)
+• After recovery, continue with your original workflow (don't restart from step 1)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ QUICK DECISION TREE

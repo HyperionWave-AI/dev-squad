@@ -88,7 +88,7 @@ export interface SystemNotification {
 }
 
 export interface StreamMessage {
-  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message' | 'session_created' | 'system_notification';
+  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message' | 'session_created' | 'system_notification' | 'streaming_started';
   content?: string;
   toolCall?: {
     tool: string;

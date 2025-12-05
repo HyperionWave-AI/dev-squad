@@ -601,6 +601,13 @@ export const CodeChatPage: React.FC = () => {
         console.log('[CodeChatPage] New subchat created, refreshing sessions list', subchatId);
         loadSessions();
       },
+      onStreamingStarted: (streamingForSessionId: string) => {
+        // Set streaming state immediately when backend starts processing
+        // This shows "AI is thinking" indicator before any content arrives
+        console.log('[CodeChatPage] 🧠 Streaming started for session:', streamingForSessionId);
+        setStreamingSessionId(streamingForSessionId);
+        setIsStreaming(true);
+      },
       onSystemNotification: (notification: SystemNotification) => {
         showSystemNotification(notification);
 

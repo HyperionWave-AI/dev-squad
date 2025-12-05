@@ -24,6 +24,13 @@ type ProgressNotifierInterface interface {
 	EmitProgress(sessionID primitive.ObjectID, message string)
 }
 
+// WebSocketBroadcasterInterface defines the interface for broadcasting to WebSocket connections.
+// This avoids import cycles with handlers package.
+// Used by SubchatOutputSink to stream directly to subchat WebSocket connections.
+type WebSocketBroadcasterInterface interface {
+	BroadcastToSession(sessionID primitive.ObjectID, message models.StreamMessage) error
+}
+
 // StreamOutputSink defines the interface for streaming AI outputs to different destinations.
 // This abstraction allows the executor to work with both WebSocket (parent chat) and
 // ProgressNotifier (subchat) without knowing the specific implementation.
@@ -319,13 +326,9 @@ func (p *ProgressNotificationSink) SendToolCall(toolName, toolID string, args ma
 }
 
 // SendToolResult sends a tool result as a progress notification
+// NOTE: Tool errors are NOT streamed to UI - they are internal guidance for the AI
 func (p *ProgressNotificationSink) SendToolResult(toolID, result, errorMsg string, durationMs int) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if errorMsg != "" {
-		p.notifier.EmitProgress(p.parentSessionID, "⚠️ Tool error: "+errorMsg)
-	}
+	// Tool errors are handled internally by the AI, not shown to users
 	// Success is implicit, no need to spam parent chat
 	return nil
 }
@@ -357,5 +360,174 @@ func (p *ProgressNotificationSink) SendMessageSaved(messageID string) error {
 // IsDisconnected always returns false for subchat (no client connection)
 // Subchat runs to completion in background regardless of parent chat state
 func (p *ProgressNotificationSink) IsDisconnected() bool {
+	return false
+}
+
+// ============================================================================
+// SubchatOutputSink - Enhanced Implementation for Subchat Execution
+// ============================================================================
+
+// SubchatOutputSink implements StreamOutputSink for subchat execution via execute_subagent.
+// This sink:
+// 1. Broadcasts tokens to the SUBCHAT WebSocket for real-time display in subchat UI
+// 2. Sends progress notifications to the PARENT session for status updates
+// 3. Converts tool calls to plain English for user-friendly progress messages
+//
+// KEY FIX: Uses WebSocketBroadcaster instead of ProgressNotifier for subchat.
+// ProgressNotifier requires pre-registration (only happens in streamAIResponse when user sends message).
+// WebSocketBroadcaster sends directly to any connected WebSocket - no pre-registration needed.
+// Thread-safe implementation with mutex protection.
+type SubchatOutputSink struct {
+	subchatSessionID primitive.ObjectID
+	parentSessionID  primitive.ObjectID
+	broadcaster      WebSocketBroadcasterInterface // For subchat real-time streaming
+	notifier         ProgressNotifierInterface     // For parent progress updates
+	agentName        string
+	logger           *zap.Logger
+	mu               sync.Mutex
+}
+
+// NewSubchatOutputSink creates a new subchat output sink.
+// subchatSessionID: The session where subchat messages are displayed (uses broadcaster)
+// parentSessionID: The parent session that receives progress notifications (uses notifier)
+// broadcaster: The WebSocket broadcaster for direct streaming to subchat UI
+// notifier: The progress notifier for parent session updates
+// agentName: Name of the agent for progress messages
+func NewSubchatOutputSink(
+	subchatSessionID primitive.ObjectID,
+	parentSessionID primitive.ObjectID,
+	broadcaster WebSocketBroadcasterInterface,
+	notifier ProgressNotifierInterface,
+	agentName string,
+	logger *zap.Logger,
+) *SubchatOutputSink {
+	return &SubchatOutputSink{
+		subchatSessionID: subchatSessionID,
+		parentSessionID:  parentSessionID,
+		broadcaster:      broadcaster,
+		notifier:         notifier,
+		agentName:        agentName,
+		logger:           logger,
+	}
+}
+
+// SendToken sends a token to the subchat session for real-time display
+// Uses WebSocketBroadcaster to send directly to subchat WebSocket (no pre-registration needed)
+func (s *SubchatOutputSink) SendToken(content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if content == "" {
+		return nil
+	}
+
+	// Broadcast to subchat WebSocket for real-time display
+	msg := models.StreamMessage{
+		Type:    "token",
+		Content: content,
+	}
+	if err := s.broadcaster.BroadcastToSession(s.subchatSessionID, msg); err != nil {
+		s.logger.Debug("Failed to broadcast token to subchat (client may not be connected yet)",
+			zap.String("subchatSessionId", s.subchatSessionID.Hex()),
+			zap.Error(err))
+		// Don't return error - subchat may not have WebSocket connected yet
+		// Messages are saved to DB and will appear on refresh
+	}
+	return nil
+}
+
+// SendToolCall sends a tool call notification to subchat
+// Uses proper tool_call message type for frontend rendering (same as WebSocketSink)
+func (s *SubchatOutputSink) SendToolCall(toolName, toolID string, args map[string]interface{}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Send proper tool_call event (same format as WebSocketSink) for frontend rendering
+	msg := models.StreamMessage{
+		Type: "tool_call",
+		ToolCall: &models.ToolCallEvent{
+			Tool: toolName,
+			Args: args,
+			ID:   toolID,
+		},
+	}
+	if err := s.broadcaster.BroadcastToSession(s.subchatSessionID, msg); err != nil {
+		s.logger.Debug("Failed to broadcast tool call to subchat",
+			zap.String("subchatSessionId", s.subchatSessionID.Hex()),
+			zap.String("toolName", toolName),
+			zap.Error(err))
+	}
+	return nil
+}
+
+// SendToolResult sends a tool result notification
+// NOTE: Tool errors are NOT streamed to subchat UI - they are internal guidance for the AI
+func (s *SubchatOutputSink) SendToolResult(toolID, result, errorMsg string, durationMs int) error {
+	// Tool errors are handled internally by the AI, not shown to users
+	// Success is implicit in the streaming flow
+	return nil
+}
+
+// SendDone sends completion notification to both subchat and parent
+func (s *SubchatOutputSink) SendDone() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Notify subchat that processing is done
+	doneMsg := models.StreamMessage{
+		Type: "done",
+	}
+	if err := s.broadcaster.BroadcastToSession(s.subchatSessionID, doneMsg); err != nil {
+		s.logger.Debug("Failed to broadcast done to subchat",
+			zap.String("subchatSessionId", s.subchatSessionID.Hex()),
+			zap.Error(err))
+	}
+
+	// Notify parent session that subchat completed (via progress notifier)
+	s.notifier.EmitProgress(s.parentSessionID, "✅ Subchat completed: "+s.agentName)
+	return nil
+}
+
+// SendError sends error notification to both subchat and parent
+func (s *SubchatOutputSink) SendError(errorMsg string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Send error to subchat WebSocket
+	errMsg := models.StreamMessage{
+		Type:    "error",
+		Content: errorMsg,
+	}
+	if err := s.broadcaster.BroadcastToSession(s.subchatSessionID, errMsg); err != nil {
+		s.logger.Debug("Failed to broadcast error to subchat",
+			zap.String("subchatSessionId", s.subchatSessionID.Hex()),
+			zap.Error(err))
+	}
+
+	// Notify parent session about the error
+	s.notifier.EmitProgress(s.parentSessionID, "⚠️ Subchat error: "+s.agentName+" - "+errorMsg)
+	return nil
+}
+
+// SendMessageSaved sends the saved message ID to subchat for frontend reconciliation
+func (s *SubchatOutputSink) SendMessageSaved(messageID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msg := models.StreamMessage{
+		Type:    "message_saved",
+		Content: messageID, // message ID is sent in Content field
+	}
+	if err := s.broadcaster.BroadcastToSession(s.subchatSessionID, msg); err != nil {
+		s.logger.Debug("Failed to broadcast message_saved to subchat",
+			zap.String("subchatSessionId", s.subchatSessionID.Hex()),
+			zap.String("messageId", messageID),
+			zap.Error(err))
+	}
+	return nil
+}
+
+// IsDisconnected always returns false for subchat (runs to completion in background)
+func (s *SubchatOutputSink) IsDisconnected() bool {
 	return false
 }
