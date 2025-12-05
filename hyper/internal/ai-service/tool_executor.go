@@ -7,32 +7,11 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"hyper/internal/config"
 
 	"github.com/tmc/langchaingo/llms"
 )
-
-// Debug logger that writes to a specific file for investigation
-var debugLogFile *os.File
-
-func init() {
-	var err error
-	debugLogFile, err = os.OpenFile("/tmp/tool_executor_debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		log.Printf("Failed to open debug log file: %v", err)
-	}
-}
-
-func debugLog(format string, args ...interface{}) {
-	if debugLogFile != nil {
-		timestamp := time.Now().Format("15:04:05.000")
-		msg := fmt.Sprintf(format, args...)
-		fmt.Fprintf(debugLogFile, "[%s] %s\n", timestamp, msg)
-		debugLogFile.Sync() // Flush immediately
-	}
-}
 
 // tool_executor.go - Tool Execution Orchestration
 //
@@ -51,91 +30,13 @@ func debugLog(format string, args ...interface{}) {
 //
 // Both methods implement sophisticated circuit breakers, caching, and validation
 // to ensure reliable tool execution and prevent infinite loops.
-
-// getErrorRecoveryGuidance provides specific recovery instructions based on error type
-func getErrorRecoveryGuidance(toolName string, errorMsg string, args map[string]interface{}) string {
-	errorLower := strings.ToLower(errorMsg)
-
-	// Validation errors - humanTaskId invalid
-	if strings.Contains(errorLower, "invalid") && strings.Contains(errorLower, "humantaskid") {
-		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-			"➡️  Call coordinator_list_human_tasks RIGHT NOW to see all available tasks\n" +
-			"➡️  Find the correct task in the response\n" +
-			"➡️  Copy the EXACT 'taskId' field from that task\n" +
-			"➡️  Then retry create_agent_task with the correct taskId\n\n" +
-			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
-			"⚠️  DO NOT generate or guess task IDs - copy them exactly from the list!"
-	}
-
-	// File path errors
-	if strings.Contains(errorLower, "path does not exist") || strings.Contains(errorLower, "file not found") {
-		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-			"➡️  Check the FILE_PATHS_TO_USE array from your code_index_search results\n" +
-			"➡️  Use ONLY paths from that array - do not modify or type paths manually\n" +
-			"➡️  Retry the tool call RIGHT NOW with the correct path from FILE_PATHS_TO_USE\n\n" +
-			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
-	}
-
-	// Missing required parameters
-	if strings.Contains(errorLower, "required") && (strings.Contains(errorLower, "must be") || strings.Contains(errorLower, "is required")) {
-		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-			"➡️  A required parameter is missing or has the wrong type\n" +
-			"➡️  Check the error message to see which parameter is missing\n" +
-			"➡️  Add the missing parameter with the correct value\n" +
-			"➡️  Retry the tool call RIGHT NOW with all required parameters\n\n" +
-			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
-	}
-
-	// TODO validation errors (discovery keywords)
-	if strings.Contains(errorLower, "todo validation failed") || strings.Contains(errorLower, "discovery keyword") {
-		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-			"➡️  Your TODO contains forbidden words like 'search', 'find', 'locate', 'explore'\n" +
-			"➡️  Call code_index_search RIGHT NOW to find the files yourself\n" +
-			"➡️  Then retry create_agent_task with implementation-only TODOs like:\n" +
-			"   - 'Add validation to AuthForm.tsx line 45'\n" +
-			"   - 'Update API call in dashboard.go line 120'\n\n" +
-			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
-			"⚠️  Remove ALL discovery words from your TODOs!"
-	}
-
-	// Similar tasks found
-	if strings.Contains(errorLower, "similar") && strings.Contains(errorLower, "task") {
-		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-			"➡️  Similar tasks were found in the response\n" +
-			"➡️  Call coordinator_create_human_task RIGHT NOW with forceCreate=true to create a new task\n" +
-			"➡️  OR use the taskId from the similarTasks array if appropriate\n\n" +
-			"⚠️  DO NOT ask the user - MAKE THE TOOL CALL IMMEDIATELY with forceCreate=true!"
-	}
-
-	// Code search errors
-	if toolName == "code_index_search" {
-		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-			"➡️  Code search failed or returned no results\n" +
-			"➡️  PROCEED ANYWAY - call create_agent_task RIGHT NOW without file paths\n" +
-			"➡️  The agent will find the files during implementation\n\n" +
-			"⚠️  DO NOT ask the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
-			"⚠️  DO NOT retry search - proceed to create_agent_task NOW!"
-	}
-
-	// Generic validation errors
-	if strings.Contains(errorLower, "validation") || strings.Contains(errorLower, "invalid") {
-		return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-			"➡️  One of your parameters failed validation\n" +
-			"➡️  Read the error message carefully to see what's wrong\n" +
-			"➡️  Correct the parameter value\n" +
-			"➡️  Retry the tool call RIGHT NOW with the corrected parameters\n\n" +
-			"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!"
-	}
-
-	// Generic error guidance
-	return "🔧 IMMEDIATE ACTION REQUIRED - MAKE THIS TOOL CALL NOW:\n" +
-		"➡️  Read the error message above carefully\n" +
-		"➡️  Identify what went wrong\n" +
-		"➡️  Correct the issue based on the error details\n" +
-		"➡️  Retry the tool call RIGHT NOW with corrected parameters\n\n" +
-		"⚠️  DO NOT explain this to the user - MAKE THE TOOL CALL IMMEDIATELY!\n" +
-		"⚠️  If error persists after 1 retry, try a different approach but KEEP MAKING TOOL CALLS!"
-}
+//
+// Related files:
+//   - tool_executor_debug.go: Debug logging utilities
+//   - tool_executor_errors.go: Error recovery guidance
+//   - tool_executor_circuit.go: Circuit breaker logic (planned)
+//   - tool_executor_workflow.go: Workflow state management (planned)
+//   - tool_executor_fallback.go: Rate limit handling (planned)
 
 // StreamChatWithTools sends messages to AI provider with tool execution support.
 // This is the main entry point for coordinator agents that need full tool access.
@@ -241,120 +142,17 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 		currentMessages := append([]Message{}, messages...) // Copy messages
 		debugLog("Initial message count: %d", len(currentMessages))
 
-		// Tool result cache: prevent duplicate tool executions
+		// Initialize modular components for tool execution
 		resultCache := NewToolResultCache()
-
-		// Circuit breaker: track recent tool calls to detect infinite loops
-		recentToolCalls := make([]string, 0, 10)
-		consecutiveFailures := 0                       // Track CONSECUTIVE failures of the same tool+args
-		lastFailedSignature := ""                      // Signature of the last failed tool call
-		pathValidationRetries := make(map[string]bool) // Track file path validation retries for code_index_search
-		taskIdValidationAttempts := 0                  // Track taskId validation attempts for create_agent_task (max 3)
-		lastCreatedHumanTaskId := ""                   // FIX #9: Cache taskId from coordinator_create_human_task for instant validation
-		lastCreatedAgentTaskId := ""                   // FIX #10: Cache agentTaskId from create_agent_task for instant validation
+		circuitBreaker := NewCircuitBreaker(s.config.Model, s.config.Provider)
+		workflowState := NewWorkflowState()
+		validator := NewTaskValidator(s.toolRegistry)
 
 		// Tool call history: track all executed tools for smart filtering (reduces token usage by ~70%)
 		toolCallHistory := make([]ToolResult, 0, 20)
-		toolCallSignature := func(name string, args map[string]interface{}) string {
-			argsJSON, _ := json.Marshal(args)
-			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
-		}
 
-		// WORKFLOW STATE ENFORCEMENT: Track coordinator workflow progress (fallback model only)
-		workflowState := map[string]interface{}{
-			"step":            0,     // 0=initial, 1=listed, 2=created, 3=searched, 4=agent_task, 5=done
-			"humanTaskId":     "",    // Store taskId from step 2
-			"searchCompleted": false, // Prevent multiple searches
-			"agentTaskId":     "",    // Store agentTaskId from step 4
-		}
-
-		// Function to validate workflow tool calls (only enforced for fallback model)
-		validateWorkflowTool := func(toolName string) (bool, string) {
-			if !s.usingFallback {
-				return true, "" // No enforcement for primary model
-			}
-
-			step := workflowState["step"].(int)
-			humanTaskId := workflowState["humanTaskId"].(string)
-			searchCompleted := workflowState["searchCompleted"].(bool)
-
-			switch toolName {
-			case "coordinator_list_human_tasks":
-				if step == 0 || step == 1 || step == 2 {
-					// Allow listing tasks at any early step to retrieve exact taskId
-					return true, ""
-				}
-				return false, "❌ BLOCKED: You already have taskId. NEXT: Call appropriate tool for current step."
-
-			case "coordinator_create_human_task":
-				if step == 1 && humanTaskId == "" {
-					return true, ""
-				}
-				if humanTaskId != "" {
-					// State-aware guidance based on workflow progress
-					if searchCompleted {
-						return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'create_agent_task'.", humanTaskId)
-					}
-					return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'code_index_search'.", humanTaskId)
-				}
-				return false, "❌ BLOCKED: Call 'coordinator_list_human_tasks' first."
-
-			case "code_index_search":
-				if step == 2 && humanTaskId != "" && !searchCompleted {
-					return true, ""
-				}
-				if searchCompleted {
-					return false, "❌ BLOCKED: Search done. NEXT: Call 'create_agent_task'."
-				}
-				return false, "❌ BLOCKED: Create human task first."
-
-			case "create_agent_task":
-				if step == 3 && humanTaskId != "" && searchCompleted {
-					return true, ""
-				}
-				return false, "❌ BLOCKED: Run 'code_index_search' first to get file paths."
-
-			case "execute_subagent":
-				agentTaskId := workflowState["agentTaskId"].(string)
-				if step == 4 && agentTaskId != "" {
-					return true, ""
-				}
-				return false, "❌ BLOCKED: Call 'create_agent_task' first."
-			}
-
-			return true, ""
-		}
-
-		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
-		// Claude models get higher thresholds as they're better at adapting
-		isClaudeModel := strings.Contains(strings.ToLower(s.config.Model), "claude") ||
-			strings.Contains(strings.ToLower(s.config.Provider), "anthropic")
-
-		var circuitBreakerThresholds map[string]int
-		if isClaudeModel {
-			// Claude-optimized thresholds: More lenient to allow legitimate multi-file operations
-			circuitBreakerThresholds = map[string]int{
-				"read_file":         5, // Allow reading multiple files
-				"write_file":        2, // Allow one retry for writes
-				"list_directory":    4, // Allow exploring directories
-				"bash":              5, // Allow command variations
-				"code_index_search": 2, // Strict: one search + one retry max
-				"create_agent_task": 4, // Allow retries for parameter refinement
-				// Default for other tools: 6 attempts
-			}
-			log.Printf("[Circuit Breaker] Using Claude-optimized thresholds (more lenient)")
-		} else {
-			// GPT thresholds: More conservative
-			circuitBreakerThresholds = map[string]int{
-				"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
-				"write_file":        1, // Never allow duplicate writes
-				"list_directory":    2, // Stop after 2 attempts
-				"bash":              3, // Allow more for command variations
-				"code_index_search": 3, // Allow query refinement
-				// Default for other tools: 4 attempts
-			}
-			log.Printf("[Circuit Breaker] Using GPT thresholds (conservative)")
-		}
+		// Model limits for context window management
+		modelLimits := GetModelLimits(s.config.Model, s.config.Provider)
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
 			// CONTEXT CANCELLATION CHECK: Check at start of each iteration (stop button support)
@@ -384,24 +182,11 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			}
 
 			// Apply sliding window BEFORE context exceeds model's token limit
-			// Claude: 200K tokens (≈800KB text) - use 150KB threshold
-			// GPT: 32K tokens (≈128KB text) - use 40KB threshold to be safe
-			var maxContextSize int
-			var maxMessages int
-			if isClaudeModel {
-				maxContextSize = 150000 // 150KB for Claude (≈37K tokens, leaves room for output)
-				maxMessages = 20        // Keep more messages for Claude
-				log.Printf("[Context Window] Using Claude limits: %d chars, max %d messages", maxContextSize, maxMessages)
-			} else {
-				maxContextSize = 40000 // 40KB for GPT (≈10K tokens)
-				maxMessages = 6        // Conservative for GPT
-				log.Printf("[Context Window] Using GPT limits: %d chars, max %d messages", maxContextSize, maxMessages)
-			}
-
-			if contextSize > maxContextSize {
+			// Uses ModelLimits from tool_executor_fallback.go
+			if contextSize > modelLimits.MaxContextSize {
 				log.Printf("[Sliding Window] Context size %d chars exceeds threshold %d chars, applying window",
-					contextSize, maxContextSize)
-				currentMessages = applySlidingWindow(currentMessages, maxMessages)
+					contextSize, modelLimits.MaxContextSize)
+				currentMessages = applySlidingWindow(currentMessages, modelLimits.MaxMessages)
 
 				// Recalculate after trimming
 				contextSize = 0
@@ -450,7 +235,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 			// Each step unlocks exactly ONE required tool - model has no choice but to follow the sequence
 			// Applied to ALL models (not just Claude) to ensure consistent coordinator workflow
 			if false { // DISABLED: Workflow enforcement (was blocking direct tool execution)
-				step := workflowState["step"].(int)
+				step := workflowState.Step
 				originalCount := len(tools)
 				debugLog("PRESCRIPTIVE FILTER: Current workflow step = %d, tools before filter = %d", step, originalCount)
 
@@ -537,7 +322,7 @@ Total Tool Calls Made: %d / %d
 
 				// INJECT CAPTURED HUMAN TASK ID: If we captured a humanTaskId from coordinator_create_human_task,
 				// inject it directly into the system prompt so Claude can use it without extraction
-				if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+				if humanTaskID := workflowState.HumanTaskId; humanTaskID != "" {
 					taskIDGuidance := fmt.Sprintf(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🎯 CAPTURED TASK ID
@@ -641,17 +426,9 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 							}
 						}
 
-						// Re-calculate circuit breaker thresholds for Claude (more lenient)
-						circuitBreakerThresholds = map[string]int{
-							"read_file":         5, // Allow reading multiple files
-							"write_file":        2, // Allow one retry for writes
-							"list_directory":    4, // Allow exploring directories
-							"bash":              5, // Allow command variations
-							"code_index_search": 2, // Strict: one search + one retry max
-							"create_agent_task": 4, // Allow retries for parameter refinement
-							// Default for other tools: 6 attempts
-						}
-						log.Printf("[Circuit Breaker] Re-applied Claude thresholds after fallback")
+						// Re-create circuit breaker with Claude thresholds (more lenient)
+						circuitBreaker = NewCircuitBreaker(s.config.Model, s.config.Provider)
+						log.Printf("[Circuit Breaker] Re-created with Claude thresholds after fallback")
 					}
 
 					// Retry with fallback provider
@@ -772,9 +549,10 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				debugLog("TOOL CALL: name=%s, args=%s", toolCall.Name, string(argsJSON))
 
 				// WORKFLOW VALIDATION: Check if this tool call is allowed in current workflow state
+				// Uses WorkflowState from tool_executor_workflow.go
 				var result ToolResult
 				if s.usingFallback {
-					allowed, blockMessage := validateWorkflowTool(toolCall.Name)
+					allowed, blockMessage := workflowState.ValidateTool(toolCall.Name, s.usingFallback)
 					if !allowed {
 						log.Printf("[Workflow Enforcer] BLOCKED tool '%s' - %s", toolCall.Name, blockMessage)
 
@@ -809,7 +587,8 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
 
 				// Generate signature for cache and circuit breaker
-				signature := toolCallSignature(toolCall.Name, toolCall.Args)
+				// Uses GenerateSignature from tool_executor_circuit.go
+				signature := GenerateSignature(toolCall.Name, toolCall.Args)
 
 				// Check tool result cache BEFORE execution
 				cachedResult, found := resultCache.Get(signature)
@@ -859,7 +638,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					// Execute tool (no cached result available)
 					// Inject humanTaskId from workflowState into context for auto-population
 					toolCtx := ctx
-					if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+					if humanTaskID := workflowState.HumanTaskId; humanTaskID != "" {
 						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
 					}
 					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
@@ -919,59 +698,25 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 
 							if len(invalidPaths) > 0 {
 								// Some paths are invalid - check if this is already a retry
-								retryAttemptKey := fmt.Sprintf("code_index_search_retry_%v", toolCall.Args["query"])
-								hasRetried := pathValidationRetries[retryAttemptKey]
-
-								if hasRetried {
+								// Uses TaskValidator from tool_executor_validation.go
+								if validator.HasRetriedPathValidation(toolCall.Args["query"]) {
 									// Already retried once - stop execution with clear error
 									log.Printf("[GPT Path Validator] code_index_search retry also returned invalid paths - stopping execution")
-
-									errorMsg := fmt.Sprintf("❌ CRITICAL ERROR: code_index_search returned invalid file paths (files don't exist on filesystem):\n\n"+
-										"INVALID PATHS:\n"+
-										"%s\n\n"+
-										"🛑 Even after retrying the search, the code index is returning paths to files that don't exist.\n"+
-										"✅ This means:\n"+
-										"   1. The code index may be stale or out of sync with the filesystem\n"+
-										"   2. The files may have been moved or deleted\n"+
-										"   3. The search query may be finding old/archived files\n\n"+
-										"🔍 NEXT STEPS:\n"+
-										"   - Ask the user to verify the file locations\n"+
-										"   - Try a different search query\n"+
-										"   - Check if files exist in a different directory\n"+
-										"   - Consider re-indexing the codebase\n\n"+
-										"DO NOT proceed with create_agent_task using these invalid paths!",
-										strings.Join(invalidPaths, "\n"))
-
-									eventChan <- StreamEvent{Type: StreamEventError, Error: errorMsg}
+									eventChan <- StreamEvent{Type: StreamEventError, Error: GetInvalidPathsError(invalidPaths)}
 									return
 								} else {
 									// First time encountering invalid paths - try automatic retry with refined query
 									log.Printf("[GPT Path Validator] First invalid path detection - attempting automatic retry with refined query")
 
 									// Mark this as a retry attempt
-									pathValidationRetries[retryAttemptKey] = true
+									validator.RecordPathValidationRetry(toolCall.Args["query"])
 
 									// Send warning to user about automatic retry
-									warningMsg := fmt.Sprintf("\n\n⚠️  FILE PATH VALIDATION WARNING:\n"+
-										"code_index_search returned %d invalid file paths (files don't exist).\n"+
-										"🔄 Automatically retrying search with refined query...\n\n"+
-										"Invalid paths found:\n%s\n\n",
-										len(invalidPaths), strings.Join(invalidPaths, "\n"))
-									eventChan <- StreamEvent{Type: StreamEventToken, Content: warningMsg}
+									eventChan <- StreamEvent{Type: StreamEventToken, Content: GetInvalidPathsWarning(invalidPaths)}
 
 									// Modify the tool result to indicate validation failure
 									// Inject validation warning into result so GPT knows to refine the search
-									if outputMap, ok := result.Output.(map[string]interface{}); ok {
-										outputMap["_validationWarning"] = fmt.Sprintf(
-											"⚠️ VALIDATION FAILED: %d out of %d file paths are INVALID (files don't exist on filesystem). "+
-												"You MUST retry code_index_search with a different query to find the CORRECT file paths. "+
-												"DO NOT proceed with create_agent_task using these invalid paths. "+
-												"Invalid paths: %s",
-											len(invalidPaths), len(filePaths), strings.Join(invalidPaths, "\n"))
-										outputMap["invalidPaths"] = invalidPaths
-										outputMap["validPaths"] = validPaths
-										result.Output = outputMap
-									}
+									InjectPathValidationWarning(&result, invalidPaths, validPaths, len(filePaths))
 
 									log.Printf("[GPT Path Validator] Injected validation warning into result - GPT should retry search")
 								}
@@ -1045,109 +790,27 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 
 					// Validate humanTaskId if provided
+					// Uses TaskValidator from tool_executor_validation.go
 					if humanTaskId != "" {
-						// FIX #9: Check cached taskId FIRST (instant validation, no database needed)
-						// This eliminates race conditions when model uses taskId immediately after creation
-						taskExists := false
-						if humanTaskId == lastCreatedHumanTaskId && lastCreatedHumanTaskId != "" {
-							taskExists = true
-							log.Printf("[TaskId Validator] ✅ Instant validation: humanTaskId '%s' matches last created task (no DB lookup needed)", humanTaskId)
-						} else {
-							// Not the cached ID - do database validation with retry
-							// FIX #8: Retry validation to handle MongoDB eventual consistency
-							for attempt := 0; attempt < 3; attempt++ {
-								// Call coordinator_list_human_tasks to get all tasks
-								listTasksCall := ToolCall{
-									ID:   "taskid_validation",
-									Name: "coordinator_list_human_tasks",
-									Args: map[string]interface{}{},
-								}
-								listResult := s.toolRegistry.ExecuteToolCall(ctx, listTasksCall)
-
-								if listResult.Error == "" {
-									if outputMap, ok := listResult.Output.(map[string]interface{}); ok {
-										if tasks, ok := outputMap["tasks"].([]interface{}); ok {
-											for _, task := range tasks {
-												if taskMap, ok := task.(map[string]interface{}); ok {
-													// Check taskId field (matching HumanTask JSON schema with json:"taskId" tag)
-													if taskId, ok := taskMap["taskId"].(string); ok && taskId == humanTaskId {
-														taskExists = true
-														break
-													}
-												}
-											}
-										}
-									}
-								}
-
-								if taskExists {
-									break // Found it, stop retrying
-								}
-
-								// Not found yet - retry with exponential backoff
-								if attempt < 2 {
-									sleepDuration := time.Duration(100*(1<<uint(attempt))) * time.Millisecond
-									log.Printf("[TaskId Validator] Task '%s' not found yet - retrying after %v (attempt %d/3)",
-										humanTaskId, sleepDuration, attempt+1)
-									time.Sleep(sleepDuration)
-								}
-							}
-						}
+						taskExists, _ := validator.ValidateHumanTaskId(ctx, humanTaskId, workflowState.LastCreatedHumanTaskId)
 
 						if !taskExists {
 							// TaskId is invalid even after retries - increment attempt counter
-							taskIdValidationAttempts++
-							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' after 3 retries with backoff - Attempt %d/3", humanTaskId, taskIdValidationAttempts)
+							attempt := validator.RecordInvalidTaskIdAttempt()
+							log.Printf("[TaskId Validator] Invalid humanTaskId '%s' after 3 retries with backoff - Attempt %d/3", humanTaskId, attempt)
 
-							if taskIdValidationAttempts >= 3 {
+							if validator.ShouldStopAfterInvalidTaskId() {
 								// After 3 attempts, stop execution with clear error
 								log.Printf("[TaskId Validator] Failed 3 times - stopping execution")
-								errorMsg := fmt.Sprintf("❌ CRITICAL ERROR: create_agent_task called with INVALID humanTaskId 3 times.\n\n"+
-									"INVALID humanTaskId PROVIDED: '%s'\n\n"+
-									"🛑 The humanTaskId you are providing DOES NOT EXIST in the database.\n"+
-									"✅ This means:\n"+
-									"   1. You are hallucinating or generating the task ID instead of copying it from tool responses\n"+
-									"   2. The task ID may have been typed incorrectly\n"+
-									"   3. The task may have been deleted\n\n"+
-									"🔍 CORRECT APPROACH:\n"+
-									"   1. Call coordinator_list_human_tasks to see ALL existing tasks\n"+
-									"   2. Find the task that matches the user's request\n"+
-									"   3. COPY the EXACT 'taskId' field from the task object\n"+
-									"   4. Use that EXACT UUID as 'humanTaskId' when calling create_agent_task\n\n"+
-									"❌ DO NOT:\n"+
-									"   - Generate UUIDs yourself\n"+
-									"   - Use descriptive names like 'add-feature' or 'fix-bug'\n"+
-									"   - Try to guess or construct the task ID\n\n"+
-									"⚠️ Execution stopped after 3 invalid attempts. Please review the instructions above and try again.",
-									humanTaskId)
-
-								eventChan <- StreamEvent{Type: StreamEventError, Error: errorMsg}
+								eventChan <- StreamEvent{Type: StreamEventError, Error: validator.GetInvalidTaskIdError(humanTaskId)}
 								return
 							}
 
 							// First or second attempt - inject warning and ask model to list tasks
-							warningMsg := fmt.Sprintf("\n\n⚠️  TASK ID VALIDATION ERROR (Attempt %d/3):\n"+
-								"The humanTaskId '%s' DOES NOT EXIST in the database.\n"+
-								"🔄 You MUST call coordinator_list_human_tasks to get the correct taskId.\n\n",
-								taskIdValidationAttempts, humanTaskId)
-							eventChan <- StreamEvent{Type: StreamEventToken, Content: warningMsg}
+							eventChan <- StreamEvent{Type: StreamEventToken, Content: validator.GetInvalidTaskIdWarning(humanTaskId)}
 
 							// Replace the result with an error result
-							result = ToolResult{
-								ID:   result.ID,
-								Name: "create_agent_task",
-								Args: result.Args,
-								Output: map[string]interface{}{
-									"_validationError": "BLOCKED",
-									"_reason":          fmt.Sprintf("Invalid humanTaskId: '%s' does not exist", humanTaskId),
-									"NEXT":             "Call coordinator_list_human_tasks to see all tasks, find the correct task, and COPY its exact 'taskId' field",
-								},
-								Error: fmt.Sprintf("❌ BLOCKED: humanTaskId '%s' is INVALID (does not exist). "+
-									"You MUST call coordinator_list_human_tasks to get all tasks and find the EXACT taskId. "+
-									"DO NOT hallucinate or generate task IDs. COPY the exact UUID from the tool response. "+
-									"This is attempt %d/3. After 3 failures, execution will stop.",
-									humanTaskId, taskIdValidationAttempts),
-							}
+							result = validator.CreateBlockedResult(result.ID, humanTaskId)
 
 							log.Printf("[TaskId Validator] Blocked create_agent_task - injected error asking model to list tasks")
 						} else {
@@ -1165,19 +828,20 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 
 					// If we have a cached agentTaskId from create_agent_task, use it
-					if lastCreatedAgentTaskId != "" {
+					// Uses WorkflowState.LastCreatedAgentTaskId from tool_executor_workflow.go
+					if workflowState.LastCreatedAgentTaskId != "" {
 						// Check if model provided wrong ID (hallucinated)
-						if providedAgentTaskId != lastCreatedAgentTaskId {
+						if providedAgentTaskId != workflowState.LastCreatedAgentTaskId {
 							log.Printf("[AgentTaskId Auto-Correct] Model provided wrong agentTaskId: '%s', replacing with correct cached ID: '%s'",
-								providedAgentTaskId, lastCreatedAgentTaskId)
+								providedAgentTaskId, workflowState.LastCreatedAgentTaskId)
 
 							// REPLACE the wrong ID with the correct cached one
-							toolCall.Args["agentTaskId"] = lastCreatedAgentTaskId
+							toolCall.Args["agentTaskId"] = workflowState.LastCreatedAgentTaskId
 
 							// Re-execute the tool with corrected arguments
 							result = s.toolRegistry.ExecuteToolCall(ctx, toolCall)
 
-							log.Printf("[AgentTaskId Auto-Correct] ✅ Re-executed execute_subagent with correct agentTaskId: '%s'", lastCreatedAgentTaskId)
+							log.Printf("[AgentTaskId Auto-Correct] ✅ Re-executed execute_subagent with correct agentTaskId: '%s'", workflowState.LastCreatedAgentTaskId)
 						} else {
 							log.Printf("[AgentTaskId Validator] ✅ Instant validation: agentTaskId '%s' matches last created task", providedAgentTaskId)
 						}
@@ -1199,86 +863,39 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					toolCallHistory = toolCallHistory[1:] // Remove oldest
 				}
 
-				// CRITICAL: Track CONSECUTIVE failed tool calls - stop on 3+ consecutive identical failures
-				// This allows: compile → error → fix → compile (normal flow)
-				// But prevents: compile → error → compile → error → compile (infinite loop)
+				// CIRCUIT BREAKER: Track failures and duplicate calls using CircuitBreaker struct
+				// Uses CircuitBreaker from tool_executor_circuit.go
 				if result.Error != "" {
-					// Check if this is the same as the last failed call
-					if lastFailedSignature == signature {
-						consecutiveFailures++
-						if consecutiveFailures >= 3 {
-							// Third CONSECUTIVE failure with same args - stop!
-							log.Printf("[Circuit Breaker] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments - stopping", toolCall.Name)
-							// Return error to AI, don't stop execution
-							// The AI should see this error and try a different approach
-							loopWarning := fmt.Sprintf("❌ CRITICAL: Tool '%s' has FAILED 3 TIMES IN A ROW with identical arguments.\n\n"+
-								"Error: %s\n\n"+
-								"🛑 This approach is NOT working. You MUST try something different:\n"+
-								"   - If file not found: List the directory first to see what files actually exist\n"+
-								"   - If path wrong: Try a different path or check your working directory\n"+
-								"   - If tool incompatible: Use a completely different tool or approach\n\n"+
-								"DO NOT call this tool with these arguments again!", toolCall.Name, result.Error)
-
-							// Add warning to current messages so AI sees it
-							currentMessages = append(currentMessages, Message{
-								Role:    "system",
-								Content: loopWarning,
-							})
-
-							// Reset counters
-							consecutiveFailures = 0
-							lastFailedSignature = ""
-						} else {
-							lastFailedSignature = signature
-						}
-					} else {
-						// Different failure, reset counter
-						consecutiveFailures = 1
-						lastFailedSignature = signature
+					circuitBreaker.RecordFailure(signature)
+					if circuitBreaker.ShouldBreakOnFailure() {
+						// Third CONSECUTIVE failure with same args - warn AI
+						log.Printf("[Circuit Breaker] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments", toolCall.Name)
+						loopWarning := circuitBreaker.GetConsecutiveFailureWarning(toolCall.Name, result.Error)
+						currentMessages = append(currentMessages, Message{
+							Role:    "system",
+							Content: loopWarning,
+						})
+						circuitBreaker.RecordSuccess() // Reset after warning
 					}
 				} else {
-					// Success - reset failure tracking
-					consecutiveFailures = 0
-					lastFailedSignature = ""
+					circuitBreaker.RecordSuccess()
 				}
 
-				// Circuit breaker: check for repeated tool calls AND warn the AI
-				recentToolCalls = append(recentToolCalls, signature)
-				if len(recentToolCalls) > 10 {
-					recentToolCalls = recentToolCalls[1:]
-				}
-
-				// Count how many times this exact tool+args was called in ALL history
-				totalCount := 0
-				for _, sig := range recentToolCalls {
-					if sig == signature {
-						totalCount++
-					}
-				}
-
-				// Get tool-specific threshold
-				threshold := circuitBreakerThresholds[toolCall.Name]
-				if threshold == 0 {
-					threshold = 4 // Default threshold
-				}
+				// Circuit breaker: track repeated tool calls and warn AI
+				totalCount := circuitBreaker.RecordToolCall(signature)
 
 				// Progressive warnings to AI (inject into context so AI sees them)
 				var loopWarning string
-				if totalCount == 2 {
-					// First duplicate - gentle warning
-					loopWarning = fmt.Sprintf("⚠️  WARNING: You already called '%s' with these exact arguments 1 time before. You should use the result from the previous call instead of repeating the same operation.", toolCall.Name)
-				} else if totalCount == 3 && threshold > 3 {
-					// Second duplicate - stronger warning (only if threshold allows)
-					loopWarning = fmt.Sprintf("🔁 LOOP DETECTED: You called '%s' with identical arguments 2 times already. You are stuck in a loop! Use previous results or try a DIFFERENT approach - do NOT call this tool again with the same arguments.", toolCall.Name)
-				} else if totalCount >= threshold {
+				if circuitBreaker.ShouldBreak(toolCall.Name, totalCount) {
 					// Threshold reached - trigger circuit breaker
-					log.Printf("[Circuit Breaker] Tool '%s' called %d times (threshold: %d) - stopping infinite loop", toolCall.Name, totalCount, threshold)
+					log.Printf("[Circuit Breaker] Tool '%s' called %d times - stopping infinite loop", toolCall.Name, totalCount)
 					eventChan <- StreamEvent{
 						Type:  StreamEventError,
-						Error: fmt.Sprintf("Circuit breaker triggered: tool '%s' called repeatedly (%d times) with identical arguments. The AI is stuck in an infinite loop and cannot complete this task.", toolCall.Name, totalCount),
+						Error: circuitBreaker.GetCircuitBreakerError(toolCall.Name, totalCount),
 					}
 					return
 				}
+				loopWarning = circuitBreaker.GetWarning(toolCall.Name, totalCount)
 
 				// Tool execution complete - no verbose logging needed
 
@@ -1444,63 +1061,13 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 				})
 
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution
-				// Apply to ALL models to match prescriptive filter behavior (line 714)
-				if result.Error == "" {
-					debugLog("WORKFLOW: Tool %s succeeded, checking for state update", toolCall.Name)
-					switch toolCall.Name {
-					case "coordinator_list_human_tasks":
-						if workflowState["step"].(int) == 0 {
-							workflowState["step"] = 1
-							log.Printf("[Workflow State] Step 1 complete: listed tasks")
-							debugLog("WORKFLOW: Updated state to step 1")
-						}
-
-					case "coordinator_create_human_task":
-						if outputMap, ok := result.Output.(map[string]interface{}); ok {
-							if taskID, hasTaskID := outputMap["taskId"].(string); hasTaskID && taskID != "" {
-								workflowState["step"] = 2
-								workflowState["humanTaskId"] = taskID
-								lastCreatedHumanTaskId = taskID // FIX #9: Cache for instant validation
-								log.Printf("[Workflow State] Step 2 complete: created human task %s", taskID)
-							} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
-								// Case 2: Similar task found - use existing task instead of creating new one
-								if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
-									if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
-										if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
-											workflowState["step"] = 2
-											workflowState["humanTaskId"] = existingTaskID
-											lastCreatedHumanTaskId = existingTaskID // FIX #9: Cache for instant validation
-											log.Printf("[Workflow State] Step 2 complete: using existing similar task %s", existingTaskID)
-										}
-									}
-								}
-							}
-						}
-
-					case "code_index_search":
-						workflowState["step"] = 3
-						workflowState["searchCompleted"] = true
-						log.Printf("[Workflow State] Step 3 complete: code search done")
-						debugLog("WORKFLOW: Updated state to step 3 (after code_index_search)")
-
-					case "create_agent_task":
-						if outputMap, ok := result.Output.(map[string]interface{}); ok {
-							if agentTaskID, hasAgentTaskID := outputMap["taskId"].(string); hasAgentTaskID && agentTaskID != "" {
-								workflowState["step"] = 4
-								workflowState["agentTaskId"] = agentTaskID
-								lastCreatedAgentTaskId = agentTaskID // FIX #10: Cache for instant validation
-								log.Printf("[Workflow State] Step 4 complete: created agent task %s", agentTaskID)
-							}
-						}
-
-					case "execute_subagent":
-						workflowState["step"] = 5
-						log.Printf("[Workflow State] Step 5 complete: subagent launched")
-					}
-				}
+				// Uses WorkflowState from tool_executor_workflow.go
+				workflowState.UpdateAfterToolExecution(toolCall.Name, result, "Workflow State")
+				debugLog("WORKFLOW: Tool %s completed, state updated", toolCall.Name)
 
 				// FALLBACK MODEL ENHANCEMENT: Add explicit state tracking for workflow comprehension
 				// Haiku (smaller model) benefits from explicit guidance on workflow state and next steps
+				// Uses WorkflowState.GetGuidance from tool_executor_workflow.go
 				if s.usingFallback {
 					// Extract session ID from system prompt (first message)
 					sessionID := ""
@@ -1508,7 +1075,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 						sessionID = extractSessionIDFromSystemPrompt(currentMessages[0].Content)
 					}
 
-					stateGuidance := s.generateWorkflowStateGuidance(toolCall.Name, result, toolCallCount, sessionID)
+					stateGuidance := workflowState.GetGuidance(toolCall.Name, result, toolCallCount, sessionID)
 					if stateGuidance != "" {
 						log.Printf("[Fallback State Tracking] Injecting workflow guidance after tool '%s' with sessionID: %s", toolCall.Name, sessionID)
 						currentMessages = append(currentMessages, Message{
@@ -1681,114 +1248,10 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 		currentMessages := append([]Message{}, messages...) // Copy messages
 		debugLog("Initial message count: %d", len(currentMessages))
 
-		// Tool result cache: prevent duplicate tool executions
+		// Initialize modular components for tool execution (same as StreamChatWithTools)
 		resultCache := NewToolResultCache()
-
-		// Circuit breaker: track recent tool calls to detect infinite loops
-		recentToolCalls := make([]string, 0, 10)
-		consecutiveFailures := 0  // Track CONSECUTIVE failures of the same tool+args
-		lastFailedSignature := "" // Signature of the last failed tool call
-		// pathValidationRetries not needed in fallback model (Claude handles its own validation)
-		toolCallSignature := func(name string, args map[string]interface{}) string {
-			argsJSON, _ := json.Marshal(args)
-			return fmt.Sprintf("%s(%s)", name, string(argsJSON))
-		}
-
-		// WORKFLOW STATE ENFORCEMENT: Track coordinator workflow progress (fallback model only)
-		workflowState := map[string]interface{}{
-			"step":            0,     // 0=initial, 1=listed, 2=created, 3=searched, 4=agent_task, 5=done
-			"humanTaskId":     "",    // Store taskId from step 2
-			"searchCompleted": false, // Prevent multiple searches
-			"agentTaskId":     "",    // Store agentTaskId from step 4
-		}
-
-		// Function to validate workflow tool calls (only enforced for fallback model)
-		validateWorkflowTool := func(toolName string) (bool, string) {
-			if !s.usingFallback {
-				return true, "" // No enforcement for primary model
-			}
-
-			step := workflowState["step"].(int)
-			humanTaskId := workflowState["humanTaskId"].(string)
-			searchCompleted := workflowState["searchCompleted"].(bool)
-
-			switch toolName {
-			case "coordinator_list_human_tasks":
-				if step == 0 || step == 1 || step == 2 {
-					// Allow listing tasks at any early step to retrieve exact taskId
-					return true, ""
-				}
-				return false, "❌ BLOCKED: You already have taskId. NEXT: Call appropriate tool for current step."
-
-			case "coordinator_create_human_task":
-				if step == 1 && humanTaskId == "" {
-					return true, ""
-				}
-				if humanTaskId != "" {
-					// State-aware guidance based on workflow progress
-					if searchCompleted {
-						return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'create_agent_task'.", humanTaskId)
-					}
-					return false, fmt.Sprintf("❌ BLOCKED: Task exists (ID: %s). NEXT: Call 'code_index_search'.", humanTaskId)
-				}
-				return false, "❌ BLOCKED: Call 'coordinator_list_human_tasks' first."
-
-			case "code_index_search":
-				if step == 2 && humanTaskId != "" && !searchCompleted {
-					return true, ""
-				}
-				if searchCompleted {
-					return false, "❌ BLOCKED: Search done. NEXT: Call 'create_agent_task'."
-				}
-				return false, "❌ BLOCKED: Create human task first."
-
-			case "create_agent_task":
-				if step == 3 && humanTaskId != "" && searchCompleted {
-					return true, ""
-				}
-				return false, "❌ BLOCKED: Run 'code_index_search' first to get file paths."
-
-			case "execute_subagent":
-				agentTaskId := workflowState["agentTaskId"].(string)
-				if step == 4 && agentTaskId != "" {
-					return true, ""
-				}
-				return false, "❌ BLOCKED: Call 'create_agent_task' first."
-			}
-
-			return true, ""
-		}
-
-		// Per-tool circuit breaker thresholds (max duplicate attempts before stopping)
-		// Claude models get higher thresholds as they're better at adapting
-		isClaudeModel := strings.Contains(strings.ToLower(s.config.Model), "claude") ||
-			strings.Contains(strings.ToLower(s.config.Provider), "anthropic")
-
-		var circuitBreakerThresholds map[string]int
-		if isClaudeModel {
-			// Claude-optimized thresholds: More lenient to allow legitimate multi-file operations
-			circuitBreakerThresholds = map[string]int{
-				"read_file":         5, // Allow reading multiple files
-				"write_file":        2, // Allow one retry for writes
-				"list_directory":    4, // Allow exploring directories
-				"bash":              5, // Allow command variations
-				"code_index_search": 2, // Strict: one search + one retry max
-				"create_agent_task": 4, // Allow retries for parameter refinement
-				// Default for other tools: 6 attempts
-			}
-			log.Printf("[Circuit Breaker] Using Claude-optimized thresholds (more lenient)")
-		} else {
-			// GPT thresholds: More conservative
-			circuitBreakerThresholds = map[string]int{
-				"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
-				"write_file":        1, // Never allow duplicate writes
-				"list_directory":    2, // Stop after 2 attempts
-				"bash":              3, // Allow more for command variations
-				"code_index_search": 3, // Allow query refinement
-				// Default for other tools: 4 attempts
-			}
-			log.Printf("[Circuit Breaker] Using GPT thresholds (conservative)")
-		}
+		circuitBreaker := NewCircuitBreaker(s.config.Model, s.config.Provider)
+		workflowState := NewWorkflowState()
 
 		for toolCallCount < maxToolCalls && iterationCount < s.config.MaxIterations {
 			// CONTEXT CANCELLATION CHECK: Check at start of each iteration (stop button support)
@@ -1883,9 +1346,10 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					toolCall.Name, string(argsJSON))
 
 				// WORKFLOW VALIDATION: Check if this tool call is allowed in current workflow state
+				// Uses WorkflowState from tool_executor_workflow.go
 				var result ToolResult
 				if s.usingFallback {
-					allowed, blockMessage := validateWorkflowTool(toolCall.Name)
+					allowed, blockMessage := workflowState.ValidateTool(toolCall.Name, s.usingFallback)
 					if !allowed {
 						log.Printf("[Workflow Enforcer - Filtered] BLOCKED tool '%s' - %s", toolCall.Name, blockMessage)
 
@@ -1920,7 +1384,8 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				eventChan <- StreamEvent{Type: StreamEventToolCall, ToolCall: &toolCall}
 
 				// Generate signature for cache and circuit breaker
-				signature := toolCallSignature(toolCall.Name, toolCall.Args)
+				// Uses GenerateSignature from tool_executor_circuit.go
+				signature := GenerateSignature(toolCall.Name, toolCall.Args)
 
 				// Check tool result cache BEFORE execution
 				cachedResult, found := resultCache.Get(signature)
@@ -1973,7 +1438,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						// Execute tool (no cached result available)
 						// Inject humanTaskId from workflowState into context for auto-population
 						toolCtx := ctx
-						if humanTaskID, ok := workflowState["humanTaskId"].(string); ok && humanTaskID != "" {
+						if humanTaskID := workflowState.HumanTaskId; humanTaskID != "" {
 							toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
 						}
 						result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
@@ -1989,83 +1454,39 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 
 				// Tool execution complete - errors handled in circuit breaker below
 
-				// CRITICAL: Track CONSECUTIVE failed tool calls - stop on 3+ consecutive identical failures
-				// This allows: compile → error → fix → compile (normal flow)
-				// But prevents: compile → error → compile → error → compile (infinite loop)
+				// CIRCUIT BREAKER: Track failures and duplicate calls using CircuitBreaker struct
+				// Uses CircuitBreaker from tool_executor_circuit.go (same as StreamChatWithTools)
 				if result.Error != "" {
-					// Check if this is the same as the last failed call
-					if lastFailedSignature == signature {
-						consecutiveFailures++
-						if consecutiveFailures >= 3 {
-							// Third CONSECUTIVE failure with same args - stop!
-							log.Printf("[Circuit Breaker - Filtered] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments", toolCall.Name)
-							// Return error to AI, don't stop execution
-							// The AI should see this error and try a different approach
-							loopWarning := fmt.Sprintf("❌ CRITICAL: Tool '%s' has FAILED 3 TIMES IN A ROW with identical arguments.\n\n"+
-								"Error: %s\n\n"+
-								"🛑 This approach is NOT working. You MUST try something different:\n"+
-								"   - If file not found: List the directory first to see what files actually exist\n"+
-								"   - If path wrong: Try a different path or check your working directory\n"+
-								"   - If tool incompatible: Use a completely different tool or approach\n\n"+
-								"DO NOT call this tool with these arguments again!", toolCall.Name, result.Error)
-
-							// Add warning to current messages so AI sees it
-							currentMessages = append(currentMessages, Message{
-								Role:    "system",
-								Content: loopWarning,
-							})
-
-							// Reset counters
-							consecutiveFailures = 0
-							lastFailedSignature = ""
-						} else {
-							lastFailedSignature = signature
-						}
-					} else {
-						// Different failure, reset counter
-						consecutiveFailures = 1
-						lastFailedSignature = signature
+					circuitBreaker.RecordFailure(signature)
+					if circuitBreaker.ShouldBreakOnFailure() {
+						// Third CONSECUTIVE failure with same args - warn AI
+						log.Printf("[Circuit Breaker - Filtered] Tool '%s' failed 3 times CONSECUTIVELY with identical arguments", toolCall.Name)
+						loopWarning := circuitBreaker.GetConsecutiveFailureWarning(toolCall.Name, result.Error)
+						currentMessages = append(currentMessages, Message{
+							Role:    "system",
+							Content: loopWarning,
+						})
+						circuitBreaker.RecordSuccess() // Reset after warning
 					}
 				} else {
-					// Success - reset failure tracking
-					consecutiveFailures = 0
-					lastFailedSignature = ""
+					circuitBreaker.RecordSuccess()
 				}
 
-				// Circuit breaker: check for repeated tool calls
-				recentToolCalls = append(recentToolCalls, signature)
-				if len(recentToolCalls) > 10 {
-					recentToolCalls = recentToolCalls[1:]
-				}
+				// Circuit breaker: track repeated tool calls and warn AI
+				totalCount := circuitBreaker.RecordToolCall(signature)
 
-				// Count duplicates
-				totalCount := 0
-				for _, sig := range recentToolCalls {
-					if sig == signature {
-						totalCount++
-					}
-				}
-
-				// Get tool-specific threshold
-				threshold := circuitBreakerThresholds[toolCall.Name]
-				if threshold == 0 {
-					threshold = 4 // Default threshold
-				}
-
-				// Progressive warnings
+				// Progressive warnings to AI (inject into context so AI sees them)
 				var loopWarning string
-				if totalCount == 2 {
-					loopWarning = fmt.Sprintf("⚠️  WARNING: You already called '%s' with these exact arguments 1 time before. Use the previous result instead of repeating.", toolCall.Name)
-				} else if totalCount == 3 && threshold > 3 {
-					loopWarning = fmt.Sprintf("🔁 LOOP DETECTED: You called '%s' with identical arguments 2 times already. You are stuck in a loop! Use previous results or try a DIFFERENT approach.", toolCall.Name)
-				} else if totalCount >= threshold {
-					log.Printf("[Circuit Breaker] Tool '%s' called %d times (threshold: %d) - stopping infinite loop", toolCall.Name, totalCount, threshold)
+				if circuitBreaker.ShouldBreak(toolCall.Name, totalCount) {
+					// Threshold reached - trigger circuit breaker
+					log.Printf("[Circuit Breaker - Filtered] Tool '%s' called %d times - stopping infinite loop", toolCall.Name, totalCount)
 					eventChan <- StreamEvent{
 						Type:  StreamEventError,
-						Error: fmt.Sprintf("Circuit breaker triggered: tool '%s' called repeatedly (%d times) with identical arguments. The AI is stuck in an infinite loop.", toolCall.Name, totalCount),
+						Error: circuitBreaker.GetCircuitBreakerError(toolCall.Name, totalCount),
 					}
 					return
 				}
+				loopWarning = circuitBreaker.GetWarning(toolCall.Name, totalCount)
 
 				// CRITICAL FIX: Add tool_call message with tool_use block (not plain text)
 				// This ensures the model has conversation memory of making the tool call
@@ -2172,54 +1593,8 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 				})
 
 				// WORKFLOW STATE UPDATE: Update workflow state after successful tool execution (filtered function)
-				// Apply to ALL models to match prescriptive filter behavior
-				if result.Error == "" {
-					switch toolCall.Name {
-					case "coordinator_list_human_tasks":
-						if workflowState["step"].(int) == 0 {
-							workflowState["step"] = 1
-							log.Printf("[Workflow State - Filtered] Step 1 complete: listed tasks")
-						}
-
-					case "coordinator_create_human_task":
-						if outputMap, ok := result.Output.(map[string]interface{}); ok {
-							if taskID, hasTaskID := outputMap["taskId"].(string); hasTaskID && taskID != "" {
-								workflowState["step"] = 2
-								workflowState["humanTaskId"] = taskID
-								log.Printf("[Workflow State - Filtered] Step 2 complete: created human task %s", taskID)
-							} else if similarTasksFound, _ := outputMap["similarTasksFound"].(bool); similarTasksFound {
-								// Case 2: Similar task found - use existing task instead of creating new one
-								if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
-									if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
-										if existingTaskID, ok := firstTask["taskId"].(string); ok && existingTaskID != "" {
-											workflowState["step"] = 2
-											workflowState["humanTaskId"] = existingTaskID
-											log.Printf("[Workflow State - Filtered] Step 2 complete: using existing similar task %s", existingTaskID)
-										}
-									}
-								}
-							}
-						}
-
-					case "code_index_search":
-						workflowState["step"] = 3
-						workflowState["searchCompleted"] = true
-						log.Printf("[Workflow State - Filtered] Step 3 complete: code search done")
-
-					case "create_agent_task":
-						if outputMap, ok := result.Output.(map[string]interface{}); ok {
-							if agentTaskID, hasAgentTaskID := outputMap["taskId"].(string); hasAgentTaskID && agentTaskID != "" {
-								workflowState["step"] = 4
-								workflowState["agentTaskId"] = agentTaskID
-								log.Printf("[Workflow State - Filtered] Step 4 complete: created agent task %s", agentTaskID)
-							}
-						}
-
-					case "execute_subagent":
-						workflowState["step"] = 5
-						log.Printf("[Workflow State - Filtered] Step 5 complete: subagent launched")
-					}
-				}
+				// Uses WorkflowState from tool_executor_workflow.go (same as StreamChatWithTools)
+				workflowState.UpdateAfterToolExecution(toolCall.Name, result, "Workflow State - Filtered")
 			}
 		}
 
@@ -2274,162 +1649,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 	return eventChan, nil
 }
 
-// generateWorkflowStateGuidance creates explicit state tracking messages for the fallback model
-// to help it understand the 5-step coordinator workflow and what to do next.
-// This is crucial for smaller models like Haiku that need more explicit guidance.
-func (s *ChatService) generateWorkflowStateGuidance(toolName string, result ToolResult, toolCallCount int, sessionID string) string {
-	// Skip guidance if tool failed
-	if result.Error != "" {
-		return ""
-	}
-
-	// Extract data from tool result for guidance
-	var guidance string
-
-	switch toolName {
-	case "coordinator_list_human_tasks":
-		// Step 1 complete - guide to Step 2
-		guidance = "✅ STEP 1 COMPLETE: You checked existing tasks.\n" +
-			"➡️ NEXT ACTION: Call 'coordinator_create_human_task' with the user's exact request.\n" +
-			"   Example: {\"prompt\": \"<user's exact words>\"}\n" +
-			"🔒 DO NOT call coordinator_list_human_tasks again - you already have the results."
-
-	case "coordinator_create_human_task":
-		// Step 2 complete - extract taskId and guide to Step 3
-		if outputMap, ok := result.Output.(map[string]interface{}); ok {
-			taskID, hasTaskID := outputMap["taskId"].(string)
-			similarTasksFound, _ := outputMap["similarTasksFound"].(bool)
-
-			if similarTasksFound {
-				// Duplicate detected - extract first similar task's ID and proceed
-				var firstTaskID string
-				if similarTasks, ok := outputMap["similarTasks"].([]interface{}); ok && len(similarTasks) > 0 {
-					if firstTask, ok := similarTasks[0].(map[string]interface{}); ok {
-						if tid, ok := firstTask["taskId"].(string); ok {
-							firstTaskID = tid
-						}
-					}
-				}
-
-				if firstTaskID != "" {
-					// Found a similar task - use it and proceed to Step 2
-					guidance = fmt.Sprintf("⚠️ SIMILAR TASK FOUND: A task with similar intent already exists.\n"+
-						"📝 SAVE THIS: humanTaskId = \"%s\" (using existing similar task)\n"+
-						"➡️ NEXT ACTION: Call 'code_index_search' ONCE to find relevant files.\n"+
-						"   Example: {\"query\": \"<what user wants to change>\", \"limit\": 15}\n"+
-						"🔒 DO NOT call coordinator_create_human_task again - you already have a taskId.\n"+
-						"💡 To create a NEW task instead, call coordinator_create_human_task with forceCreate=true", firstTaskID)
-				} else {
-					// No task ID found in similar tasks - tell model to force create
-					guidance = "⚠️ DUPLICATE TASK DETECTED: Similar tasks exist but no ID was found.\n" +
-						"➡️ NEXT ACTION: Call coordinator_create_human_task with forceCreate=true to create anyway.\n" +
-						"   Example: {\"prompt\": \"<user's exact words>\", \"forceCreate\": true}"
-				}
-			} else if hasTaskID {
-				// Task created successfully - guide to Step 3
-				guidance = fmt.Sprintf("✅ STEP 2 COMPLETE: Human task created successfully.\n"+
-					"📝 SAVE THIS: humanTaskId = \"%s\"\n"+
-					"➡️ NEXT ACTION: Call 'code_index_search' ONCE to find relevant files.\n"+
-					"   Example: {\"query\": \"<what user wants to change>\", \"limit\": 15}\n"+
-					"🔒 DO NOT call coordinator_create_human_task again - you already have the taskId.\n"+
-					"🔒 You will need this taskId for Step 4 (create_agent_task).", taskID)
-			}
-		}
-
-	case "code_index_search":
-		// Step 3 complete - extract file paths and guide to Step 4
-		if outputMap, ok := result.Output.(map[string]interface{}); ok {
-			filePathsRaw, hasFilePaths := outputMap["FILE_PATHS_TO_USE"]
-			_, hasResults := outputMap["results"]
-
-			if hasFilePaths || hasResults {
-				filePathsCount := 0
-				if filePaths, ok := filePathsRaw.([]interface{}); ok {
-					filePathsCount = len(filePaths)
-				}
-
-				guidance = fmt.Sprintf("✅ STEP 3 COMPLETE: Code search returned %d file(s).\n"+
-					"📝 EXTRACT: Copy file paths from FILE_PATHS_TO_USE array above.\n"+
-					"➡️ NEXT ACTION: Call 'create_agent_task' with:\n"+
-					"   - humanTaskId: \"<taskId from Step 2>\"\n"+
-					"   - agentName: \"ui-dev\" (for UI changes) or \"go-dev\" (for backend)\n"+
-					"   - role: \"Brief mission description\"\n"+
-					"   - contextSummary: \"WHAT to change, WHERE (file:line from search), HOW\"\n"+
-					"   - filesModified: [\"<COPY exact paths from FILE_PATHS_TO_USE>\"]\n"+
-					"   - todos: [{description: \"Implement X in file Y\", filePath, contextHint}]\n\n"+
-					"🚨 CRITICAL:\n"+
-					"   • filesModified MUST NOT be empty - populate with paths from FILE_PATHS_TO_USE\n"+
-					"   • TODOs must be implementation steps, NOT discovery steps\n"+
-					"   • DO NOT create TODOs like 'Search for...' or 'Find...'\n"+
-					"   • Subagent CANNOT run code_index_search - it's blocked in write-only mode\n\n"+
-					"🔒 DO NOT call code_index_search again - you already have the file paths.\n"+
-					"🔒 Use EXACT paths from FILE_PATHS_TO_USE array - do NOT type paths manually!", filePathsCount)
-			}
-		}
-
-	case "create_agent_task":
-		// Step 4 complete - extract agent task ID and guide to Step 5
-		if outputMap, ok := result.Output.(map[string]interface{}); ok {
-			agentTaskID, hasAgentTaskID := outputMap["taskId"].(string)
-			agentName, _ := outputMap["agentName"].(string)
-
-			if hasAgentTaskID {
-				// Use actual session ID instead of placeholder
-				parentChatIDValue := sessionID
-				if parentChatIDValue == "" {
-					parentChatIDValue = "<session-id-not-found>"
-				}
-				guidance = fmt.Sprintf("✅ STEP 4 COMPLETE: Agent task created successfully.\n"+
-					"📝 Agent Task ID: \"%s\"\n"+
-					"➡️ NEXT ACTION (FINAL): Call 'execute_subagent' to launch the agent:\n"+
-					"   {\"agentTaskId\": \"%s\", \"parentChatId\": \"%s\"}\n"+
-					"🔒 DO NOT call create_agent_task again - the task is created.\n"+
-					"✅ After execute_subagent, the %s agent will implement the changes - YOU ARE DONE!", agentTaskID, agentTaskID, parentChatIDValue, agentName)
-			}
-		}
-
-	case "execute_subagent":
-		// Step 5 complete - extract agentTaskId and tell coordinator to STOP
-		if outputMap, ok := result.Output.(map[string]interface{}); ok {
-			agentTaskID, hasAgentTaskID := outputMap["agentTaskId"].(string)
-			agentName, _ := outputMap["agentName"].(string)
-			subchatID, _ := outputMap["subchatId"].(string)
-
-			if hasAgentTaskID {
-				guidance = fmt.Sprintf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"+
-					"✅ WORKFLOW COMPLETE - YOUR JOB IS DONE!\n"+
-					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"+
-					"The %s agent is executing your request in background.\n"+
-					"   • Agent Task ID: %s\n"+
-					"   • Subchat ID: %s\n\n"+
-					"🛑 STOP HERE - DO NOT CALL ANY MORE TOOLS\n"+
-					"🛑 DO NOT call list_agent_tasks, coordinator_get_agent_task, or any monitoring tools\n"+
-					"🛑 DO NOT try to check status - the agent is working independently\n\n"+
-					"✅ YOUR ONLY ACTION: Inform the user that work has begun.\n"+
-					"   Example: \"I've delegated this to the %s agent. They're working on it now.\"\n\n"+
-					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-					agentName, agentTaskID, subchatID, agentName)
-			} else {
-				// Fallback if agentTaskId not found
-				guidance = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-					"✅ WORKFLOW COMPLETE - YOUR JOB IS DONE!\n" +
-					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-					"The specialist agent is executing the request in background.\n\n" +
-					"🛑 STOP HERE - DO NOT CALL ANY MORE TOOLS\n" +
-					"✅ YOUR ONLY ACTION: Inform the user that work has begun.\n\n" +
-					"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-			}
-		}
-	}
-
-	// If we generated guidance, add a clear separator
-	if guidance != "" {
-		guidance = "\n" + strings.Repeat("━", 70) + "\n" +
-			"🤖 WORKFLOW STATE TRACKER (for your guidance)\n" +
-			strings.Repeat("━", 70) + "\n" +
-			guidance + "\n" +
-			strings.Repeat("━", 70)
-	}
-
-	return guidance
-}
+// NOTE: generateWorkflowStateGuidance has been moved to tool_executor_workflow.go
+// as WorkflowState.GetGuidance() method. This function is kept as a stub for backwards
+// compatibility but should not be called directly.
+// See: tool_executor_workflow.go for the implementation.
