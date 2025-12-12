@@ -20,18 +20,30 @@ func TestTokenMetricsStorage(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Connect to test MongoDB
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Connect to test MongoDB with short timeout (3 seconds)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	clientOpts := options.Client().
+		ApplyURI("mongodb://localhost:27017").
+		SetConnectTimeout(3 * time.Second).
+		SetServerSelectionTimeout(3 * time.Second)
+
+	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
 		t.Skipf("Could not connect to MongoDB: %v", err)
 	}
-	defer client.Disconnect(ctx)
+	defer client.Disconnect(context.Background())
+
+	// Ping to verify connection works
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		t.Skipf("MongoDB not responding: %v", err)
+	}
 
 	db := client.Database("test_metrics")
-	defer db.Drop(ctx)
+	defer db.Drop(context.Background())
 
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()

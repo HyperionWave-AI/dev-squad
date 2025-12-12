@@ -27,6 +27,16 @@ func setupTestChatService(t *testing.T) (*ChatService, func()) {
 		return nil, nil
 	}
 
+	// Ping with short timeout to verify MongoDB is actually available
+	// mongo.Connect succeeds even if MongoDB isn't running - it's lazy
+	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		client.Disconnect(ctx)
+		t.Skipf("MongoDB not reachable: %v. Skipping integration test.", err)
+		return nil, nil
+	}
+
 	// Use unique database for this test
 	dbName := "chat_service_test_" + primitive.NewObjectID().Hex()
 	db := client.Database(dbName)

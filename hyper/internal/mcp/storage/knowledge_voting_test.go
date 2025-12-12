@@ -24,17 +24,27 @@ func TestVoteWeightedRetrieval(t *testing.T) {
 		qdrantURL = "http://localhost:6333"
 	}
 
-	// Connect to MongoDB
-	ctx := context.Background()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	// Connect to MongoDB with short timeout (3 seconds)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	clientOpts := options.Client().ApplyURI(mongoURI).SetConnectTimeout(3 * time.Second).SetServerSelectionTimeout(3 * time.Second)
+	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
 		t.Skipf("MongoDB not available: %v", err)
 	}
-	defer client.Disconnect(ctx)
+	defer client.Disconnect(context.Background())
+
+	// Ping to verify connection works
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		t.Skipf("MongoDB not responding at %s: %v", mongoURI, err)
+	}
 
 	// Test database
 	db := client.Database("hyper_test_voting")
-	defer db.Drop(ctx)
+	defer db.Drop(context.Background())
 
 	// Create Qdrant client with test embedding
 	qdrantClient := NewQdrantClientWithEmbedding(qdrantURL, func(text string) ([]float64, error) {

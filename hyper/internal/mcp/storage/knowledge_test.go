@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/zap"
 )
 
@@ -86,11 +87,31 @@ func (m *MockQdrantClient) Ping(ctx context.Context) error {
 }
 
 // setupTestStorage creates a test MongoDB instance with MongoKnowledgeStorage
+// Skips the test if MongoDB is not available (with a short 3-second timeout)
 func setupTestStorage(t *testing.T) (*MongoKnowledgeStorage, *mongo.Database, *MockQdrantClient, func()) {
-	// Use in-memory MongoDB for testing
-	client, err := mongo.Connect(context.Background(), nil)
+	// Get MongoDB URI from environment or use default
+	mongoURI := os.Getenv("MONGODB_URI")
+	if mongoURI == "" {
+		mongoURI = "mongodb://localhost:27017"
+	}
+
+	// Create a short timeout context for connection check (3 seconds)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Try to connect with short timeout
+	clientOpts := options.Client().ApplyURI(mongoURI).SetConnectTimeout(3 * time.Second).SetServerSelectionTimeout(3 * time.Second)
+	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
-		t.Fatalf("Failed to create MongoDB client: %v", err)
+		t.Skipf("Skipping test: MongoDB not available at %s: %v", mongoURI, err)
+	}
+
+	// Ping to verify connection works
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		client.Disconnect(context.Background())
+		t.Skipf("Skipping test: MongoDB not responding at %s: %v", mongoURI, err)
 	}
 
 	db := client.Database("test_knowledge_" + uuid.New().String())
