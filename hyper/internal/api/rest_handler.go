@@ -19,6 +19,43 @@ import (
 	"go.uber.org/zap"
 )
 
+// Agent Communication DTOs
+type AgentCommunicationRequest struct {
+	AgentType         string                 `json:"agentType"`
+	CommunicationType string                 `json:"communicationType"`
+	Message           string                 `json:"message,omitempty"`
+	TaskID            string                 `json:"taskId,omitempty"`
+	Parameters        map[string]interface{} `json:"parameters,omitempty"`
+}
+
+type AgentCommunicationResponse struct {
+	Success   bool                   `json:"success"`
+	Message   string                 `json:"message,omitempty"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	AgentType string                 `json:"agentType"`
+	Timestamp string                 `json:"timestamp"`
+}
+
+// Valid agent types
+var validAgentTypes = map[string]bool{
+	"ui-dev":       true,
+	"go-dev":       true,
+	"sre":          true,
+	"coordinator":  true,
+	"data-analyst": true,
+	"qa":           true,
+}
+
+// Valid communication types
+var validCommunicationTypes = map[string]bool{
+	"execute":        true,
+	"status":         true,
+	"direct_message": true,
+}
+
+// Maximum message length
+const maxMessageLength = 10000
+
 // REST API Data Transfer Objects (DTOs)
 type TaskDTO struct {
 	ID        string `json:"id"`
@@ -2166,6 +2203,316 @@ func (h *RESTAPIHandler) HandleGetFileWithContent(c *gin.Context) {
 		Size:       file.Size,
 		ChunkCount: len(chunks),
 		IndexedAt:  file.IndexedAt.Format(time.RFC3339),
+	})
+}
+
+// Agent Communication Handlers
+
+// validateAgentType validates that the agent type is one of the allowed types
+func (h *RESTAPIHandler) validateAgentType(agentType string) error {
+	if !validAgentTypes[agentType] {
+		return fmt.Errorf("invalid agent type: %s", agentType)
+	}
+	return nil
+}
+
+// validateCommunicationType validates that the communication type is valid
+func (h *RESTAPIHandler) validateCommunicationType(commType string) error {
+	if !validCommunicationTypes[commType] {
+		return fmt.Errorf("invalid communication type: %s", commType)
+	}
+	return nil
+}
+
+// validateAndLogAgentRequest validates the request method and content type
+func (h *RESTAPIHandler) validateAndLogAgentRequest(c *gin.Context) bool {
+	// Check HTTP method
+	if c.Request.Method != http.MethodPost {
+		c.JSON(http.StatusMethodNotAllowed, AgentCommunicationResponse{
+			Success:   false,
+			Message:   "Method not allowed",
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return false
+	}
+
+	// Check content type (allow empty for some cases)
+	contentType := c.GetHeader("Content-Type")
+	if contentType != "" && !strings.HasPrefix(contentType, "application/json") {
+		c.JSON(http.StatusUnsupportedMediaType, AgentCommunicationResponse{
+			Success:   false,
+			Message:   "Content-Type must be application/json",
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return false
+	}
+
+	return true
+}
+
+// validateExecuteRequest validates an execute type request
+func (h *RESTAPIHandler) validateExecuteRequest(req AgentCommunicationRequest) error {
+	// Check message length
+	if len(req.Message) > maxMessageLength {
+		return fmt.Errorf("message length exceeds maximum of %d characters", maxMessageLength)
+	}
+
+	// Execute requires either a message or parameters with command
+	if req.Message == "" && req.Parameters == nil {
+		return fmt.Errorf("execute communication requires either a message or parameters with command")
+	}
+
+	// If parameters provided, validate command
+	if req.Parameters != nil {
+		command, ok := req.Parameters["command"]
+		if ok {
+			cmdStr, isString := command.(string)
+			if !isString || cmdStr == "" {
+				return fmt.Errorf("command must be a non-empty string")
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateDirectMessageRequest validates a direct_message type request
+func (h *RESTAPIHandler) validateDirectMessageRequest(req AgentCommunicationRequest) error {
+	// Check message length
+	if len(req.Message) > maxMessageLength {
+		return fmt.Errorf("message length exceeds maximum of %d characters", maxMessageLength)
+	}
+
+	// Direct message requires a message (either in Message field or in Parameters)
+	message := req.Message
+	if message == "" && req.Parameters != nil {
+		if msg, ok := req.Parameters["message"].(string); ok {
+			message = msg
+		}
+	}
+
+	if message == "" {
+		return fmt.Errorf("direct_message communication requires message content")
+	}
+
+	return nil
+}
+
+// AgentCommunicate handles agent-to-agent communication
+// POST /api/v1/agents/communicate
+func (h *RESTAPIHandler) AgentCommunicate(c *gin.Context) {
+	// Validate request basics
+	if !h.validateAndLogAgentRequest(c) {
+		return
+	}
+
+	var req AgentCommunicationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, AgentCommunicationResponse{
+			Success:   false,
+			Message:   "Invalid request body: " + err.Error(),
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Validate agent type
+	if err := h.validateAgentType(req.AgentType); err != nil {
+		c.JSON(http.StatusBadRequest, AgentCommunicationResponse{
+			Success:   false,
+			Message:   err.Error(),
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Validate communication type
+	if err := h.validateCommunicationType(req.CommunicationType); err != nil {
+		c.JSON(http.StatusBadRequest, AgentCommunicationResponse{
+			Success:   false,
+			Message:   err.Error(),
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Handle based on communication type
+	switch req.CommunicationType {
+	case "status":
+		h.handleStatusCommunication(c, req)
+	case "execute":
+		h.handleExecuteCommunication(c, req)
+	case "direct_message":
+		h.handleDirectMessageCommunication(c, req)
+	default:
+		c.JSON(http.StatusBadRequest, AgentCommunicationResponse{
+			Success:   false,
+			Message:   "Unsupported communication type",
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+	}
+}
+
+// handleStatusCommunication handles status type communications
+func (h *RESTAPIHandler) handleStatusCommunication(c *gin.Context, req AgentCommunicationRequest) {
+	// If task ID provided, verify access to task
+	if req.TaskID != "" {
+		task, err := h.taskStorage.GetAgentTask(req.TaskID)
+		if err != nil {
+			c.JSON(http.StatusForbidden, AgentCommunicationResponse{
+				Success:   false,
+				Message:   "task not found or access denied",
+				AgentType: req.AgentType,
+				Timestamp: time.Now().Format(time.RFC3339),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, AgentCommunicationResponse{
+			Success:   true,
+			Message:   fmt.Sprintf("Status for task %s: %s", task.ID, task.Status),
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+			Data: map[string]interface{}{
+				"taskId": task.ID,
+				"status": string(task.Status),
+			},
+		})
+		return
+	}
+
+	// General status response
+	c.JSON(http.StatusOK, AgentCommunicationResponse{
+		Success:   true,
+		Message:   fmt.Sprintf("Agent %s is active", req.AgentType),
+		AgentType: req.AgentType,
+		Timestamp: time.Now().Format(time.RFC3339),
+	})
+}
+
+// handleExecuteCommunication handles execute type communications
+func (h *RESTAPIHandler) handleExecuteCommunication(c *gin.Context, req AgentCommunicationRequest) {
+	// Validate execute request
+	if err := h.validateExecuteRequest(req); err != nil {
+		c.JSON(http.StatusBadRequest, AgentCommunicationResponse{
+			Success:   false,
+			Message:   err.Error(),
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Get command from parameters
+	var command string
+	if req.Parameters != nil {
+		if cmd, ok := req.Parameters["command"].(string); ok {
+			command = cmd
+		}
+	}
+
+	// Handle supported commands
+	switch command {
+	case "create_agent_task":
+		h.handleCreateAgentTaskCommand(c, req)
+	case "list_subagents":
+		c.JSON(http.StatusOK, AgentCommunicationResponse{
+			Success:   true,
+			Message:   "Subagents listed successfully",
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+			Data: map[string]interface{}{
+				"subagents": []string{"ui-dev", "go-dev", "sre", "coordinator", "data-analyst", "qa"},
+			},
+		})
+	case "query_knowledge":
+		c.JSON(http.StatusOK, AgentCommunicationResponse{
+			Success:   true,
+			Message:   "Knowledge query executed",
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+			Data:      map[string]interface{}{"results": []interface{}{}},
+		})
+	default:
+		c.JSON(http.StatusBadRequest, AgentCommunicationResponse{
+			Success:   false,
+			Message:   fmt.Sprintf("Unsupported command: %s", command),
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+	}
+}
+
+// handleCreateAgentTaskCommand handles the create_agent_task command
+func (h *RESTAPIHandler) handleCreateAgentTaskCommand(c *gin.Context, req AgentCommunicationRequest) {
+	humanTaskID, _ := req.Parameters["humanTaskId"].(string)
+	role, _ := req.Parameters["role"].(string)
+
+	// Get todos from parameters
+	var todos []storage.TodoItemInput
+	if todosRaw, ok := req.Parameters["todos"]; ok {
+		if todosList, isList := todosRaw.([]storage.TodoItemInput); isList {
+			todos = todosList
+		}
+	}
+
+	task, err := h.taskStorage.CreateAgentTask(
+		humanTaskID,
+		req.AgentType,
+		role,
+		todos,
+		"",   // contextSummary
+		nil,  // filesModified
+		nil,  // qdrantCollections
+		"",   // priorWorkSummary
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, AgentCommunicationResponse{
+			Success:   false,
+			Message:   "Failed to create agent task: " + err.Error(),
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, AgentCommunicationResponse{
+		Success:   true,
+		Message:   fmt.Sprintf("Agent task %s created successfully", task.ID),
+		AgentType: req.AgentType,
+		Timestamp: time.Now().Format(time.RFC3339),
+		Data: map[string]interface{}{
+			"taskId": task.ID,
+		},
+	})
+}
+
+// handleDirectMessageCommunication handles direct_message type communications
+func (h *RESTAPIHandler) handleDirectMessageCommunication(c *gin.Context, req AgentCommunicationRequest) {
+	// Validate direct message request
+	if err := h.validateDirectMessageRequest(req); err != nil {
+		c.JSON(http.StatusBadRequest, AgentCommunicationResponse{
+			Success:   false,
+			Message:   err.Error(),
+			AgentType: req.AgentType,
+			Timestamp: time.Now().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Log the message
+	h.logger.Info("Direct message received",
+		zap.String("agentType", req.AgentType),
+		zap.String("message", req.Message))
+
+	c.JSON(http.StatusOK, AgentCommunicationResponse{
+		Success:   true,
+		Message:   "Message received successfully",
+		AgentType: req.AgentType,
+		Timestamp: time.Now().Format(time.RFC3339),
 	})
 }
 

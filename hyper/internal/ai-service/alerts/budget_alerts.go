@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dev-squad/hyper/internal/storage"
+	"hyper/internal/storage"
 )
 
 // BudgetAlertManager manages budget monitoring and alerts
@@ -156,14 +156,14 @@ func (bam *BudgetAlertManager) checkMonthlyBudget(ctx context.Context, userID, c
 }
 
 // GetActiveAlerts retrieves all active (unresolved) alerts for a user
-func (bam *BudgetAlertManager) GetActiveAlerts(ctx context.Context, userID string) ([]storage.BudgetAlert, error) {
+func (bam *BudgetAlertManager) GetActiveAlerts(ctx context.Context, userID string) ([]*storage.BudgetAlert, error) {
 	alerts, err := bam.storage.GetBudgetAlerts(ctx, userID, 100)
 	if err != nil {
 		return nil, err
 	}
 
 	// Filter for unresolved alerts
-	activeAlerts := []storage.BudgetAlert{}
+	activeAlerts := []*storage.BudgetAlert{}
 	for _, alert := range alerts {
 		if !alert.IsResolved {
 			activeAlerts = append(activeAlerts, alert)

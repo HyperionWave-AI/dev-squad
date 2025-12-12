@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.uber.org/zap"
 )
 
@@ -111,6 +112,38 @@ func (m *MockTaskStorage) ClearTodoPromptNotes(agentTaskID, todoID string) error
 	return args.Error(0)
 }
 
+func (m *MockTaskStorage) GetAgentTasksByName(agentName string) ([]*storage.AgentTask, error) {
+	args := m.Called(agentName)
+	if args.Get(0) != nil {
+		return args.Get(0).([]*storage.AgentTask), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockTaskStorage) ListHumanTasks(filter bson.M) ([]*storage.HumanTask, error) {
+	args := m.Called(filter)
+	if args.Get(0) != nil {
+		return args.Get(0).([]*storage.HumanTask), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockTaskStorage) ListAgentTasks(filter bson.M, offset, limit int) ([]*storage.AgentTask, int, error) {
+	args := m.Called(filter, offset, limit)
+	if args.Get(0) != nil {
+		return args.Get(0).([]*storage.AgentTask), args.Int(1), args.Error(2)
+	}
+	return nil, 0, args.Error(2)
+}
+
+func (m *MockTaskStorage) SearchSimilarHumanTasks(prompt string, limit int, minScore float64) ([]*storage.HumanTask, []float64, error) {
+	args := m.Called(prompt, limit, minScore)
+	if args.Get(0) != nil {
+		return args.Get(0).([]*storage.HumanTask), args.Get(1).([]float64), args.Error(2)
+	}
+	return nil, nil, args.Error(2)
+}
+
 type MockKnowledgeStorage struct {
 	mock.Mock
 }
@@ -131,16 +164,16 @@ func (m *MockKnowledgeStorage) ListKnowledge(collection string, limit int) ([]*s
 	return nil, args.Error(1)
 }
 
-func (m *MockKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}) (*storage.KnowledgeEntry, error) {
-	args := m.Called(collection, text, metadata)
+func (m *MockKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*storage.KnowledgeEntry, error) {
+	args := m.Called(collection, text, metadata, taskId)
 	if args.Get(0) != nil {
 		return args.Get(0).(*storage.KnowledgeEntry), args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (m *MockKnowledgeStorage) Query(collection, query string, limit int) ([]*storage.QueryResult, error) {
-	args := m.Called(collection, query, limit)
+func (m *MockKnowledgeStorage) Query(collection, query string, limit int, taskId *string, voteBoost ...float64) ([]*storage.QueryResult, error) {
+	args := m.Called(collection, query, limit, taskId)
 	if args.Get(0) != nil {
 		return args.Get(0).([]*storage.QueryResult), args.Error(1)
 	}
@@ -151,6 +184,95 @@ func (m *MockKnowledgeStorage) GetPopularCollections(limit int) ([]*storage.Coll
 	args := m.Called(limit)
 	if args.Get(0) != nil {
 		return args.Get(0).([]*storage.CollectionStats), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) UpdateEntry(id, text string, metadata map[string]interface{}) (*storage.KnowledgeEntry, error) {
+	args := m.Called(id, text, metadata)
+	if args.Get(0) != nil {
+		return args.Get(0).(*storage.KnowledgeEntry), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) DeleteEntry(id string) error {
+	args := m.Called(id)
+	return args.Error(0)
+}
+
+func (m *MockKnowledgeStorage) GetEntryByID(id string) (*storage.KnowledgeEntry, error) {
+	args := m.Called(id)
+	if args.Get(0) != nil {
+		return args.Get(0).(*storage.KnowledgeEntry), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) GetEntriesByCollection(collectionName string) ([]*storage.KnowledgeEntry, error) {
+	args := m.Called(collectionName)
+	if args.Get(0) != nil {
+		return args.Get(0).([]*storage.KnowledgeEntry), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) ListCollections() []string {
+	args := m.Called()
+	return args.Get(0).([]string)
+}
+
+func (m *MockKnowledgeStorage) CreateCollection(name, category, description string, tags []string) (*storage.Collection, error) {
+	args := m.Called(name, category, description, tags)
+	if args.Get(0) != nil {
+		return args.Get(0).(*storage.Collection), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) DeleteCollection(id string) (string, int64, error) {
+	args := m.Called(id)
+	return args.String(0), args.Get(1).(int64), args.Error(2)
+}
+
+func (m *MockKnowledgeStorage) UpdateCollectionMetadata(collectionName, description string, tags []string, category string) (*storage.CollectionMetadata, error) {
+	args := m.Called(collectionName, description, tags, category)
+	if args.Get(0) != nil {
+		return args.Get(0).(*storage.CollectionMetadata), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) RenameCollection(oldName, newName string) (int64, error) {
+	args := m.Called(oldName, newName)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) VoteOnEntry(entryID, userID, vote, reason string) (*storage.Vote, error) {
+	args := m.Called(entryID, userID, vote, reason)
+	if args.Get(0) != nil {
+		return args.Get(0).(*storage.Vote), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) GetEntryVotes(entryID, userID string) (*storage.VoteSummary, error) {
+	args := m.Called(entryID, userID)
+	if args.Get(0) != nil {
+		return args.Get(0).(*storage.VoteSummary), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) BatchSyncVotesToQdrant(collectionName string) (int, error) {
+	args := m.Called(collectionName)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockKnowledgeStorage) ExportToFiles(outputPath string, collections []string) (*storage.ExportReport, error) {
+	args := m.Called(outputPath, collections)
+	if args.Get(0) != nil {
+		return args.Get(0).(*storage.ExportReport), args.Error(1)
 	}
 	return nil, args.Error(1)
 }
@@ -248,10 +370,11 @@ func TestCreateHumanTask(t *testing.T) {
 func TestListHumanTasks(t *testing.T) {
 	handler, mockTaskStorage, _ := setupTestHandler()
 
-	mockTaskStorage.On("ListAllHumanTasks").Return([]*storage.HumanTask{
+	// ListHumanTasks now accepts a filter parameter (bson.M)
+	mockTaskStorage.On("ListHumanTasks", mock.AnythingOfType("primitive.M")).Return([]*storage.HumanTask{
 		{ID: "task-1", Prompt: "Task 1"},
 		{ID: "task-2", Prompt: "Task 2"},
-	})
+	}, nil)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -307,8 +430,8 @@ func TestListCollections(t *testing.T) {
 	handler, _, mockKnowledgeStorage := setupTestHandler()
 
 	mockKnowledgeStorage.On("GetCollectionStatsWithMetadata").Return([]*storage.CollectionWithMetadata{
-		{CollectionName: "technical-knowledge", Category: "technical", EntryCount: 10},
-		{CollectionName: "adr", Category: "architecture", EntryCount: 5},
+		{Name: "technical-knowledge", Category: "technical", Count: 10},
+		{Name: "adr", Category: "architecture", Count: 5},
 	}, nil)
 
 	gin.SetMode(gin.TestMode)

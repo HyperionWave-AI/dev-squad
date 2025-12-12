@@ -58,7 +58,7 @@ func main() {
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
 
-	fmt.Println("=== Testing Fixed knowledge_store (via Upsert method) ===\n")
+	fmt.Println("=== Testing Fixed knowledge_store (via Upsert method) ===")
 
 	// Create collection first
 	fmt.Println("1. Creating collection...")
@@ -71,7 +71,7 @@ func main() {
 
 	// Call Upsert
 	fmt.Println("\n2. Calling Upsert (what knowledge_store now uses)...")
-	entry, err := knowledgeStorage.Upsert(testCollection, testText, testMetadata)
+	entry, err := knowledgeStorage.Upsert(testCollection, testText, testMetadata, nil)
 	if err != nil {
 		log.Fatalf("   ✗ Upsert failed: %v", err)
 	}

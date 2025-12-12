@@ -5,10 +5,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/dev-squad/hyper/internal/ai-service/alerts"
-	"github.com/dev-squad/hyper/internal/ai-service/metrics"
-	"github.com/dev-squad/hyper/internal/ai-service/recommendations"
-	"github.com/dev-squad/hyper/internal/storage"
+	"hyper/internal/ai-service/alerts"
+	"hyper/internal/ai-service/metrics"
+	"hyper/internal/ai-service/recommendations"
+	"hyper/internal/storage"
 	"go.uber.org/zap"
 )
 

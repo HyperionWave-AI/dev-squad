@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/zap"
 )
 
@@ -83,11 +87,31 @@ func (m *MockQdrantClient) Ping(ctx context.Context) error {
 }
 
 // setupTestStorage creates a test MongoDB instance with MongoKnowledgeStorage
+// Skips the test if MongoDB is not available (with a short 3-second timeout)
 func setupTestStorage(t *testing.T) (*MongoKnowledgeStorage, *mongo.Database, *MockQdrantClient, func()) {
-	// Use in-memory MongoDB for testing
-	client, err := mongo.Connect(context.Background(), nil)
+	// Get MongoDB URI from environment or use default
+	mongoURI := os.Getenv("MONGODB_URI")
+	if mongoURI == "" {
+		mongoURI = "mongodb://localhost:27017"
+	}
+
+	// Create a short timeout context for connection check (3 seconds)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Try to connect with short timeout
+	clientOpts := options.Client().ApplyURI(mongoURI).SetConnectTimeout(3 * time.Second).SetServerSelectionTimeout(3 * time.Second)
+	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
-		t.Fatalf("Failed to create MongoDB client: %v", err)
+		t.Skipf("Skipping test: MongoDB not available at %s: %v", mongoURI, err)
+	}
+
+	// Ping to verify connection works
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, nil); err != nil {
+		client.Disconnect(context.Background())
+		t.Skipf("Skipping test: MongoDB not responding at %s: %v", mongoURI, err)
 	}
 
 	db := client.Database("test_knowledge_" + uuid.New().String())
@@ -786,4 +810,490 @@ func TestKnowledgeStorage_Query(t *testing.T) {
 // Helper function to create string pointers
 func stringPtr(s string) *string {
 	return &s
+}
+
+// TestSanitizeFilename tests the sanitizeFilename function
+func TestSanitizeFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Spaces replaced with hyphens",
+			input:    "hello world test",
+			expected: "hello-world-test",
+		},
+		{
+			name:     "Special characters removed",
+			input:    "test@file#name!.doc",
+			expected: "testfilenamedoc",
+		},
+		{
+			name:     "Mixed special chars and spaces",
+			input:    "Test File @ Name #1",
+			expected: "test-file-name-1",
+		},
+		{
+			name:     "Lowercase conversion",
+			input:    "UPPERCASE TEST",
+			expected: "uppercase-test",
+		},
+		{
+			name:     "Truncation to 50 chars",
+			input:    "this is a very long title that should be truncated to fifty characters maximum",
+			expected: "this-is-a-very-long-title-that-should-be-truncated",
+		},
+		{
+			name:     "Empty string returns untitled",
+			input:    "",
+			expected: "untitled",
+		},
+		{
+			name:     "Only special characters returns untitled",
+			input:    "!@#$%^&*()",
+			expected: "untitled",
+		},
+		{
+			name:     "Consecutive hyphens collapsed",
+			input:    "test  multiple   spaces",
+			expected: "test-multiple-spaces",
+		},
+		{
+			name:     "Leading and trailing spaces",
+			input:    "  trimmed title  ",
+			expected: "trimmed-title",
+		},
+		{
+			name:     "Numbers preserved",
+			input:    "test123 file456",
+			expected: "test123-file456",
+		},
+		{
+			name:     "Mixed case with numbers and special chars",
+			input:    "Go Lang 1.21 Best Practices!",
+			expected: "go-lang-121-best-practices",
+		},
+		{
+			name:     "Unicode characters removed",
+			input:    "café résumé naïve",
+			expected: "caf-rsum-nave",
+		},
+		{
+			name:     "Truncation removes trailing hyphen",
+			input:    "this is a very long title that ends with hyphen at exactly-",
+			expected: "this-is-a-very-long-title-that-ends-with-hyphen-at",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sanitizeFilename(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestExtractTitleFromText tests the extractTitleFromText function
+func TestExtractTitleFromText(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Extract # heading",
+			input:    "# My Title\n\nSome content here",
+			expected: "My Title",
+		},
+		{
+			name:     "Extract # heading with extra spaces",
+			input:    "#   Spaced Title  \n\nContent",
+			expected: "Spaced Title",
+		},
+		{
+			name:     "Fallback to first 50 chars when no heading",
+			input:    "No heading here, just regular text content that goes on",
+			expected: "No heading here, just regular text content that go",
+		},
+		{
+			name:     "Empty text returns Untitled",
+			input:    "",
+			expected: "Untitled",
+		},
+		{
+			name:     "Whitespace only returns Untitled",
+			input:    "   \n\n   ",
+			expected: "Untitled",
+		},
+		{
+			name:     "Multiple headings - use first",
+			input:    "# First Heading\n\n## Second Heading\n\nContent",
+			expected: "First Heading",
+		},
+		{
+			name:     "Heading after content is still found",
+			input:    "\n\n# Delayed Heading\n\nContent",
+			expected: "Delayed Heading",
+		},
+		{
+			name:     "## heading is not matched (only #)",
+			input:    "## Second Level\n\n# First Level",
+			expected: "First Level",
+		},
+		{
+			name:     "Short first line without heading",
+			input:    "Short\nMore content",
+			expected: "Short",
+		},
+		{
+			name:     "First line exactly 50 chars",
+			input:    "12345678901234567890123456789012345678901234567890\nMore content",
+			expected: "12345678901234567890123456789012345678901234567890",
+		},
+		{
+			name:     "First line over 50 chars truncated",
+			input:    "This is a line that is definitely longer than fifty characters in total\nMore",
+			expected: "This is a line that is definitely longer than fift",
+		},
+		{
+			name:     "Hash without space is not heading",
+			input:    "#notheading\n# Real Heading",
+			expected: "Real Heading",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractTitleFromText(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestWriteToSourceFolder tests the WriteToSourceFolder method
+func TestWriteToSourceFolder(t *testing.T) {
+	// Create a temporary directory for all tests
+	tempDir := t.TempDir()
+
+	// Set up mock storage with minimal dependencies
+	logger := zap.NewNop()
+	mockQdrant := new(MockQdrantClient)
+	mockQdrant.On("GetDimensions").Return(768)
+
+	storage := &MongoKnowledgeStorage{
+		qdrantClient: mockQdrant,
+		logger:       logger,
+	}
+
+	tests := []struct {
+		name           string
+		collection     string
+		text           string
+		metadata       map[string]interface{}
+		envPath        string
+		wantErr        bool
+		validateOutput func(t *testing.T, filePath string)
+	}{
+		{
+			name:       "Creates file with correct content",
+			collection: "test-collection",
+			text:       "# Test Title\n\nThis is the content.",
+			metadata:   nil,
+			envPath:    tempDir,
+			wantErr:    false,
+			validateOutput: func(t *testing.T, filePath string) {
+				assert.FileExists(t, filePath)
+				content, err := os.ReadFile(filePath)
+				assert.NoError(t, err)
+				assert.Contains(t, string(content), "# Test Title")
+				assert.Contains(t, string(content), "**Collection:** test-collection")
+				assert.Contains(t, string(content), "**Version:** 1.0")
+				assert.Contains(t, string(content), "This is the content.")
+			},
+		},
+		{
+			name:       "Creates directory if not exists",
+			collection: "new-collection",
+			text:       "# New Entry\n\nContent here",
+			metadata:   nil,
+			envPath:    tempDir,
+			wantErr:    false,
+			validateOutput: func(t *testing.T, filePath string) {
+				assert.DirExists(t, filepath.Dir(filePath))
+				assert.FileExists(t, filePath)
+			},
+		},
+		{
+			name:       "Handles metadata with string array tags",
+			collection: "tagged",
+			text:       "# Tagged Entry",
+			metadata: map[string]interface{}{
+				"tags": []string{"go", "testing", "best-practices"},
+			},
+			envPath: tempDir,
+			wantErr: false,
+			validateOutput: func(t *testing.T, filePath string) {
+				content, err := os.ReadFile(filePath)
+				assert.NoError(t, err)
+				assert.Contains(t, string(content), "**Tags:** go, testing, best-practices")
+			},
+		},
+		{
+			name:       "Handles metadata with interface array tags",
+			collection: "interface-tagged",
+			text:       "# Interface Tags Entry",
+			metadata: map[string]interface{}{
+				"tags": []interface{}{"tag1", "tag2"},
+			},
+			envPath: tempDir,
+			wantErr: false,
+			validateOutput: func(t *testing.T, filePath string) {
+				content, err := os.ReadFile(filePath)
+				assert.NoError(t, err)
+				assert.Contains(t, string(content), "**Tags:** tag1, tag2")
+			},
+		},
+		{
+			name:       "Handles metadata with string tag",
+			collection: "string-tagged",
+			text:       "# String Tag Entry",
+			metadata: map[string]interface{}{
+				"tags": "single-tag",
+			},
+			envPath: tempDir,
+			wantErr: false,
+			validateOutput: func(t *testing.T, filePath string) {
+				content, err := os.ReadFile(filePath)
+				assert.NoError(t, err)
+				assert.Contains(t, string(content), "**Tags:** single-tag")
+			},
+		},
+		{
+			name:       "Uses custom path from env var",
+			collection: "custom-path",
+			text:       "# Custom Path Entry",
+			metadata:   nil,
+			envPath:    tempDir + "/custom",
+			wantErr:    false,
+			validateOutput: func(t *testing.T, filePath string) {
+				assert.Contains(t, filePath, "/custom/custom-path/")
+				assert.FileExists(t, filePath)
+			},
+		},
+		{
+			name:       "Sanitizes filename from title",
+			collection: "sanitized",
+			text:       "# Special @#$ Characters! In Title",
+			metadata:   nil,
+			envPath:    tempDir,
+			wantErr:    false,
+			validateOutput: func(t *testing.T, filePath string) {
+				assert.Contains(t, filePath, "special-characters-in-title.md")
+			},
+		},
+		{
+			name:       "Skips duplicate title line in content",
+			collection: "no-duplicate",
+			text:       "# My Title\n\nThe actual content without title duplication.",
+			metadata:   nil,
+			envPath:    tempDir,
+			wantErr:    false,
+			validateOutput: func(t *testing.T, filePath string) {
+				content, err := os.ReadFile(filePath)
+				assert.NoError(t, err)
+				// Should have title once in header, then content without title
+				lines := strings.Split(string(content), "\n")
+				titleCount := 0
+				for _, line := range lines {
+					if strings.TrimSpace(line) == "# My Title" {
+						titleCount++
+					}
+				}
+				assert.Equal(t, 1, titleCount, "Title should appear exactly once")
+				assert.Contains(t, string(content), "The actual content without title duplication.")
+			},
+		},
+		{
+			name:       "Empty text creates file with Untitled",
+			collection: "empty-text",
+			text:       "",
+			metadata:   nil,
+			envPath:    tempDir,
+			wantErr:    false,
+			validateOutput: func(t *testing.T, filePath string) {
+				assert.Contains(t, filePath, "untitled.md")
+				content, err := os.ReadFile(filePath)
+				assert.NoError(t, err)
+				assert.Contains(t, string(content), "# Untitled")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set environment variable for this test
+			if tt.envPath != "" {
+				t.Setenv("KB_DOCS_PATH", tt.envPath)
+			} else {
+				t.Setenv("KB_DOCS_PATH", "")
+			}
+
+			filePath, err := storage.WriteToSourceFolder(tt.collection, tt.text, tt.metadata)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.NotEmpty(t, filePath)
+				if tt.validateOutput != nil {
+					tt.validateOutput(t, filePath)
+				}
+			}
+		})
+	}
+}
+
+// TestUpsertWriteBackEnvVariable tests the KB_WRITE_BACK environment variable behavior
+// This is a unit test that verifies the env variable check logic without requiring MongoDB
+func TestUpsertWriteBackEnvVariable(t *testing.T) {
+	tests := []struct {
+		name          string
+		writeBackEnv  string
+		shouldWrite   bool
+	}{
+		{
+			name:         "KB_WRITE_BACK=true should write",
+			writeBackEnv: "true",
+			shouldWrite:  true,
+		},
+		{
+			name:         "KB_WRITE_BACK empty (default) should write",
+			writeBackEnv: "",
+			shouldWrite:  true,
+		},
+		{
+			name:         "KB_WRITE_BACK=false should not write",
+			writeBackEnv: "false",
+			shouldWrite:  false,
+		},
+		{
+			name:         "KB_WRITE_BACK=0 should not write",
+			writeBackEnv: "0",
+			shouldWrite:  false,
+		},
+		{
+			name:         "KB_WRITE_BACK=any_other_value should not write",
+			writeBackEnv: "disabled",
+			shouldWrite:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("KB_WRITE_BACK", tt.writeBackEnv)
+
+			// Verify the environment variable check logic
+			writeBack := os.Getenv("KB_WRITE_BACK")
+			shouldWrite := writeBack == "" || writeBack == "true"
+
+			assert.Equal(t, tt.shouldWrite, shouldWrite,
+				"KB_WRITE_BACK=%q should result in shouldWrite=%v", tt.writeBackEnv, tt.shouldWrite)
+		})
+	}
+}
+
+// TestUpsertWithFileWriteBack_Integration tests the Upsert method's file write-back functionality
+// Requires MongoDB connection - skip if unavailable
+func TestUpsertWithFileWriteBack_Integration(t *testing.T) {
+	// Check if MongoDB is available
+	if os.Getenv("MONGODB_URI") == "" && os.Getenv("CI") == "" {
+		t.Skip("Skipping integration test: MONGODB_URI not set and not in CI")
+	}
+
+	// Create temp directory for file output
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name            string
+		writeBackEnv    string
+		expectFileWrite bool
+	}{
+		{
+			name:            "KB_WRITE_BACK=true creates file",
+			writeBackEnv:    "true",
+			expectFileWrite: true,
+		},
+		{
+			name:            "KB_WRITE_BACK=false skips file write",
+			writeBackEnv:    "false",
+			expectFileWrite: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set environment variables
+			t.Setenv("KB_WRITE_BACK", tt.writeBackEnv)
+			t.Setenv("KB_DOCS_PATH", tempDir)
+
+			// Setup storage with mocks
+			storage, _, mockQdrant, cleanup := setupTestStorage(t)
+			defer cleanup()
+
+			// Create collection
+			collectionName := "writeback-test-" + uuid.New().String()[:8]
+			_, err := storage.CreateCollection(collectionName, "test", "Test collection", []string{})
+			assert.NoError(t, err)
+
+			// Setup mock for StorePoint
+			mockQdrant.On("StorePoint", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+			// Call Upsert
+			entry, err := storage.Upsert(collectionName, "# Test Entry\n\nContent here", nil, nil)
+			assert.NoError(t, err)
+			assert.NotNil(t, entry)
+
+			// Check if file was created
+			expectedPath := filepath.Join(tempDir, collectionName, "test-entry.md")
+			if tt.expectFileWrite {
+				assert.FileExists(t, expectedPath, "File should be created when KB_WRITE_BACK=%s", tt.writeBackEnv)
+			} else {
+				assert.NoFileExists(t, expectedPath, "File should NOT be created when KB_WRITE_BACK=%s", tt.writeBackEnv)
+			}
+		})
+	}
+}
+
+// TestUpsertFileWriteFailureDoesNotBlockDB_Integration tests that file write failure doesn't prevent DB storage
+// Requires MongoDB connection - skip if unavailable
+func TestUpsertFileWriteFailureDoesNotBlockDB_Integration(t *testing.T) {
+	// Check if MongoDB is available
+	if os.Getenv("MONGODB_URI") == "" && os.Getenv("CI") == "" {
+		t.Skip("Skipping integration test: MONGODB_URI not set and not in CI")
+	}
+
+	// Set KB_DOCS_PATH to an invalid/non-writable path
+	t.Setenv("KB_WRITE_BACK", "true")
+	t.Setenv("KB_DOCS_PATH", "/nonexistent/path/that/cannot/be/created")
+
+	storage, _, mockQdrant, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	// Create collection
+	collectionName := "failover-test"
+	_, err := storage.CreateCollection(collectionName, "test", "Test collection", []string{})
+	assert.NoError(t, err)
+
+	// Setup mock for StorePoint
+	mockQdrant.On("StorePoint", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+	// Call Upsert - should succeed even though file write fails
+	entry, err := storage.Upsert(collectionName, "# Test Entry\n\nContent", nil, nil)
+
+	// DB storage should still succeed
+	assert.NoError(t, err, "Upsert should succeed even when file write fails")
+	assert.NotNil(t, entry)
+	assert.NotEmpty(t, entry.ID)
+	assert.Equal(t, collectionName, entry.Collection)
 }

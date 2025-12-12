@@ -1268,6 +1268,57 @@ func (h *KnowledgeHandler) SyncMarkdownKB(c *gin.Context) {
 	})
 }
 
+// ExportToFilesHandler exports knowledge entries to markdown files
+// POST /api/v1/knowledge/export
+func (h *KnowledgeHandler) ExportToFilesHandler(c *gin.Context) {
+	var req struct {
+		OutputPath  string   `json:"outputPath"`
+		Collections []string `json:"collections"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// Default output path if not specified
+	if req.OutputPath == "" {
+		req.OutputPath = os.Getenv("KB_EXPORT_PATH")
+		if req.OutputPath == "" {
+			req.OutputPath = ".hyper/kb-export"
+		}
+	}
+
+	h.logger.Info("Starting knowledge export",
+		zap.String("outputPath", req.OutputPath),
+		zap.Strings("collections", req.Collections))
+
+	// Perform export
+	report, err := h.knowledgeStorage.ExportToFiles(req.OutputPath, req.Collections)
+	if err != nil {
+		h.logger.Error("Failed to export knowledge",
+			zap.String("outputPath", req.OutputPath),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to export knowledge: %v", err)})
+		return
+	}
+
+	h.logger.Info("Knowledge export completed",
+		zap.Int("collectionsExported", report.CollectionsExported),
+		zap.Int("entriesExported", report.EntriesExported),
+		zap.Int("filesCreated", report.FilesCreated))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":             true,
+		"collectionsExported": report.CollectionsExported,
+		"entriesExported":     report.EntriesExported,
+		"filesCreated":        report.FilesCreated,
+		"outputPath":          report.OutputPath,
+		"collections":         report.Collections,
+		"errors":              report.Errors,
+	})
+}
+
 func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/popular-collections", h.GetPopularCollections)
 	r.GET("/collections", h.GetAllCollections)
@@ -1292,4 +1343,5 @@ func (h *KnowledgeHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/migrate", h.MigrateCollectionsHandler)
 	r.POST("/resync-to-unified", h.ResyncToUnifiedHandler)
 	r.GET("/resync-status", h.GetResyncStatusHandler)
+	r.POST("/export", h.ExportToFilesHandler)
 }

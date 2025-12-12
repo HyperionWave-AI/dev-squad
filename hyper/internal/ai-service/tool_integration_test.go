@@ -164,11 +164,15 @@ func TestToolRegistry(t *testing.T) {
 		}
 		registry.Register(tool)
 
-		// Should timeout (registry has 30s default timeout)
-		result, err := registry.Execute(context.Background(), "slow_tool", map[string]interface{}{})
+		// Create a context with a short timeout to test timeout behavior
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		result, err := registry.Execute(ctx, "slow_tool", map[string]interface{}{})
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "context deadline exceeded")
 	})
 
 	t.Run("Get LangChain tools format", func(t *testing.T) {

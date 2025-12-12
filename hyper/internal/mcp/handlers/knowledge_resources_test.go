@@ -137,6 +137,14 @@ func (m *MockKnowledgeStorage) ListKnowledge(collection string, limit int) ([]*s
 	return result, nil
 }
 
+func (m *MockKnowledgeStorage) ExportToFiles(outputPath string, collections []string) (*storage.ExportReport, error) {
+	return &storage.ExportReport{
+		OutputPath:          outputPath,
+		CollectionsExported: len(collections),
+		Collections:         collections,
+	}, nil
+}
+
 func TestKnowledgeResourceHandler_CollectionsResource(t *testing.T) {
 	mockStorage := &MockKnowledgeStorage{
 		collections: []string{"technical-knowledge", "code-patterns", "team-coordination"},

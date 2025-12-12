@@ -7,7 +7,7 @@
  * - Creating, updating, and deleting entries
  */
 
-import type { SyncReport } from '@/types/knowledge';
+import type { SyncReport, ExportReport } from '@/types/knowledge';
 
 export interface KnowledgeEntry {
   id: string;
@@ -488,6 +488,30 @@ class KnowledgeService {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Failed to sync markdown KB');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Export knowledge entries to markdown files
+   * Exports all or specified collections to a target directory
+   */
+  async exportToFiles(outputPath?: string, collections?: string[]): Promise<ExportReport> {
+    const response = await fetch('/api/v1/knowledge/export', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        outputPath: outputPath || '.hyper/kb',
+        collections: collections || [],
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to export knowledge to files');
     }
 
     return response.json();

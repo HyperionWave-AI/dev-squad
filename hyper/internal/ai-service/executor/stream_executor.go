@@ -263,20 +263,6 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 		}
 	}
 
-	// CRITICAL FIX: Stream any remaining accumulated text to frontend before completing
-	// This handles the case where AI generates text after the last tool call
-	if fullResponse != "" && !e.config.OutputSink.IsDisconnected() {
-		if err := e.config.OutputSink.SendToken(fullResponse); err != nil {
-			e.logger.Warn("Failed to send final accumulated text to frontend",
-				zap.String("sessionId", e.config.SessionID.Hex()),
-				zap.Error(err))
-		} else {
-			e.logger.Debug("Streamed final accumulated text to frontend",
-				zap.String("sessionId", e.config.SessionID.Hex()),
-				zap.Int("textLength", len(fullResponse)))
-		}
-	}
-
 	// RACE CONDITION FIX: Save to database FIRST, then send signals
 	// Previous order: done -> save (broken: frontend refreshes before save completes)
 	// New order: save -> message_saved -> done (safe: message guaranteed in DB before done)

@@ -365,16 +365,15 @@ func TestKnowledgeStore_NoMetadata(t *testing.T) {
 
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "✓ Knowledge stored in Qdrant")
+	assert.Contains(t, textContent.Text, "✓ Knowledge stored successfully")
 }
 
 // Test knowledge_store with storage failure
 func TestKnowledgeStore_StorageFailure(t *testing.T) {
 	mockClient := NewMockQdrantClient()
-	mockClient.shouldError = true
-	mockClient.errorMsg = "storage failure"
 	handler := NewQdrantToolHandler(mockClient)
-	mockStorage := NewMockVotingStorage()
+	// Use a mock storage that returns an error on Upsert
+	mockStorage := NewMockVotingStorageWithError("storage failure")
 	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
@@ -390,16 +389,16 @@ func TestKnowledgeStore_StorageFailure(t *testing.T) {
 
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "failed to ensure collection exists")
+	assert.Contains(t, textContent.Text, "Failed to store knowledge")
+	assert.Contains(t, textContent.Text, "storage failure")
 }
 
-// Test knowledge_find with collection creation failure
+// Test knowledge_find with query failure
 func TestKnowledgeFind_CollectionFailure(t *testing.T) {
 	mockClient := NewMockQdrantClient()
-	mockClient.shouldError = true
-	mockClient.errorMsg = "collection creation failed"
 	handler := NewQdrantToolHandler(mockClient)
-	mockStorage := NewMockVotingStorage()
+	// Use a mock storage that returns an error on Query
+	mockStorage := NewMockVotingStorageWithError("query failed: collection not found")
 	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
@@ -415,7 +414,8 @@ func TestKnowledgeFind_CollectionFailure(t *testing.T) {
 
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "failed to ensure collection exists")
+	// The handler transforms "collection not found" errors to a user-friendly message
+	assert.Contains(t, textContent.Text, "not found")
 }
 
 // Test RegisterQdrantTools
@@ -501,14 +501,26 @@ func TestKnowledgeFind_ResponseFormat(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
 
-	// Create test data with long text
-	longText := "This is a very long piece of text that should be truncated in the response because it exceeds 200 characters. " +
-		"This additional text ensures we go well over the 200 character limit so we can verify truncation is working correctly in our implementation."
+	// Create test data with long text via mockStorage (which the handler uses)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
-	mockClient.EnsureCollection("test-collection", 1536)
-	mockClient.StorePoint("test-collection", "test-id", longText, map[string]interface{}{
+	// Create text that exceeds 800 characters (the default chunk size)
+	// The text needs to be > 800 chars to trigger truncation
+	longText := "This is a very long piece of text that should be truncated in the response because it exceeds the chunk size. " +
+		"This additional text ensures we go well over the limit so we can verify truncation is working correctly. " +
+		"More text to ensure we exceed the chunk size limit of 800 characters in the default chunk mode. " +
+		"This is additional padding text to make sure the content is long enough to be truncated when chunk mode is used. " +
+		"We need more content here to really test the truncation behavior properly and ensure it works as expected. " +
+		"Let's add even more text to be absolutely sure we exceed the default chunk size of 800 characters. " +
+		"Final padding to ensure the text is definitely long enough for truncation testing purposes. " +
+		"Adding even more padding here to make absolutely certain we cross the 800 character threshold. " +
+		"This should definitely be enough text now to trigger the truncation behavior in the handler."
+
+	// Store the long text via mockStorage
+	mockStorage.Upsert("test-collection", longText, map[string]interface{}{
 		"key": "value",
-	})
+	}, nil)
 
 	args := map[string]interface{}{
 		"collectionName": "test-collection",
@@ -525,13 +537,14 @@ func TestKnowledgeFind_ResponseFormat(t *testing.T) {
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 
-	// Verify format: "Result N (Score: 0.XX)"
+	// Verify format: "Result N (Score: 0.XX, ID:"
 	assert.Contains(t, textContent.Text, "Result 1 (Score:")
-	assert.Contains(t, textContent.Text, "Text:")
-	assert.Contains(t, textContent.Text, "Metadata:")
+	assert.Contains(t, textContent.Text, "Text")
+	// Note: The new format shows "ID:" instead of "Metadata:" in chunk mode
+	assert.Contains(t, textContent.Text, "ID:")
 	assert.Contains(t, textContent.Text, "---")
 
-	// Verify truncation (first 200 chars + "...")
+	// Verify truncation (chunk mode shows "..." for truncated text)
 	assert.Contains(t, textContent.Text, "...")
 }
 
@@ -730,6 +743,35 @@ func (m *MockVotingStorage) RenameCollection(oldName, newName string) (int64, er
 
 func (m *MockVotingStorage) BatchSyncVotesToQdrant(collectionName string) (int, error) {
 	return 0, nil
+}
+
+func (m *MockVotingStorage) ExportToFiles(outputPath string, collections []string) (*storage.ExportReport, error) {
+	return &storage.ExportReport{
+		OutputPath:          outputPath,
+		CollectionsExported: len(collections),
+		Collections:         collections,
+	}, nil
+}
+
+// MockVotingStorageWithError is a mock storage that returns errors for testing failure scenarios
+type MockVotingStorageWithError struct {
+	*MockVotingStorage
+	errorMsg string
+}
+
+func NewMockVotingStorageWithError(errorMsg string) *MockVotingStorageWithError {
+	return &MockVotingStorageWithError{
+		MockVotingStorage: NewMockVotingStorage(),
+		errorMsg:          errorMsg,
+	}
+}
+
+func (m *MockVotingStorageWithError) Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*storage.KnowledgeEntry, error) {
+	return nil, &mockError{msg: m.errorMsg}
+}
+
+func (m *MockVotingStorageWithError) Query(collection, query string, limit int, taskId *string, voteBoost ...float64) ([]*storage.QueryResult, error) {
+	return nil, &mockError{msg: m.errorMsg}
 }
 
 // Test knowledge_vote_on_entry with successful upvote

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dev-squad/hyper/internal/storage"
+	"hyper/internal/storage"
 )
 
 // OptimizerMetrics provides optimization metrics analysis

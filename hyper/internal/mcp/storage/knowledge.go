@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -33,12 +35,12 @@ func GetUnifiedCollectionName() string {
 // All knowledge entries are stored in a single unified Qdrant collection with collectionId filtering
 type Collection struct {
 	ID          primitive.ObjectID `json:"id" bson:"_id"`
-	Name        string             `json:"name" bson:"name"`               // User-facing collection name
-	QdrantName  string             `json:"qdrantName" bson:"qdrantName"`   // Unique identifier for Qdrant collection mapping
+	Name        string             `json:"name" bson:"name"`             // User-facing collection name
+	QdrantName  string             `json:"qdrantName" bson:"qdrantName"` // Unique identifier for Qdrant collection mapping
 	Category    string             `json:"category" bson:"category"`
 	Description string             `json:"description" bson:"description"`
 	Tags        []string           `json:"tags" bson:"tags"`
-	EntryCount  int                `json:"entryCount" bson:"entryCount"`   // Cached count
+	EntryCount  int                `json:"entryCount" bson:"entryCount"` // Cached count
 	CreatedAt   time.Time          `json:"createdAt" bson:"createdAt"`
 	UpdatedAt   time.Time          `json:"updatedAt" bson:"updatedAt"`
 }
@@ -104,6 +106,16 @@ type CollectionMetadata struct {
 	UpdatedAt      time.Time `json:"updatedAt" bson:"updatedAt"`
 }
 
+// ExportReport contains statistics about a knowledge export operation
+type ExportReport struct {
+	CollectionsExported int      `json:"collectionsExported"`
+	EntriesExported     int      `json:"entriesExported"`
+	FilesCreated        int      `json:"filesCreated"`
+	OutputPath          string   `json:"outputPath"`
+	Collections         []string `json:"collections"`
+	Errors              []string `json:"errors,omitempty"`
+}
+
 // KnowledgeStorage provides storage interface for knowledge entries
 type KnowledgeStorage interface {
 	Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*KnowledgeEntry, error)
@@ -123,18 +135,19 @@ type KnowledgeStorage interface {
 	VoteOnEntry(entryID, userID, vote, reason string) (*Vote, error)
 	GetEntryVotes(entryID, userID string) (*VoteSummary, error)
 	BatchSyncVotesToQdrant(collectionName string) (int, error)
+	ExportToFiles(outputPath string, collections []string) (*ExportReport, error)
 }
 
 // ResyncStatus represents the current status of a resync operation
 type ResyncStatus struct {
-	InProgress              bool      `json:"inProgress"`
-	TotalEntries            int       `json:"totalEntries"`
-	ProcessedEntries        int       `json:"processedEntries"`
-	Percentage              float64   `json:"percentage"`
-	EstimatedTimeRemaining  string    `json:"estimatedTimeRemaining,omitempty"`
-	ErrorMessage            string    `json:"errorMessage,omitempty"`
-	CompletedTime           string    `json:"completedTime,omitempty"`
-	StartTime               time.Time `json:"-"`
+	InProgress             bool      `json:"inProgress"`
+	TotalEntries           int       `json:"totalEntries"`
+	ProcessedEntries       int       `json:"processedEntries"`
+	Percentage             float64   `json:"percentage"`
+	EstimatedTimeRemaining string    `json:"estimatedTimeRemaining,omitempty"`
+	ErrorMessage           string    `json:"errorMessage,omitempty"`
+	CompletedTime          string    `json:"completedTime,omitempty"`
+	StartTime              time.Time `json:"-"`
 }
 
 // MongoKnowledgeStorage implements KnowledgeStorage using MongoDB + Qdrant
@@ -722,6 +735,21 @@ func (s *MongoKnowledgeStorage) MigrateToCollectionObjects() (map[string]interfa
 func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*KnowledgeEntry, error) {
 	ctx := context.Background()
 
+	// Check if we should write to source folder (KB_WRITE_BACK env var, default: true)
+	writeBack := os.Getenv("KB_WRITE_BACK")
+	if writeBack == "" || writeBack == "true" {
+		filePath, err := s.WriteToSourceFolder(collection, text, metadata)
+		if err != nil {
+			// Log warning but continue with DB storage
+			s.logger.Warn("Failed to write knowledge entry to source folder",
+				zap.String("collection", collection),
+				zap.Error(err))
+		} else {
+			s.logger.Debug("Knowledge entry written to source folder",
+				zap.String("filePath", filePath))
+		}
+	}
+
 	// Lookup Collection object by name, auto-create if it doesn't exist
 	collectionObj, err := s.GetCollection(collection)
 	if err != nil {
@@ -745,8 +773,8 @@ func (s *MongoKnowledgeStorage) Upsert(collection, text string, metadata map[str
 
 	entry := &KnowledgeEntry{
 		ID:           uuid.New().String(),
-		CollectionID: collectionObj.ID,      // NEW: Set collection ID
-		Collection:   collection,            // Keep for backward compatibility
+		CollectionID: collectionObj.ID, // NEW: Set collection ID
+		Collection:   collection,       // Keep for backward compatibility
 		Text:         text,
 		Metadata:     metadata,
 		CreatedAt:    time.Now().UTC(),
@@ -1342,6 +1370,158 @@ func calculateSimilarity(query, text string) float64 {
 	return float64(matchCount) / float64(len(queryWords)) * 0.5
 }
 
+// sanitizeFilename sanitizes a string for use as a filename
+// Replaces spaces with hyphens, removes special chars, lowercases, truncates to 50 chars
+func sanitizeFilename(title string) string {
+	// Convert to lowercase
+	result := strings.ToLower(title)
+
+	// Replace spaces with hyphens
+	result = strings.ReplaceAll(result, " ", "-")
+
+	// Remove special characters (keep alphanumeric and hyphens)
+	reg := regexp.MustCompile(`[^a-z0-9\-]`)
+	result = reg.ReplaceAllString(result, "")
+
+	// Remove consecutive hyphens
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+
+	// Trim leading/trailing hyphens
+	result = strings.Trim(result, "-")
+
+	// Truncate to 50 chars
+	if len(result) > 50 {
+		result = result[:50]
+		// Ensure we don't cut off in the middle of a word (trim trailing hyphen)
+		result = strings.TrimSuffix(result, "-")
+	}
+
+	// If empty, use a default
+	if result == "" {
+		result = "untitled"
+	}
+
+	return result
+}
+
+// extractTitleFromText extracts the title from text content
+// Looks for first # heading line, or falls back to first 50 chars
+func extractTitleFromText(text string) string {
+	lines := strings.Split(text, "\n")
+
+	// Look for first # heading
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+		}
+	}
+
+	// Fallback: first 50 non-empty chars
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "Untitled"
+	}
+
+	// Get first line or first 50 chars
+	firstLine := strings.Split(text, "\n")[0]
+	firstLine = strings.TrimSpace(firstLine)
+
+	if len(firstLine) > 50 {
+		firstLine = firstLine[:50]
+	}
+
+	if firstLine == "" {
+		return "Untitled"
+	}
+
+	return firstLine
+}
+
+// WriteToSourceFolder writes a knowledge entry to the source folder as a markdown file
+// This enables bidirectional sync where tool-created entries are also persisted to git-tracked files
+// Uses KB_DOCS_PATH env var for base path (default: ".hyper/kb")
+func (s *MongoKnowledgeStorage) WriteToSourceFolder(collection, text string, metadata map[string]interface{}) (string, error) {
+	// Get base path from env var with default
+	basePath := os.Getenv("KB_DOCS_PATH")
+	if basePath == "" {
+		basePath = ".hyper/kb"
+	}
+
+	// Extract title from text
+	title := extractTitleFromText(text)
+
+	// Sanitize title for filename
+	filename := sanitizeFilename(title) + ".md"
+
+	// Build directory path: basePath/collection/
+	dirPath := filepath.Join(basePath, collection)
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory %s: %w", dirPath, err)
+	}
+
+	// Build full file path
+	filePath := filepath.Join(dirPath, filename)
+
+	// Extract tags from metadata
+	tagsStr := ""
+	if metadata != nil {
+		if tags, ok := metadata["tags"]; ok {
+			switch v := tags.(type) {
+			case []string:
+				tagsStr = strings.Join(v, ", ")
+			case []interface{}:
+				tagStrings := make([]string, 0, len(v))
+				for _, t := range v {
+					if s, ok := t.(string); ok {
+						tagStrings = append(tagStrings, s)
+					}
+				}
+				tagsStr = strings.Join(tagStrings, ", ")
+			case string:
+				tagsStr = v
+			}
+		}
+	}
+
+	// Build markdown content with frontmatter
+	var content strings.Builder
+	content.WriteString(fmt.Sprintf("# %s\n\n", title))
+	content.WriteString(fmt.Sprintf("**Collection:** %s\n", collection))
+	if tagsStr != "" {
+		content.WriteString(fmt.Sprintf("**Tags:** %s\n", tagsStr))
+	}
+	content.WriteString("**Version:** 1.0\n")
+	content.WriteString(fmt.Sprintf("**Last Updated:** %s\n", time.Now().UTC().Format("2006-01-02")))
+	content.WriteString("\n---\n\n")
+
+	// Add content (skip the title if it's already in the text)
+	textContent := text
+	lines := strings.Split(text, "\n")
+	if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "# ") {
+		// Skip the first title line as we already added it
+		textContent = strings.TrimSpace(strings.Join(lines[1:], "\n"))
+	}
+	content.WriteString(textContent)
+	content.WriteString("\n")
+
+	// Write file
+	if err := os.WriteFile(filePath, []byte(content.String()), 0644); err != nil {
+		return "", fmt.Errorf("failed to write file %s: %w", filePath, err)
+	}
+
+	s.logger.Info("Wrote knowledge entry to source folder",
+		zap.String("collection", collection),
+		zap.String("title", title),
+		zap.String("filePath", filePath))
+
+	return filePath, nil
+}
+
 // UpdateCollectionMetadata updates or creates metadata for a collection
 func (s *MongoKnowledgeStorage) UpdateCollectionMetadata(collectionName, description string, tags []string, category string) (*CollectionMetadata, error) {
 	ctx := context.Background()
@@ -1918,4 +2098,130 @@ func (s *MongoKnowledgeStorage) GetResyncStatus() ResyncStatus {
 		}
 	}
 	return *s.resyncStatus
+}
+
+// ExportToFiles exports knowledge entries to markdown files in the specified output path
+// If collections is empty, exports all collections
+func (s *MongoKnowledgeStorage) ExportToFiles(outputPath string, collections []string) (*ExportReport, error) {
+	report := &ExportReport{
+		OutputPath:  outputPath,
+		Collections: make([]string, 0),
+		Errors:      make([]string, 0),
+	}
+
+	// Get collections to export
+	var collectionsToExport []*Collection
+	var err error
+
+	if len(collections) == 0 {
+		// Export all collections
+		collectionsToExport, err = s.ListCollectionsObjects()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list collections: %w", err)
+		}
+	} else {
+		// Export specified collections
+		for _, name := range collections {
+			col, err := s.GetCollection(name)
+			if err != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("Collection not found: %s", name))
+				continue
+			}
+			collectionsToExport = append(collectionsToExport, col)
+		}
+	}
+
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Export each collection
+	for _, col := range collectionsToExport {
+		entries, err := s.GetEntriesByCollection(col.Name)
+		if err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("Failed to get entries for %s: %v", col.Name, err))
+			continue
+		}
+
+		// Create collection directory
+		collectionDir := filepath.Join(outputPath, col.Name)
+		if err := os.MkdirAll(collectionDir, 0755); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("Failed to create directory for %s: %v", col.Name, err))
+			continue
+		}
+
+		// Export each entry as a markdown file
+		for _, entry := range entries {
+			filename := sanitizeFilename(extractTitleFromText(entry.Text)) + ".md"
+			filePath := filepath.Join(collectionDir, filename)
+
+			content := s.formatEntryAsMarkdown(entry, col.Name)
+			if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("Failed to write %s: %v", filePath, err))
+				continue
+			}
+			report.FilesCreated++
+			report.EntriesExported++
+		}
+
+		report.CollectionsExported++
+		report.Collections = append(report.Collections, col.Name)
+	}
+
+	s.logger.Info("Knowledge export completed",
+		zap.String("outputPath", outputPath),
+		zap.Int("collectionsExported", report.CollectionsExported),
+		zap.Int("entriesExported", report.EntriesExported),
+		zap.Int("filesCreated", report.FilesCreated))
+
+	return report, nil
+}
+
+// formatEntryAsMarkdown formats a knowledge entry as markdown content
+func (s *MongoKnowledgeStorage) formatEntryAsMarkdown(entry *KnowledgeEntry, collectionName string) string {
+	var content strings.Builder
+
+	// Extract title
+	title := extractTitleFromText(entry.Text)
+
+	// Write header
+	content.WriteString(fmt.Sprintf("# %s\n\n", title))
+	content.WriteString(fmt.Sprintf("**Collection:** %s\n", collectionName))
+
+	// Add tags from metadata if present
+	if entry.Metadata != nil {
+		if tags, ok := entry.Metadata["tags"]; ok {
+			switch v := tags.(type) {
+			case []string:
+				content.WriteString(fmt.Sprintf("**Tags:** %s\n", strings.Join(v, ", ")))
+			case []interface{}:
+				tagStrings := make([]string, 0, len(v))
+				for _, t := range v {
+					if s, ok := t.(string); ok {
+						tagStrings = append(tagStrings, s)
+					}
+				}
+				if len(tagStrings) > 0 {
+					content.WriteString(fmt.Sprintf("**Tags:** %s\n", strings.Join(tagStrings, ", ")))
+				}
+			case string:
+				content.WriteString(fmt.Sprintf("**Tags:** %s\n", v))
+			}
+		}
+	}
+
+	content.WriteString(fmt.Sprintf("**Created:** %s\n", entry.CreatedAt.Format("2006-01-02")))
+	content.WriteString("\n---\n\n")
+
+	// Write content (skip title if already in text)
+	textContent := entry.Text
+	lines := strings.Split(entry.Text, "\n")
+	if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), "# ") {
+		textContent = strings.TrimSpace(strings.Join(lines[1:], "\n"))
+	}
+	content.WriteString(textContent)
+	content.WriteString("\n")
+
+	return content.String()
 }

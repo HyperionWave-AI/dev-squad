@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -590,13 +591,8 @@ func createLargeString(size int) string {
 	if size <= 0 {
 		return ""
 	}
-	// Create a string by repeating a pattern
-	pattern := "x"
-	result := ""
-	for len(result) < size {
-		result += pattern
-	}
-	return result[:size]
+	// Use strings.Repeat for O(n) performance instead of O(n^2) concatenation
+	return strings.Repeat("x", size)
 }
 
 // TestCalculateSplitPointBySize tests the size-based split point calculation

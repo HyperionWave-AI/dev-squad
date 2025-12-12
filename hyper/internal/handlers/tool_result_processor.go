@@ -15,6 +15,72 @@ type ToolResultProcessed struct {
 	IsTruncated    bool   // Whether output was modified
 }
 
+// ProcessedToolResult holds the result after processing with summarization info
+type ProcessedToolResult struct {
+	OriginalResult interface{} // The original tool result
+	ProcessedStr   string      // Processed/summarized output string
+	WasSummarized  bool        // Whether the result was summarized
+	TokenCount     int         // Estimated token count of the result
+}
+
+// ToolResultProcessor handles processing of tool results with token-aware summarization
+type ToolResultProcessor struct {
+	estimator *TokenEstimator
+}
+
+// NewToolResultProcessor creates a new tool result processor
+func NewToolResultProcessor() *ToolResultProcessor {
+	return &ToolResultProcessor{
+		estimator: NewTokenEstimator(),
+	}
+}
+
+// ProcessToolResult processes a single tool result, potentially summarizing if too large
+func (p *ToolResultProcessor) ProcessToolResult(toolName string, result interface{}, remainingContextTokens int) *ProcessedToolResult {
+	// Estimate token count for the result
+	tokenCount := p.estimator.EstimateTokens(result)
+
+	// Check if we should summarize
+	wasSummarized := p.estimator.ShouldUseSummary(tokenCount, remainingContextTokens)
+
+	var processedStr string
+	if wasSummarized {
+		// Generate a summary instead of the full result
+		processedStr = extractToolResultSummary(toolName, result)
+	} else {
+		// Use the full result
+		if str, ok := result.(string); ok {
+			processedStr = str
+		} else {
+			processedStr = fmt.Sprintf("%v", result)
+		}
+	}
+
+	return &ProcessedToolResult{
+		OriginalResult: result,
+		ProcessedStr:   processedStr,
+		WasSummarized:  wasSummarized,
+		TokenCount:     tokenCount,
+	}
+}
+
+// ProcessMultipleToolResults processes multiple tool results
+func (p *ToolResultProcessor) ProcessMultipleToolResults(toolResults map[string]interface{}, remainingContextTokens int) map[string]*ProcessedToolResult {
+	results := make(map[string]*ProcessedToolResult)
+
+	// Distribute remaining context tokens among tools
+	tokensPerTool := remainingContextTokens
+	if len(toolResults) > 0 {
+		tokensPerTool = remainingContextTokens / len(toolResults)
+	}
+
+	for toolName, result := range toolResults {
+		results[toolName] = p.ProcessToolResult(toolName, result, tokensPerTool)
+	}
+
+	return results
+}
+
 // extractToolResultSummary generates concise metadata for suppressed tool results
 func extractToolResultSummary(toolName string, output interface{}) string {
 	switch toolName {

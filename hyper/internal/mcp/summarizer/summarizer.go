@@ -205,6 +205,7 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, code string, metadata Cod
 				zap.String("node_type", metadata.NodeType),
 			)
 			cached.CacheHit = true
+			cached.Type = "cached"
 			latencyMs := time.Since(startTime).Milliseconds()
 			s.metrics.RecordSummarization("cached", latencyMs, cached.TokenCount, true)
 			return cached, nil
