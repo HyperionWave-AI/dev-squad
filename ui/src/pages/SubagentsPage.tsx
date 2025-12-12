@@ -111,14 +111,16 @@ export function SubagentsPage() {
                 </Accordion.Header>
                 <Accordion.Content className="px-4 py-3 bg-white/30 dark:bg-gray-700/30">
                   <div className="space-y-3">
-                    <div>
-                      <h4 className="text-sm font-semibold mb-1 text-gray-900 dark:text-gray-100">Tools</h4>
-                      <div className="flex flex-wrap gap-1">
-                        {agent.tools.map((tool, i) => (
-                          <Badge key={i} variant="outline" className="text-xs">{tool}</Badge>
-                        ))}
+                    {agent.tools && agent.tools.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-semibold mb-1 text-gray-900 dark:text-gray-100">Tools</h4>
+                        <div className="flex flex-wrap gap-1">
+                          {agent.tools.map((tool, i) => (
+                            <Badge key={i} variant="outline" className="text-xs">{tool}</Badge>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     {agent.examples && agent.examples.length > 0 && (
                       <div>
                         <h4 className="text-sm font-semibold mb-1 text-gray-900 dark:text-gray-100">Examples</h4>
