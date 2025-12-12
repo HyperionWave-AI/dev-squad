@@ -12,11 +12,13 @@ var (
 	fileLinePattern = regexp.MustCompile(`([a-zA-Z0-9_\-./]+\.(go|ts|tsx|js|jsx|py|java|rs|md|yaml|yml|json)):(\d+)`)
 	fileLinesPattern = regexp.MustCompile(`([a-zA-Z0-9_\-./]+\.(go|ts|tsx|js|jsx|py|java|rs|md|yaml|yml|json))\s*\(lines?\s+(\d+)(?:-(\d+))?\)`)
 
-	// Function patterns: FunctionName() or Type.Method() or package.FunctionName()
-	functionPattern = regexp.MustCompile(`\b([A-Z][a-zA-Z0-9]*(?:\.[A-Z][a-zA-Z0-9]*)?)\s*\(`)
+	// Function patterns: FunctionName() or Type.Method() or package.FunctionName() or handleSearch()
+	// Matches both uppercase and lowercase starting function names
+	functionPattern = regexp.MustCompile(`\b([a-zA-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)?)\s*\(`)
 
-	// Git commit patterns: 7 or 40 character hex strings
-	commitPattern = regexp.MustCompile(`\b([0-9a-f]{7,40})\b`)
+	// Git commit patterns: 7-40 character hex strings (allow up to 41 for edge cases)
+	// No trailing word boundary to match hashes at end of string
+	commitPattern = regexp.MustCompile(`\b([0-9a-f]{7,})`)
 
 	// API endpoint patterns: HTTP method + path
 	apiPattern = regexp.MustCompile(`\b(GET|POST|PUT|DELETE|PATCH)\s+(/[a-zA-Z0-9/_:\-]+)`)
@@ -76,6 +78,13 @@ func parseReferences(text string) []Reference {
 	for _, match := range matches {
 		funcName := text[match[2]:match[3]]
 
+		// Filter out file extensions (e.g., "mcp.go" should not be treated as a function)
+		if strings.HasSuffix(funcName, ".go") || strings.HasSuffix(funcName, ".js") ||
+		   strings.HasSuffix(funcName, ".ts") || strings.HasSuffix(funcName, ".py") ||
+		   strings.HasSuffix(funcName, ".tsx") || strings.HasSuffix(funcName, ".jsx") {
+			continue
+		}
+
 		// Filter out common false positives (keywords, common words)
 		if isLikelyFunctionName(funcName) {
 			// Use funcName with method call syntax as key to avoid duplicates
@@ -96,21 +105,20 @@ func parseReferences(text string) []Reference {
 	for _, match := range matches {
 		commitHash := text[match[2]:match[3]]
 
-		// Only consider as commit if near keywords like "commit", "SHA", "hash"
-		// Get wider context (100 chars instead of 50 for keyword detection)
-		contextStart := match[0] - 100
+		// Only consider as commit if it appears in commit reference patterns
+		// Look for patterns like "commit <hash>", "SHA <hash>", "hash <hash>"
+		// Get context before the hash (up to 30 chars)
+		contextStart := match[0] - 30
 		if contextStart < 0 {
 			contextStart = 0
 		}
-		contextEnd := match[1] + 100
-		if contextEnd > len(text) {
-			contextEnd = len(text)
-		}
-		wideContext := strings.ToLower(text[contextStart:contextEnd])
+		beforeContext := strings.ToLower(text[contextStart:match[0]])
 
-		if (strings.Contains(wideContext, "commit") ||
-		    strings.Contains(wideContext, "sha") ||
-		    strings.Contains(wideContext, "hash")) && !seen[commitHash] {
+		// Check if there's a commit keyword immediately before the hash (with optional whitespace)
+		// Patterns: "commit <hash>", "SHA: <hash>", "hash: <hash>", etc.
+		hasCommitKeyword := regexp.MustCompile(`(?:commit|sha|hash)\s*:?\s*$`).MatchString(beforeContext)
+
+		if hasCommitKeyword && !seen[commitHash] {
 			refs = append(refs, Reference{
 				Type:    ReferenceTypeCommit,
 				Value:   commitHash,
@@ -181,12 +189,14 @@ func extractContext(text string, start, end int) string {
 
 // isLikelyFunctionName filters out common false positives
 func isLikelyFunctionName(name string) bool {
-	// Filter out common false positives
+	// Filter out common false positives (both upper and lowercase)
 	falsePositives := map[string]bool{
 		"If": true, "For": true, "While": true, "Switch": true,
 		"Type": true, "This": true, "The": true, "When": true,
 		"Error": true, "String": true, "Int": true, "Bool": true,
 		"Map": true, "Array": true, "List": true, "Set": true,
+		"if": true, "for": true, "while": true, "switch": true,
+		"new": true, "return": true, "case": true, "break": true,
 	}
 
 	// Check if it's a false positive
@@ -194,19 +204,32 @@ func isLikelyFunctionName(name string) bool {
 		return false
 	}
 
-	// Must start with uppercase and be at least 2 characters
+	// Must be at least 2 characters
 	if len(name) < 2 {
 		return false
 	}
 
-	// Should contain at least one lowercase letter (to filter out acronyms like "HTTP")
+	// Check if it has mixed case or is a reasonable length lowercase name
+	// This handles both HandleSearch (uppercase) and handleSearch (lowercase)
+	hasUppercase := false
 	hasLowercase := false
 	for _, ch := range name {
+		if ch >= 'A' && ch <= 'Z' {
+			hasUppercase = true
+		}
 		if ch >= 'a' && ch <= 'z' {
 			hasLowercase = true
-			break
 		}
 	}
 
-	return hasLowercase
+	// Accept if:
+	// 1. Has both upper and lowercase (e.g., HandleSearch, handleSearch)
+	// 2. Is all lowercase but longer than 3 chars (e.g., handleSearch is reasonable, but "if" isn't)
+	// 3. Starts with uppercase and has lowercase (traditional Go naming)
+	if (hasUppercase && hasLowercase) || (hasLowercase && !hasUppercase && len(name) > 3) {
+		return true
+	}
+
+	// Reject all-uppercase acronyms like "HTTP"
+	return false
 }

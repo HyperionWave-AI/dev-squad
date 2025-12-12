@@ -73,7 +73,11 @@ func TestGetTools_Empty(t *testing.T) {
 // Test RegisterToolWithServer
 func TestRegisterToolWithServer(t *testing.T) {
 	registry := NewToolMetadataRegistry()
-	server := mcp.NewServer()
+	impl := &mcp.Implementation{
+		Name:    "test-server",
+		Version: "1.0.0",
+	}
+	server := mcp.NewServer(impl, nil)
 
 	tool := &mcp.Tool{
 		Name:        "test_tool",
@@ -111,7 +115,11 @@ func TestRegisterToolWithServer(t *testing.T) {
 // Test RegisterToolWithServer - nil registry (should not panic)
 func TestRegisterToolWithServer_NilRegistry(t *testing.T) {
 	var registry *ToolMetadataRegistry
-	server := mcp.NewServer()
+	impl := &mcp.Implementation{
+		Name:    "test-server",
+		Version: "1.0.0",
+	}
+	server := mcp.NewServer(impl, nil)
 
 	tool := &mcp.Tool{
 		Name:        "test_tool",

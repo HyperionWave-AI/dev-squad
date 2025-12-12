@@ -10,16 +10,17 @@ import (
 
 // AIConfig holds AI provider configuration from .env.hyper
 type AIConfig struct {
-	Provider        string  // "openai", "anthropic", or "custom"
-	ProviderURL     string  // Custom endpoint URL (for custom provider)
-	APIKey          string  // API key for the provider
-	MaxIterations   int     // Maximum iteration count (default: 100)
-	MaxToolCalls    int     // Maximum tool calls per session (default: 50)
-	MaxOutputTokens int     // Maximum output tokens
-	Temperature     float64 // Temperature for generation (default: 0.7)
-	ReasoningMode   string  // Reasoning mode (e.g., "o1", "o3" for OpenAI)
-	Model           string  // Model name as configured in environment
-	FallbackModel   string  // Fallback model when rate limited (e.g., "qwen2.5-coder:7b")
+	Provider          string  // "openai", "anthropic", or "custom"
+	ProviderURL       string  // Custom endpoint URL (for custom provider)
+	APIKey            string  // API key for the provider
+	MaxIterations     int     // Maximum iteration count (default: 100)
+	MaxToolCalls      int     // Maximum tool calls per session (default: 50)
+	MaxOutputTokens   int     // Maximum output tokens
+	Temperature       float64 // Temperature for generation (default: 0.7)
+	ReasoningMode     string  // Reasoning mode (e.g., "o1", "o3" for OpenAI)
+	Model             string  // Model name as configured in environment
+	FallbackModel     string  // Fallback model when rate limited (e.g., "qwen2.5-coder:7b")
+	ContextWindowSize int     // Context window size in tokens (optional, defaults based on provider)
 }
 
 // LoadAIConfig loads AI configuration from .env.hyper file

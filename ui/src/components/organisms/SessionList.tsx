@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '../atoms/Button';
-import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2 } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Clock, MoreVertical, Edit2, Users, Bot } from 'lucide-react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
+import { subagentsService } from '@/services/subagentsService';
+import type { Subagent } from '@/types/subagent';
 
 interface ChatSession {
   id: string;
@@ -13,6 +15,7 @@ interface ChatSession {
   timestamp: Date | string;
   messageCount: number;
   activeSubagentId?: string;
+  activeSubagentName?: string;
 }
 
 interface SessionListProps {
@@ -23,6 +26,7 @@ interface SessionListProps {
   onDeleteSession: (sessionId: string) => void;
   onDeleteAllSessions: () => void;
   onRenameSession: (sessionId: string, newTitle: string) => void;
+  onRefreshSessions?: () => Promise<void>;
   isLoading?: boolean;
 }
 
@@ -30,7 +34,7 @@ interface SessionListProps {
 const organizeSessionsHierarchy = (sessions: ChatSession[]) => {
   const mainSessions: ChatSession[] = [];
   const subchatsMap = new Map<string, ChatSession[]>();
-  
+
   // Separate main sessions and subchats
   sessions.forEach(session => {
     if (session.isSubchat && session.parentSessionId) {
@@ -42,10 +46,10 @@ const organizeSessionsHierarchy = (sessions: ChatSession[]) => {
       mainSessions.push(session);
     }
   });
-  
+
   // Sort subchats by timestamp for each parent
   subchatsMap.forEach(subchats => subchats.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
-  
+
   return { mainSessions, subchatsMap };
 };
 
@@ -57,6 +61,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   onDeleteSession,
   onDeleteAllSessions,
   onRenameSession,
+  onRefreshSessions,
   isLoading = false,
 }) => {
   const [isNewDialogOpen, setIsNewDialogOpen] = useState(false);
@@ -65,22 +70,36 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [editingTitle, setEditingTitle] = useState('');
   const [dropdownSessionId, setDropdownSessionId] = useState<string | null>(null);
 
+  // State for the subagents modal
+  const [isAgentsModalOpen, setIsAgentsModalOpen] = useState(false);
+  const [subagents, setSubagents] = useState<Subagent[]>([]);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(false);
+  const [activatingAgent, setActivatingAgent] = useState<string | null>(null);
+
   // Organize sessions into hierarchy
   const { mainSessions, subchatsMap } = organizeSessionsHierarchy(sessions);
 
   // Function to render a single session
-  const renderSession = (session: ChatSession, isSubchat = false) => (
-    <div
-      key={session.id}
-      className={`relative group rounded-lg p-3 mb-2 cursor-pointer transition-colors ${
-        isSubchat ? 'ml-6' : ''
-      } ${
-        currentSessionId === session.id
-          ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700'
-          : 'hover:bg-gray-50 dark:hover:bg-gray-800'
-      }`}
-      onClick={() => onSessionSelect(session.id)}
-    >
+  const renderSession = (session: ChatSession, isSubchat = false) => {
+    // Check if this is a direct subagent chat session
+    const isSubagentChat = !!(session.activeSubagentId || session.activeSubagentName);
+
+    return (
+      <div
+        key={session.id}
+        className={`relative group rounded-lg p-3 mb-2 cursor-pointer transition-all duration-200 ${
+          isSubchat ? 'ml-6' : ''
+        } ${
+          currentSessionId === session.id
+            ? isSubagentChat
+              ? 'bg-pink-50/80 dark:bg-pink-950/20 border border-pink-300/60 dark:border-pink-500/40 shadow-sm shadow-pink-200/50 dark:shadow-pink-900/30'
+              : 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700'
+            : isSubagentChat
+              ? 'border border-pink-200/50 dark:border-pink-800/40 hover:bg-pink-50/40 dark:hover:bg-pink-950/10 hover:border-pink-300/60 dark:hover:border-pink-600/40 hover:shadow-sm hover:shadow-pink-200/30 dark:hover:shadow-pink-900/20'
+              : 'hover:bg-gray-50 dark:hover:bg-gray-800'
+        }`}
+        onClick={() => onSessionSelect(session.id)}
+      >
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           {editingSessionId === session.id ? (
@@ -104,7 +123,18 @@ export const SessionList: React.FC<SessionListProps> = ({
           ) : (
             <>
               <h3 className="font-medium text-gray-900 dark:text-white truncate">
-                {session.title}
+                <div className="flex items-center gap-2">
+                  {isSubagentChat && (
+                    <Bot className="w-4 h-4 text-pink-300 dark:text-pink-500 flex-shrink-0" />
+                  )}
+                  {!isSubagentChat && !isSubchat && (
+                    <Bot className="w-4 h-4 text-green-500 dark:text-green-400 flex-shrink-0" />
+                  )}
+                  {isSubchat && !isSubagentChat && (
+                    <Bot className="w-4 h-4 text-blue-500 dark:text-blue-400 flex-shrink-0" />
+                  )}
+                  <span className="truncate">{session.title}</span>
+                </div>
               </h3>
               {session.lastMessage && (
                 <p className="text-sm text-gray-500 dark:text-gray-400 truncate mt-1">
@@ -179,7 +209,8 @@ export const SessionList: React.FC<SessionListProps> = ({
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   const handleNewChat = () => {
     setIsNewDialogOpen(false);
@@ -215,10 +246,47 @@ export const SessionList: React.FC<SessionListProps> = ({
     setDropdownSessionId(null);
   };
 
-  // Handler for the blue placeholder button
-  const handlePlaceholderClick = () => {
-    console.log('Blue placeholder button clicked!');
+  // Handler for the new "View Agents" button
+  const handleViewAgentsClick = async () => {
+    setIsAgentsModalOpen(true);
+    setIsLoadingAgents(true);
+    try {
+      const { subagents } = await subagentsService.listSubagents();
+      setSubagents(subagents);
+    } catch (error) {
+      console.error('Failed to fetch subagents:', error);
+      // Optionally set an error state here to show in the modal
+    } finally {
+      setIsLoadingAgents(false);
+    }
   };
+
+  // Handler for clicking on an agent - creates a dedicated session and switches to it
+  const handleAgentClick = async (agentName: string) => {
+    try {
+      setActivatingAgent(agentName);
+      setIsLoadingAgents(true);
+      const response = await subagentsService.createAgentSession(agentName);
+
+      // Close the modal
+      setIsAgentsModalOpen(false);
+
+      // Immediately refresh sessions to show the new session
+      if (onRefreshSessions) {
+        await onRefreshSessions();
+      }
+
+      // Switch to the newly created session
+      onSessionSelect(response.session.id);
+    } catch (error) {
+      console.error(`Failed to create session for agent ${agentName}:`, error);
+      alert(`Failed to create chat with ${agentName}. Please try again.`);
+    } finally {
+      setIsLoadingAgents(false);
+      setActivatingAgent(null);
+    }
+  };
+
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -256,14 +324,15 @@ export const SessionList: React.FC<SessionListProps> = ({
             New Chat
           </Button>
           
-          {/* Blue Placeholder Button */}
+          {/* Replaced Placeholder Button */}
           <Button
-            onClick={handlePlaceholderClick}
-            className="w-full justify-center bg-blue-600 hover:bg-blue-700 text-white border-blue-600 hover:border-blue-700 focus:ring-blue-500"
+            onClick={handleViewAgentsClick}
+            variant="secondary"
+            className="w-full justify-center"
             disabled={isLoading}
           >
-            <MessageSquare className="w-4 h-4 mr-2" />
-            Placeholder Action
+            <Users className="w-4 h-4 mr-2" />
+            View Agents
           </Button>
           
           {sessions.length > 0 && (
@@ -279,6 +348,7 @@ export const SessionList: React.FC<SessionListProps> = ({
           )}
         </div>
       </div>
+
 
       {/* Sessions List */}
       <div className="flex-1 overflow-y-auto">
@@ -310,6 +380,7 @@ export const SessionList: React.FC<SessionListProps> = ({
           </div>
         )}
       </div>
+
 
       {/* New Chat Dialog */}
       <Dialog.Root open={isNewDialogOpen} onOpenChange={setIsNewDialogOpen}>
@@ -357,6 +428,100 @@ export const SessionList: React.FC<SessionListProps> = ({
                   {isLoading ? 'Deleting...' : 'Delete All'}
                 </Button>
               </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+          {/* Agents List Dialog */}
+      <Dialog.Root open={isAgentsModalOpen} onOpenChange={setIsAgentsModalOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50 z-[1200] backdrop-blur-sm" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-[1200] w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <Dialog.Title className="text-xl font-semibold text-gray-900 dark:text-white">
+                Available Agents
+              </Dialog.Title>
+              <Dialog.Description className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                These are the specialized agents available for use.
+              </Dialog.Description>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 relative">
+              {isLoadingAgents && !activatingAgent ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
+              ) : subagents.length > 0 ? (
+                <ul className="space-y-4">
+                  {subagents.map((agent) => (
+                    <li
+                      key={agent.name}
+                      className="p-4 bg-gray-50 dark:bg-gray-900/60 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 hover:border-blue-400 dark:hover:border-blue-600 cursor-pointer transition-all duration-200 group"
+                      onClick={() => handleAgentClick(agent.name)}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-md text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                            {agent.name}
+                          </h3>
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{agent.description}</p>
+                        </div>
+                        <div className="ml-4 text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                          <MessageSquare className="w-5 h-5" />
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-center text-gray-500 dark:text-gray-400 py-8">
+                    <p>No agents found or failed to load.</p>
+                </div>
+              )}
+
+              {/* Creative Loading Overlay for Agent Activation */}
+              {activatingAgent && (
+                <div className="absolute inset-0 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm flex items-center justify-center z-10">
+                  <div className="text-center">
+                    {/* Animated robot icon */}
+                    <div className="mb-6 flex justify-center">
+                      <div className="relative">
+                        {/* Pulsing circles */}
+                        <div className="absolute inset-0 animate-ping">
+                          <div className="w-20 h-20 rounded-full bg-blue-400/30"></div>
+                        </div>
+                        <div className="absolute inset-0 animate-pulse" style={{ animationDelay: '75ms' }}>
+                          <div className="w-20 h-20 rounded-full bg-blue-500/20"></div>
+                        </div>
+
+                        {/* Central icon */}
+                        <div className="relative w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center animate-bounce shadow-lg shadow-blue-500/50">
+                          <MessageSquare className="w-10 h-10 text-white" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Animated text */}
+                    <div className="space-y-2">
+                      <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent animate-pulse">
+                        Activating {activatingAgent}
+                      </h3>
+                      <div className="flex items-center justify-center space-x-1 text-gray-600 dark:text-gray-300">
+                        <span className="animate-bounce" style={{ animationDelay: '0ms' }}>●</span>
+                        <span className="animate-bounce" style={{ animationDelay: '150ms' }}>●</span>
+                        <span className="animate-bounce" style={{ animationDelay: '300ms' }}>●</span>
+                      </div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 animate-pulse">
+                        Initializing secure connection...
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end bg-white dark:bg-gray-800">
+              <Button onClick={() => setIsAgentsModalOpen(false)} variant="ghost">
+                Close
+              </Button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // MockTaskStorage implements storage.TaskStorage for testing
@@ -50,6 +51,18 @@ func (m *MockMetricsTaskStorage) ListAllHumanTasks() []*storage.HumanTask {
 
 func (m *MockMetricsTaskStorage) ListAllAgentTasks() []*storage.AgentTask {
 	return m.tasks
+}
+
+func (m *MockMetricsTaskStorage) ListHumanTasks(filter bson.M) ([]*storage.HumanTask, error) {
+	return []*storage.HumanTask{}, nil
+}
+
+func (m *MockMetricsTaskStorage) ListAgentTasks(filter bson.M, offset, limit int) ([]*storage.AgentTask, int, error) {
+	return m.tasks, len(m.tasks), nil
+}
+
+func (m *MockMetricsTaskStorage) SearchSimilarHumanTasks(prompt string, limit int, minScore float64) ([]*storage.HumanTask, []float64, error) {
+	return nil, nil, nil
 }
 
 func (m *MockMetricsTaskStorage) UpdateTaskStatus(taskID string, status storage.TaskStatus, notes string) error {

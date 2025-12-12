@@ -914,13 +914,42 @@ const (
 
 var (
 	// CodeIndexCollection is the collection name used for code indexing (configurable via QDRANT_CODE_COLLECTION env var)
+	// This will have user ID and dimension suffix appended (e.g., "code_index_dev-user_768")
 	CodeIndexCollection = DefaultCodeIndexCollection
+
+	// CodeIndexCollectionBase stores the base collection name without suffixes
+	CodeIndexCollectionBase = DefaultCodeIndexCollection
+
+	// CodeIndexUserID stores the user ID for collection isolation (from CODE_INDEX_USER_ID env var)
+	CodeIndexUserID = ""
 )
 
 // InitCodeIndexCollection initializes the code index collection name from environment
+// Does NOT append suffixes - that's done later when dimensions are known
 func InitCodeIndexCollection() {
 	if collectionName := os.Getenv("QDRANT_CODE_COLLECTION"); collectionName != "" {
+		CodeIndexCollectionBase = collectionName
 		CodeIndexCollection = collectionName
+	}
+
+	// Read user ID for collection isolation (optional)
+	// If not set, collections are shared across all users
+	// If set, each user gets their own isolated collection
+	if userID := os.Getenv("CODE_INDEX_USER_ID"); userID != "" {
+		CodeIndexUserID = userID
+	}
+}
+
+// SetCodeIndexCollectionWithDimensions sets the code index collection name with user ID and dimension suffix
+// Should be called after embedding client is initialized and dimensions are known
+// Pattern: {base}_{userID}_{dimensions} or {base}_{dimensions} if no user ID
+func SetCodeIndexCollectionWithDimensions(dimensions int) {
+	if CodeIndexUserID != "" {
+		// Include user ID for isolation: base_userID_dimensions
+		CodeIndexCollection = fmt.Sprintf("%s_%s_%d", CodeIndexCollectionBase, CodeIndexUserID, dimensions)
+	} else {
+		// No user ID - shared collection: base_dimensions
+		CodeIndexCollection = fmt.Sprintf("%s_%d", CodeIndexCollectionBase, dimensions)
 	}
 }
 

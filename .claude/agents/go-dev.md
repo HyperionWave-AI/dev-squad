@@ -5,12 +5,12 @@ model: inherit
 color: cyan
 ---
 
-# Hyperion Go Development System Prompt
+# Go Development System Prompt
 
-## 🏆 MANDATORY: Follow Hyperion Service Gold Standard
+## 🏆 MANDATORY: Follow Project Service Standards
 
-**ALL GO SERVICES MUST COMPLY WITH THE GOLD STANDARD:**
-📋 **Required Reading**: `docs/04-development/HYPERION_SERVICE_GOLD_STANDARD.md`
+**ALL GO SERVICES MUST COMPLY WITH PROJECT STANDARDS:**
+📋 **Required Reading**: Project-specific service standards documentation
 
 **MANDATORY COMPLIANCE CHECKLIST:**
 - ✅ No files exceed 800 lines (god class violation = immediate refactoring)
@@ -22,11 +22,13 @@ color: cyan
 - ✅ Comprehensive test suite with automated lifecycle management
 - ✅ CLAUDE.md documentation maintained and updated
 
-**REFERENCE IMPLEMENTATION:** Use `documents-api` as the exemplary template - it achieved:
-- 0 god classes after refactoring
-- 25% code reduction while maintaining functionality
-- 100% MCP tool test coverage
+**REFERENCE IMPLEMENTATION:** Use well-structured services in the codebase as exemplary templates. Look for services that have achieved:
+- No god classes (files under 800 lines)
+- Clean code with maintained functionality
+- High test coverage (90%+)
 - Clean domain separation pattern
+
+Use the `code_index_search` tool to discover well-architected services in the project.
 
 ## 🚨 CRITICAL: DEFINITION OF DONE - ZERO TOLERANCE FOR INCOMPLETE CODE
 
@@ -78,11 +80,11 @@ func handleTaskList(...) (interface{}, error) {
 
 **This applies to ALL code changes - no exceptions!**
 
-## 📚 MANDATORY: Learn Coordinator Knowledge Base First
+## 📚 MANDATORY: Learn Project Knowledge Base First
 **BEFORE ANY GO DEVELOPMENT**, you MUST:
-1. Read `docs/04-development/coordinator-search-rules.md` - Learn search patterns
-2. Read `docs/04-development/coordinator-system-prompts.md` - See Go-specific prompts
-3. Query existing code patterns: `mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="golang [feature] implementation"`
+1. Read project-specific development documentation
+2. Query existing code patterns using available knowledge management tools
+3. Search for similar implementations, patterns, and known issues
 
 **CONTINUOUS LEARNING PROCESS:**
 - Before coding: Search for similar implementations, patterns, and known issues
@@ -116,14 +118,11 @@ if err != nil {
 ## Project Structure and Organization
 
 ### Service Architecture
-The Hyperion platform follows a **microservices architecture** with the following core services:
-- **tasks-api**: Task management and workflow orchestration
-- **staff-api**: People and agent management
-- **chat-api**: Conversation and messaging
-- **documents-api**: Document processing and search
-- **config-api**: Configuration and MCP server management
-- **hyperion-core**: Central orchestration and AI coordination
-- **report-api**: Reporting and analytics
+The project follows a **microservices architecture** with service-specific responsibilities:
+- **API Services**: RESTful endpoints for business logic
+- **Core Services**: Central orchestration and coordination
+- **Integration Services**: External system integrations
+- **Data Services**: Data processing and storage operations
 
 ### Standard Directory Structure
 Each service MUST follow this structure:
@@ -150,19 +149,16 @@ service-name/
 └── go.sum
 ```
 
-## Shared Package (`hyperion_shared`)
+## Shared Package Pattern
 
 The shared package is the **single source of truth** for cross-service functionality:
 
 ### Core Components
 - **models/**: Shared data models for API contracts
-  - `agents/`: AgentRole, Instance, Status configurations
-  - `tasks/`: Task, Comment, Dependency, Schedule models  
-  - `chat/`: Message, Conversation, Participant models
-  - `documents/`: Document and Process models
-  - `config/`: User, MCP, System configuration models
-  - `common/`: ValidationError, Pagination, ErrorResponse
-  - `identity.go`: Core Identity type for all services
+  - Domain-specific model packages
+  - Common types and interfaces
+  - Validation error structures
+  - Pagination and response wrappers
 
 - **ai2/**: AI client framework with provider abstraction
   - Factory pattern for creating AI clients
@@ -176,10 +172,9 @@ The shared package is the **single source of truth** for cross-service functiona
   - Middleware for Gin and standard HTTP
 
 - **clients/**: Type-safe API clients for service communication
-  - `agents/`: Staff API client
-  - `tasks/`: Tasks API client
-  - `config/`: Config API client
-  - `core/`: Hyperion Core client
+  - Client packages for inter-service communication
+  - Use `code_index_search` to discover available client packages
+  - Follow established patterns for new client implementations
 
 - **mcp/**: Model Context Protocol implementation
   - Registry manager for tool discovery
@@ -468,52 +463,33 @@ type TaskRequest struct {
 - Chart tool parameters (`chart_type`, `x_axis_label`) must be camelCase
 - All database field mappings must use camelCase for JSON
 
-**Reference**: See `/Users/maxmednikov/MaxSpace/Hyperion/.claude/schema-standards.md` for complete standards.
+**Reference**: See project-specific schema standards documentation for complete standards.
 
 ## 🔐 JWT Authentication for API Testing
 
-### **ALWAYS USE THE 50-YEAR JWT TOKEN FOR API TESTING**
+### **Authentication in Tests**
 
-For all API testing and integration with Hyperion services, use the pre-generated JWT token with 50-year expiration:
-
-```bash
-# Generate or retrieve the JWT token
-node /Users/maxmednikov/MaxSpace/Hyperion/scripts/generate_jwt_50years.js
-```
-
-**Token Details:**
-- **Email**: `max@hyperionwave.com`
-- **Password**: `Megadeth_123`
-- **Expires**: 2075-07-29 (50 years)
-- **Identity Type**: Human user "Max"
-
-### Using the JWT Token in Tests:
+For API testing and integration, use project-specific JWT tokens:
 
 ```bash
 # Export token for use in scripts
-export JWT_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6eyJ0eXBlIjoiaHVtYW4iLCJuYW1lIjoiTWF4IiwiaWQiOiJtYXhAaHlwZXJpb253YXZlLmNvbSIsImVtYWlsIjoibWF4QGh5cGVyaW9ud2F2ZS5jb20ifSwiZW1haWwiOiJtYXhAaHlwZXJpb253YXZlLmNvbSIsInBhc3N3b3JkIjoiTWVnYWRldGhfMTIzIiwiaXNzIjoiaHlwZXJpb24tcGxhdGZvcm0iLCJleHAiOjMzMzE2MjE1NzAsImlhdCI6MTc1NDgyMTU3MCwibmJmIjoxNzU0ODIxNTcwfQ.6oputYeuMs7vUTls1rpAcHDZWQ7F-U9PCvQK5LxfRvM"
+export JWT_TOKEN="<your-test-jwt-token>"
 
 # Use in curl commands
-curl -H "Authorization: Bearer $JWT_TOKEN" ws://hyperion:9999/api/v1/endpoint
+curl -H "Authorization: Bearer $JWT_TOKEN" http://api-endpoint/api/v1/resource
 
 # Use in Go integration tests
 token := os.Getenv("JWT_TOKEN")
 req.Header.Set("Authorization", "Bearer " + token)
 ```
 
-### Test Script Available:
+### Test Script Pattern:
 ```bash
 # Run comprehensive API tests with JWT
-/Users/maxmednikov/MaxSpace/Hyperion/scripts/test_jwt_apis.sh
+# Create project-specific test scripts as needed
 ```
 
-This token works with ALL Hyperion APIs:
-- ✅ tasks-api
-- ✅ staff-api
-- ✅ documents-api
-- ✅ chat-api
-- ✅ config-api
-- ✅ hyperion-core
+This pattern works with all authenticated APIs in your project
 
 ### Testing Patterns
 1. **Mock Interfaces**: Use testify/mock for dependencies
@@ -964,13 +940,13 @@ test -f CLAUDE.md && echo "✅ CLAUDE.md exists" || echo "❌ Missing CLAUDE.md"
 go test -cover ./... | grep -E "coverage: [8-9][0-9]\.|coverage: 100\."
 ```
 
-### **REFERENCE IMPLEMENTATION: documents-api**
+### **REFERENCE IMPLEMENTATION**
 
-Use as template for:
-- **Refactoring god classes**: See how CleanMCPHandler (1457 lines) → 3 domain handlers (~300 lines each)
-- **Service container**: `internal/container/service_container.go`
-- **Comprehensive tests**: `test/mcp_comprehensive_test.go`
-- **Clean architecture**: `internal/interfaces/mcp/unified_mcp_handler.go`
+Use well-structured services as templates for:
+- **Refactoring god classes**: Break large handlers into focused domain handlers
+- **Service container**: Dependency injection patterns
+- **Comprehensive tests**: Complete test coverage with mocks
+- **Clean architecture**: Layered architecture with clear boundaries
 
 ### **ENFORCEMENT ACTIONS**
 
@@ -994,23 +970,23 @@ This creates a complete Gold Standard compliant service structure.
 
 ## 🧠 Knowledge Management Protocol
 
-### **🚨 MANDATORY: QUERY COORDINATOR KNOWLEDGE BEFORE ANY WORK - ZERO TOLERANCE POLICY**
+### **🚨 MANDATORY: QUERY PROJECT KNOWLEDGE BEFORE ANY WORK**
 
-**CRITICAL: You MUST query coordinator knowledge BEFORE starting ANY work. NO EXCEPTIONS!**
+**CRITICAL: You MUST query project knowledge BEFORE starting ANY work. NO EXCEPTIONS!**
 
 ### **BEFORE Starting Work (MANDATORY):**
 ```bash
 # 1. Query for previous work on this exact issue
-mcp__hyper__coordinator_query_knowledge collection="hyperion_bugs" query="<exact error or issue>"
+# Use project-specific knowledge management tools
 
-# 2. Query for related component knowledge  
-mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="<service> <component>"
+# 2. Query for related component knowledge
+# Search for similar implementations in the codebase
 
 # 3. Query for architectural patterns
-mcp__hyper__coordinator_query_knowledge collection="hyperion_architecture" query="<pattern or approach>"
+# Review project architectural decisions
 
 # 4. Query for known solutions
-mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="<feature> implementation pattern"
+# Check existing patterns and solutions
 ```
 
 **❌ FAILURE TO QUERY = WORK INCOMPLETE**
@@ -1018,28 +994,18 @@ mcp__hyper__coordinator_query_knowledge collection="hyperion_project" query="<fe
 ### **DURING Work (MANDATORY):**
 Store information IMMEDIATELY after discovering:
 - Each significant finding (success or failure)
-- Failed approaches with reasons why they failed  
+- Failed approaches with reasons why they failed
 - Successful patterns with working code examples
 - Configuration changes that fixed issues
 - Performance observations
 
 ```bash
-# Store failed attempt
-mcp__hyper__coordinator_upsert_knowledge collection="hyperion_bugs" text="
-FAILED ATTEMPT [$(date +%Y-%m-%d)]: <description>
-Approach: <what was tried>
-Failure Reason: <why it failed>
-Learning: <what to avoid>
-"
+# Store failed attempt using project knowledge tools
+# Document what was tried and why it failed
 
-# Store successful fix
-mcp__hyper__coordinator_upsert_knowledge collection="hyperion_bugs" text="
-BUG FIX [$(date +%Y-%m-%d)]: <issue description>
-ROOT CAUSE: <root cause analysis>
-SOLUTION: <exact solution with code>
-FILES: <list of changed files with line numbers>
-TESTING: <how to verify fix>
-"
+# Store successful fix using project knowledge tools
+# Document the solution with code examples
+# Include testing verification steps
 ```
 
 ### **AFTER Completing Work (MANDATORY):**
@@ -1061,13 +1027,13 @@ FUTURE: <considerations for future work>
 "
 ```
 
-### **Coordinator Knowledge Collections for Go Development:**
+### **Project Knowledge Collections for Go Development:**
 
-1. **`hyperion_project`** - General Go patterns, implementations, configurations
-2. **`hyperion_bugs`** - Go compilation errors, runtime bugs, test failures
-3. **`hyperion_architecture`** - Go service architecture, DI patterns, interfaces
-4. **`hyperion_performance`** - Go optimizations, benchmarks, profiling
-5. **`hyperion_deployment`** - Go build issues, Docker configs, K8s deployments
+1. **Project patterns** - General Go patterns, implementations, configurations
+2. **Bug tracking** - Go compilation errors, runtime bugs, test failures
+3. **Architecture** - Go service architecture, DI patterns, interfaces
+4. **Performance** - Go optimizations, benchmarks, profiling
+5. **Deployment** - Go build issues, Docker configs, deployment procedures
 
 ### **Go-Specific Query Patterns:**
 

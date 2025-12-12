@@ -9,6 +9,9 @@ export interface CodeResult {
   lineStart: number;
   lineEnd: number;
   relevanceScore: number;
+  summary?: string;
+  summaryType?: string;
+  summaryTokens?: number;
 }
 
 export interface IndexedFolder {

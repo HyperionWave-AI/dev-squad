@@ -38,6 +38,91 @@ func (m *MockToolsStorage) GetToolSchema(ctx context.Context, toolName string) (
 	return args.Get(0).(*storage.ToolMetadata), args.Error(1)
 }
 
+func (m *MockToolsStorage) StoreResourceMetadata(ctx context.Context, uri, name, description, mimeType, serverName string) error {
+	args := m.Called(ctx, uri, name, description, mimeType, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) GetServerResources(ctx context.Context, serverName string) ([]*storage.ResourceMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.ResourceMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) StorePromptMetadata(ctx context.Context, name, description string, arguments []map[string]interface{}, serverName string) error {
+	args := m.Called(ctx, name, description, arguments, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) GetServerPrompts(ctx context.Context, serverName string) ([]*storage.PromptMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.PromptMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) AddServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error {
+	args := m.Called(ctx, serverName, serverURL, description, headers)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) UpdateServer(ctx context.Context, serverName, serverURL, description string, headers map[string]interface{}) error {
+	args := m.Called(ctx, serverName, serverURL, description, headers)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) UpdateServerCounts(ctx context.Context, serverName string, toolCount, resourceCount, promptCount int) error {
+	args := m.Called(ctx, serverName, toolCount, resourceCount, promptCount)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) RemoveServer(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) GetServer(ctx context.Context, serverName string) (*storage.ServerMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.ServerMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) ListServers(ctx context.Context) ([]*storage.ServerMetadata, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.ServerMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) GetServerTools(ctx context.Context, serverName string) ([]*storage.ToolMetadata, error) {
+	args := m.Called(ctx, serverName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*storage.ToolMetadata), args.Error(1)
+}
+
+func (m *MockToolsStorage) RemoveServerTools(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) RemoveServerResources(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
+func (m *MockToolsStorage) RemoveServerPrompts(ctx context.Context, serverName string) error {
+	args := m.Called(ctx, serverName)
+	return args.Error(0)
+}
+
 // TestHandleDiscoverTools tests the discover_tools handler
 func TestHandleDiscoverTools(t *testing.T) {
 	tests := []struct {
@@ -456,7 +541,6 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"status": "success", "data": "result"}`,
 					},
 				},
@@ -474,11 +558,9 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "This is plain text in first block",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"status": "success", "data": "found in second block"}`,
 					},
 				},
@@ -496,15 +578,12 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "Plain text block 1",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: "Plain text block 2",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"result": "found in third block", "count": 42}`,
 					},
 				},
@@ -522,11 +601,9 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "First text content",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: "Second text content",
 					},
 				},
@@ -551,16 +628,13 @@ func TestExtractResultData(t *testing.T) {
 				StructuredContent: nil,
 				Content: []mcp.Content{
 					&mcp.TextContent{
-						Type: "text",
 						Text: "not json",
 					},
 					// Simulate other content type by using empty text
 					&mcp.TextContent{
-						Type: "text",
 						Text: "",
 					},
 					&mcp.TextContent{
-						Type: "text",
 						Text: `{"valid": "json", "block": 3}`,
 					},
 				},
@@ -599,6 +673,211 @@ func TestExtractResultData(t *testing.T) {
 					assert.Equal(t, expectedValue, resultMap[key], "Map key '%s' should match", key)
 				}
 			}
+		})
+	}
+}
+
+// TestExtractResultData_ImageContent tests that ImageContent blocks are properly extracted
+func TestExtractResultData_ImageContent(t *testing.T) {
+	tests := []struct {
+		name         string
+		result       *mcp.CallToolResult
+		expectType   string
+		expectFields map[string]interface{}
+		description  string
+	}{
+		{
+			name: "single image content",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.ImageContent{
+						MIMEType: "image/png",
+						Data:     []byte("fake-image-data"),
+					},
+				},
+			},
+			expectType: "map",
+			expectFields: map[string]interface{}{
+				"type":     "image",
+				"mimeType": "image/png",
+			},
+			description: "Should extract image content with type and mimeType",
+		},
+		{
+			name: "image content with text - image takes priority",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Text: "Image generated successfully",
+					},
+					&mcp.ImageContent{
+						MIMEType: "image/jpeg",
+						Data:     []byte("jpeg-data"),
+					},
+				},
+			},
+			expectType: "map",
+			expectFields: map[string]interface{}{
+				"type":     "image",
+				"mimeType": "image/jpeg",
+			},
+			description: "Image content should be returned even when text is present",
+		},
+		{
+			name: "multiple images returns media array",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.ImageContent{
+						MIMEType: "image/png",
+						Data:     []byte("image1"),
+					},
+					&mcp.ImageContent{
+						MIMEType: "image/jpeg",
+						Data:     []byte("image2"),
+					},
+				},
+			},
+			expectType: "media-array",
+			expectFields: map[string]interface{}{
+				"mediaCount": 2,
+			},
+			description: "Multiple images should be wrapped in media array",
+		},
+		{
+			name: "audio content",
+			result: &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.AudioContent{
+						MIMEType: "audio/mp3",
+						Data:     []byte("audio-data"),
+					},
+				},
+			},
+			expectType: "map",
+			expectFields: map[string]interface{}{
+				"type":     "audio",
+				"mimeType": "audio/mp3",
+			},
+			description: "Should extract audio content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := zap.NewNop()
+			handler := &ToolsDiscoveryHandler{
+				logger: logger,
+			}
+
+			result := extractResultData(handler, tt.result)
+
+			if tt.expectType == "map" {
+				resultMap, ok := result.(map[string]interface{})
+				assert.True(t, ok, "Result should be a map: %v", result)
+				for key, expected := range tt.expectFields {
+					assert.Equal(t, expected, resultMap[key], "Field %s should match", key)
+				}
+				// Verify data field exists and is non-empty for image/audio
+				if tt.expectFields["type"] == "image" || tt.expectFields["type"] == "audio" {
+					data, hasData := resultMap["data"]
+					assert.True(t, hasData, "Should have data field")
+					assert.NotEmpty(t, data, "Data should not be empty")
+				}
+			} else if tt.expectType == "media-array" {
+				resultMap, ok := result.(map[string]interface{})
+				assert.True(t, ok, "Result should be a map with media array")
+				media, hasMedia := resultMap["media"]
+				assert.True(t, hasMedia, "Should have media field")
+				mediaArr, ok := media.([]map[string]interface{})
+				assert.True(t, ok, "Media should be array of maps")
+				assert.Equal(t, tt.expectFields["mediaCount"], len(mediaArr), "Media count should match")
+			}
+		})
+	}
+}
+
+// TestNormalizeToolName tests the normalizeToolName function
+func TestNormalizeToolName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// MCP server tools with _mcp_ pattern
+		{
+			name:     "hyperion prefixed BFL tool",
+			input:    "mcp_hyperion_black_forest_labs_mcp_bfl_text_to_image",
+			expected: "bfl_text_to_image",
+		},
+		{
+			name:     "non-hyperion prefixed BFL tool",
+			input:    "mcp_black_forest_labs_mcp_bfl_text_to_image",
+			expected: "bfl_text_to_image",
+		},
+		{
+			name:     "google MCP tool",
+			input:    "mcp_google_mcp_google_generate_image",
+			expected: "google_generate_image",
+		},
+		{
+			name:     "hedra MCP tool",
+			input:    "mcp_hedra_mcp_hedra_create_video",
+			expected: "hedra_create_video",
+		},
+		// Storage API tools with _api_ pattern
+		{
+			name:     "storage API list directory",
+			input:    "mcp_hyperion_storage_api_list_directory",
+			expected: "list_directory",
+		},
+		{
+			name:     "storage API upload file",
+			input:    "mcp_hyperion_storage_api_upload_file",
+			expected: "upload_file",
+		},
+		{
+			name:     "storage API share public link",
+			input:    "mcp_hyperion_storage_api_share_public_link",
+			expected: "share_public_link",
+		},
+		{
+			name:     "non-hyperion storage API tool",
+			input:    "mcp_storage_api_list_directory",
+			expected: "list_directory",
+		},
+		// Original tool names (no normalization needed)
+		{
+			name:     "already original BFL tool name",
+			input:    "bfl_text_to_image",
+			expected: "bfl_text_to_image",
+		},
+		{
+			name:     "already original list directory",
+			input:    "list_directory",
+			expected: "list_directory",
+		},
+		// Edge cases
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only mcp prefix",
+			input:    "mcp_some_tool",
+			expected: "some_tool",
+		},
+		{
+			name:     "only mcp_hyperion prefix without pattern",
+			input:    "mcp_hyperion_simple_tool",
+			expected: "simple_tool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeToolName(tt.input)
+			assert.Equal(t, tt.expected, result, "normalizeToolName(%q) = %q, want %q", tt.input, result, tt.expected)
 		})
 	}
 }

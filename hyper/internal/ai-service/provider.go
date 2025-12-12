@@ -1,5 +1,17 @@
 package aiservice
 
+// Provider implementations for different AI services (OpenAI, Anthropic, etc.)
+//
+// Token Usage Tracking:
+// Each provider tracks token usage from API responses and includes it in ToolResponse.
+// Token usage is automatically logged and aggregated via TokenUsageLogger.
+//
+// - OpenAI: Extracts prompt_tokens and completion_tokens from response
+// - Anthropic: Extracts input_tokens and output_tokens from response body
+// - Groq: Uses same format as OpenAI (prompt_tokens, completion_tokens)
+//
+// See TOKEN_USAGE.md for detailed documentation on token tracking.
+
 import (
 	"bytes"
 	"context"
@@ -8,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,22 +59,29 @@ type ToolCapableProvider interface {
 }
 
 // ToolResponse contains the streaming response and any tool calls made by the AI
+// 
+// Token Usage: The TokenUsage field contains token consumption metrics from the API response.
+// This includes prompt_tokens (input), completion_tokens (output), and total_tokens.
+// Token usage is automatically extracted from provider responses and logged via TokenUsageLogger.
 type ToolResponse struct {
 	TextChannel <-chan string // Channel for streaming text tokens
 	ToolCalls   []ToolCall    // Tool calls requested by the AI
+	StopReason  string        // Why the model stopped: "end_turn", "tool_use", "max_tokens", etc.
+	TokenUsage  *TokenUsage   // Token usage metrics from the API response (prompt, completion, total tokens)
 }
 
 // NewChatProvider creates a ChatProvider based on the configuration
-func NewChatProvider(config *AIConfig) (ChatProvider, error) {
+// metricsStore is optional - pass nil to disable metrics recording
+func NewChatProvider(config *AIConfig, metricsStore MetricsStore) (ChatProvider, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
 	switch config.Provider {
 	case "openai":
-		return newOpenAIProvider(config)
+		return newOpenAIProvider(config, metricsStore)
 	case "anthropic":
-		return newAnthropicProvider(config)
+		return newAnthropicProvider(config, metricsStore)
 	case "custom":
 		return newCustomProvider(config)
 	default:
@@ -69,13 +89,24 @@ func NewChatProvider(config *AIConfig) (ChatProvider, error) {
 	}
 }
 
-// openAIProvider wraps langchaingo's OpenAI client
-type openAIProvider struct {
-	llm    *openai.LLM
-	config *AIConfig
+// Global HTTP logger instance for AI requests/responses
+var httpLogger *HTTPLogger
+
+func init() {
+	// Initialize HTTP logger to ./logs/ directory
+	httpLogger = NewHTTPLogger("./logs")
 }
 
-func newOpenAIProvider(config *AIConfig) (*openAIProvider, error) {
+// openAIProvider wraps langchaingo's OpenAI client
+type openAIProvider struct {
+	llm              *openai.LLM
+	config           *AIConfig
+	tokenExtractor   *TokenUsageExtractor
+	tokenLogger      *TokenUsageLogger
+	metricsStore     MetricsStore
+}
+
+func newOpenAIProvider(config *AIConfig, metricsStore MetricsStore) (*openAIProvider, error) {
 	opts := []openai.Option{
 		openai.WithModel(config.Model),
 		openai.WithToken(config.APIKey),
@@ -92,8 +123,11 @@ func newOpenAIProvider(config *AIConfig) (*openAIProvider, error) {
 	}
 
 	return &openAIProvider{
-		llm:    llm,
-		config: config,
+		llm:            llm,
+		config:         config,
+		tokenExtractor: NewTokenUsageExtractor("openai"),
+		tokenLogger:    NewTokenUsageLogger(),
+		metricsStore:   metricsStore,
 	}, nil
 }
 
@@ -150,44 +184,144 @@ func (p *openAIProvider) messagesToContent(messages []Message) string {
 	return content
 }
 
+// extractTokenUsageFromOpenAI attempts to extract token usage from OpenAI response
+// Note: LangChain's ContentResponse doesn't expose token usage directly,
+// so we log a message indicating that token usage should be captured from HTTP headers
+func (p *openAIProvider) extractTokenUsageFromOpenAI(resp *llms.ContentResponse) *TokenUsage {
+	// TODO: Capture token usage from HTTP response headers
+	// OpenAI includes usage in response headers:
+	// - x-openai-input-tokens: prompt token count
+	// - x-openai-output-tokens: completion token count
+	// This requires intercepting the HTTP response before LangChain processes it
+	
+	// For now, return nil - token usage will be captured via HTTP logging
+	fmt.Printf("[TOKEN USAGE] OpenAI token usage extraction via LangChain not yet implemented\n")
+	return nil
+}
+
 // SupportsTools returns true - all OpenAI-compatible endpoints support tools by default
 // If a model doesn't support tools, it will simply ignore them
 func (p *openAIProvider) SupportsTools() bool {
 	return true
 }
 
-// StreamChatWithTools implements tool calling for OpenAI using GenerateContent
+// StreamChatWithTools implements tool calling for OpenAI using LangChain
 func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
+	// Helper function for JSON marshaling
+	mustMarshalJSON := func(v interface{}) string {
+		if v == nil {
+			return "{}"
+		}
+		bytes, err := json.Marshal(v)
+		if err != nil {
+			return "{}"
+		}
+		return string(bytes)
+	}
+
 	// Convert messages to LangChain MessageContent format
 	msgContents := make([]llms.MessageContent, 0, len(messages))
 	for _, msg := range messages {
-		var msgType llms.ChatMessageType
 		switch msg.Role {
 		case "user":
-			msgType = llms.ChatMessageTypeHuman
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
+
 		case "assistant":
-			msgType = llms.ChatMessageTypeAI
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeAI, msg.Content))
+
 		case "system":
-			msgType = llms.ChatMessageTypeSystem
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeSystem, msg.Content))
+
+		case "tool_call":
+			// Tool calls should be sent as assistant messages with ToolCall parts
+			if msg.ToolCall != nil {
+				parts := []llms.ContentPart{}
+
+				// Add text content if present
+				if msg.Content != "" {
+					parts = append(parts, llms.TextPart(msg.Content))
+				}
+
+				// Add ToolCall part
+				toolCallPart := llms.ToolCall{
+					ID:   msg.ToolCall.ID,
+					Type: "function",
+					FunctionCall: &llms.FunctionCall{
+						Name:      msg.ToolCall.Name,
+						Arguments: mustMarshalJSON(msg.ToolCall.Args),
+					},
+				}
+				parts = append(parts, toolCallPart)
+
+				msgContent := llms.MessageContent{
+					Role:  llms.ChatMessageTypeAI,
+					Parts: parts,
+				}
+				msgContents = append(msgContents, msgContent)
+			} else {
+				// Fallback if no ToolCall data
+				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeAI, msg.Content))
+			}
+
+		case "tool_result":
+			// Tool results should be sent as Tool messages with ToolCallResponse parts
+			if msg.ToolResult != nil {
+				// Format result content - pass through as-is without forcing JSON
+				var resultContent string
+				if msg.ToolResult.Error != "" {
+					resultContent = msg.ToolResult.Error
+				} else {
+					switch v := msg.ToolResult.Output.(type) {
+					case string:
+						resultContent = v
+					default:
+						// Try JSON marshal, fallback to fmt.Sprintf
+						if outputJSON, err := json.Marshal(v); err == nil {
+							resultContent = string(outputJSON)
+						} else {
+							resultContent = fmt.Sprintf("%v", v)
+						}
+					}
+				}
+
+				msgContent := llms.MessageContent{
+					Role: llms.ChatMessageTypeTool, // FIXED: Use Tool role, not Human
+					Parts: []llms.ContentPart{
+						llms.ToolCallResponse{
+							ToolCallID: msg.ToolResult.ID,
+							Name:       msg.ToolResult.Name,
+							Content:    resultContent,
+						},
+					},
+				}
+				msgContents = append(msgContents, msgContent)
+			} else {
+				// Fallback if no ToolResult data
+				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
+			}
+
 		default:
-			msgType = llms.ChatMessageTypeHuman
+			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
 		}
-		msgContents = append(msgContents, llms.TextParts(msgType, msg.Content))
 	}
 
 	// Create text channel for streaming
-	textChan := make(chan string, 1000) // Larger buffer to prevent blocking
+	textChan := make(chan string, 1000)
 	var toolCalls []ToolCall
 
-	// Prepare streaming function (non-blocking) with tool call filtering
+	// Prepare streaming function (non-blocking)
 	streamFunc := func(ctx context.Context, chunk []byte) error {
 		chunkStr := string(chunk)
 
-		// Filter out tool call JSON arrays that match the pattern:
-		// [{"id":"call_*","type":"function","function":{...}}]
-		// These are metadata that should not appear in the message content
-		if strings.HasPrefix(strings.TrimSpace(chunkStr), "[{\"id\":\"call_") {
-			// This looks like a tool call JSON array - skip it
+		// Strip tool call JSON if present (Groq/some providers append it to text)
+		// Pattern: [{"id":"functions.X:Y" or [{"id":"call_X"
+		if idx := strings.Index(chunkStr, `[{"id":"`); idx >= 0 {
+			// Keep only the text before the JSON array
+			chunkStr = chunkStr[:idx]
+		}
+
+		// Skip empty chunks
+		if strings.TrimSpace(chunkStr) == "" {
 			return nil
 		}
 
@@ -197,8 +331,6 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		case textChan <- chunkStr:
 			return nil
 		default:
-			// Channel full, skip chunk (non-blocking)
-			// This prevents GenerateContent from hanging
 			return nil
 		}
 	}
@@ -214,7 +346,19 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		opts = append(opts, llms.WithMaxTokens(p.config.MaxOutputTokens))
 	}
 
-	// Call GenerateContent in goroutine to avoid blocking
+	// LOG REQUEST: Serialize msgContents and tools before AI call
+	httpLogger.LogLangChainRequest(
+		p.config.Provider,
+		convertMsgContentsToJSON(msgContents),
+		convertToolsToJSON(tools),
+		map[string]interface{}{
+			"temperature":     p.config.Temperature,
+			"maxOutputTokens": p.config.MaxOutputTokens,
+			"model":           p.config.Model,
+		},
+	)
+
+	// Call GenerateContent in goroutine
 	type generateResult struct {
 		resp *llms.ContentResponse
 		err  error
@@ -224,54 +368,38 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 	go func() {
 		resp, err := p.llm.GenerateContent(ctx, msgContents, opts...)
 		resultChan <- generateResult{resp: resp, err: err}
-		close(textChan) // Close after generation completes
+		close(textChan)
 	}()
 
 	// Wait for generation to complete
 	result := <-resultChan
 
+	// LOG RESPONSE: Log the response immediately after AI call
+	httpLogger.LogLangChainResponse(
+		p.config.Provider,
+		convertContentResponseToJSON(result.resp),
+		result.err,
+	)
+
 	if result.err != nil && result.err != context.Canceled {
 		return nil, fmt.Errorf("failed to generate content: %w", result.err)
 	}
 
-	// Extract tool calls from response
+	// Extract tool calls and stop reason from response - USE AI-GENERATED IDs
+	var stopReason string
 	if result.resp != nil && len(result.resp.Choices) > 0 {
 		choice := result.resp.Choices[0]
+		stopReason = choice.StopReason // Capture stop reason from LangChain
 
-		// Check for function call (FuncCall field)
-		if choice.FuncCall != nil {
-			var args map[string]interface{}
-			if choice.FuncCall.Arguments != "" {
-				if err := json.Unmarshal([]byte(choice.FuncCall.Arguments), &args); err == nil {
-					toolCalls = append(toolCalls, ToolCall{
-						ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
-						Name: choice.FuncCall.Name,
-						Args: args,
-					})
-				}
-			}
-		}
-
-		// Also check for tool calls in content (newer format)
-		if choice.Content != "" {
-			// Try to parse tool calls from JSON in content
-			var toolCallData struct {
-				ToolCalls []struct {
-					ID       string                 `json:"id"`
-					Type     string                 `json:"type"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			}
-			if err := json.Unmarshal([]byte(choice.Content), &toolCallData); err == nil {
-				for _, tc := range toolCallData.ToolCalls {
+		// Check ToolCalls array first (preferred - has real IDs from AI)
+		if len(choice.ToolCalls) > 0 {
+			for _, tc := range choice.ToolCalls {
+				if tc.FunctionCall != nil {
 					var args map[string]interface{}
-					if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err == nil {
+					if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err == nil {
 						toolCalls = append(toolCalls, ToolCall{
-							ID:   tc.ID,
-							Name: tc.Function.Name,
+							ID:   tc.ID, // Use AI-generated ID from ToolCalls
+							Name: tc.FunctionCall.Name,
 							Args: args,
 						})
 					}
@@ -280,21 +408,58 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 		}
 	}
 
-	response := &ToolResponse{
-		TextChannel: textChan,
-		ToolCalls:   toolCalls,
+	// Extract token usage from response
+	var tokenUsage *TokenUsage
+	if result.resp != nil {
+		tokenUsage = p.extractTokenUsageFromOpenAI(result.resp)
+		if tokenUsage != nil {
+			p.tokenLogger.LogUsage(tokenUsage)
+		}
 	}
 
-	return response, nil
+	// Record metrics to metrics store
+	if tokenUsage != nil {
+		metric := &ProviderMetric{
+			ID:               fmt.Sprintf("openai-%d", time.Now().UnixNano()),
+			Provider:         "openai",
+			Model:            p.config.Model,
+			PromptTokens:     tokenUsage.PromptTokens,
+			CompletionTokens: tokenUsage.CompletionTokens,
+			TotalTokens:      tokenUsage.TotalTokens,
+			Cost:             CalculateOpenAICost(p.config.Model, tokenUsage.PromptTokens, tokenUsage.CompletionTokens),
+			DurationMs:       0, // TODO: Track from method start time
+			Success:          result.err == nil,
+			ErrorMessage:     "",
+			Timestamp:        time.Now(),
+		}
+		if result.err != nil {
+			metric.ErrorMessage = result.err.Error()
+		}
+		if p.metricsStore != nil {
+			if err := p.metricsStore.RecordProviderMetric(metric); err != nil {
+				fmt.Printf("[Metrics] Failed to record OpenAI provider metric: %v\n", err)
+			}
+		}
+	}
+
+	return &ToolResponse{
+		TextChannel: textChan,
+		ToolCalls:   toolCalls,
+		StopReason:  stopReason,
+		TokenUsage:  tokenUsage,
+	}, nil
 }
 
 // anthropicProvider wraps langchaingo's Anthropic client
 type anthropicProvider struct {
-	llm    *anthropic.LLM
-	config *AIConfig
+	llm              *anthropic.LLM
+	config           *AIConfig
+	tokenExtractor   *TokenUsageExtractor
+	tokenLogger      *TokenUsageLogger
+	metricsStore     MetricsStore
 }
 
-func newAnthropicProvider(config *AIConfig) (*anthropicProvider, error) {
+func newAnthropicProvider(config *AIConfig, metricsStore MetricsStore) (*anthropicProvider, error) {
 	opts := []anthropic.Option{
 		anthropic.WithModel(config.Model),
 		anthropic.WithToken(config.APIKey),
@@ -306,8 +471,11 @@ func newAnthropicProvider(config *AIConfig) (*anthropicProvider, error) {
 	}
 
 	return &anthropicProvider{
-		llm:    llm,
-		config: config,
+		llm:            llm,
+		config:         config,
+		tokenExtractor: NewTokenUsageExtractor("anthropic"),
+		tokenLogger:    NewTokenUsageLogger(),
+		metricsStore:   metricsStore,
 	}, nil
 }
 
@@ -362,6 +530,22 @@ func (p *anthropicProvider) messagesToContent(messages []Message) string {
 		content += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
 	}
 	return content
+}
+
+// extractTokenUsageFromAnthropicResponse extracts token usage from Anthropic API response body
+func (p *anthropicProvider) extractTokenUsageFromAnthropicResponse(inputTokens, outputTokens int) *TokenUsage {
+	if inputTokens == 0 && outputTokens == 0 {
+		return nil
+	}
+	
+	return &TokenUsage{
+		PromptTokens:     inputTokens,
+		CompletionTokens: outputTokens,
+		TotalTokens:      inputTokens + outputTokens,
+		Provider:         "anthropic",
+		Model:            p.config.Model,
+		Timestamp:        time.Now(),
+	}
 }
 
 // SupportsTools returns true for Anthropic provider
@@ -458,7 +642,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 
 				// Track this tool_use ID as included
 				includedToolUseIDs[toolUseID] = true
-				fmt.Printf("[DEBUG] Tracked tool_use ID: %s (name=%s)\n", toolUseID, msg.ToolCall.Name)
+				// fmt.Printf("[DEBUG] Tracked tool_use ID: %s (name=%s)\n", toolUseID, msg.ToolCall.Name)
 			}
 			continue
 		}
@@ -475,10 +659,8 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 				toolResultID := sanitizeToolID(msg.ToolResult.ID)
 				if !includedToolUseIDs[toolResultID] {
 					// Skip this tool_result because its tool_call was filtered out
-					fmt.Printf("[DEBUG] Skipped tool_result ID: %s (no matching tool_use)\n", toolResultID)
 					continue
 				}
-				fmt.Printf("[DEBUG] Including tool_result ID: %s (has matching tool_use)\n", toolResultID)
 			}
 
 			// Format tool_result (user message with tool result) for Anthropic
@@ -524,10 +706,6 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		})
 	}
 
-	// Debug: Show summary of tool_use/tool_result filtering
-	fmt.Printf("[DEBUG] Message filtering complete: %d total messages, %d included tool_use IDs\n",
-		len(apiMessages), len(includedToolUseIDs))
-
 	// Convert tools to Anthropic format
 	apiTools := make([]map[string]interface{}, 0, len(tools))
 	for _, tool := range tools {
@@ -572,7 +750,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	}
 
 	// Debug: Print the actual JSON being sent to Anthropic
-	fmt.Printf("[DEBUG Anthropic Request] JSON: %s\n", string(bodyBytes))
+	// fmt.Printf("[DEBUG Anthropic Request] JSON: %s\n", string(bodyBytes))
 
 	// Make HTTP request
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(bodyBytes))
@@ -608,9 +786,19 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 			Input map[string]interface{} `json:"input,omitempty"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
+		Usage      struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
+	// Read response body for token extraction
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -634,7 +822,6 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 				Name: block.Name,
 				Args: block.Input,
 			})
-			fmt.Printf("[DEBUG] Extracted tool call: %s (id=%s)\n", block.Name, block.ID)
 		}
 	}
 
@@ -646,12 +833,42 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		close(textChan)
 	}()
 
-	fmt.Printf("[DEBUG Anthropic Direct] StopReason: %s, ToolCalls: %d, Text: %d chars\n",
-		anthropicResp.StopReason, len(toolCalls), len(textContent))
+	// Extract token usage from response
+	tokenUsage := p.extractTokenUsageFromAnthropicResponse(anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens)
+	if tokenUsage != nil {
+		p.tokenLogger.LogUsage(tokenUsage)
+	}
+
+	// Record metrics to metrics store
+	if tokenUsage != nil {
+		metric := &ProviderMetric{
+			ID:               fmt.Sprintf("anthropic-%d", time.Now().UnixNano()),
+			Provider:         "anthropic",
+			Model:            p.config.Model,
+			PromptTokens:     tokenUsage.PromptTokens,
+			CompletionTokens: tokenUsage.CompletionTokens,
+			TotalTokens:      tokenUsage.TotalTokens,
+			Cost:             CalculateAnthropicCost(p.config.Model, tokenUsage.PromptTokens, tokenUsage.CompletionTokens),
+			DurationMs:       0, // TODO: Track from method start time
+			Success:          err == nil,
+			ErrorMessage:     "",
+			Timestamp:        time.Now(),
+		}
+		if err != nil {
+			metric.ErrorMessage = err.Error()
+		}
+		if p.metricsStore != nil {
+			if recordErr := p.metricsStore.RecordProviderMetric(metric); recordErr != nil {
+				fmt.Printf("[Metrics] Failed to record Anthropic provider metric: %v\n", recordErr)
+			}
+		}
+	}
 
 	return &ToolResponse{
 		TextChannel: textChan,
 		ToolCalls:   toolCalls,
+		StopReason:  anthropicResp.StopReason,
+		TokenUsage:  tokenUsage,
 	}, nil
 }
 
@@ -697,4 +914,213 @@ func (p *customProvider) SupportsTools() bool {
 // StreamChatWithTools is not supported for custom provider
 func (p *customProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
 	return nil, fmt.Errorf("tool calling not supported for custom provider")
+}
+
+// CodeResultSummarizer handles intelligent summarization of code search results
+// to reduce token usage while preserving critical information for AI decision-making
+type CodeResultSummarizer struct {
+	maxTokens int
+}
+
+// ResultMetadata contains extracted metadata from a code search result
+type ResultMetadata struct {
+	FilePath       string
+	LineNumber     int
+	FileType       string  // "ui", "backend", "test", "config", "other"
+	RelevanceScore float64 // 0.0 to 1.0
+	MatchType      string  // "exact", "partial", "contextual"
+	ContextHint    string  // Brief context about the match
+}
+
+// NewCodeResultSummarizer creates a new summarizer with token limit
+func NewCodeResultSummarizer(maxTokens int) *CodeResultSummarizer {
+	if maxTokens <= 0 {
+		maxTokens = 2000 // Default max tokens for summary
+	}
+	return &CodeResultSummarizer{
+		maxTokens: maxTokens,
+	}
+}
+
+// DetectFileType categorizes a file based on its path and extension
+func (s *CodeResultSummarizer) DetectFileType(filePath string) string {
+	lowerPath := strings.ToLower(filePath)
+
+	// Test files
+	if strings.Contains(lowerPath, "_test.go") || strings.Contains(lowerPath, ".test.tsx") ||
+		strings.Contains(lowerPath, ".test.ts") || strings.Contains(lowerPath, ".spec.ts") ||
+		strings.Contains(lowerPath, ".spec.tsx") {
+		return "test"
+	}
+
+	// UI files
+	if strings.Contains(lowerPath, "/ui/") || strings.Contains(lowerPath, "\\ui\\") {
+		if strings.HasSuffix(lowerPath, ".tsx") || strings.HasSuffix(lowerPath, ".jsx") ||
+			strings.HasSuffix(lowerPath, ".css") || strings.HasSuffix(lowerPath, ".scss") {
+			return "ui"
+		}
+	}
+
+	// Backend files
+	if strings.HasSuffix(lowerPath, ".go") {
+		return "backend"
+	}
+
+	// Config files
+	if strings.HasSuffix(lowerPath, ".yaml") || strings.HasSuffix(lowerPath, ".yml") ||
+		strings.HasSuffix(lowerPath, ".json") || strings.HasSuffix(lowerPath, ".env") ||
+		strings.HasSuffix(lowerPath, ".toml") {
+		return "config"
+	}
+
+	return "other"
+}
+
+// CalculateRelevanceScore determines how relevant a result is based on match quality
+func (s *CodeResultSummarizer) CalculateRelevanceScore(matchType string, hasContextHint bool) float64 {
+	score := 0.0
+
+	// Base score by match type
+	switch matchType {
+	case "exact":
+		score = 0.8
+	case "partial":
+		score = 0.5
+	case "contextual":
+		score = 0.3
+	default:
+		score = 0.2
+	}
+
+	// Bonus for context hint
+	if hasContextHint {
+		score += 0.15
+	}
+
+	// Cap at 1.0
+	if score > 1.0 {
+		score = 1.0
+	}
+
+	return score
+}
+
+// ExtractMetadata extracts metadata from a code search result
+func (s *CodeResultSummarizer) ExtractMetadata(result map[string]interface{}) *ResultMetadata {
+	metadata := &ResultMetadata{
+		MatchType: "contextual",
+	}
+
+	// Extract file path
+	if filePath, ok := result["filePath"].(string); ok {
+		metadata.FilePath = filePath
+		metadata.FileType = s.DetectFileType(filePath)
+	}
+
+	// Extract line number
+	if lineNum, ok := result["lineNumber"].(float64); ok {
+		metadata.LineNumber = int(lineNum)
+	} else if lineNum, ok := result["lineNumber"].(int); ok {
+		metadata.LineNumber = lineNum
+	}
+
+	// Extract match type if available
+	if matchType, ok := result["matchType"].(string); ok {
+		metadata.MatchType = matchType
+	}
+
+	// Extract context hint if available
+	if context, ok := result["context"].(string); ok {
+		if len(context) > 100 {
+			metadata.ContextHint = context[:100] + "..."
+		} else {
+			metadata.ContextHint = context
+		}
+	}
+
+	// Calculate relevance score
+	metadata.RelevanceScore = s.CalculateRelevanceScore(metadata.MatchType, metadata.ContextHint != "")
+
+	return metadata
+}
+
+// SummarizeResults generates an intelligent summary of code search results
+func (s *CodeResultSummarizer) SummarizeResults(results []interface{}) string {
+	if len(results) == 0 {
+		return "No results found."
+	}
+
+	// Extract metadata from all results
+	metadataList := make([]*ResultMetadata, 0, len(results))
+	for _, result := range results {
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			metadata := s.ExtractMetadata(resultMap)
+			if metadata.FilePath != "" {
+				metadataList = append(metadataList, metadata)
+			}
+		}
+	}
+
+	if len(metadataList) == 0 {
+		return "No valid results found."
+	}
+
+	// Sort by relevance score (highest first)
+	sort.Slice(metadataList, func(i, j int) bool {
+		return metadataList[i].RelevanceScore > metadataList[j].RelevanceScore
+	})
+
+	// Group by file type
+	categories := make(map[string][]*ResultMetadata)
+	for _, metadata := range metadataList {
+		categories[metadata.FileType] = append(categories[metadata.FileType], metadata)
+	}
+
+	// Build summary
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf("Found %d results in %d categories:\n\n", len(metadataList), len(categories)))
+
+	// Define category order for consistent output
+	categoryOrder := []string{"ui", "backend", "test", "config", "other"}
+
+	// Output each category
+	for _, category := range categoryOrder {
+		if items, exists := categories[category]; exists && len(items) > 0 {
+			// Format category name
+			categoryName := strings.ToUpper(category[:1]) + category[1:]
+			if category == "ui" {
+				categoryName = "UI Components"
+			} else if category == "backend" {
+				categoryName = "Backend Services"
+			} else if category == "test" {
+				categoryName = "Tests"
+			} else if category == "config" {
+				categoryName = "Configuration"
+			}
+
+			summary.WriteString(fmt.Sprintf("%s (%d files):\n", categoryName, len(items)))
+
+			// List files in this category
+			for _, item := range items {
+				scoreStr := fmt.Sprintf("%.2f", item.RelevanceScore)
+				if item.ContextHint != "" {
+					summary.WriteString(fmt.Sprintf("  • %s:%d - %s (score: %s)\n",
+						item.FilePath, item.LineNumber, item.ContextHint, scoreStr))
+				} else {
+					summary.WriteString(fmt.Sprintf("  • %s:%d (score: %s)\n",
+						item.FilePath, item.LineNumber, scoreStr))
+				}
+			}
+			summary.WriteString("\n")
+		}
+	}
+
+	// Add most relevant file recommendation
+	if len(metadataList) > 0 {
+		topResult := metadataList[0]
+		summary.WriteString(fmt.Sprintf("Most relevant: %s:%d (score: %.2f)\n",
+			topResult.FilePath, topResult.LineNumber, topResult.RelevanceScore))
+	}
+
+	return summary.String()
 }

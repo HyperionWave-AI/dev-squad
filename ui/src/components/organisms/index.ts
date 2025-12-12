@@ -20,3 +20,4 @@ export * from './TaskDetailDialog';
 export * from './KanbanColumn';
 export * from './MetricsDashboard';
 export * from './PageHeader';
+export * from './ArchiveDialog';

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"hyper/internal/mcp/storage"
@@ -58,7 +59,7 @@ func (m *MockQdrantClient) StorePoint(collectionName string, id string, text str
 	return nil
 }
 
-func (m *MockQdrantClient) SearchSimilar(collectionName string, query string, limit int) ([]*storage.QdrantQueryResult, error) {
+func (m *MockQdrantClient) SearchSimilar(collectionName string, query string, limit int, voteBoost ...float64) ([]*storage.QdrantQueryResult, error) {
 	if m.shouldError {
 		return nil, &mockError{msg: m.errorMsg}
 	}
@@ -87,6 +88,35 @@ func (m *MockQdrantClient) DeletePoint(collectionName string, pointID string) er
 	return nil
 }
 
+func (m *MockQdrantClient) DeleteCollection(collectionName string) error {
+	if m.shouldError {
+		return &mockError{msg: m.errorMsg}
+	}
+	delete(m.collections, collectionName)
+	delete(m.points, collectionName)
+	return nil
+}
+
+func (m *MockQdrantClient) UpdatePointPayload(collectionName string, pointID string, payload map[string]interface{}) error {
+	return nil
+}
+
+func (m *MockQdrantClient) RecreateCollectionWithReindex(collectionName string, entries []*storage.KnowledgeEntry, dimensions int) (int, error) {
+	return 0, nil
+}
+
+func (m *MockQdrantClient) GetDimensions() int {
+	return 384
+}
+
+func (m *MockQdrantClient) SearchSimilarWithFilter(collectionName string, query string, limit int, filter map[string]interface{}, voteBoost ...float64) ([]*storage.QdrantQueryResult, error) {
+	return nil, nil
+}
+
+func (m *MockQdrantClient) SearchWithVoteFilter(collectionName string, query string, limit int, minVoteScore int, voteBoost ...float64) ([]*storage.QdrantQueryResult, error) {
+	return nil, nil
+}
+
 func (m *MockQdrantClient) Ping(ctx context.Context) error {
 	if m.pingError != nil {
 		return m.pingError
@@ -106,13 +136,14 @@ func (e *mockError) Error() string {
 func TestKnowledgeFind_ValidParams(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
-	// Add test data
-	mockClient.EnsureCollection("test-collection", 1536)
-	mockClient.StorePoint("test-collection", "test-id-1", "This is test content for searching", map[string]interface{}{
+	// Add test data via storage (handler uses storage, not client directly)
+	mockStorage.Upsert("test-collection", "This is test content for searching", map[string]interface{}{
 		"author": "test-user",
 		"tags":   []string{"testing", "qdrant"},
-	})
+	}, nil)
 
 	// Test knowledge_find
 	args := map[string]interface{}{
@@ -131,14 +162,16 @@ func TestKnowledgeFind_ValidParams(t *testing.T) {
 	// Verify result contains expected text
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "Found 1 results")
-	assert.Contains(t, textContent.Text, "This is test content")
+	assert.Contains(t, textContent.Text, "Found 1 total results")
+	assert.Contains(t, textContent.Text, "test content")
 }
 
 // Test knowledge_find with missing collectionName
 func TestKnowledgeFind_MissingCollectionName(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
 		"query": "test query",
@@ -159,6 +192,8 @@ func TestKnowledgeFind_MissingCollectionName(t *testing.T) {
 func TestKnowledgeFind_MissingQuery(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
 		"collectionName": "test-collection",
@@ -179,11 +214,12 @@ func TestKnowledgeFind_MissingQuery(t *testing.T) {
 func TestKnowledgeFind_LimitExceedsMax(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
-	// Add multiple test points
-	mockClient.EnsureCollection("test-collection", 1536)
+	// Add multiple test points via storage
 	for i := 0; i < 25; i++ {
-		mockClient.StorePoint("test-collection", string(rune(i)), "test content", nil)
+		mockStorage.Upsert("test-collection", fmt.Sprintf("test content %d", i), nil, nil)
 	}
 
 	args := map[string]interface{}{
@@ -199,7 +235,7 @@ func TestKnowledgeFind_LimitExceedsMax(t *testing.T) {
 	assert.False(t, result.IsError)
 
 	// Verify data is limited
-	results, ok := data.([]*storage.QdrantQueryResult)
+	results, ok := data.([]*storage.QueryResult)
 	require.True(t, ok)
 	assert.LessOrEqual(t, len(results), 20, "Results should be capped at 20")
 }
@@ -208,9 +244,10 @@ func TestKnowledgeFind_LimitExceedsMax(t *testing.T) {
 func TestKnowledgeFind_NoResults(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
-	// Create empty collection
-	mockClient.EnsureCollection("empty-collection", 1536)
+	// No data added - collection is empty
 
 	args := map[string]interface{}{
 		"collectionName": "empty-collection",
@@ -226,13 +263,16 @@ func TestKnowledgeFind_NoResults(t *testing.T) {
 
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "No results found")
+	// The handler returns "No results at offset X" message when there are no results
+	assert.Contains(t, textContent.Text, "No results")
 }
 
 // Test knowledge_store with valid parameters
 func TestKnowledgeStore_ValidParams(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
 		"collectionName": "test-collection",
@@ -253,9 +293,8 @@ func TestKnowledgeStore_ValidParams(t *testing.T) {
 	// Verify result contains expected information
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "✓ Knowledge stored in Qdrant")
+	assert.Contains(t, textContent.Text, "✓ Knowledge stored successfully")
 	assert.Contains(t, textContent.Text, "Collection: test-collection")
-	assert.Contains(t, textContent.Text, "Vector dimensions: 1536")
 
 	// Verify data structure
 	dataMap, ok := data.(map[string]interface{})
@@ -309,6 +348,8 @@ func TestKnowledgeStore_EmptyInformation(t *testing.T) {
 func TestKnowledgeStore_NoMetadata(t *testing.T) {
 	mockClient := NewMockQdrantClient()
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
 		"collectionName": "test-collection",
@@ -333,6 +374,8 @@ func TestKnowledgeStore_StorageFailure(t *testing.T) {
 	mockClient.shouldError = true
 	mockClient.errorMsg = "storage failure"
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
 		"collectionName": "test-collection",
@@ -356,6 +399,8 @@ func TestKnowledgeFind_CollectionFailure(t *testing.T) {
 	mockClient.shouldError = true
 	mockClient.errorMsg = "collection creation failed"
 	handler := NewQdrantToolHandler(mockClient)
+	mockStorage := NewMockVotingStorage()
+	handler.SetKnowledgeStorage(mockStorage)
 
 	args := map[string]interface{}{
 		"collectionName": "test-collection",
@@ -406,30 +451,46 @@ func TestExtractArguments(t *testing.T) {
 		}
 		argsJSON, _ := json.Marshal(args)
 
-		req := &mcp.CallToolRequest{}
-		req.Params.Arguments = argsJSON
+		// Create the request properly - CallToolRequest is ServerRequest[*CallToolParamsRaw]
+		params := &mcp.CallToolParamsRaw{
+			Name:      "test_tool",
+			Arguments: argsJSON,
+		}
+		req := mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+			Params: params,
+		}
 
-		result, err := extractArguments(req)
+		result, err := extractArguments(&req)
 		require.NoError(t, err)
 		assert.Equal(t, "value1", result["key1"])
 		assert.Equal(t, float64(123), result["key2"])
 	})
 
 	t.Run("nil arguments", func(t *testing.T) {
-		req := &mcp.CallToolRequest{}
-		req.Params.Arguments = nil
+		params := &mcp.CallToolParamsRaw{
+			Name:      "test_tool",
+			Arguments: nil,
+		}
+		req := mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+			Params: params,
+		}
 
-		result, err := extractArguments(req)
+		result, err := extractArguments(&req)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.Empty(t, result)
 	})
 
 	t.Run("invalid JSON", func(t *testing.T) {
-		req := &mcp.CallToolRequest{}
-		req.Params.Arguments = json.RawMessage(`{invalid json}`)
+		params := &mcp.CallToolParamsRaw{
+			Name:      "test_tool",
+			Arguments: json.RawMessage(`{invalid json}`),
+		}
+		req := mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+			Params: params,
+		}
 
-		_, err := extractArguments(req)
+		_, err := extractArguments(&req)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "arguments must be a valid JSON object")
 	})
@@ -550,6 +611,125 @@ func (m *MockVotingStorage) GetEntryVotes(entryID, userID string) (*storage.Vote
 	}
 
 	return summary, nil
+}
+
+// Implement remaining KnowledgeStorage methods as stubs
+func (m *MockVotingStorage) Upsert(collection, text string, metadata map[string]interface{}, taskId *string) (*storage.KnowledgeEntry, error) {
+	// Create a knowledge entry
+	id := fmt.Sprintf("%s-%d", collection, len(m.entries))
+	entry := &storage.KnowledgeEntry{
+		ID:         id,
+		Collection: collection,
+		Text:       text,
+		Metadata:   metadata,
+	}
+	m.entries[id] = entry
+	return entry, nil
+}
+
+func (m *MockVotingStorage) UpdateEntry(id, text string, metadata map[string]interface{}) (*storage.KnowledgeEntry, error) {
+	entry, exists := m.entries[id]
+	if !exists {
+		return nil, &mockError{msg: "entry not found"}
+	}
+	entry.Text = text
+	entry.Metadata = metadata
+	return entry, nil
+}
+
+func (m *MockVotingStorage) DeleteEntry(id string) error {
+	delete(m.entries, id)
+	return nil
+}
+
+func (m *MockVotingStorage) GetEntryByID(id string) (*storage.KnowledgeEntry, error) {
+	entry, exists := m.entries[id]
+	if !exists {
+		return nil, &mockError{msg: "entry not found"}
+	}
+	return entry, nil
+}
+
+func (m *MockVotingStorage) GetEntriesByCollection(collectionName string) ([]*storage.KnowledgeEntry, error) {
+	var results []*storage.KnowledgeEntry
+	for _, entry := range m.entries {
+		if entry.Collection == collectionName {
+			results = append(results, entry)
+		}
+	}
+	return results, nil
+}
+
+func (m *MockVotingStorage) Query(collection, query string, limit int, taskId *string, voteBoost ...float64) ([]*storage.QueryResult, error) {
+	// Simple mock implementation: return all entries from the collection that contain the query string
+	var results []*storage.QueryResult
+	for _, entry := range m.entries {
+		if entry.Collection == collection {
+			// Simple contains check for testing
+			if query == "" || containsText(entry.Text, query) {
+				results = append(results, &storage.QueryResult{
+					Entry: entry,
+					Score: 0.9, // Mock score
+				})
+			}
+		}
+	}
+
+	// Apply limit
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+
+	return results, nil
+}
+
+// Helper function for simple string contains check
+func containsText(text, substr string) bool {
+	if substr == "" {
+		return true
+	}
+	for i := 0; i <= len(text)-len(substr); i++ {
+		if text[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *MockVotingStorage) ListCollections() []string {
+	return []string{}
+}
+
+func (m *MockVotingStorage) CreateCollection(name, category, description string, tags []string) (*storage.Collection, error) {
+	return nil, nil
+}
+
+func (m *MockVotingStorage) DeleteCollection(id string) (string, int64, error) {
+	return "", 0, nil
+}
+
+func (m *MockVotingStorage) GetPopularCollections(limit int) ([]*storage.CollectionStats, error) {
+	return nil, nil
+}
+
+func (m *MockVotingStorage) GetCollectionStatsWithMetadata() ([]*storage.CollectionWithMetadata, error) {
+	return nil, nil
+}
+
+func (m *MockVotingStorage) ListKnowledge(collection string, limit int) ([]*storage.KnowledgeEntry, error) {
+	return nil, nil
+}
+
+func (m *MockVotingStorage) UpdateCollectionMetadata(collectionName, description string, tags []string, category string) (*storage.CollectionMetadata, error) {
+	return nil, nil
+}
+
+func (m *MockVotingStorage) RenameCollection(oldName, newName string) (int64, error) {
+	return 0, nil
+}
+
+func (m *MockVotingStorage) BatchSyncVotesToQdrant(collectionName string) (int, error) {
+	return 0, nil
 }
 
 // Test knowledge_vote_on_entry with successful upvote

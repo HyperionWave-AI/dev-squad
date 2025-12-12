@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
+
+	"go.uber.org/zap"
 )
 
+// ContextKey type for context keys
 // ContextKey type for context keys
 type contextKey string
 
@@ -15,6 +19,8 @@ const (
 	RequestIDKey contextKey = "requestID"
 	// IdentityKey is the context key for user identity
 	IdentityKey contextKey = "identity"
+	// AIConfigKey is the context key for AI configuration (used by code summarizer)
+	AIConfigKey contextKey = "aiConfig"
 )
 
 // Identity represents user identity extracted from JWT
@@ -35,6 +41,150 @@ const (
 	StreamEventToolResult StreamEventType = "tool_result" // Tool execution result
 	StreamEventError      StreamEventType = "error"       // Error during processing
 )
+
+// ContextTracker tracks token usage and context size during AI execution
+type ContextTracker struct {
+	InputTokens      int // Tokens in the input messages
+	OutputTokens     int // Tokens in the AI response
+	ToolResultTokens int // Tokens in tool results before processing
+	ProcessedTokens  int // Tokens in tool results after processing
+	ContextSize      int // Total context size in bytes
+	StartTime        time.Time
+	EndTime          time.Time
+}
+
+// NewContextTracker creates a new context tracker
+func NewContextTracker() *ContextTracker {
+	return &ContextTracker{
+		StartTime: time.Now(),
+	}
+}
+
+// RecordInputTokens records the number of input tokens
+func (ct *ContextTracker) RecordInputTokens(count int) {
+	ct.InputTokens = count
+}
+
+// RecordOutputTokens records the number of output tokens
+func (ct *ContextTracker) RecordOutputTokens(count int) {
+	ct.OutputTokens = count
+}
+
+// RecordToolResultTokens records tokens in tool results before processing
+func (ct *ContextTracker) RecordToolResultTokens(count int) {
+	ct.ToolResultTokens = count
+}
+
+// RecordProcessedTokens records tokens in tool results after processing
+func (ct *ContextTracker) RecordProcessedTokens(count int) {
+	ct.ProcessedTokens = count
+}
+
+// RecordContextSize records the total context size
+func (ct *ContextTracker) RecordContextSize(size int) {
+	ct.ContextSize = size
+}
+
+// Complete marks the tracking as complete
+func (ct *ContextTracker) Complete() {
+	ct.EndTime = time.Now()
+}
+
+// GetTokenReduction calculates the token reduction percentage
+func (ct *ContextTracker) GetTokenReduction() float64 {
+	if ct.ToolResultTokens == 0 {
+		return 0
+	}
+	reduction := float64(ct.ToolResultTokens-ct.ProcessedTokens) / float64(ct.ToolResultTokens)
+	return reduction * 100
+}
+
+// GetDuration returns the duration of the tracking
+func (ct *ContextTracker) GetDuration() time.Duration {
+	if ct.EndTime.IsZero() {
+		return time.Since(ct.StartTime)
+	}
+	return ct.EndTime.Sub(ct.StartTime)
+}
+
+// LogMetrics logs the token usage metrics
+func (ct *ContextTracker) LogMetrics(logger interface{}, sessionID string) {
+	reduction := ct.GetTokenReduction()
+	duration := ct.GetDuration()
+
+	// Log metrics - use reflection to handle different logger types
+	logMsg := fmt.Sprintf(
+		"Token Usage Metrics - Session: %s | Input: %d | Output: %d | Tool Results: %d → %d (%.1f%% reduction) | Context: %d bytes | Duration: %v",
+		sessionID,
+		ct.InputTokens,
+		ct.OutputTokens,
+		ct.ToolResultTokens,
+		ct.ProcessedTokens,
+		reduction,
+		ct.ContextSize,
+		duration,
+	)
+
+	// Try to log with zap logger if available
+	if zapLogger, ok := logger.(*zap.Logger); ok {
+		zapLogger.Info(logMsg)
+	} else {
+		// Fallback to standard logging
+		log.Println(logMsg)
+	}
+}
+
+// GetMetricsMap returns metrics as a map for easy access
+func (ct *ContextTracker) GetMetricsMap() map[string]interface{} {
+	return map[string]interface{}{
+		"input_tokens":       ct.InputTokens,
+		"output_tokens":      ct.OutputTokens,
+		"tool_result_tokens": ct.ToolResultTokens,
+		"processed_tokens":   ct.ProcessedTokens,
+		"token_reduction":    ct.GetTokenReduction(),
+		"context_size":       ct.ContextSize,
+		"duration_ms":        ct.GetDuration().Milliseconds(),
+	}
+}
+
+// IsContextSizeExceeded checks if context size exceeds a threshold
+func (ct *ContextTracker) IsContextSizeExceeded(maxSize int) bool {
+	return ct.ContextSize > maxSize
+}
+
+// GetContextSizePercentage returns the context size as a percentage of max
+func (ct *ContextTracker) GetContextSizePercentage(maxSize int) float64 {
+	if maxSize == 0 {
+		return 0
+	}
+	return (float64(ct.ContextSize) / float64(maxSize)) * 100
+}
+
+// CalculateContextSize calculates the total context size from messages
+func CalculateContextSize(messages []Message) int {
+	totalSize := 0
+	for _, msg := range messages {
+		totalSize += len(msg.Content)
+		if msg.ToolCall != nil {
+			totalSize += len(msg.ToolCall.Name)
+			// Estimate args size
+			for k, v := range msg.ToolCall.Args {
+				totalSize += len(k) + len(fmt.Sprintf("%v", v))
+			}
+		}
+		if msg.ToolResult != nil {
+			totalSize += len(msg.ToolResult.Name)
+			totalSize += len(fmt.Sprintf("%v", msg.ToolResult.Output))
+			totalSize += len(msg.ToolResult.Error)
+		}
+	}
+	return totalSize
+}
+
+// ShouldApplySlidingWindow determines if sliding window should be applied
+func (ct *ContextTracker) ShouldApplySlidingWindow(maxSize int) bool {
+	return ct.ContextSize > (maxSize / 2) // Apply when at 50% of max
+}
 
 // StreamEvent represents a streaming event (token, tool call, or tool result)
 type StreamEvent struct {
@@ -65,6 +215,19 @@ func getClaudeSystemPrompt() string {
 	return `# Task Coordination System
 
 You are a development task coordinator. Your goal: **Get user requests completed by delegating to specialist agents**.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 CRITICAL REQUIREMENT: SUBAGENTS MUST WRITE COMPLETE CODE 🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When creating tasks for subagents, you MUST include this in contextSummary:
+
+"ABSOLUTE REQUIREMENT: Write COMPLETE, FULL code - NEVER use placeholders like
+'// Rest of code remains the same' or '/* ... existing code ... */'.
+Write EVERY LINE of the file. Incomplete code will be REJECTED.
+Your code MUST compile with ZERO errors before task completion."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ## Your Role
 
@@ -166,6 +329,32 @@ There's no strict step order, but typically:
    - "Update function Z in file W"
    - "Test the changes work correctly"
 
+**CRITICAL: Prevent undefined variable/import errors:**
+When creating contextSummary and contextHint, you MUST:
+- Tell subagent to READ THE ENTIRE FILE before modifying
+- Warn about common errors: using undefined variables, wrong function names, missing imports
+- Include instruction: "Verify all variable names, function names, and imports exist before using them"
+- Add: "Check existing useState hooks, props, and imports - use exact names from the file"
+
+**CRITICAL: Prevent incomplete code:**
+ALWAYS include in contextHint for code modification todos:
+"Write the COMPLETE file - NEVER use placeholders like '// Rest remains same' or '/* ... existing code ... */'. Write EVERY LINE from start to finish."
+
+5. **ALWAYS include compilation/build verification TODO**
+   - MANDATORY: Add a final TODO to verify code compiles/builds successfully
+   - Specify the appropriate command based on language:
+     • Go: "Verify: Run 'go build ./...' and fix any errors"
+     • TypeScript/JS: "Verify: Run 'npm run build' and fix any errors"
+     • Python: "Verify: Run 'python -m compileall .' and fix any errors"
+     • Rust: "Verify: Run 'cargo build' and fix any errors"
+     • Java: "Verify: Run 'mvn compile' or 'gradle build' and fix any errors"
+     • C/C++: "Verify: Run 'make' or 'cmake --build .' and fix any errors"
+     • C#: "Verify: Run 'dotnet build' and fix any errors"
+     • Ruby: "Verify: Run 'ruby -c file.rb' and fix any errors"
+     • PHP: "Verify: Run 'php -l file.php' and fix any errors"
+   - Subagent MUST verify compilation before marking task complete
+   - Task is NOT complete until build succeeds with NO errors
+
 **Why this matters:** Subagents run in WRITE-ONLY MODE where discovery tools are BLOCKED. If you create a TODO requiring code_index_search, the subagent literally cannot complete it and will do nothing.
 
 ### coordinator_create_human_task Returns:
@@ -192,21 +381,35 @@ Example: If the response shows "taskId": "f0205882-473b-49bf-b3ba-adc30ab82fc3",
   "humanTaskId": "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789",
   "agentName": "ui-dev",
   "role": "Add dark mode toggle to Settings page",
-  "contextSummary": "User wants a dark mode toggle in the Settings component. Files found: Settings.tsx (lines 15-45 contain main component), useDarkMode.ts (lines 8-25 contain the hook). Need to add toggle UI element and wire it to the existing useDarkMode hook.",
+  "contextSummary": "User wants a dark mode toggle in the Settings component. Files found: Settings.tsx (lines 15-45 contain main component), useDarkMode.ts (lines 8-25 contain the hook). Need to add toggle UI element and wire it to the existing useDarkMode hook.
+
+ABSOLUTE REQUIREMENT: Write COMPLETE, FULL code - NEVER use placeholders like '// Rest of code remains the same' or '{/* ... existing code ... */}'. Write EVERY LINE of the file. Incomplete code will be REJECTED. Your code MUST compile with ZERO errors before task completion.
+
+CRITICAL: Read the ENTIRE Settings.tsx file first to verify existing state variables, props, and imports before making any changes. Do NOT assume variable names - check what actually exists in the file.",
   "filesModified": [
     "/Users/name/project/ui/src/components/Settings.tsx",
     "/Users/name/project/ui/src/hooks/useDarkMode.ts"
   ],
   "todos": [
     {
+      "description": "Read entire Settings.tsx file to verify context",
+      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
+      "contextHint": "FIRST STEP: Read the complete file. Check: (1) What state variables exist? (2) What props are defined? (3) What's already imported? (4) What's the naming pattern for similar toggles? DO NOT skip this step - it prevents 'Cannot find name' errors."
+    },
+    {
       "description": "Add dark mode toggle button to Settings component UI",
       "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
-      "contextHint": "Line 15-45: Add <ToggleSwitch> component, place in settings grid. Follow existing pattern for other toggle switches in the file."
+      "contextHint": "Write the COMPLETE Settings.tsx file with the toggle added. NEVER use '// Rest remains same' - write ALL imports, ALL functions, ALL JSX from start to finish. Line 15-45: Add <ToggleSwitch> component, place in settings grid. Follow existing pattern for other toggle switches. Use EXACT names from step 1 - verify variable names before using them."
     },
     {
       "description": "Connect toggle to useDarkMode hook state",
       "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
-      "contextHint": "Import useDarkMode from hooks file, destructure { darkMode, setDarkMode }, pass setDarkMode to toggle onChange handler."
+      "contextHint": "Import useDarkMode from hooks file (verify path exists first). Destructure { darkMode, setDarkMode } using exact export names from useDarkMode.ts. Pass setDarkMode to toggle onChange - verify the handler name matches the component's prop interface."
+    },
+    {
+      "description": "Verify build: Run npm run build and fix any errors",
+      "filePath": "/Users/name/project/ui/src/components/Settings.tsx",
+      "contextHint": "MANDATORY: Run 'npm run build' or 'cd ui && npm run build' after making changes. Fix any TypeScript/build errors (undefined variables, missing imports, type mismatches). Task is NOT complete until build succeeds with zero errors."
     }
   ]
 }
@@ -359,7 +562,7 @@ func (c *ToolResultCache) DeletePrefix(prefix string) int {
 // NewChatService creates a new ChatService with the given configuration
 // Creates an empty tool registry - use RegisterTool() or GetToolRegistry() to add tools
 func NewChatService(config *AIConfig) (*ChatService, error) {
-	provider, err := NewChatProvider(config)
+	provider, err := NewChatProvider(config, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -382,7 +585,7 @@ func NewChatService(config *AIConfig) (*ChatService, error) {
 // NewChatServiceWithTools creates a ChatService with a pre-configured tool registry
 // Useful when you want to inject a tool registry with pre-registered tools
 func NewChatServiceWithTools(config *AIConfig, toolRegistry *ToolRegistry) (*ChatService, error) {
-	provider, err := NewChatProvider(config)
+	provider, err := NewChatProvider(config, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -408,7 +611,49 @@ func (s *ChatService) GetToolRegistry() *ToolRegistry {
 	return s.toolRegistry
 }
 
+// calculateRemainingContext calculates the remaining context window available for tool results
+// Returns the number of tokens still available in the context window
+func (s *ChatService) calculateRemainingContext(messages []Message) int {
+	// Get max context window based on model provider
+	maxContextWindow := 128000 // Default for GPT models
+	if s.config.Provider == "anthropic" {
+		maxContextWindow = 200000 // Claude models have 200K context
+	}
+
+	// Override with config value if set
+	if s.config.ContextWindowSize > 0 {
+		maxContextWindow = s.config.ContextWindowSize
+	}
+
+	// Estimate tokens used by all messages
+	usedTokens := 0
+	for _, msg := range messages {
+		// Rough estimation: ~4 characters per token
+		usedTokens += len(msg.Content) / 4
+
+		// Add tokens for tool calls if present
+		if msg.ToolCall != nil {
+			usedTokens += len(msg.ToolCall.Name) / 4
+			usedTokens += len(fmt.Sprintf("%v", msg.ToolCall.Args)) / 4
+		}
+
+		// Add tokens for tool results if present
+		if msg.ToolResult != nil {
+			usedTokens += len(fmt.Sprintf("%v", msg.ToolResult.Output)) / 4
+		}
+	}
+
+	// Return remaining context, minimum 0
+	remaining := maxContextWindow - usedTokens
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // StreamChat sends messages to AI provider and streams the response (legacy text-only method)
+// For tool-enabled streaming, use StreamChatWithTools
+// Extracts user identity from context for logging and multi-tenancy
 // For tool-enabled streaming, use StreamChatWithTools
 // Extracts user identity from context for logging and multi-tenancy
 func (s *ChatService) StreamChat(ctx context.Context, messages []Message) (<-chan string, error) {
@@ -483,6 +728,33 @@ func (s *ChatService) StreamChat(ctx context.Context, messages []Message) (<-cha
 // GetConfig returns the AI configuration for this service
 func (s *ChatService) GetConfig() *AIConfig {
 	return s.config
+}
+
+// GetAllowedToolsForDirectSubagent returns the list of tools that direct subagent chats can use
+// This blocks only the delegation tool (execute_subagent) to prevent subchats from being created
+// Direct subagent mode is when user communicates directly with a specific agent (go-dev, ui-dev, etc.)
+// In this mode, the agent should work autonomously without delegating, but CAN use task management tools
+func (s *ChatService) GetAllowedToolsForDirectSubagent() []string {
+	// Get all registered tool names
+	allTools := s.toolRegistry.List()
+
+	// Define blocked tools (ONLY delegation tool - allow task management)
+	blockedTools := map[string]bool{
+		"execute_subagent": true, // CRITICAL: Prevent direct subagents from creating subchats and delegating to other agents
+		// Note: Task management tools (coordinator_create_human_task, coordinator_create_agent_task, etc.) are ALLOWED
+		// This enables direct subagents to track work via human tasks, agent tasks, and todos
+		// while still preventing delegation to other agents
+	}
+
+	// Filter out blocked tools
+	allowedTools := make([]string, 0, len(allTools))
+	for _, toolName := range allTools {
+		if !blockedTools[toolName] {
+			allowedTools = append(allowedTools, toolName)
+		}
+	}
+
+	return allowedTools
 }
 
 // getIdentityFromContext extracts user identity from context

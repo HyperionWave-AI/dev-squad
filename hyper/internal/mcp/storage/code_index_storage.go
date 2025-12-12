@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -546,10 +547,10 @@ func (s *CodeIndexStorage) GetIndexStatus() (*IndexStatus, error) {
 
 // CodeIndexMapping represents a path-to-Qdrant-collection mapping
 type CodeIndexMapping struct {
-	Path              string    `bson:"path" json:"path"`
-	QdrantCollection  string    `bson:"qdrantCollection" json:"qdrantCollection"`
-	CreatedAt         time.Time `bson:"createdAt" json:"createdAt"`
-	LastIndexed       time.Time `bson:"lastIndexed" json:"lastIndexed"`
+	Path             string    `bson:"path" json:"path"`
+	QdrantCollection string    `bson:"qdrantCollection" json:"qdrantCollection"`
+	CreatedAt        time.Time `bson:"createdAt" json:"createdAt"`
+	LastIndexed      time.Time `bson:"lastIndexed" json:"lastIndexed"`
 }
 
 // AddPathMapping adds or updates a path-to-collection mapping
@@ -736,6 +737,143 @@ func (s *CodeIndexStorage) CountAllChunks() (int, error) {
 
 // ClearAllIndexData removes all indexed data but preserves folder configurations
 // This allows users to reindex after clearing without needing to re-add folders
+
+// GetContentByFilePathAndLineRange retrieves code content for a file by path and optional line range
+// If startLine and endLine are 0, returns the entire file content
+// Returns file metadata, content, and actual line range retrieved
+func (s *CodeIndexStorage) GetContentByFilePathAndLineRange(filePath string, startLine, endLine int) (*ContentResult, error) {
+	fmt.Printf("🗄️ PHASE2-STORAGE: GetContentByFilePathAndLineRange called - filePath=%s, startLine=%d, endLine=%d\n", filePath, startLine, endLine)
+
+	// Validate file path
+	if filePath == "" {
+		fmt.Printf("🗄️ PHASE2-STORAGE: ERROR - filePath is empty\n")
+		return nil, fmt.Errorf("filePath is required")
+	}
+
+	// Reject archived files
+	if strings.Contains(filePath, "/.archived/") || strings.Contains(filePath, "/.archive/") {
+		fmt.Printf("🗄️ PHASE2-STORAGE: ERROR - archived file rejected: %s\n", filePath)
+		return nil, fmt.Errorf("cannot fetch content from archived file: %s", filePath)
+	}
+
+	// Get file metadata by path
+	fmt.Printf("🗄️ PHASE2-STORAGE: Looking up file in MongoDB by path: %s\n", filePath)
+	file, err := s.GetFileByPath(filePath)
+	if err != nil {
+		fmt.Printf("🗄️ PHASE2-STORAGE: ERROR - failed to get file by path: %v\n", err)
+		return nil, fmt.Errorf("failed to get file by path: %w", err)
+	}
+	if file == nil {
+		fmt.Printf("🗄️ PHASE2-STORAGE: ERROR - file not found in index: %s\n", filePath)
+		return nil, fmt.Errorf("file not found in index: %s", filePath)
+	}
+	fmt.Printf("🗄️ PHASE2-STORAGE: File found - ID=%s, Language=%s, LineCount=%d, ChunkCount=%d\n", file.ID, file.Language, file.LineCount, file.ChunkCount)
+
+	// Fetch all chunks for this file
+	fmt.Printf("🗄️ PHASE2-STORAGE: Fetching chunks for fileID: %s\n", file.ID)
+	chunks, err := s.GetChunksByFileID(file.ID)
+	if err != nil {
+		fmt.Printf("🗄️ PHASE2-STORAGE: ERROR - failed to fetch chunks: %v\n", err)
+		return nil, fmt.Errorf("failed to fetch chunks: %w", err)
+	}
+	if len(chunks) == 0 {
+		fmt.Printf("🗄️ PHASE2-STORAGE: ERROR - no chunks found for file: %s\n", filePath)
+		return nil, fmt.Errorf("no chunks found for file: %s", filePath)
+	}
+	fmt.Printf("🗄️ PHASE2-STORAGE: Found %d chunks for file\n", len(chunks))
+
+	// Build full file content from chunks
+	var fullContent strings.Builder
+	for i, chunk := range chunks {
+		fullContent.WriteString(chunk.Content)
+		if i == 0 {
+			fmt.Printf("🗄️ PHASE2-STORAGE: Chunk 0: startLine=%d, endLine=%d, contentLen=%d\n", chunk.StartLine, chunk.EndLine, len(chunk.Content))
+		}
+	}
+	totalContentLen := fullContent.Len()
+	fmt.Printf("🗄️ PHASE2-STORAGE: Built full content from chunks - totalBytes=%d\n", totalContentLen)
+
+	// Determine actual line range to return
+	actualStartLine := startLine
+	actualEndLine := endLine
+
+	// If no line range specified, return entire file
+	if startLine == 0 && endLine == 0 {
+		actualStartLine = 1
+		actualEndLine = file.LineCount
+		fmt.Printf("🗄️ PHASE2-STORAGE: No line range specified - returning entire file (lines 1-%d)\n", file.LineCount)
+	} else {
+		// Validate line range
+		if startLine < 1 {
+			actualStartLine = 1
+		}
+		if endLine > file.LineCount {
+			actualEndLine = file.LineCount
+		}
+		if actualStartLine > actualEndLine {
+			fmt.Printf("🗄️ PHASE2-STORAGE: ERROR - invalid line range: startLine (%d) > endLine (%d)\n", actualStartLine, actualEndLine)
+			return nil, fmt.Errorf("invalid line range: startLine (%d) > endLine (%d)", actualStartLine, actualEndLine)
+		}
+		fmt.Printf("🗄️ PHASE2-STORAGE: Line range validated - requested=%d-%d, actual=%d-%d\n", startLine, endLine, actualStartLine, actualEndLine)
+	}
+
+	// Extract requested line range from full content
+	allLines := strings.Split(fullContent.String(), "\n")
+	fmt.Printf("🗄️ PHASE2-STORAGE: Split content into %d lines\n", len(allLines))
+
+	// Convert to 0-based indexing for extraction
+	startIdx := actualStartLine - 1
+	endIdx := actualEndLine
+
+	// Validate indices
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx > len(allLines) {
+		endIdx = len(allLines)
+	}
+
+	// Extract lines
+	var extractedLines []string
+	if startIdx < len(allLines) {
+		extractedLines = allLines[startIdx:endIdx]
+	}
+	fmt.Printf("🗄️ PHASE2-STORAGE: Extracted %d lines (indices %d-%d)\n", len(extractedLines), startIdx, endIdx)
+
+	// Build result
+	result := &ContentResult{
+		FilePath:       file.Path,
+		RelativePath:   file.RelativePath,
+		Language:       file.Language,
+		LineCount:      file.LineCount,
+		Content:        strings.Join(extractedLines, "\n"),
+		StartLine:      actualStartLine,
+		EndLine:        actualEndLine,
+		RequestedStart: startLine,
+		RequestedEnd:   endLine,
+		Size:           file.Size,
+		IndexedAt:      file.IndexedAt,
+	}
+
+	fmt.Printf("🗄️ PHASE2-STORAGE: SUCCESS - returning result: filePath=%s, lines=%d-%d, contentLen=%d\n", result.FilePath, result.StartLine, result.EndLine, len(result.Content))
+	return result, nil
+}
+
+// ContentResult represents the result of fetching code content
+type ContentResult struct {
+	FilePath       string    `json:"filePath"`
+	RelativePath   string    `json:"relativePath"`
+	Language       string    `json:"language"`
+	LineCount      int       `json:"lineCount"`
+	Content        string    `json:"content"`
+	StartLine      int       `json:"startLine"`      // Actual start line returned
+	EndLine        int       `json:"endLine"`        // Actual end line returned
+	RequestedStart int       `json:"requestedStart"` // Requested start line (may differ if out of range)
+	RequestedEnd   int       `json:"requestedEnd"`   // Requested end line (may differ if out of range)
+	Size           int64     `json:"size"`
+	IndexedAt      time.Time `json:"indexedAt"`
+}
+
 func (s *CodeIndexStorage) ClearAllIndexData() error {
 	ctx := context.Background()
 

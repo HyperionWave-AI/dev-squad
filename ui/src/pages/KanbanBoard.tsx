@@ -5,7 +5,7 @@ import { Button } from '@/components/atoms/Button';
 import { KanbanColumn } from '@/components/organisms/KanbanColumn';
 import { TaskDetailDialog } from '@/components/organisms/TaskDetailDialog';
 import { PageHeader } from '@/components/organisms/PageHeader';
-import ErrorBoundary from '@/components/organisms/ErrorBoundary';
+import { ErrorBoundary } from '@/components/organisms/ErrorBoundary';
 import { restClient } from '@/services/restClient';
 import type { HumanTask, AgentTask, TaskStatus, FlattenedTask } from '@/types/coordinator';
 import { Search, Loader, AlertCircle, LayoutDashboard } from 'lucide-react';

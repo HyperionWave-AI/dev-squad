@@ -18,10 +18,12 @@ import (
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/indexer"
+	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/parser"
 	"hyper/internal/mcp/storage"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/server"
+	"hyper/internal/validation"
 
 	"github.com/joho/godotenv"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -452,6 +454,27 @@ func main() {
 	embeddingDimensions := embeddingClient.GetDimensions()
 	logger.Info("Embedding dimensions", zap.Int("dimensions", embeddingDimensions))
 
+	// Set code index collection name with user ID and dimension suffix
+	// This allows:
+	// 1. User isolation - each user gets their own code index (if CODE_INDEX_USER_ID is set)
+	// 2. Seamless provider switching - different embedding dimensions use separate collections
+	// Pattern: {base}_{userID}_{dimensions} or {base}_{dimensions} if no user ID
+	storage.SetCodeIndexCollectionWithDimensions(embeddingDimensions)
+
+	if storage.CodeIndexUserID != "" {
+		logger.Info("Code index collection configured with user isolation",
+			zap.String("baseCollection", storage.CodeIndexCollectionBase),
+			zap.String("userId", storage.CodeIndexUserID),
+			zap.String("activeCollection", storage.CodeIndexCollection),
+			zap.Int("dimensions", embeddingDimensions))
+	} else {
+		logger.Info("Code index collection configured (shared mode)",
+			zap.String("baseCollection", storage.CodeIndexCollectionBase),
+			zap.String("activeCollection", storage.CodeIndexCollection),
+			zap.Int("dimensions", embeddingDimensions),
+			zap.String("note", "Set CODE_INDEX_USER_ID env var for user isolation"))
+	}
+
 	if err := ensureCodeIndexCollectionWithDimensions(qdrantClient, embeddingDimensions, logger); err != nil {
 		logger.Fatal("Failed to ensure code index collection", zap.Error(err))
 	}
@@ -655,8 +678,25 @@ func main() {
 		logger.Fatal("Failed to initialize tools storage", zap.Error(err))
 	}
 
+	// Initialize code summarizer for search results
+	var codeSummarizer summarizer.CodeSummarizer
+	summarizerConfig := summarizer.LoadSummarizerConfig()
+	if summarizerConfig.Enabled {
+		llmSummarizer, err := summarizer.NewLLMSummarizer(summarizerConfig, logger)
+		if err != nil {
+			logger.Warn("Failed to initialize code summarizer, search results will not include summaries",
+				zap.Error(err))
+			// Continue without summarizer - graceful degradation
+		} else {
+			codeSummarizer = llmSummarizer
+			logger.Info("Code summarizer initialized successfully",
+				zap.String("model", summarizerConfig.Model),
+				zap.Int("maxTokens", summarizerConfig.MaxTokens))
+		}
+	}
+
 	// Initialize MCP handlers
-	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, qdrantClient, embeddingClient, fileWatcher, logger)
+	codeToolsHandler := handlers.NewCodeToolsHandler(codeIndexStorage, codeSummarizer, qdrantClient, embeddingClient, fileWatcher, logger)
 
 	// Create MCP server with Implementation and ServerOptions
 	impl := &mcp.Implementation{
@@ -720,9 +760,14 @@ func main() {
 	}
 	logger.Info("Reflection tools registered to MCP server", zap.Int("count", 3))
 
+	// Initialize code validator for error prevention mode (per-session control via context)
+	logger.Info("Initializing code validator for error prevention...")
+	validator := validation.NewCodeValidator(logger, tools.GetProjectRoot())
+	logger.Info("Code validator initialized (per-session control)")
+
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools to MCP server...")
-	filesystemHandler := handlers.NewFilesystemToolHandler(logger)
+	filesystemHandler := handlers.NewFilesystemToolHandler(logger, validator)
 	if err := filesystemHandler.RegisterFilesystemTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register filesystem tools to MCP server", zap.Error(err))
 	}
@@ -760,6 +805,7 @@ func main() {
 				codeIndexStorage,
 				qdrantClient,
 				embeddingClient,
+				codeSummarizer,
 				fileWatcher,
 				mcpServer,
 				embeddedUI,

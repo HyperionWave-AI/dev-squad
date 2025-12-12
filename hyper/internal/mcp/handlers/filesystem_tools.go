@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"hyper/internal/ai-service/tools"
+	"hyper/internal/validation"
 )
 
 // FilesystemToolHandler handles MCP tool requests for filesystem operations
@@ -26,16 +27,18 @@ type FilesystemToolHandler struct {
 	logger           *zap.Logger
 	baseDir          string // Base directory for path validation
 	metadataRegistry *ToolMetadataRegistry
+	validator        *validation.CodeValidator // For post-write validation (per-session control via context)
 }
 
 // NewFilesystemToolHandler creates a new filesystem tools handler
-func NewFilesystemToolHandler(logger *zap.Logger) *FilesystemToolHandler {
+func NewFilesystemToolHandler(logger *zap.Logger, validator *validation.CodeValidator) *FilesystemToolHandler {
 	// Use project root (git root) as base, not current working directory
 	// This ensures paths work correctly even when server is run from subdirectories
 	baseDir := tools.GetProjectRoot()
 	return &FilesystemToolHandler{
-		logger:  logger,
-		baseDir: baseDir,
+		logger:    logger,
+		baseDir:   baseDir,
+		validator: validator,
 	}
 }
 
@@ -408,6 +411,12 @@ func (h *FilesystemToolHandler) registerFileWriteTool(server *mcp.Server) error 
 
 // handleFileWrite writes content to a file
 func (h *FilesystemToolHandler) handleFileWrite(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	// Log context values for debugging
+	h.logger.Info("📝 file_write called",
+		zap.Any("errorPreventionMode", ctx.Value("errorPreventionMode")),
+		zap.Any("sessionID", ctx.Value("sessionID")),
+		zap.Any("companyID", ctx.Value("companyID")))
+
 	filePath, ok := args["path"].(string)
 	if !ok || filePath == "" {
 		return createFilesystemErrorResult("path is required and must be a non-empty string"), nil
@@ -467,6 +476,47 @@ func (h *FilesystemToolHandler) handleFileWrite(ctx context.Context, args map[st
 	fileInfo, err := file.Stat()
 	if err != nil {
 		return createFilesystemErrorResult(fmt.Sprintf("failed to stat file: %s", err.Error())), nil
+	}
+
+	// SYNCHRONOUS post-write validation (only if error prevention mode is enabled)
+	errorPreventionMode := ctx.Value("errorPreventionMode")
+	isErrorPreventionEnabled := errorPreventionMode != nil && errorPreventionMode.(bool)
+
+	h.logger.Debug("Post-write validation check",
+		zap.String("file", validatedPath),
+		zap.Any("errorPreventionModeValue", errorPreventionMode),
+		zap.Bool("isEnabled", isErrorPreventionEnabled))
+
+	ext := filepath.Ext(validatedPath)
+	if isErrorPreventionEnabled && (ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".go") {
+		if h.validator != nil {
+			h.logger.Info("🔍 Running SYNCHRONOUS post-write validation (Error Prevention Mode: ON)",
+				zap.String("file", validatedPath))
+
+			// Create independent context that doesn't die with HTTP request
+			validationCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Run validation synchronously
+			validationResult, validationErr := h.validator.ValidateFiles(validationCtx, []string{validatedPath})
+			if validationErr != nil {
+				h.logger.Warn("⚠️  Validation failed to run", zap.Error(validationErr))
+				// Don't block on validation infrastructure errors
+			} else if !validationResult.Passed {
+				h.logger.Error("❌ COMPILATION ERRORS DETECTED",
+					zap.Int("errorCount", len(validationResult.Errors)),
+					zap.String("file", validatedPath))
+
+				// Format errors for agent
+				errorMsg := h.validator.FormatErrorsForAgent(validationResult)
+				h.logger.Error("🚨 COMPILATION ERRORS", zap.String("errors", errorMsg))
+
+				// BLOCK the tool call - return error so agent must fix before proceeding
+				return createFilesystemErrorResult(fmt.Sprintf("❌ COMPILATION FAILED:\n%s\n\nYou MUST fix these errors before proceeding. The file was written but contains compilation errors.", errorMsg)), nil
+			} else {
+				h.logger.Info("✅ Compilation validation passed", zap.String("file", validatedPath))
+			}
+		}
 	}
 
 	result := map[string]interface{}{
@@ -540,14 +590,24 @@ func (h *FilesystemToolHandler) extractFilePathFromPatch(patch string) (string, 
 		if strings.HasPrefix(line, "--- ") {
 			// Remove "--- " prefix
 			path := strings.TrimPrefix(line, "--- ")
-			// Remove a/ or b/ prefix if present
-			path = strings.TrimPrefix(path, "a/")
-			path = strings.TrimPrefix(path, "b/")
+			// Remove a/ or b/ prefix if present, preserving absolute paths
+			if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+				path = path[2:] // Remove "a/" or "b/"
+			}
 			// Remove any trailing whitespace or timestamps
 			if idx := strings.Index(path, "\t"); idx != -1 {
 				path = path[:idx]
 			}
 			path = strings.TrimSpace(path)
+			// Restore leading slash for common absolute path prefixes
+			if !strings.HasPrefix(path, "/") {
+				for _, prefix := range []string{"tmp/", "usr/", "etc/", "home/", "opt/", "var/", "root/"} {
+					if strings.HasPrefix(path, prefix) {
+						path = "/" + path
+						break
+					}
+				}
+			}
 			if path != "" && path != "/dev/null" {
 				return path, nil
 			}
@@ -556,14 +616,24 @@ func (h *FilesystemToolHandler) extractFilePathFromPatch(patch string) (string, 
 		if strings.HasPrefix(line, "+++ ") {
 			// Remove "+++ " prefix
 			path := strings.TrimPrefix(line, "+++ ")
-			// Remove a/ or b/ prefix if present
-			path = strings.TrimPrefix(path, "a/")
-			path = strings.TrimPrefix(path, "b/")
+			// Remove a/ or b/ prefix if present, preserving absolute paths
+			if strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/") {
+				path = path[2:] // Remove "a/" or "b/"
+			}
 			// Remove any trailing whitespace or timestamps
 			if idx := strings.Index(path, "\t"); idx != -1 {
 				path = path[:idx]
 			}
 			path = strings.TrimSpace(path)
+			// Restore leading slash for common absolute path prefixes
+			if !strings.HasPrefix(path, "/") {
+				for _, prefix := range []string{"tmp/", "usr/", "etc/", "home/", "opt/", "var/", "root/"} {
+					if strings.HasPrefix(path, prefix) {
+						path = "/" + path
+						break
+					}
+				}
+			}
 			if path != "" && path != "/dev/null" {
 				return path, nil
 			}

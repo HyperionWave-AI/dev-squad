@@ -15,15 +15,7 @@ type BashTool struct{}
 // BashInput represents the input schema for bash execution
 type BashInput struct {
 	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"` // timeout in seconds, default 30
-}
-
-// BashOutput represents the output from bash execution
-type BashOutput struct {
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exitCode"`
-	Duration int64  `json:"durationMs"`
+	Timeout int    `json:"timeout,omitempty"` // timeout in seconds, default 3600 (60 minutes)
 }
 
 var dangerousCommands = []string{
@@ -42,10 +34,10 @@ func (b *BashTool) Name() string {
 
 // Description returns the tool description
 func (b *BashTool) Description() string {
-	return "Execute shell commands and return stdout/stderr. Supports timeout (default 30s). Use for system operations, file checks, script execution."
+	return "Execute shell commands and return stdout/stderr. Supports timeout (default 3600s/60min). Use for system operations, file checks, script execution."
 }
 
-// Call executes the bash command
+// Call executes the bash command and returns raw stdout
 func (b *BashTool) Call(ctx context.Context, input string) (string, error) {
 	var bashInput BashInput
 	if err := json.Unmarshal([]byte(input), &bashInput); err != nil {
@@ -70,10 +62,10 @@ func (b *BashTool) Call(ctx context.Context, input string) (string, error) {
 		return "", fmt.Errorf("access to system directories is blocked for security")
 	}
 
-	// Set timeout (default 30s)
+	// Set timeout (default 3600s / 60 minutes)
 	timeout := time.Duration(bashInput.Timeout) * time.Second
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = 3600 * time.Second
 	}
 
 	// Create command with timeout
@@ -92,27 +84,23 @@ func (b *BashTool) Call(ctx context.Context, input string) (string, error) {
 		return "", fmt.Errorf("command timed out after %dms", duration)
 	}
 
-	output := BashOutput{
-		Duration: duration,
-	}
-
+	// Handle execution errors
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			output.Stderr = string(exitErr.Stderr)
-			output.ExitCode = exitErr.ExitCode()
-			output.Stdout = string(stdout)
-		} else {
-			return "", fmt.Errorf("command execution failed: %w", err)
+			stderr := string(exitErr.Stderr)
+			// Return stderr if available, otherwise return stdout with error
+			if stderr != "" {
+				return "", fmt.Errorf("command failed (exit code %d, %dms): %s", exitErr.ExitCode(), duration, stderr)
+			}
+			// If no stderr, still return the error but with stdout if available
+			if len(stdout) > 0 {
+				return "", fmt.Errorf("command failed (exit code %d, %dms): %s", exitErr.ExitCode(), duration, string(stdout))
+			}
+			return "", fmt.Errorf("command failed with exit code %d (%dms)", exitErr.ExitCode(), duration)
 		}
-	} else {
-		output.Stdout = string(stdout)
-		output.ExitCode = 0
+		return "", fmt.Errorf("command execution failed: %w", err)
 	}
 
-	result, err := json.Marshal(output)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal output: %w", err)
-	}
-
-	return string(result), nil
+	// Return raw stdout on success
+	return string(stdout), nil
 }

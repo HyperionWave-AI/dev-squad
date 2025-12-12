@@ -1,0 +1,335 @@
+package handlers
+
+import (
+	"testing"
+	"time"
+
+	"hyper/internal/models"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
+)
+
+// TestShouldCompact verifies the trigger threshold detection
+func TestShouldCompact(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	compactor := NewContextCompactor(config, logger)
+
+	tests := []struct {
+		name           string
+		messages       []models.ChatMessage
+		expectedResult bool
+		description    string
+	}{
+		{
+			name:           "empty messages",
+			messages:       []models.ChatMessage{},
+			expectedResult: false,
+			description:    "Should not compact empty message list",
+		},
+		{
+			name: "below trigger threshold",
+			messages: []models.ChatMessage{
+				{
+					ID:        primitive.NewObjectID(),
+					Role:      "user",
+					Content:   "Hello",
+					Timestamp: time.Now(),
+				},
+			},
+			expectedResult: false,
+			description:    "Should not compact when below 90% threshold",
+		},
+		{
+			name: "above trigger threshold",
+			messages: createLargeMessageList(120000), // 120K tokens > 115.2K threshold
+			expectedResult: true,
+			description:    "Should compact when above 90% threshold",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := compactor.ShouldCompact(tt.messages)
+			if result != tt.expectedResult {
+				t.Errorf("%s: expected %v, got %v", tt.description, tt.expectedResult, result)
+			}
+		})
+	}
+}
+
+// TestCalculateSplitPoint verifies the backward sliding window algorithm
+func TestCalculateSplitPoint(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	compactor := NewContextCompactor(config, logger)
+
+	tests := []struct {
+		name              string
+		messages          []models.ChatMessage
+		expectedCompact   int
+		expectedKeep      int
+		description       string
+	}{
+		{
+			name:              "empty messages",
+			messages:          []models.ChatMessage{},
+			expectedCompact:   0,
+			expectedKeep:      0,
+			description:       "Empty message list should return 0, 0",
+		},
+		{
+			name: "single message",
+			messages: []models.ChatMessage{
+				createMessage("user", "Hello", 100),
+			},
+			expectedCompact: 0,
+			expectedKeep:    1,
+			description:     "Single message should not be compacted",
+		},
+		{
+			name: "all messages fit in target",
+			messages: []models.ChatMessage{
+				createMessage("user", "msg1", 1000),
+				createMessage("assistant", "msg2", 1000),
+				createMessage("user", "msg3", 1000),
+			},
+			expectedCompact: 0,
+			expectedKeep:    3,
+			description:     "All messages should be kept if they fit in target tokens",
+		},
+		{
+			name: "backward sliding window",
+			messages: []models.ChatMessage{
+				createMessage("user", "old1", 20000),
+				createMessage("assistant", "old2", 20000),
+				createMessage("user", "recent1", 10000),
+				createMessage("assistant", "recent2", 10000),
+				createMessage("user", "recent3", 5000),
+			},
+			expectedCompact: 2,
+			expectedKeep:    3,
+			description:     "Should keep recent messages that fit in target tokens",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compactCount, keepCount := compactor.CalculateSplitPoint(tt.messages)
+			if compactCount != tt.expectedCompact || keepCount != tt.expectedKeep {
+				t.Errorf("%s: expected (%d, %d), got (%d, %d)",
+					tt.description, tt.expectedCompact, tt.expectedKeep, compactCount, keepCount)
+			}
+		})
+	}
+}
+
+// TestToolPairPreservation verifies that tool_call and tool_result stay together
+func TestToolPairPreservation(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	config.PreserveToolPairs = true
+	compactor := NewContextCompactor(config, logger)
+
+	// Create messages with tool pairs
+	messages := []models.ChatMessage{
+		createMessage("user", "old message", 10000),
+		createMessage("assistant", "response", 10000),
+		createMessage("tool_call", "tool call", 5000),
+		createMessage("tool_result", "tool result", 5000),
+		createMessage("user", "recent message", 5000),
+	}
+
+	compactCount, keepCount := compactor.CalculateSplitPoint(messages)
+
+	// The tool_call and tool_result should not be split
+	// If split would be at tool_result, it should move back to include tool_call
+	if compactCount > 0 && compactCount < len(messages) {
+		splitMsg := messages[compactCount]
+		if splitMsg.Role == "tool_result" {
+			t.Errorf("Tool pair preservation failed: split at tool_result without tool_call")
+		}
+	}
+
+	t.Logf("Tool pair test: compact=%d, keep=%d", compactCount, keepCount)
+}
+
+// TestPreserveRecentCount verifies minimum recent messages are kept
+func TestPreserveRecentCount(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	config.PreserveRecentCount = 4
+	compactor := NewContextCompactor(config, logger)
+
+	// Create many large messages
+	messages := createLargeMessageList(150000) // 150K tokens
+
+	_, keepCount := compactor.CalculateSplitPoint(messages)
+
+	// Should keep at least PreserveRecentCount messages
+	if keepCount < config.PreserveRecentCount {
+		t.Errorf("PreserveRecentCount not respected: expected at least %d, got %d",
+			config.PreserveRecentCount, keepCount)
+	}
+}
+
+// TestGetMessagesToCompact verifies the helper method
+func TestGetMessagesToCompact(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	compactor := NewContextCompactor(config, logger)
+
+	messages := []models.ChatMessage{
+		createMessage("user", "old1", 20000),
+		createMessage("assistant", "old2", 20000),
+		createMessage("user", "recent1", 10000),
+		createMessage("assistant", "recent2", 10000),
+	}
+
+	toCompact := compactor.GetMessagesToCompact(messages)
+
+	if len(toCompact) == 0 {
+		t.Errorf("GetMessagesToCompact returned empty slice when messages should be compacted")
+	}
+
+	// Verify returned messages are from the beginning
+	if len(toCompact) > 0 && toCompact[0].Content != "old1" {
+		t.Errorf("GetMessagesToCompact returned wrong messages")
+	}
+}
+
+// TestGetMessagesToKeep verifies the helper method
+func TestGetMessagesToKeep(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	compactor := NewContextCompactor(config, logger)
+
+	messages := []models.ChatMessage{
+		createMessage("user", "old1", 20000),
+		createMessage("assistant", "old2", 20000),
+		createMessage("user", "recent1", 10000),
+		createMessage("assistant", "recent2", 10000),
+	}
+
+	toKeep := compactor.GetMessagesToKeep(messages)
+
+	if len(toKeep) == 0 {
+		t.Errorf("GetMessagesToKeep returned empty slice when messages should be kept")
+	}
+
+	// Verify returned messages are from the end
+	if len(toKeep) > 0 && toKeep[len(toKeep)-1].Content != "recent2" {
+		t.Errorf("GetMessagesToKeep returned wrong messages")
+	}
+}
+
+// TestPerMessageMaxTokens verifies large messages are capped
+func TestPerMessageMaxTokens(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	config.PerMessageMaxTokens = 5000
+	compactor := NewContextCompactor(config, logger)
+
+	// Create a message larger than PerMessageMaxTokens
+	largeMsg := createMessage("user", "x", 10000) // 10K tokens
+	messages := []models.ChatMessage{largeMsg}
+
+	_, keepCount := compactor.CalculateSplitPoint(messages)
+
+	// The large message should still be kept (not compacted)
+	// but its token count should be capped in calculations
+	if keepCount != 1 {
+		t.Errorf("Large message should still be kept: expected keepCount=1, got %d", keepCount)
+	}
+}
+
+// TestAdjustForToolPairs verifies tool pair adjustment logic
+func TestAdjustForToolPairs(t *testing.T) {
+	logger := zap.NewNop()
+	config := DefaultCompactionConfig()
+	compactor := NewContextCompactor(config, logger)
+
+	tests := []struct {
+		name           string
+		messages       []models.ChatMessage
+		splitIndex     int
+		expectedResult int
+		description    string
+	}{
+		{
+			name: "split at tool_result",
+			messages: []models.ChatMessage{
+				createMessage("user", "msg1", 1000),
+				createMessage("tool_call", "call", 1000),
+				createMessage("tool_result", "result", 1000),
+				createMessage("user", "msg2", 1000),
+			},
+			splitIndex:     2, // Split at tool_result
+			expectedResult: 1, // Should move back to include tool_call
+			description:    "Should move split back when at tool_result",
+		},
+		{
+			name: "split at tool_call",
+			messages: []models.ChatMessage{
+				createMessage("user", "msg1", 1000),
+				createMessage("tool_call", "call", 1000),
+				createMessage("tool_result", "result", 1000),
+				createMessage("user", "msg2", 1000),
+			},
+			splitIndex:     1, // Split at tool_call
+			expectedResult: 2, // Should move forward to include tool_result
+			description:    "Should move split forward when at tool_call",
+		},
+		{
+			name: "split not at tool pair",
+			messages: []models.ChatMessage{
+				createMessage("user", "msg1", 1000),
+				createMessage("assistant", "response", 1000),
+				createMessage("user", "msg2", 1000),
+			},
+			splitIndex:     1,
+			expectedResult: 1,
+			description:    "Should not adjust when not at tool pair",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := compactor.adjustForToolPairs(tt.messages, tt.splitIndex)
+			if result != tt.expectedResult {
+				t.Errorf("%s: expected %d, got %d", tt.description, tt.expectedResult, result)
+			}
+		})
+	}
+}
+
+// Helper functions
+
+// createMessage creates a test ChatMessage with estimated token count
+func createMessage(role, content string, estimatedTokens int) models.ChatMessage {
+	return models.ChatMessage{
+		ID:        primitive.NewObjectID(),
+		SessionID: primitive.NewObjectID(),
+		Role:      role,
+		Content:   content,
+		Timestamp: time.Now(),
+		TokenCount: estimatedTokens,
+	}
+}
+
+// createLargeMessageList creates a list of messages with specified total tokens
+func createLargeMessageList(totalTokens int) []models.ChatMessage {
+	var messages []models.ChatMessage
+	tokensPerMessage := 10000
+	messageCount := (totalTokens + tokensPerMessage - 1) / tokensPerMessage
+
+	for i := 0; i < messageCount; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		messages = append(messages, createMessage(role, "message", tokensPerMessage))
+	}
+
+	return messages
+}

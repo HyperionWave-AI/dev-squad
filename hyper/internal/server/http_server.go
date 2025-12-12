@@ -22,11 +22,13 @@ import (
 	mcphandlers "hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/review"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/metrics"
 	"hyper/internal/middleware"
 	"hyper/internal/services"
 	userstorage "hyper/internal/storage"
+	"hyper/internal/validation"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -127,6 +129,7 @@ func StartHTTPServer(
 	codeIndexStorage *storage.CodeIndexStorage,
 	qdrantClient *storage.QdrantClient,
 	embeddingClient embeddings.EmbeddingClient,
+	codeSummarizer summarizer.CodeSummarizer,
 	fileWatcher *watcher.FileWatcher,
 	mcpServer *mcp.Server,
 	embeddedUI http.FileSystem,
@@ -238,7 +241,7 @@ func StartHTTPServer(
 	// NOW FULLY FUNCTIONAL with embedding and Qdrant clients injected
 	logger.Info("Registering code index tools (semantic code search and indexing)...")
 	beforeCount = len(toolRegistry.List())
-	if err := mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage, embeddingClient, qdrantClient, logger); err != nil {
+	if err := mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage, embeddingClient, qdrantClient, codeSummarizer, logger); err != nil {
 		logger.Error("Failed to register code index tools", zap.Error(err))
 		return err
 	}
@@ -251,10 +254,15 @@ func StartHTTPServer(
 		logger.Debug("Registered code index tool", zap.String("name", toolName))
 	}
 
+	// Initialize code validator for error prevention mode (per-session control via context)
+	logger.Info("Initializing code validator for error prevention...")
+	validator := validation.NewCodeValidator(logger, tools.GetProjectRoot())
+	logger.Info("Code validator initialized (per-session control)")
+
 	// Register filesystem tools (bash, file operations, patch application)
 	logger.Info("Registering filesystem tools (bash, file operations, patch application)...")
 	beforeCount = len(toolRegistry.List())
-	if err := tools.RegisterFilesystemTools(toolRegistry); err != nil {
+	if err := tools.RegisterFilesystemTools(toolRegistry, validator, logger); err != nil {
 		logger.Error("Failed to register filesystem tools", zap.Error(err))
 		return err
 	}
@@ -277,9 +285,21 @@ func StartHTTPServer(
 		zap.Int("filesystemTools", filesystemToolsCount))
 	logger.Info("All registered tools", zap.Strings("availableTools", allTools))
 
+	// MCP tools are NO LONGER synced directly to ToolRegistry
+	// AI must use discover_tools + execute_tool pattern to call external MCP tools
+	// This provides better control, logging, and tool name normalization
+	mcpRegistrySync := mcptools.NewMCPRegistrySync(toolRegistry, toolsStorage, logger)
+	// NOTE: SyncAllMCPTools is intentionally NOT called here
+	// External MCP tools should be called via execute_tool, not directly
+	logger.Info("MCP tools NOT synced to registry - use execute_tool to call external MCP tools")
+
+	// Pass sync service to tools discovery handler for refresh on server changes
+	// (still needed for mcp_add_server/mcp_remove_server to track tools)
+	toolsDiscoveryHandler.SetRegistrySync(mcpRegistrySync)
+
 	// Create chat handlers
 	chatHandler := handlers.NewChatHandler(chatService, logger)
-	chatWebSocketHandler := handlers.NewChatWebSocketHandler(chatService, aiChatService, aiSettingsService, logger)
+	chatWebSocketHandler := handlers.NewChatWebSocketHandler(chatService, aiChatService, aiSettingsService, subchatStorage, logger)
 
 	// Create AI settings handler
 	aiSettingsHandler := handlers.NewAISettingsHandler(aiSettingsService, logger)
@@ -504,11 +524,11 @@ func StartHTTPServer(
 	}
 
 	subchatHandler := handlers.NewSubchatHandler(subchatStorage, taskStorage, chatService, logger)
-	subagentHandler := handlers.NewSubagentHandler(subchatStorage, logger)
+	subagentHandler := handlers.NewSubagentHandler(subchatStorage, chatService, logger)
 
 	// Initialize rate limiter for subchat creation (10 requests per minute per user)
-	subchatRateLimiter := middleware.NewRateLimiter(10, time.Minute, logger)
-	logger.Info("🚦 Rate limiter initialized", zap.Int("maxRequests", 10), zap.Duration("per", time.Minute))
+	// PHASE 3: Uses distributed (Redis) rate limiter if REDIS_URL is set, otherwise in-memory
+	subchatRateLimiter := middleware.NewDistributedRateLimiter(10, time.Minute, logger)
 
 	// Register subchat routes with rate limiting on POST
 	subchatGroup := r.Group("/api/v1/subchats")
@@ -531,12 +551,15 @@ func StartHTTPServer(
 	{
 		subagentGroup.GET("", subagentHandler.ListSubagents)
 		subagentGroup.GET("/:name", subagentHandler.GetSubagent)
+		subagentGroup.POST("/:name/sessions", subagentHandler.CreateAgentSession)
 	}
 
 	logger.Info("Subchat and Subagent API routes registered",
 		zap.String("subchatsPath", "/api/v1/subchats"),
 		zap.String("chatSubchatsPath", "/api/v1/chats/:chatId/subchats"),
-		zap.String("subagentsPath", "/api/v1/subagents"))
+		zap.String("subagentsPath", "/api/v1/subagents"),
+		zap.String("createAgentSessionPath", "/api/v1/subagents/:name/sessions"),
+		zap.String("agentStreamPath", "/api/v1/subagents/:name/stream"))
 
 	// Register HTTP tools routes
 	httpToolsGroup := r.Group("/api/v1/tools/http")
@@ -550,6 +573,19 @@ func StartHTTPServer(
 		zap.String("deletePath", "/api/v1/tools/http/:id"))
 
 	// Register MCP server registry routes
+	// Initialize Phase 1 metrics store and handler
+	metricsStore := aiservice.NewInMemoryMetricsStore(10000)
+	metricsHandler := handlers.NewMetricsHandler(metricsStore, logger)
+	metricsGroup := r.Group("/api/v1/metrics")
+	{
+		metricsHandler.RegisterMetricsRoutes(metricsGroup)
+	}
+
+	logger.Info("Phase 1 Metrics API routes registered",
+		zap.String("phase1Path", "/api/v1/metrics/phase1"),
+		zap.String("providersPath", "/api/v1/metrics/providers/:provider"),
+		zap.String("toolsPath", "/api/v1/metrics/tools/:toolName"))
+
 	mcpServersHandler := handlers.NewMCPServersHandler(toolsStorage, toolsDiscoveryHandler, logger)
 	mcpServersGroup := r.Group("/api/v1/mcp/servers")
 	{

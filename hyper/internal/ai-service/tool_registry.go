@@ -123,16 +123,24 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, input map[strin
 		return nil, err
 	}
 
-	// Execute with timeout (30 seconds default)
-	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Execute with timeout (5 minutes default)
+	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	return tool.Execute(execCtx, input)
 }
 
 // ExecuteToolCall executes a ToolCall and returns ToolResult with timing
+// OPTION 2 FIX: Ensures ToolResult.ID is ALWAYS populated from toolCall.ID
 func (r *ToolRegistry) ExecuteToolCall(ctx context.Context, toolCall ToolCall) ToolResult {
 	startTime := time.Now()
+
+	// VALIDATION: Check if toolCall.ID is empty (root cause of SaveToolResult bug)
+	if toolCall.ID == "" {
+		fmt.Printf("[⚠️  BUG DETECTED] ExecuteToolCall: toolCall.ID is EMPTY for tool '%s'\n", toolCall.Name)
+		fmt.Printf("[⚠️  BUG DETECTED] This will cause SaveToolResult to fail with empty toolCallID\n")
+		fmt.Printf("[⚠️  BUG DETECTED] Tool: %s, Args: %v\n", toolCall.Name, toolCall.Args)
+	}
 
 	result := ToolResult{
 		ID:   toolCall.ID,
@@ -158,6 +166,11 @@ func (r *ToolRegistry) GetToolsForLangChain() []llms.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	return r.getToolsForLangChainUnlocked()
+}
+
+// getToolsForLangChainUnlocked is an internal helper that assumes the lock is already held
+func (r *ToolRegistry) getToolsForLangChainUnlocked() []llms.Tool {
 	tools := make([]llms.Tool, 0, len(r.tools))
 
 	for _, tool := range r.tools {
@@ -179,9 +192,15 @@ func (r *ToolRegistry) GetToolsForLangChain() []llms.Tool {
 // GetFilteredToolsForLangChain converts only specified tools to LangChain Go format
 // This is used to restrict which tools are available to subagents or other contexts
 // allowedNames: list of tool names to include (e.g., []string{"read_file", "write_file"})
+// If allowedNames is nil, returns ALL tools (coordinator mode with full access)
 func (r *ToolRegistry) GetFilteredToolsForLangChain(allowedNames []string) []llms.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	// If allowedNames is nil, return ALL tools (coordinator mode)
+	if allowedNames == nil {
+		return r.getToolsForLangChainUnlocked()
+	}
 
 	// Create a set for O(1) lookup
 	allowedSet := make(map[string]bool, len(allowedNames))

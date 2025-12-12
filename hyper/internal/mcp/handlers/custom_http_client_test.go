@@ -125,3 +125,133 @@ func TestHeaderRoundTripperNonStringValue(t *testing.T) {
 		t.Errorf("Expected headers '%s', got '%s'", expected, string(body))
 	}
 }
+
+// TestHeaderRoundTripperAcceptMerge verifies that Accept headers are merged, not replaced
+// This is critical for MCP SDK compatibility which requires "application/json, text/event-stream"
+func TestHeaderRoundTripperAcceptMerge(t *testing.T) {
+	tests := []struct {
+		name           string
+		existingAccept string
+		customAccept   string
+		expectedAccept string
+	}{
+		{
+			name:           "merge custom accept with SDK accept",
+			existingAccept: "application/json, text/event-stream",
+			customAccept:   "application/json",
+			expectedAccept: "application/json, text/event-stream", // No duplicate added
+		},
+		{
+			name:           "add new accept type",
+			existingAccept: "application/json, text/event-stream",
+			customAccept:   "application/xml",
+			expectedAccept: "application/json, text/event-stream, application/xml",
+		},
+		{
+			name:           "case insensitive duplicate detection",
+			existingAccept: "application/json, text/event-stream",
+			customAccept:   "APPLICATION/JSON",
+			expectedAccept: "application/json, text/event-stream",
+		},
+		{
+			name:           "preserve SDK required types when custom only has json",
+			existingAccept: "application/json, text/event-stream",
+			customAccept:   "application/json",
+			expectedAccept: "application/json, text/event-stream",
+		},
+		{
+			name:           "empty existing accept uses custom",
+			existingAccept: "",
+			customAccept:   "application/json",
+			expectedAccept: "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var receivedAccept string
+
+			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				receivedAccept = r.Header.Get("Accept")
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer testServer.Close()
+
+			// Create custom headers with Accept
+			headers := map[string]interface{}{
+				"Accept": tt.customAccept,
+			}
+
+			client := createCustomHTTPClient(headers)
+
+			// Create request with existing Accept header (simulating MCP SDK)
+			req, err := http.NewRequest("GET", testServer.URL, nil)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+			if tt.existingAccept != "" {
+				req.Header.Set("Accept", tt.existingAccept)
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to make request: %v", err)
+			}
+			resp.Body.Close()
+
+			if receivedAccept != tt.expectedAccept {
+				t.Errorf("Expected Accept header '%s', got '%s'", tt.expectedAccept, receivedAccept)
+			}
+		})
+	}
+}
+
+// TestParseAcceptValues verifies the Accept header parsing helper
+func TestParseAcceptValues(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{
+			input:    "application/json, text/event-stream",
+			expected: []string{"application/json", "text/event-stream"},
+		},
+		{
+			input:    "application/json,text/event-stream",
+			expected: []string{"application/json", "text/event-stream"},
+		},
+		{
+			input:    "  application/json  ,  text/event-stream  ",
+			expected: []string{"application/json", "text/event-stream"},
+		},
+		{
+			input:    "application/json",
+			expected: []string{"application/json"},
+		},
+		{
+			input:    "",
+			expected: nil,
+		},
+		{
+			input:    "  ,  ,  ",
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := parseAcceptValues(tt.input)
+
+			if len(result) != len(tt.expected) {
+				t.Errorf("Expected %d values, got %d: %v", len(tt.expected), len(result), result)
+				return
+			}
+
+			for i, v := range result {
+				if v != tt.expected[i] {
+					t.Errorf("At index %d: expected '%s', got '%s'", i, tt.expected[i], v)
+				}
+			}
+		})
+	}
+}

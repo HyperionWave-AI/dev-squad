@@ -1,0 +1,268 @@
+/* Context Indicator Component Styles */
+
+.context-indicator {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background-color: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+}
+
+/* Status-specific styling */
+.context-indicator.context-healthy {
+  border-color: #4caf50;
+  background-color: #f1f8f4;
+}
+
+.context-indicator.context-warning {
+  border-color: #ff9800;
+  background-color: #fff8f0;
+}
+
+.context-indicator.context-critical {
+  border-color: #f44336;
+  background-color: #fef5f5;
+}
+
+/* Header with label and token count */
+.context-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.context-label {
+  color: #333;
+}
+
+.context-tokens {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  color: #666;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* Progress bar */
+.context-progress-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-progress-bar {
+  flex: 1;
+  height: 8px;
+  background-color: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.context-progress-fill {
+  height: 100%;
+  transition: width 0.3s ease, background-color 0.3s ease;
+  border-radius: 4px;
+}
+
+.context-progress-fill.context-healthy {
+  background-color: #4caf50;
+}
+
+.context-progress-fill.context-warning {
+  background-color: #ff9800;
+}
+
+.context-progress-fill.context-critical {
+  background-color: #f44336;
+}
+
+.context-percentage {
+  font-weight: 600;
+  min-width: 45px;
+  text-align: right;
+  color: #333;
+}
+
+/* Alert messages */
+.context-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.context-alert-warning {
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+  color: #856404;
+}
+
+.context-alert-critical {
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+  color: #721c24;
+}
+
+.alert-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.alert-text {
+  flex: 1;
+}
+
+/* Loading state */
+.context-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #666;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #e0e0e0;
+  border-top-color: #666;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-text {
+  font-size: 12px;
+}
+
+/* Info section */
+.context-info {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.info-item {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.info-label {
+  color: #666;
+  font-weight: 500;
+}
+
+.info-value {
+  color: #333;
+  font-weight: 600;
+}
+
+.info-value.status-healthy {
+  color: #4caf50;
+}
+
+.info-value.status-warning {
+  color: #ff9800;
+}
+
+.info-value.status-critical {
+  color: #f44336;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .context-indicator {
+    padding: 10px;
+    gap: 10px;
+    font-size: 12px;
+  }
+
+  .context-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .context-tokens {
+    font-size: 11px;
+  }
+
+  .context-info {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .alert-text {
+    font-size: 11px;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .context-indicator {
+    background-color: #2a2a2a;
+    border-color: #444;
+    color: #e0e0e0;
+  }
+
+  .context-indicator.context-healthy {
+    border-color: #66bb6a;
+    background-color: #1b5e20;
+  }
+
+  .context-indicator.context-warning {
+    border-color: #ffb74d;
+    background-color: #e65100;
+  }
+
+  .context-indicator.context-critical {
+    border-color: #ef5350;
+    background-color: #b71c1c;
+  }
+
+  .context-label {
+    color: #e0e0e0;
+  }
+
+  .context-tokens {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #b0b0b0;
+  }
+
+  .context-percentage {
+    color: #e0e0e0;
+  }
+
+  .context-progress-bar {
+    background-color: #444;
+  }
+
+  .info-label {
+    color: #999;
+  }
+
+  .info-value {
+    color: #e0e0e0;
+  }
+}

@@ -3,15 +3,24 @@
  *
  * Provides REST API and WebSocket interface for chat functionality.
  * Follows existing restClient.ts patterns with typed responses.
+ * 
+ * INTEGRATION: Now uses WebSocketManager for robust connection handling with:
+ * - Atomic state transitions
+ * - Bounded message queue (prevents memory leaks)
+ * - Exponential backoff with intelligent retry logic
+ * - User-visible connection status indicators
+ * - Graceful degradation when WebSocket fails
+ * - Correlation IDs for end-to-end request tracing
  */
 
+import { WebSocketManager, ConnectionState } from './WebSocketManager';
+import { getCorrelationId, addCorrelationIdToHeaders } from '@/utils/correlationId';
+import { retryWithBackoff, DEFAULT_RETRY_CONFIG } from '@/utils/retry';
+
 const BASE_URL = '/api/v1';
-const WS_BASE_URL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const WS_URL = `${WS_BASE_URL}//${window.location.host}/api/v1`;
 
 // ============================================================
 // TYPE DEFINITIONS
-// ============================================================
 
 export interface ChatSession {
   id: string;
@@ -20,6 +29,8 @@ export interface ChatSession {
   title: string;
   parentChatId?: string; // For subchats - links to parent session
   activeSubagentId?: string; // Indicates session is being processed by a subagent
+  errorPreventionMode: boolean; // Toggle for validation plugin
+  complexityAnalysisMode: boolean; // Toggle for complexity analysis and task splitting
   createdAt: string;
   updatedAt: string;
 }
@@ -46,6 +57,8 @@ export interface ChatMessage {
     error: string | null;
     durationMs: number;
   };
+  // Plugin metadata
+  metadata?: Record<string, any>;
 }
 
 export interface ToolCall {
@@ -61,10 +74,21 @@ export interface ToolResult {
   result: any;
   error: string | null;
   durationMs: number;
+  // Plugin metadata
+  metadata?: Record<string, any>;
+}
+
+// System notification from backend (compaction, deflection, summarization, execution_stopped events)
+export interface SystemNotification {
+  category: 'compaction' | 'deflection' | 'summarization' | 'execution_stopped';
+  title: string;
+  message: string;
+  severity: 'info' | 'warning' | 'success';
+  metadata?: Record<string, unknown>;
 }
 
 export interface StreamMessage {
-  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved';
+  type: 'token' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'message_saved' | 'user_message' | 'session_created' | 'system_notification' | 'streaming_started';
   content?: string;
   toolCall?: {
     tool: string;
@@ -78,6 +102,7 @@ export interface StreamMessage {
     durationMs: number;
   };
   error?: string;
+  notification?: SystemNotification;
 }
 
 // ============================================================
@@ -85,21 +110,31 @@ export interface StreamMessage {
 // ============================================================
 
 /**
- * Generic fetch wrapper with error handling
+ * Generic fetch wrapper with error handling and correlation IDs
  */
 async function fetchJSON<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
   const url = `${BASE_URL}${endpoint}`;
+  const correlationId = getCorrelationId();
 
   try {
+    const baseHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    // Merge options headers if they exist
+    if (options?.headers) {
+      const optionsHeaders = new Headers(options.headers);
+      optionsHeaders.forEach((value, key) => {
+        baseHeaders[key] = value;
+      });
+    }
+
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers: addCorrelationIdToHeaders(baseHeaders),
     });
 
     if (!response.ok) {
@@ -111,6 +146,7 @@ async function fetchJSON<T>(
       } catch {
         errorMessage = errorText || `HTTP ${response.status}`;
       }
+      console.error(`[${correlationId}] API Error:`, errorMessage);
       throw new Error(`API Error: ${errorMessage}`);
     }
 
@@ -152,23 +188,43 @@ export async function getSessions(): Promise<ChatSession[]> {
 
 /**
  * Get messages for a specific chat session
+ * Fetches ALL messages by paginating until hasMore is false
  */
 export async function getMessages(
   sessionId: string,
-  limit: number = 50,
+  limit: number = 100,
   offset: number = 0
 ): Promise<ChatMessage[]> {
-  const queryParams = new URLSearchParams({
-    limit: limit.toString(),
-    offset: offset.toString(),
-  });
+  const allMessages: ChatMessage[] = [];
+  let currentOffset = offset;
+  let hasMore = true;
 
-  const response = await fetchJSON<{ messages: ChatMessage[] | null; total: number; hasMore: boolean }>(
-    `/chat/sessions/${sessionId}/messages?${queryParams}`,
-    { method: 'GET' }
-  );
+  // Paginate through all messages
+  while (hasMore) {
+    const queryParams = new URLSearchParams({
+      limit: limit.toString(),
+      offset: currentOffset.toString(),
+    });
 
-  return response.messages || [];
+    const response = await fetchJSON<{ messages: ChatMessage[] | null; total: number; hasMore: boolean }>(
+      `/chat/sessions/${sessionId}/messages?${queryParams}`,
+      { method: 'GET' }
+    );
+
+    const messages = response.messages || [];
+    allMessages.push(...messages);
+
+    hasMore = response.hasMore;
+    currentOffset += messages.length;
+
+    // Safety limit to prevent infinite loops
+    if (currentOffset > 10000) {
+      console.warn('[chatService] Reached safety limit of 10000 messages');
+      break;
+    }
+  }
+
+  return allMessages;
 }
 
 /**
@@ -204,8 +260,117 @@ export async function updateSession(sessionId: string, title: string): Promise<C
   return response.session;
 }
 
+/**
+ * Update error prevention mode for a chat session
+ */
+export async function updateErrorPreventionMode(
+  sessionId: string,
+  enabled: boolean
+): Promise<{ success: boolean; errorPreventionMode: boolean }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    errorPreventionMode: boolean;
+    session: ChatSession;
+  }>(`/chat/sessions/${sessionId}/error-prevention`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+
+  return {
+    success: response.success,
+    errorPreventionMode: response.errorPreventionMode,
+  };
+}
+
+/**
+ * Update complexity analysis mode for a session
+ */
+export async function updateComplexityAnalysisMode(
+  sessionId: string,
+  enabled: boolean
+): Promise<{ success: boolean; complexityAnalysisMode: boolean }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    complexityAnalysisMode: boolean;
+    session: ChatSession;
+  }>(`/chat/sessions/${sessionId}/complexity-analysis`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+
+  return {
+    success: response.success,
+    complexityAnalysisMode: response.complexityAnalysisMode,
+  };
+}
+
+/**
+ * Get context status for a chat session
+ */
+export async function getContextStatus(
+  sessionId: string
+): Promise<{ contextStatus: any; contextError?: any }> {
+  const response = await fetchJSON<{ contextStatus: any; contextError?: any }>(
+    `/chat/sessions/${sessionId}/context-status`,
+    { method: 'GET' }
+  );
+
+  return response;
+}
+
+/**
+ * Archive messages in a chat session
+ */
+export async function archiveMessages(
+  sessionId: string,
+  messageIds: string[],
+  reason?: string
+): Promise<{ success: boolean; archivedCount: number; tokensSaved: number }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    archivedCount: number;
+    tokensSaved: number;
+  }>(`/chat/sessions/${sessionId}/archive`, {
+    method: 'POST',
+    body: JSON.stringify({
+      messageIds,
+      reason: reason || 'User-initiated archive to free up context',
+    }),
+  });
+
+  if (!response.success) {
+    throw new Error('Failed to archive messages');
+  }
+
+  return response;
+}
+
+/**
+ * Summarize messages in a chat session
+ */
+export async function summarizeMessages(
+  sessionId: string,
+  messageIds?: string[],
+  reason?: string
+): Promise<{ success: boolean; summarizedCount: number; tokensSaved: number; summary?: string }> {
+  const response = await fetchJSON<{
+    success: boolean;
+    summarizedCount: number;
+    tokensSaved: number;
+    summary?: string;
+  }>(`/chat/sessions/${sessionId}/summarize`, {
+    method: 'POST',
+    body: JSON.stringify({
+      messageIds: messageIds || [],
+      reason: reason || 'User-initiated summarization to free up context',
+    }),
+  });
+
+  return response;
+}
+
 // ============================================================
-// WEBSOCKET STREAM CONNECTION
+// WEBSOCKET STREAM CONNECTION (USING WEBSOCKETMANAGER)
 // ============================================================
 
 export interface StreamCallbacks {
@@ -213,116 +378,178 @@ export interface StreamCallbacks {
   onToolCall?: (tool: string, args: Record<string, any>, id: string) => void;
   onToolResult?: (id: string, tool: string, result: any, error: string | null, durationMs: number) => void;
   onMessageSaved?: (databaseId: string) => void;
+  onUserMessage?: (content: string) => void; // Bug #1 fix: handle user message echo
+  onSessionCreated?: (subchatId: string) => void; // Event-driven session updates
+  onSystemNotification?: (notification: SystemNotification) => void; // Backend system events (compaction, deflection, summarization)
   onError: (error: Error) => void;
   onOpen?: () => void;
   onClose?: () => void;
+  onConnectionStateChange?: (state: ConnectionState) => void; // NEW: Connection state visibility
 }
 
 export interface ChatStreamConnection {
-  ws: WebSocket;
-  disconnect: () => void;
-  sendMessage: (content: string) => void;
+  manager: WebSocketManager;
+  disconnect: () => Promise<void>;
+  sendMessage: (content: string) => Promise<void>;
+  stopExecution: () => void;
+  getState: () => ConnectionState;
+  isConnected: () => boolean;
 }
 
 /**
- * Connect to chat stream WebSocket
- * Returns connection object with WebSocket instance, disconnect function, and sendMessage helper
+ * Connect to chat stream WebSocket using WebSocketManager
+ * 
+ * Returns connection object with:
+ * - manager: WebSocketManager instance for advanced control
+ * - disconnect: Graceful disconnect function
+ * - sendMessage: Send message with automatic queuing and retry logic
+ * - getState: Get current connection state
+ * - isConnected: Check if actively connected
  */
 export function connectChatStream(
   sessionId: string,
   callbacks: StreamCallbacks
 ): ChatStreamConnection {
-  const wsUrl = `${WS_URL}/chat/stream?sessionId=${sessionId}`;
-  const ws = new WebSocket(wsUrl);
+  const manager = new WebSocketManager();
+  const correlationId = getCorrelationId();
 
-  ws.onopen = () => {
-    console.log('[ChatService] WebSocket connected');
-    callbacks.onOpen?.();
-  };
+  // Adapt WebSocketManager callbacks to StreamCallbacks
+  const wsCallbacks: Record<string, Function> = {
+    onOpen: () => {
+      console.log(`[${correlationId}] WebSocket connected via WebSocketManager`);
+      callbacks.onOpen?.();
+      callbacks.onConnectionStateChange?.(ConnectionState.CONNECTED);
+    },
 
-  ws.onmessage = (event) => {
-    try {
-      const data: StreamMessage = JSON.parse(event.data);
+    onMessage: (data: StreamMessage) => {
+      try {
+        switch (data.type) {
+          case 'error':
+            callbacks.onError(new Error(data.error || 'Unknown error'));
+            break;
 
-      switch (data.type) {
-        case 'error':
-          callbacks.onError(new Error(data.error || 'Unknown error'));
-          break;
+          case 'token':
+            // Streaming token
+            callbacks.onMessage(data.content || '', false);
+            break;
 
-        case 'token':
-          // Streaming token
-          callbacks.onMessage(data.content || '', false);
-          break;
+          case 'tool_call':
+            // Tool execution started
+            if (data.toolCall && callbacks.onToolCall) {
+              callbacks.onToolCall(
+                data.toolCall.tool,
+                data.toolCall.args,
+                data.toolCall.id
+              );
+            }
+            break;
 
-        case 'tool_call':
-          // Tool execution started
-          if (data.toolCall && callbacks.onToolCall) {
-            callbacks.onToolCall(
-              data.toolCall.tool,
-              data.toolCall.args,
-              data.toolCall.id
-            );
-          }
-          break;
+          case 'tool_result':
+            // Tool execution completed
+            if (data.toolResult && callbacks.onToolResult) {
+              // Note: tool name should be included in toolResult from backend
+              const toolName = (data.toolResult as any).tool || 'unknown';
+              callbacks.onToolResult(
+                data.toolResult.id,
+                toolName,
+                data.toolResult.result,
+                data.toolResult.error,
+                data.toolResult.durationMs
+              );
+            }
+            break;
 
-        case 'tool_result':
-          // Tool execution completed
-          if (data.toolResult && callbacks.onToolResult) {
-            // Note: tool name should be included in toolResult from backend
-            const toolName = (data.toolResult as any).tool || 'unknown';
-            callbacks.onToolResult(
-              data.toolResult.id,
-              toolName,
-              data.toolResult.result,
-              data.toolResult.error,
-              data.toolResult.durationMs
-            );
-          }
-          break;
+          case 'done':
+            // Stream complete
+            callbacks.onMessage('', true);
+            break;
 
-        case 'done':
-          // Stream complete
-          callbacks.onMessage('', true);
-          break;
+          case 'message_saved':
+            // Message saved with database ID
+            if (data.content && callbacks.onMessageSaved) {
+              callbacks.onMessageSaved(data.content);
+            }
+            break;
 
-        case 'message_saved':
-          // Message saved with database ID
-          if (data.content && callbacks.onMessageSaved) {
-            callbacks.onMessageSaved(data.content);
-          }
-          break;
+          case 'user_message':
+            // User message echo from server
+            if (callbacks.onUserMessage && data.content) {
+              callbacks.onUserMessage(data.content);
+            }
+            break;
+
+          case 'session_created':
+            // New subchat session created - refresh sessions list
+            if (callbacks.onSessionCreated && data.content) {
+              callbacks.onSessionCreated(data.content);
+            }
+            break;
+
+          case 'system_notification':
+            // System notification from backend (compaction, deflection, summarization)
+            if (data.notification && callbacks.onSystemNotification) {
+              callbacks.onSystemNotification(data.notification);
+            }
+            break;
+        }
+      } catch (error) {
+        callbacks.onError(
+          error instanceof Error ? error : new Error('Failed to parse message')
+        );
       }
-    } catch (error) {
-      callbacks.onError(
-        error instanceof Error ? error : new Error('Failed to parse message')
-      );
-    }
+    },
+
+    onError: (error: Error) => {
+      console.error(`[${correlationId}] WebSocket error via WebSocketManager:`, error);
+      callbacks.onError(error);
+      callbacks.onConnectionStateChange?.(ConnectionState.ERROR);
+    },
+
+    onClose: () => {
+      console.log(`[${correlationId}] WebSocket closed via WebSocketManager`);
+      callbacks.onClose?.();
+      callbacks.onConnectionStateChange?.(ConnectionState.DISCONNECTED);
+    },
   };
 
-  ws.onerror = (event) => {
-    console.error('[ChatService] WebSocket error:', event);
-    callbacks.onError(new Error('WebSocket connection error'));
-  };
+  // Connect using WebSocketManager with atomic state management
+  manager.connect(sessionId, wsCallbacks).catch((error) => {
+    console.error(`[${correlationId}] Failed to connect WebSocketManager:`, error);
+    callbacks.onError(error);
+  });
 
-  ws.onclose = () => {
-    console.log('[ChatService] WebSocket closed');
-    callbacks.onClose?.();
+  // Return connection interface with retry-aware sendMessage
+  return {
+    manager,
+    disconnect: async () => {
+      await manager.disconnect();
+    },
+    sendMessage: async (content: string) => {
+      try {
+        // Retry with exponential backoff for transient errors
+        await retryWithBackoff(
+          () => manager.sendMessage(content),
+          DEFAULT_RETRY_CONFIG,
+          (attempt, error, nextDelayMs) => {
+            console.warn(
+              `[${correlationId}] Message send failed (attempt ${attempt}), retrying in ${nextDelayMs}ms:`,
+              error.message
+            );
+          }
+        );
+      } catch (error) {
+        throw error instanceof Error ? error : new Error('Failed to send message');
+      }
+    },
+    stopExecution: () => {
+      manager.sendStopExecution();
+    },
+    getState: () => manager.getState(),
+    isConnected: () => manager.isConnected(),
   };
-
-  const disconnect = () => {
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-      ws.close();
-    }
-  };
-
-  const sendMessage = (content: string) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ content }));
-      console.log('[ChatService] Message sent:', content);
-    } else {
-      throw new Error('WebSocket is not connected');
-    }
-  };
-
-  return { ws, disconnect, sendMessage };
 }
+
+/**
+ * Export ConnectionState for UI components to use
+ */
+export { ConnectionState };

@@ -163,6 +163,32 @@ export const CodeResultsList: React.FC<CodeResultsListProps> = ({
             </div>
           </div>
 
+          {/* Summary Section */}
+          {result.summary && (
+            <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-blue-50 dark:bg-blue-950/20">
+              <div className="flex items-start justify-between gap-4 mb-2">
+                <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide">
+                  Summary
+                </span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {result.summaryType && (
+                    <Badge variant="secondary" className="text-xs">
+                      {result.summaryType}
+                    </Badge>
+                  )}
+                  {result.summaryTokens && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {result.summaryTokens} tokens
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+                {result.summary}
+              </p>
+            </div>
+          )}
+
           {/* Code Content */}
           <div className="bg-gray-50 dark:bg-gray-900">
             <Suspense

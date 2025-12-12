@@ -11,6 +11,7 @@ import (
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/scanner"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/utils"
 
@@ -23,6 +24,7 @@ import (
 // CodeToolsHandler handles MCP tool requests for code indexing
 type CodeToolsHandler struct {
 	codeIndexStorage *storage.CodeIndexStorage
+	summarizer       summarizer.CodeSummarizer
 	qdrantClient     *storage.QdrantClient
 	embeddingClient  embeddings.EmbeddingClient
 	fileScanner      *scanner.FileScanner
@@ -34,6 +36,7 @@ type CodeToolsHandler struct {
 // NewCodeToolsHandler creates a new code tools handler
 func NewCodeToolsHandler(
 	codeIndexStorage *storage.CodeIndexStorage,
+	codeSummarizer summarizer.CodeSummarizer,
 	qdrantClient *storage.QdrantClient,
 	embeddingClient embeddings.EmbeddingClient,
 	fileWatcher *watcher.FileWatcher,
@@ -41,6 +44,7 @@ func NewCodeToolsHandler(
 ) *CodeToolsHandler {
 	return &CodeToolsHandler{
 		codeIndexStorage: codeIndexStorage,
+		summarizer:       codeSummarizer,
 		qdrantClient:     qdrantClient,
 		embeddingClient:  embeddingClient,
 		fileScanner:      scanner.NewFileScanner(),
@@ -121,7 +125,7 @@ func (h *CodeToolsHandler) registerScan(server *mcp.Server) error {
 func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 	tool := &mcp.Tool{
 		Name:        "code_index_search",
-		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Content can be retrieved as chunks (default) or full files. IMPORTANT: When retrieve='full', returns only the top 1 result to conserve context. Use chunk modes (chunk-s/m/l/xl) for multi-result exploration.",
+		Description: "Search for code using natural language queries. Returns relevant code snippets with file paths and line numbers. Content can be retrieved as chunks (default) or full files. IMPORTANT: When retrieve='full', returns only the top 1 result to conserve context. Use chunk modes (chunk-s/m/l/xl) for multi-result exploration. Response modes: 'summary' (~100-200 tokens), 'preview' (~300-500 tokens), 'full' (~500-2000 tokens).",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -152,6 +156,11 @@ func (h *CodeToolsHandler) registerSearch(server *mcp.Server) error {
 				"minScore": {
 					Type:        "number",
 					Description: "Optional: minimum similarity score threshold (0.0-1.0). Only results with score >= minScore will be returned. Default: 0.0 (no filtering). Higher values = stricter filtering (e.g., 0.5 = moderate, 0.9 = strict).",
+				},
+				"responseMode": {
+					Type:        "string",
+					Description: "Response mode: 'summary' (file path + line numbers only, ~100-200 tokens), 'preview' (summary + first 20 lines, ~300-500 tokens), or 'full' (complete code, ~500-2000 tokens). Default: 'summary'.",
+					Enum:        []interface{}{"summary", "preview", "full"},
 				},
 			},
 			Required: []string{"query"},
@@ -387,39 +396,39 @@ func estimateTokens(text string) int {
 // This matches the language metadata stored during indexing
 func fileExtensionToLanguage(extension string) string {
 	extensionMap := map[string]string{
-		".go":      "go",
-		".js":      "javascript",
-		".ts":      "typescript",
-		".jsx":     "javascript",
-		".tsx":     "typescript",
-		".py":      "python",
-		".java":    "java",
-		".c":       "c",
-		".cpp":     "cpp",
-		".h":       "c",
-		".hpp":     "cpp",
-		".cs":      "csharp",
-		".rb":      "ruby",
-		".php":     "php",
-		".rs":      "rust",
-		".swift":   "swift",
-		".kt":      "kotlin",
-		".m":       "objective-c",
-		".scala":   "scala",
-		".r":       "r",
-		".sql":     "sql",
-		".sh":      "shell",
-		".bash":    "shell",
-		".yaml":    "yaml",
-		".yml":     "yaml",
-		".json":    "json",
-		".xml":     "xml",
-		".html":    "html",
-		".css":     "css",
-		".scss":    "scss",
-		".less":    "less",
-		".vue":     "vue",
-		".md":      "markdown",
+		".go":    "go",
+		".js":    "javascript",
+		".ts":    "typescript",
+		".jsx":   "javascript",
+		".tsx":   "typescript",
+		".py":    "python",
+		".java":  "java",
+		".c":     "c",
+		".cpp":   "cpp",
+		".h":     "c",
+		".hpp":   "cpp",
+		".cs":    "csharp",
+		".rb":    "ruby",
+		".php":   "php",
+		".rs":    "rust",
+		".swift": "swift",
+		".kt":    "kotlin",
+		".m":     "objective-c",
+		".scala": "scala",
+		".r":     "r",
+		".sql":   "sql",
+		".sh":    "shell",
+		".bash":  "shell",
+		".yaml":  "yaml",
+		".yml":   "yaml",
+		".json":  "json",
+		".xml":   "xml",
+		".html":  "html",
+		".css":   "css",
+		".scss":  "scss",
+		".less":  "less",
+		".vue":   "vue",
+		".md":    "markdown",
 	}
 
 	// Normalize extension to lowercase with leading dot
@@ -472,7 +481,6 @@ func buildFileTypeFilter(fileTypes []interface{}) map[string]interface{} {
 	}
 }
 
-
 // handleSearch handles the code_index_search tool
 func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	query, ok := args["query"].(string)
@@ -510,6 +518,18 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		retrieveModeParam = mode
 	}
 	retrieveType, chunkLines, tshirtSize := utils.ParseRetrieveMode(retrieveModeParam)
+
+	// Parse and validate responseMode parameter (default: "summary")
+	responseMode := "summary"
+	if mode, ok := args["responseMode"].(string); ok {
+		responseMode = mode
+	}
+	// Validate responseMode
+	if responseMode != "summary" && responseMode != "preview" && responseMode != "full" {
+		return createCodeIndexErrorResult(fmt.Sprintf("responseMode must be 'summary', 'preview', or 'full', got: %s", responseMode)), nil
+	}
+
+	h.logger.Info("Response mode selected", zap.String("responseMode", responseMode))
 
 	// MCP Best Practice: Limit full file retrieval to top 1 result to conserve context
 	// Full mode returns entire file content which can be very large
@@ -675,21 +695,6 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		results = append(results, result)
 	}
 
-	// Filter out deprecated ui/ directory (but keep ui2/)
-	// This prevents confusion between old UI (ui/) and new UI (ui2/)
-	filteredByPath := make([]storage.SearchResult, 0, len(results))
-	for _, result := range results {
-		// Check if the file is in deprecated ui/ directory
-		// We want to exclude paths like "/ui/" or "/ui/src/" but keep "/ui2/"
-		if strings.Contains(result.FilePath, "/ui/") && !strings.Contains(result.FilePath, "/ui2/") {
-			h.logger.Debug("Filtering deprecated UI file from search results",
-				zap.String("filePath", result.FilePath))
-			continue
-		}
-		filteredByPath = append(filteredByPath, result)
-	}
-	results = filteredByPath
-
 	// Filter results by minScore threshold (if specified)
 	originalCount := len(results)
 	if minScore > 0.0 {
@@ -742,13 +747,29 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		zap.Int("estimatedTokens", cumulativeTokens),
 		zap.Bool("truncated", truncated))
 
+	// Apply response mode formatting (summary/preview/full)
+	results = h.applyResponseMode(results, responseMode)
+
+	// Apply code summarization to results (graceful degradation if fails)
+	results, summarizationStats := h.summarizeResults(ctx, results)
+
 	// Build response with filtering metadata
 	response := map[string]interface{}{
 		"success":      true,
 		"query":        query,
+		"responseMode": responseMode,
 		"retrieveMode": retrieveModeParam,
 		"results":      results,
 		"count":        len(results),
+	}
+
+	// Add summarization metadata if any results were summarized
+	if summarizationStats.ResultsSummarized > 0 {
+		response["summarization"] = map[string]interface{}{
+			"enabled":           true,
+			"resultsSummarized": summarizationStats.ResultsSummarized,
+			"tokensUsed":        summarizationStats.TokensUsed,
+		}
 	}
 
 	// Add token limiting metadata if truncation occurred
@@ -783,6 +804,23 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 		response["resultsFiltered"] = false
 	}
 
+	// Add token estimates for response mode
+	estimatedTokens := 0
+	for _, result := range results {
+		estimatedTokens += estimateResponseModeTokens(result, responseMode)
+	}
+	response["estimatedTokens"] = estimatedTokens
+	response["tokenEstimate"] = map[string]interface{}{
+		"mode":              responseMode,
+		"perResult":         estimateResponseModeTokens(storage.SearchResult{}, responseMode),
+		"totalEstimated":    estimatedTokens,
+		"breakdown": map[string]interface{}{
+			"summary": "~100-200 tokens per result",
+			"preview": "~300-500 tokens per result",
+			"full":    "~500-2000 tokens per result (varies by file size)",
+		},
+	}
+
 	jsonData, _ := json.Marshal(response)
 
 	return &mcp.CallToolResult{
@@ -790,6 +828,161 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 			&mcp.TextContent{Text: string(jsonData)},
 		},
 	}, nil
+}
+
+// applyResponseMode applies the selected response mode to search results
+// Modes:
+//   - summary: Returns only file path, line numbers, and metadata (~100-200 tokens)
+//   - preview: Returns summary + first 20 lines of code (~300-500 tokens)
+//   - full: Returns complete code content (~500-2000 tokens)
+func (h *CodeToolsHandler) applyResponseMode(results []storage.SearchResult, responseMode string) []storage.SearchResult {
+	if responseMode == "full" {
+		// Full mode: keep all content as-is
+		return results
+	}
+
+	processedResults := make([]storage.SearchResult, 0, len(results))
+
+	for _, result := range results {
+		processedResult := result
+
+		if responseMode == "summary" {
+			// Summary mode: remove content, keep only metadata
+			processedResult.Content = ""
+			h.logger.Debug("Applied summary mode",
+				zap.String("filePath", result.FilePath),
+				zap.Int("startLine", result.StartLine),
+				zap.Int("endLine", result.EndLine))
+
+		} else if responseMode == "preview" {
+			// Preview mode: keep first 20 lines of content
+			if len(result.Content) > 0 {
+				lines := strings.Split(result.Content, "\n")
+				maxLines := 20
+				if len(lines) > maxLines {
+					lines = lines[:maxLines]
+					processedResult.Content = strings.Join(lines, "\n") + "\n... (truncated)"
+				} else {
+					processedResult.Content = result.Content
+				}
+
+				h.logger.Debug("Applied preview mode",
+					zap.String("filePath", result.FilePath),
+					zap.Int("originalLines", len(strings.Split(result.Content, "\n"))),
+					zap.Int("previewLines", len(lines)))
+			}
+		}
+
+		processedResults = append(processedResults, processedResult)
+	}
+
+	h.logger.Info("Applied response mode to results",
+		zap.String("responseMode", responseMode),
+		zap.Int("resultCount", len(processedResults)))
+
+	return processedResults
+}
+
+// estimateResponseModeTokens estimates token count for a result based on response mode
+func estimateResponseModeTokens(result storage.SearchResult, responseMode string) int {
+	if responseMode == "summary" {
+		// Summary: ~100-200 tokens (just metadata)
+		return 150
+	} else if responseMode == "preview" {
+		// Preview: ~300-500 tokens (summary + 20 lines)
+		return 400
+	}
+	// Full: estimate from actual content
+	return estimateTokens(result.Content)
+}
+
+// SummarizationStats holds statistics about the summarization process
+type SummarizationStats struct {
+	ResultsSummarized int
+	TokensUsed        int
+}
+
+// summarizeResults applies code summarization to search results
+// Implements graceful degradation: if summarization fails, returns results without summaries
+func (h *CodeToolsHandler) summarizeResults(ctx context.Context, results []storage.SearchResult) ([]storage.SearchResult, SummarizationStats) {
+	stats := SummarizationStats{}
+
+	if h.summarizer == nil {
+		h.logger.Info("Summarizer not initialized, skipping summarization")
+		return results, stats
+	}
+
+	const tokenBudget = 5000
+	var tokensUsed int
+
+	h.logger.Info("Starting result summarization with LLM",
+		zap.Int("resultCount", len(results)),
+		zap.Int("tokenBudget", tokenBudget))
+
+	for i := range results {
+		// Check if we've exceeded token budget
+		if tokensUsed >= tokenBudget {
+			h.logger.Info("Summary token budget exhausted",
+				zap.Int("tokensUsed", tokensUsed),
+				zap.Int("resultsProcessed", i),
+				zap.Int("totalResults", len(results)))
+			break
+		}
+
+		// Build metadata for this result
+		metadata := summarizer.CodeMetadata{
+			FilePath:   results[i].FilePath,
+			Language:   results[i].Language,
+			NodeType:   results[i].NodeType,
+			NodeName:   results[i].NodeName,
+			Signature:  results[i].Signature,
+			DocContent: results[i].DocContent,
+			LineStart:  results[i].StartLine,
+			LineEnd:    results[i].EndLine,
+		}
+
+		// Attempt to summarize this result
+		summary, err := h.summarizer.Summarize(ctx, results[i].Content, metadata)
+		if err != nil {
+			h.logger.Warn("Failed to summarize result",
+				zap.String("filePath", results[i].FilePath),
+				zap.Int("startLine", results[i].StartLine),
+				zap.Error(err))
+			// Continue without summary for this result (graceful degradation)
+			continue
+		}
+
+		// Update result with summary information
+		results[i].Summary = summary.Text
+		results[i].SummaryType = summary.Type
+		results[i].SummaryTokens = summary.TokenCount
+
+		tokensUsed += summary.TokenCount
+		stats.ResultsSummarized++
+
+		h.logger.Info("Summarized result successfully",
+			zap.String("filePath", results[i].FilePath),
+			zap.String("summaryPreview", truncateString(summary.Text, 100)),
+			zap.Int("summaryTokens", summary.TokenCount),
+			zap.Int("cumulativeTokens", tokensUsed))
+	}
+
+	stats.TokensUsed = tokensUsed
+
+	h.logger.Info("Summarization complete",
+		zap.Int("totalResults", len(results)),
+		zap.Int("resultsSummarized", stats.ResultsSummarized),
+		zap.Int("tokensUsed", tokensUsed))
+
+	return results, stats
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // handleStatus handles the code_index_status tool
@@ -885,7 +1078,7 @@ func validateSafeIndexPath(path string) error {
 			return fmt.Errorf("cannot index system directory '%s'", cleanPath)
 		}
 		if strings.HasPrefix(cleanPath, dangerous+"/") &&
-		   dangerous != "/opt" && dangerous != "/tmp" {
+			dangerous != "/opt" && dangerous != "/tmp" {
 			return fmt.Errorf("cannot index system subdirectory '%s' under '%s'", cleanPath, dangerous)
 		}
 	}

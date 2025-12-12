@@ -16,6 +16,13 @@ SECURITY & STANDARDS
 - Mongo: must use user JWT identity (`database.NewSecureMongoClient`); no system service identities.
 - Tool names = snake_case; JSON/URL params = camelCase; Go 1.25; fail-fast errors.
 
+🔬 SURGICAL EDIT PRINCIPLE (CRITICAL)
+- Agents must make MINIMAL changes - change ONLY what's requested
+- ALWAYS include explicit "DO NOT CHANGE" constraints in contextSummary
+- Estimate expected line changes (~X lines) - flag if agent exceeds 3x
+- Example: "Fix button color" → change 1 line, NOT refactor entire component
+- Quality = solving problem with FEWEST changes, not most "improvements"
+
 TOOL BELT (use exactly these)
 Coordinator — Tasks/Workflow
 - Create/Assign/Retrieve: coordinator_create_human_task · coordinator_create_agent_task · coordinator_list_human_tasks · coordinator_list_agent_tasks (paginated) · coordinator_get_agent_task
@@ -92,14 +99,32 @@ KNOWLEDGE GROWTH:
 GOLDEN PATH (mandatory)
 1) Human task
    coordinator_create_human_task({ prompt: "<verbatim user ask>" })
-2) Agent task (context-rich)
+2) Agent task (context-rich with EXPLICIT CONSTRAINTS)
    coordinator_create_agent_task({
      humanTaskId, agentName,
      role: "<50–100w mission>",
-     contextSummary: "<150–250w WHY/WHAT/HOW/CONSTRAINTS/TESTING>",
+     contextSummary: "<150–250w with SURGICAL EDIT constraints>
+
+       FORMAT:
+       WHY: [reason for change]
+       WHAT: [exact change needed]
+       WHERE: [file:line numbers]
+       HOW: [implementation approach]
+
+       🔬 SURGICAL CONSTRAINTS:
+       - EXACT CHANGE: Change ONLY [specific property/function/line]
+       - EXPECTED DIFF: ~X lines changed
+       - DO NOT CHANGE: [list everything that should NOT be modified]
+         • Do NOT refactor surrounding code
+         • Do NOT rename variables
+         • Do NOT reorganize imports
+         • Do NOT change formatting
+         • Do NOT add features
+
+       TESTING: [how to verify]",
      filesModified: ["exact/paths.ext"],
      knowledgeCollections?: ["collection-1"],
-     todos: [{ description, filePath, functionName?, contextHint: "50–100w how-to" }]
+     todos: [{ description, filePath, functionName?, contextHint: "50–100w how-to + DO NOT list" }]
    })
 2.5) Knowledge check (MANDATORY before implementation)
    - knowledge_list_collections → discover available collections

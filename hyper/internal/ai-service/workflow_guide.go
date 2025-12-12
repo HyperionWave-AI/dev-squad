@@ -75,80 +75,39 @@ var (
 	}
 )
 
-// filterToolsByWorkflowState analyzes tool call history and returns relevant tools
-// This reduces token usage by ~70% (from 38 tools to 8-12 tools per request)
+// filterToolsByWorkflowState returns ALL tools - phase-based filtering has been DISABLED.
+// The coordinator now has full tool access and should use discover_tools to find available tools.
+// The only requirement is to create human task, agent task, and delegate to subchats.
+//
+// DEPRECATED: Phase-based filtering was removed to simplify the workflow and give the
+// coordinator more flexibility. The coordinator prompt guides the workflow instead.
 func filterToolsByWorkflowState(toolCallHistory []ToolResult) []string {
-	// Start with core tools (always included)
-	relevantTools := make(map[string]bool)
+	// Return ALL tools from all phases - no filtering
+	allTools := make(map[string]bool)
+
+	// Add all phase tools
+	for _, tool := range workflowPhase1Tools {
+		allTools[tool] = true
+	}
+	for _, tool := range workflowPhase2Tools {
+		allTools[tool] = true
+	}
+	for _, tool := range workflowPhase3Tools {
+		allTools[tool] = true
+	}
+	for _, tool := range workflowPhase4Tools {
+		allTools[tool] = true
+	}
 	for _, tool := range coreTools {
-		relevantTools[tool] = true
+		allTools[tool] = true
 	}
 
-	// Analyze recent tool calls to determine workflow phase
-	recentCalls := make(map[string]bool)
-	lookbackLimit := 3 // Look at last 3 tool calls
-
-	// Collect recent tool names
-	for i := len(toolCallHistory) - 1; i >= 0 && len(recentCalls) < lookbackLimit; i-- {
-		recentCalls[toolCallHistory[i].Name] = true
-	}
-
-	// Determine which phases to include based on recent activity
-	includePhase1 := len(toolCallHistory) == 0 // First request - include listing tools
-	includePhase2 := false
-	includePhase3 := false
-	includePhase4 := false
-
-	// Check recent calls to determine active phases
-	for toolName := range recentCalls {
-		// If we just listed tasks, include task creation tools
-		if toolName == "coordinator_list_human_tasks" || toolName == "list_agent_tasks" {
-			includePhase2 = true
-		}
-		// If we just created a task, include code search tools
-		if toolName == "coordinator_create_human_task" || toolName == "create_agent_task" {
-			includePhase3 = true
-		}
-		// If we searched code, include knowledge and task creation tools
-		if toolName == "code_index_search" {
-			includePhase2 = true // Can create agent tasks
-			includePhase4 = true // Can store knowledge
-		}
-		// If we're managing knowledge, keep those tools
-		if toolName == "coordinator_upsert_knowledge" || toolName == "knowledge_store" || toolName == "knowledge_find" {
-			includePhase4 = true
-		}
-		// If we're updating task status, keep task management tools
-		if toolName == "coordinator_update_task_status" || toolName == "coordinator_update_todo_status" {
-			includePhase2 = true
-		}
-	}
-
-	// Add tools for active phases
-	if includePhase1 {
-		for _, tool := range workflowPhase1Tools {
-			relevantTools[tool] = true
-		}
-	}
-	if includePhase2 {
-		for _, tool := range workflowPhase2Tools {
-			relevantTools[tool] = true
-		}
-	}
-	if includePhase3 {
-		for _, tool := range workflowPhase3Tools {
-			relevantTools[tool] = true
-		}
-	}
-	if includePhase4 {
-		for _, tool := range workflowPhase4Tools {
-			relevantTools[tool] = true
-		}
-	}
+	// Add discover_tools for tool discovery
+	allTools["discover_tools"] = true
 
 	// Convert map to slice
-	result := make([]string, 0, len(relevantTools))
-	for tool := range relevantTools {
+	result := make([]string, 0, len(allTools))
+	for tool := range allTools {
 		result = append(result, tool)
 	}
 

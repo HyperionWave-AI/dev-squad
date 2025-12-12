@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ function calculateSum(a, b) {
 
 	parser.SetLanguage(lang)
 
-	tree, err := parser.ParseCtx(nil, nil, jsCode)
+	tree, err := parser.ParseCtx(context.Background(), nil, jsCode)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
