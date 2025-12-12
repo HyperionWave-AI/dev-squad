@@ -420,6 +420,7 @@ func TestStreamExecutor_InterruptDetection(t *testing.T) {
 	mockSink.On("SendToken", "Starting...").Return(nil)
 	mockSink.On("SendToken", "\n\n⏸️ _Interrupt detected - processing your message..._\n\n").Return(nil)
 	mockSink.On("IsDisconnected").Return(false)
+	mockSink.On("SendDone").Return(nil) // SendDone is called when interrupt is detected to notify frontend
 	mockChat.On("SaveMessage", ctx, sessionID, "assistant", "Starting...", companyID).Return(nil, nil)
 
 	// Create executor with interrupt channel

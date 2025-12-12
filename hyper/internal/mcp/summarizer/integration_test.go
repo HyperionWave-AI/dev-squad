@@ -207,13 +207,16 @@ func TestIntegrationTokenBudgetEnforcement(t *testing.T) {
 	}
 	defer summarizer.Close()
 
+	// Generate a large code block that exceeds 50 tokens (201+ characters)
+	// Token estimation: (len + 3) / 4, so 201 chars = 51 tokens, which exceeds budget of 50
+	largeCode := "func processLargeDataset(data []interface{}) error { for i := 0; i < len(data); i++ { if data[i] == nil { return errors.New(\"nil element found\") } result := transform(data[i]); store(result) } return nil }"
 	summarizer.llmClient = &MockLLMClient{
 		responses: map[string]string{
-			"large code block": "This is a very long summary that will consume many tokens",
+			largeCode: "This is a very long summary that will consume many tokens",
 		},
 	}
 
-	code := "large code block"
+	code := largeCode
 	metadata := CodeMetadata{
 		FilePath:  "test.go",
 		Language:  "go",

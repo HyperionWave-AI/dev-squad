@@ -156,12 +156,20 @@ func (tm *TokenManager) TotalBudget() int {
 	return tm.budget
 }
 
-// Reset resets the token usage counter
+// Reset resets the token usage counter and metrics
 func (tm *TokenManager) Reset() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
 	tm.used = 0
+
+	// Reset metrics
+	tm.metrics.mu.Lock()
+	tm.metrics.totalTokensUsed = 0
+	tm.metrics.totalRequests = 0
+	tm.metrics.requestsBlocked = 0
+	tm.metrics.mu.Unlock()
+
 	tm.logger.Debug("Token budget reset",
 		zap.Int("budget", tm.budget))
 }

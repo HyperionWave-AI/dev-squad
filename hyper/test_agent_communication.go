@@ -210,7 +210,7 @@ func main() {
 	}
 	
 	// Summary
-	fmt.Printf("\n" + strings.Repeat("=", 50))
+	fmt.Print("\n" + strings.Repeat("=", 50))
 	fmt.Printf("\n📊 Test Results Summary:")
 	fmt.Printf("\n   Total Tests: %d", totalTests)
 	fmt.Printf("\n   Passed: %d", passedTests)

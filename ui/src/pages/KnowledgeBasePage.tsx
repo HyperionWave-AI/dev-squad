@@ -11,6 +11,7 @@ import { Badge } from '@/components/atoms/Badge';
 import { ResyncButton } from '@/components/ResyncButton';
 import { ResyncProgressDialog } from '@/components/ResyncProgressDialog';
 import { MarkdownSyncButton } from '@/components/organisms/MarkdownSyncButton';
+import { ExportToFilesButton } from '@/components/organisms/ExportToFilesButton';
 import { knowledgeApi } from '@/services/knowledgeApi';
 import { knowledgeService } from '@/services/knowledgeService';
 import type { KnowledgeCollection, KnowledgeEntry } from '@/types/knowledge';
@@ -310,6 +311,7 @@ export function KnowledgeBasePage() {
           <div className="flex gap-3">
             <ResyncButton onResyncStarted={handleResyncStarted} />
             <MarkdownSyncButton onSyncComplete={loadCollections} />
+            <ExportToFilesButton onExportComplete={loadCollections} />
           </div>
           <div className="flex gap-4">
             <Badge variant="default" className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600">

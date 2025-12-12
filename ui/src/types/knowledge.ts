@@ -161,3 +161,13 @@ export interface SyncReport {
   errors: string[];
   collections: string[];
 }
+
+// Export to files result
+export interface ExportReport {
+  collectionsExported: number;
+  entriesExported: number;
+  filesCreated: number;
+  outputPath: string;
+  collections: string[];
+  errors?: string[];
+}

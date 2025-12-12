@@ -283,7 +283,8 @@ func TestValidateAndLogAgentRequest(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.POST("/test", func(c *gin.Context) {
+	// Register for all methods using Any to test method validation inside the handler
+	router.Any("/test", func(c *gin.Context) {
 		if handler.validateAndLogAgentRequest(c) {
 			c.JSON(http.StatusOK, gin.H{"success": true})
 		}

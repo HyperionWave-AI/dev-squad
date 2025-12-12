@@ -88,7 +88,7 @@ func TestVerification_TriggerThresholds(t *testing.T) {
 	config := DefaultCompactionConfig()
 
 	// Verify token trigger threshold
-	expectedTokenTrigger := int(float64(128000) * 0.01) // 0.01 is the test threshold
+	expectedTokenTrigger := int(float64(128000) * 0.90) // 90% trigger threshold from DefaultCompactionConfig
 	actualTokenTrigger := config.TriggerTokens()
 	if actualTokenTrigger != expectedTokenTrigger {
 		t.Errorf("Token trigger threshold mismatch: expected %d, got %d", expectedTokenTrigger, actualTokenTrigger)

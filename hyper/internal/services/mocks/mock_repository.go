@@ -7,7 +7,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
-)
 
 // MockCollection is a mock implementation of mongo.Collection
 type MockCollection struct {
@@ -92,7 +91,7 @@ func (m *MockCollection) CountDocuments(ctx context.Context, filter interface{},
 func (m *MockCollection) Indexes() mongo.IndexView {
 	args := m.Called()
 	if args.Get(0) == nil {
-		return nil
+		return mongo.IndexView{}
 	}
 	return args.Get(0).(mongo.IndexView)
 }

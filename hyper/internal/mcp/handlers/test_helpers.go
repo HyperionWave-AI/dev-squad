@@ -131,3 +131,11 @@ func (m *CompleteKnowledgeStorageMock) BatchSyncVotesToQdrant(collectionName str
 	args := m.Called(collectionName)
 	return args.Int(0), args.Error(1)
 }
+
+func (m *CompleteKnowledgeStorageMock) ExportToFiles(outputPath string, collections []string) (*storage.ExportReport, error) {
+	args := m.Called(outputPath, collections)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.ExportReport), args.Error(1)
+}
