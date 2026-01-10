@@ -58,6 +58,27 @@ type ErrorPattern struct {
 	RelatedLesson  string          `json:"relatedLesson,omitempty" bson:"relatedLesson,omitempty"`
 }
 
+// FeedbackStats represents aggregated feedback statistics
+type FeedbackStats struct {
+	TotalCount      int                `json:"totalCount"`
+	IssueCount      int                `json:"issueCount"`
+	SuccessCount    int                `json:"successCount"`
+	SuggestionCount int                `json:"suggestionCount"`
+	Groups          []FeedbackGroup    `json:"groups"`
+	Recommendations []string           `json:"recommendations,omitempty"`
+}
+
+// FeedbackGroup represents a group of feedback (by agent, category, or type)
+type FeedbackGroup struct {
+	Name            string   `json:"name"`
+	Count           int      `json:"count"`
+	IssueCount      int      `json:"issueCount"`
+	SuccessCount    int      `json:"successCount"`
+	SuggestionCount int      `json:"suggestionCount"`
+	AvgSeverity     float64  `json:"avgSeverity"`
+	TopIssues       []string `json:"topIssues,omitempty"`
+}
+
 // ReflectionStorage provides storage for metacognitive data
 type ReflectionStorage struct {
 	reflectionsCollection     *mongo.Collection
@@ -447,7 +468,7 @@ func (rs *ReflectionStorage) SearchLessonsByText(query string, limit int) ([]*Re
 			for _, result := range results {
 				// Fetch full reflection from MongoDB by ID
 				var lesson Reflection
-				err := rs.reflectionsCollection.FindOne(ctx, bson.M{"id": result.Entry.ID}).Decode(&lesson)
+				err := rs.reflectionsCollection.FindOne(ctx, bson.M{"_id": result.Entry.ID}).Decode(&lesson)
 				if err != nil {
 					rs.logger.Warn("Failed to fetch lesson from MongoDB",
 						zap.String("lessonId", result.Entry.ID),
@@ -618,4 +639,216 @@ func (rs *ReflectionStorage) MarkLessonExtracted(errorPatternID, lessonID string
 		zap.String("lesson", lessonID))
 
 	return nil
+}
+
+// GetFeedbackStats retrieves aggregated feedback statistics
+func (rs *ReflectionStorage) GetFeedbackStats(groupBy, filterAgent, filterCategory, filterType string, days, limit int) (*FeedbackStats, error) {
+	ctx := context.Background()
+
+	// Build filter for feedback type and time range
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+	filter := bson.M{
+		"type":      "feedback",
+		"timestamp": bson.M{"$gte": cutoff},
+	}
+
+	// Add optional filters
+	if filterAgent != "" {
+		filter["data.agentType"] = filterAgent
+	}
+	if filterCategory != "" {
+		filter["data.category"] = filterCategory
+	}
+	if filterType != "" {
+		filter["data.feedbackType"] = filterType
+	}
+
+	// Determine group field based on groupBy parameter
+	groupField := "$data.agentType"
+	switch groupBy {
+	case "category":
+		groupField = "$data.category"
+	case "type":
+		groupField = "$data.feedbackType"
+	}
+
+	// Build aggregation pipeline
+	pipeline := mongo.Pipeline{
+		// Match feedback entries within time range
+		{{Key: "$match", Value: filter}},
+		// Group by the specified field
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: groupField},
+			{Key: "count", Value: bson.M{"$sum": 1}},
+			{Key: "issueCount", Value: bson.M{"$sum": bson.M{
+				"$cond": bson.A{bson.M{"$eq": bson.A{"$data.feedbackType", "issue"}}, 1, 0},
+			}}},
+			{Key: "successCount", Value: bson.M{"$sum": bson.M{
+				"$cond": bson.A{bson.M{"$eq": bson.A{"$data.feedbackType", "success"}}, 1, 0},
+			}}},
+			{Key: "suggestionCount", Value: bson.M{"$sum": bson.M{
+				"$cond": bson.A{bson.M{"$eq": bson.A{"$data.feedbackType", "suggestion"}}, 1, 0},
+			}}},
+			{Key: "avgSeverity", Value: bson.M{"$avg": "$data.severity"}},
+			{Key: "issues", Value: bson.M{"$push": bson.M{
+				"$cond": bson.A{
+					bson.M{"$eq": bson.A{"$data.feedbackType", "issue"}},
+					"$data.summary",
+					"$$REMOVE",
+				},
+			}}},
+		}}},
+		// Sort by count descending
+		{{Key: "$sort", Value: bson.D{{Key: "count", Value: -1}}}},
+		// Limit results
+		{{Key: "$limit", Value: limit}},
+	}
+
+	cursor, err := rs.reflectionsCollection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("failed to aggregate feedback: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	// Parse results
+	var results []struct {
+		ID              string   `bson:"_id"`
+		Count           int      `bson:"count"`
+		IssueCount      int      `bson:"issueCount"`
+		SuccessCount    int      `bson:"successCount"`
+		SuggestionCount int      `bson:"suggestionCount"`
+		AvgSeverity     float64  `bson:"avgSeverity"`
+		Issues          []string `bson:"issues"`
+	}
+
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, fmt.Errorf("failed to decode feedback stats: %w", err)
+	}
+
+	// Build response
+	stats := &FeedbackStats{
+		Groups:          make([]FeedbackGroup, 0, len(results)),
+		Recommendations: []string{},
+	}
+
+	for _, r := range results {
+		name := r.ID
+		if name == "" {
+			name = "unknown"
+		}
+
+		// Get top 3 issues for this group
+		topIssues := r.Issues
+		if len(topIssues) > 3 {
+			topIssues = topIssues[:3]
+		}
+
+		stats.Groups = append(stats.Groups, FeedbackGroup{
+			Name:            name,
+			Count:           r.Count,
+			IssueCount:      r.IssueCount,
+			SuccessCount:    r.SuccessCount,
+			SuggestionCount: r.SuggestionCount,
+			AvgSeverity:     r.AvgSeverity,
+			TopIssues:       topIssues,
+		})
+
+		stats.TotalCount += r.Count
+		stats.IssueCount += r.IssueCount
+		stats.SuccessCount += r.SuccessCount
+		stats.SuggestionCount += r.SuggestionCount
+	}
+
+	// Generate recommendations based on patterns
+	stats.Recommendations = rs.generateRecommendations(stats)
+
+	rs.logger.Info("Retrieved feedback stats",
+		zap.String("groupBy", groupBy),
+		zap.Int("totalCount", stats.TotalCount),
+		zap.Int("groupCount", len(stats.Groups)))
+
+	return stats, nil
+}
+
+// generateRecommendations creates actionable recommendations based on feedback patterns
+func (rs *ReflectionStorage) generateRecommendations(stats *FeedbackStats) []string {
+	recommendations := []string{}
+
+	// Find groups with high issue rates
+	for _, group := range stats.Groups {
+		if group.Count < 3 {
+			continue // Skip groups with too few data points
+		}
+
+		issueRate := float64(group.IssueCount) / float64(group.Count)
+		successRate := float64(group.SuccessCount) / float64(group.Count)
+
+		// High issue rate recommendation
+		if issueRate > 0.6 {
+			recommendations = append(recommendations,
+				fmt.Sprintf("🔴 %s has %.0f%% issue rate - investigate common failure patterns and update agent prompts",
+					group.Name, issueRate*100))
+		}
+
+		// High severity issues
+		if group.AvgSeverity >= 4.0 && group.IssueCount > 0 {
+			recommendations = append(recommendations,
+				fmt.Sprintf("⚠️ %s has high severity issues (avg %.1f/5) - prioritize for immediate attention",
+					group.Name, group.AvgSeverity))
+		}
+
+		// Success patterns to reinforce
+		if successRate > 0.7 && group.SuccessCount >= 5 {
+			recommendations = append(recommendations,
+				fmt.Sprintf("✅ %s has %.0f%% success rate - document patterns as best practices",
+					group.Name, successRate*100))
+		}
+	}
+
+	// Overall recommendations
+	if stats.TotalCount > 0 {
+		overallIssueRate := float64(stats.IssueCount) / float64(stats.TotalCount)
+		if overallIssueRate > 0.5 {
+			recommendations = append(recommendations,
+				fmt.Sprintf("📊 Overall issue rate is %.0f%% - consider systematic review of agent configurations",
+					overallIssueRate*100))
+		}
+	}
+
+	return recommendations
+}
+
+// GetRecentFeedback retrieves recent feedback entries for UI display
+func (rs *ReflectionStorage) GetRecentFeedback(filterAgent, filterCategory, filterType string, limit int) ([]*Reflection, error) {
+	ctx := context.Background()
+
+	filter := bson.M{"type": "feedback"}
+
+	// Add optional filters
+	if filterAgent != "" {
+		filter["data.agentType"] = filterAgent
+	}
+	if filterCategory != "" {
+		filter["data.category"] = filterCategory
+	}
+	if filterType != "" {
+		filter["data.feedbackType"] = filterType
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "timestamp", Value: -1}}).
+		SetLimit(int64(limit))
+
+	cursor, err := rs.reflectionsCollection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query recent feedback: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var feedback []*Reflection
+	if err := cursor.All(ctx, &feedback); err != nil {
+		return nil, fmt.Errorf("failed to decode feedback: %w", err)
+	}
+
+	return feedback, nil
 }
