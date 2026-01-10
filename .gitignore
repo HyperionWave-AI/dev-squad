@@ -60,3 +60,5 @@ hyper/coverage_mcp.out
 hyper/coverage_api.out
 hyper/coverage.out
 hyper/rebuild.sh
+/hyper/logs
+/hyper/internal/ai-service/logs

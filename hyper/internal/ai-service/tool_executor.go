@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"hyper/internal/config"
-
-	"github.com/tmc/langchaingo/llms"
 )
 
 // tool_executor.go - Tool Execution Orchestration
@@ -247,7 +245,7 @@ func (s *ChatService) StreamChatWithTools(ctx context.Context, messages []Messag
 						allowedSet[name] = true
 					}
 
-					filteredTools := make([]llms.Tool, 0, len(allowedTools))
+					filteredTools := make([]Tool, 0, len(allowedTools))
 					for _, tool := range tools {
 						if tool.Function != nil && allowedSet[tool.Function.Name] {
 							filteredTools = append(filteredTools, tool)

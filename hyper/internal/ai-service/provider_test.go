@@ -259,3 +259,269 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+// ==================== Cache Breakpoint Tests ====================
+
+// TestDefaultCacheBreakpointConfig tests the default configuration values
+func TestDefaultCacheBreakpointConfig(t *testing.T) {
+	config := DefaultCacheBreakpointConfig()
+
+	if !config.Enabled {
+		t.Error("Expected Enabled to be true by default")
+	}
+
+	if config.StandardInterval != 10 {
+		t.Errorf("Expected StandardInterval 10, got %d", config.StandardInterval)
+	}
+
+	if config.MinMessagesForCaching != 5 {
+		t.Errorf("Expected MinMessagesForCaching 5, got %d", config.MinMessagesForCaching)
+	}
+}
+
+// TestAddMessageCacheBreakpoints_DisabledConfig tests that breakpoints are skipped when disabled
+func TestAddMessageCacheBreakpoints_DisabledConfig(t *testing.T) {
+	provider := &anthropicProvider{
+		cacheBreakpointConfig: CacheBreakpointConfig{
+			Enabled:               false,
+			StandardInterval:      10,
+			MinMessagesForCaching: 5,
+		},
+	}
+
+	messages := createTestMessages(15)
+	result := provider.addMessageCacheBreakpoints(messages)
+
+	// Should return messages unchanged
+	if len(result) != len(messages) {
+		t.Errorf("Expected %d messages, got %d", len(messages), len(result))
+	}
+
+	// Verify no cache control was added
+	for i, msg := range result {
+		if hasCacheControl(msg) {
+			t.Errorf("Message %d should not have cache control when disabled", i)
+		}
+	}
+}
+
+// TestAddMessageCacheBreakpoints_TooFewMessages tests that breakpoints are skipped for short conversations
+func TestAddMessageCacheBreakpoints_TooFewMessages(t *testing.T) {
+	provider := &anthropicProvider{
+		cacheBreakpointConfig: DefaultCacheBreakpointConfig(),
+	}
+
+	messages := createTestMessages(3) // Less than MinMessagesForCaching (5)
+	result := provider.addMessageCacheBreakpoints(messages)
+
+	// Should return messages unchanged
+	if len(result) != 3 {
+		t.Errorf("Expected 3 messages, got %d", len(result))
+	}
+
+	// Verify no cache control was added
+	for i, msg := range result {
+		if hasCacheControl(msg) {
+			t.Errorf("Message %d should not have cache control with too few messages", i)
+		}
+	}
+}
+
+// TestAddMessageCacheBreakpoints_StandardInterval tests breakpoints at message 10
+func TestAddMessageCacheBreakpoints_StandardInterval(t *testing.T) {
+	provider := &anthropicProvider{
+		cacheBreakpointConfig: DefaultCacheBreakpointConfig(),
+	}
+
+	// Create 12 messages (positions 1-12)
+	// With StandardInterval=10, position 10 should get breakpoint
+	messages := createTestMessages(12)
+	result := provider.addMessageCacheBreakpoints(messages)
+
+	if len(result) != 12 {
+		t.Errorf("Expected 12 messages, got %d", len(result))
+	}
+
+	// Message at index 9 (position 10) should have cache control
+	if !hasCacheControl(result[9]) {
+		t.Error("Expected cache control on message at position 10 (index 9)")
+	}
+
+	// First breakpoint (later message) should have 5m TTL
+	ttl := extractCacheTTL(result[9])
+	if ttl != "5m" {
+		t.Errorf("Expected TTL '5m' for first breakpoint, got '%s'", ttl)
+	}
+}
+
+// TestAddMessageCacheBreakpoints_TwoBreakpoints tests that two breakpoints are placed correctly
+func TestAddMessageCacheBreakpoints_TwoBreakpoints(t *testing.T) {
+	provider := &anthropicProvider{
+		cacheBreakpointConfig: DefaultCacheBreakpointConfig(),
+	}
+
+	// Create 25 messages (positions 1-25)
+	// With StandardInterval=10, positions 20 and 10 should get breakpoints
+	messages := createTestMessages(25)
+	result := provider.addMessageCacheBreakpoints(messages)
+
+	if len(result) != 25 {
+		t.Errorf("Expected 25 messages, got %d", len(result))
+	}
+
+	// Count breakpoints
+	breakpointCount := 0
+	for _, msg := range result {
+		if hasCacheControl(msg) {
+			breakpointCount++
+		}
+	}
+
+	if breakpointCount != 2 {
+		t.Errorf("Expected 2 breakpoints, got %d", breakpointCount)
+	}
+
+	// Message at index 19 (position 20) should have 5m TTL (first found = later message)
+	if !hasCacheControl(result[19]) {
+		t.Error("Expected cache control on message at position 20")
+	}
+	ttl20 := extractCacheTTL(result[19])
+	if ttl20 != "5m" {
+		t.Errorf("Expected TTL '5m' for position 20 (first breakpoint), got '%s'", ttl20)
+	}
+
+	// Message at index 9 (position 10) should have 1h TTL (second found = earlier message)
+	if !hasCacheControl(result[9]) {
+		t.Error("Expected cache control on message at position 10")
+	}
+	ttl10 := extractCacheTTL(result[9])
+	if ttl10 != "1h" {
+		t.Errorf("Expected TTL '1h' for position 10 (second breakpoint), got '%s'", ttl10)
+	}
+}
+
+// TestAddMessageCacheBreakpoints_MaxTwoBreakpoints tests that only 2 breakpoints are added max
+func TestAddMessageCacheBreakpoints_MaxTwoBreakpoints(t *testing.T) {
+	provider := &anthropicProvider{
+		cacheBreakpointConfig: DefaultCacheBreakpointConfig(),
+	}
+
+	// Create 45 messages - positions 40, 30, 20, 10 are potential breakpoints
+	// Only 2 should be added (40 and 30)
+	messages := createTestMessages(45)
+	result := provider.addMessageCacheBreakpoints(messages)
+
+	breakpointCount := 0
+	for _, msg := range result {
+		if hasCacheControl(msg) {
+			breakpointCount++
+		}
+	}
+
+	if breakpointCount != 2 {
+		t.Errorf("Expected exactly 2 breakpoints (max limit), got %d", breakpointCount)
+	}
+
+	// Should be at positions 40 and 30, NOT 20 and 10
+	if !hasCacheControl(result[39]) {
+		t.Error("Expected cache control at position 40")
+	}
+	if !hasCacheControl(result[29]) {
+		t.Error("Expected cache control at position 30")
+	}
+	if hasCacheControl(result[19]) {
+		t.Error("Position 20 should NOT have cache control (max 2 breakpoints)")
+	}
+	if hasCacheControl(result[9]) {
+		t.Error("Position 10 should NOT have cache control (max 2 breakpoints)")
+	}
+}
+
+// TestAddMessageCacheBreakpoints_StringContent tests conversion of string content to array format
+func TestAddMessageCacheBreakpoints_StringContent(t *testing.T) {
+	provider := &anthropicProvider{
+		cacheBreakpointConfig: CacheBreakpointConfig{
+			Enabled:               true,
+			StandardInterval:      5, // Every 5 messages
+			MinMessagesForCaching: 3,
+		},
+	}
+
+	// Create messages with string content
+	messages := []map[string]interface{}{
+		{"role": "user", "content": "Message 1"},
+		{"role": "assistant", "content": "Message 2"},
+		{"role": "user", "content": "Message 3"},
+		{"role": "assistant", "content": "Message 4"},
+		{"role": "user", "content": "Message 5"}, // Position 5, should get breakpoint
+	}
+
+	result := provider.addMessageCacheBreakpoints(messages)
+
+	// Position 5 (index 4) should be converted to array format with cache_control
+	msg5 := result[4]
+	content, ok := msg5["content"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("Expected content to be converted to array format")
+	}
+
+	if len(content) != 1 {
+		t.Errorf("Expected 1 content block, got %d", len(content))
+	}
+
+	if content[0]["type"] != "text" {
+		t.Errorf("Expected type 'text', got '%v'", content[0]["type"])
+	}
+
+	if content[0]["text"] != "Message 5" {
+		t.Errorf("Expected text 'Message 5', got '%v'", content[0]["text"])
+	}
+
+	cacheControl, ok := content[0]["cache_control"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected cache_control to be present")
+	}
+
+	if cacheControl["type"] != "ephemeral" {
+		t.Errorf("Expected cache_control type 'ephemeral', got '%v'", cacheControl["type"])
+	}
+}
+
+// Helper functions for cache breakpoint tests
+
+func createTestMessages(count int) []map[string]interface{} {
+	messages := make([]map[string]interface{}, count)
+	for i := 0; i < count; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		messages[i] = map[string]interface{}{
+			"role":    role,
+			"content": fmt.Sprintf("Message %d", i+1),
+		}
+	}
+	return messages
+}
+
+func hasCacheControl(msg map[string]interface{}) bool {
+	// Check string content that was converted to array
+	if contentArr, ok := msg["content"].([]map[string]interface{}); ok && len(contentArr) > 0 {
+		lastBlock := contentArr[len(contentArr)-1]
+		_, hasCacheCtrl := lastBlock["cache_control"]
+		return hasCacheCtrl
+	}
+	return false
+}
+
+func extractCacheTTL(msg map[string]interface{}) string {
+	if contentArr, ok := msg["content"].([]map[string]interface{}); ok && len(contentArr) > 0 {
+		lastBlock := contentArr[len(contentArr)-1]
+		if cacheControl, ok := lastBlock["cache_control"].(map[string]interface{}); ok {
+			if ttl, ok := cacheControl["ttl"].(string); ok {
+				return ttl
+			}
+		}
+	}
+	return ""
+}

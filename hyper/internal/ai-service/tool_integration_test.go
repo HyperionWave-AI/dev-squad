@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tmc/langchaingo/llms"
 )
 
 // MockTool implements ToolExecutor for testing
@@ -57,7 +56,7 @@ func (m *MockToolProvider) SupportsTools() bool {
 	return m.supportsTools
 }
 
-func (m *MockToolProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
+func (m *MockToolProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []Tool) (*ToolResponse, error) {
 	textChan := make(chan string, 1)
 	go func() {
 		defer close(textChan)

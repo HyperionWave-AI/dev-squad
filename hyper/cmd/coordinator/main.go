@@ -758,7 +758,7 @@ func main() {
 	if err := reflectionToolHandler.RegisterReflectionTools(mcpServer); err != nil {
 		logger.Fatal("Failed to register reflection tools to MCP server", zap.Error(err))
 	}
-	logger.Info("Reflection tools registered to MCP server", zap.Int("count", 3))
+	logger.Info("Reflection tools registered to MCP server", zap.Int("count", 7))
 
 	// Initialize code validator for error prevention mode (per-session control via context)
 	logger.Info("Initializing code validator for error prevention...")

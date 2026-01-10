@@ -13,6 +13,7 @@ package aiservice
 // See TOKEN_USAGE.md for detailed documentation on token tracking.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -23,10 +24,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/llms/anthropic"
-	"github.com/tmc/langchaingo/llms/openai"
 )
 
 // Message represents a chat message with role and content
@@ -43,6 +40,20 @@ type Message struct {
 	Provider string `json:"provider,omitempty"`
 }
 
+// Tool represents a function/tool that can be called by the AI
+// This is a native type that replaces the langchaingo llms.Tool dependency
+type Tool struct {
+	Type     string              `json:"type"` // "function"
+	Function *FunctionDefinition `json:"function,omitempty"`
+}
+
+// FunctionDefinition describes a function tool that can be called by the AI
+type FunctionDefinition struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+}
+
 // ChatProvider defines the interface for AI chat providers
 type ChatProvider interface {
 	// StreamChat sends messages and returns a channel that streams response tokens
@@ -55,7 +66,7 @@ type ToolCapableProvider interface {
 	// SupportsTools returns true if the provider/model supports tool calling
 	SupportsTools() bool
 	// StreamChatWithTools sends messages with tools and returns a response with tool calls
-	StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error)
+	StreamChatWithTools(ctx context.Context, messages []Message, tools []Tool) (*ToolResponse, error)
 }
 
 // ToolResponse contains the streaming response and any tool calls made by the AI
@@ -97,425 +108,227 @@ func init() {
 	httpLogger = NewHTTPLogger("./logs")
 }
 
-// openAIProvider wraps langchaingo's OpenAI client
-type openAIProvider struct {
-	llm              *openai.LLM
-	config           *AIConfig
-	tokenExtractor   *TokenUsageExtractor
-	tokenLogger      *TokenUsageLogger
-	metricsStore     MetricsStore
+// openAIStreamChunk represents a streaming response chunk from OpenAI
+// Kept here for compatibility with HTTP logger
+type openAIStreamChunk struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	Model   string `json:"model"`
+	Choices []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Role      string `json:"role,omitempty"`
+			Content   string `json:"content,omitempty"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id,omitempty"`
+				Type     string `json:"type,omitempty"`
+				Function struct {
+					Name      string `json:"name,omitempty"`
+					Arguments string `json:"arguments,omitempty"`
+				} `json:"function,omitempty"`
+			} `json:"tool_calls,omitempty"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason,omitempty"`
+	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 }
 
-func newOpenAIProvider(config *AIConfig, metricsStore MetricsStore) (*openAIProvider, error) {
-	opts := []openai.Option{
-		openai.WithModel(config.Model),
-		openai.WithToken(config.APIKey),
-	}
-
-	// Add custom base URL if ProviderURL is set (for Ollama or other OpenAI-compatible endpoints)
-	if config.ProviderURL != "" {
-		opts = append(opts, openai.WithBaseURL(config.ProviderURL))
-	}
-
-	llm, err := openai.New(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OpenAI client: %w", err)
-	}
-
-	return &openAIProvider{
-		llm:            llm,
-		config:         config,
-		tokenExtractor: NewTokenUsageExtractor("openai"),
-		tokenLogger:    NewTokenUsageLogger(),
-		metricsStore:   metricsStore,
-	}, nil
+// openAICompletionResponse represents a non-streaming response from OpenAI
+// Kept here for compatibility with HTTP logger
+type openAICompletionResponse struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	Model   string `json:"model"`
+	Choices []struct {
+		Index   int `json:"index"`
+		Message struct {
+			Role      string `json:"role"`
+			Content   string `json:"content,omitempty"`
+			ToolCalls []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls,omitempty"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
-func (p *openAIProvider) StreamChat(ctx context.Context, messages []Message) (<-chan string, error) {
-	// Convert messages to langchaingo format
-	content := p.messagesToContent(messages)
+// CacheBreakpointConfig configures cache breakpoint placement strategy.
+// Anthropic allows up to 4 cache breakpoints per request:
+// - BP1: Tools (handled separately when building tools array)
+// - BP2: System message (handled when building system prompt)
+// - BP3 & BP4: Conversation history (configured here)
+//
+// Strategy: Place breakpoints at FIXED positions to ensure cache hits.
+// A moving breakpoint (like "2nd-to-last message") invalidates cache every request
+// because the prefix changes. Fixed positions maintain stable cache prefixes.
+type CacheBreakpointConfig struct {
+	// Enabled controls whether cache breakpoints are added.
+	// When false, no cache breakpoints will be added to requests.
+	Enabled bool
 
-	// Create output channel
-	outputChan := make(chan string, 100)
+	// StandardInterval defines the message interval for standard breakpoints.
+	// A breakpoint is placed at the last message where (index % StandardInterval == 0).
+	// Example: StandardInterval=10 places breakpoint at message 10, 20, 30, etc.
+	// Default: 10
+	StandardInterval int
 
-	// Start streaming in goroutine
-	go func() {
-		defer close(outputChan)
-
-		// Build call options
-		callOpts := []llms.CallOption{
-			llms.WithTemperature(p.config.Temperature),
-			llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case outputChan <- string(chunk):
-					return nil
-				}
-			}),
-		}
-
-		// Add max tokens if configured
-		if p.config.MaxOutputTokens > 0 {
-			callOpts = append(callOpts, llms.WithMaxTokens(p.config.MaxOutputTokens))
-		}
-
-		// Stream with callback
-		_, err := p.llm.Call(ctx, content, callOpts...)
-
-		if err != nil && err != context.Canceled {
-			// Send error as last message (with error prefix so caller can detect)
-			select {
-			case <-ctx.Done():
-			case outputChan <- fmt.Sprintf("ERROR: %v", err):
-			}
-		}
-	}()
-
-	return outputChan, nil
+	// MinMessagesForCaching is the minimum number of messages required before
+	// adding any conversation history breakpoints. This prevents overhead
+	// on short conversations where caching provides minimal benefit.
+	// Default: 5
+	MinMessagesForCaching int
 }
 
-func (p *openAIProvider) messagesToContent(messages []Message) string {
-	// Simple concatenation for now - langchaingo will handle formatting
-	var content string
-	for _, msg := range messages {
-		content += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+// DefaultCacheBreakpointConfig returns the recommended cache breakpoint configuration.
+// Places breakpoints every 10 messages for conversations with 5+ messages.
+func DefaultCacheBreakpointConfig() CacheBreakpointConfig {
+	return CacheBreakpointConfig{
+		Enabled:               true,
+		StandardInterval:      10,
+		MinMessagesForCaching: 5,
 	}
-	return content
 }
 
-// extractTokenUsageFromOpenAI attempts to extract token usage from OpenAI response
-// Note: LangChain's ContentResponse doesn't expose token usage directly,
-// so we log a message indicating that token usage should be captured from HTTP headers
-func (p *openAIProvider) extractTokenUsageFromOpenAI(resp *llms.ContentResponse) *TokenUsage {
-	// TODO: Capture token usage from HTTP response headers
-	// OpenAI includes usage in response headers:
-	// - x-openai-input-tokens: prompt token count
-	// - x-openai-output-tokens: completion token count
-	// This requires intercepting the HTTP response before LangChain processes it
-	
-	// For now, return nil - token usage will be captured via HTTP logging
-	fmt.Printf("[TOKEN USAGE] OpenAI token usage extraction via LangChain not yet implemented\n")
-	return nil
-}
-
-// SupportsTools returns true - all OpenAI-compatible endpoints support tools by default
-// If a model doesn't support tools, it will simply ignore them
-func (p *openAIProvider) SupportsTools() bool {
-	return true
-}
-
-// StreamChatWithTools implements tool calling for OpenAI using LangChain
-func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
-	// Helper function for JSON marshaling
-	mustMarshalJSON := func(v interface{}) string {
-		if v == nil {
-			return "{}"
-		}
-		bytes, err := json.Marshal(v)
-		if err != nil {
-			return "{}"
-		}
-		return string(bytes)
-	}
-
-	// Convert messages to LangChain MessageContent format
-	msgContents := make([]llms.MessageContent, 0, len(messages))
-	for _, msg := range messages {
-		switch msg.Role {
-		case "user":
-			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
-
-		case "assistant":
-			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeAI, msg.Content))
-
-		case "system":
-			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeSystem, msg.Content))
-
-		case "tool_call":
-			// Tool calls should be sent as assistant messages with ToolCall parts
-			if msg.ToolCall != nil {
-				parts := []llms.ContentPart{}
-
-				// Add text content if present
-				if msg.Content != "" {
-					parts = append(parts, llms.TextPart(msg.Content))
-				}
-
-				// Add ToolCall part
-				toolCallPart := llms.ToolCall{
-					ID:   msg.ToolCall.ID,
-					Type: "function",
-					FunctionCall: &llms.FunctionCall{
-						Name:      msg.ToolCall.Name,
-						Arguments: mustMarshalJSON(msg.ToolCall.Args),
-					},
-				}
-				parts = append(parts, toolCallPart)
-
-				msgContent := llms.MessageContent{
-					Role:  llms.ChatMessageTypeAI,
-					Parts: parts,
-				}
-				msgContents = append(msgContents, msgContent)
-			} else {
-				// Fallback if no ToolCall data
-				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeAI, msg.Content))
-			}
-
-		case "tool_result":
-			// Tool results should be sent as Tool messages with ToolCallResponse parts
-			if msg.ToolResult != nil {
-				// Format result content - pass through as-is without forcing JSON
-				var resultContent string
-				if msg.ToolResult.Error != "" {
-					resultContent = msg.ToolResult.Error
-				} else {
-					switch v := msg.ToolResult.Output.(type) {
-					case string:
-						resultContent = v
-					default:
-						// Try JSON marshal, fallback to fmt.Sprintf
-						if outputJSON, err := json.Marshal(v); err == nil {
-							resultContent = string(outputJSON)
-						} else {
-							resultContent = fmt.Sprintf("%v", v)
-						}
-					}
-				}
-
-				msgContent := llms.MessageContent{
-					Role: llms.ChatMessageTypeTool, // FIXED: Use Tool role, not Human
-					Parts: []llms.ContentPart{
-						llms.ToolCallResponse{
-							ToolCallID: msg.ToolResult.ID,
-							Name:       msg.ToolResult.Name,
-							Content:    resultContent,
-						},
-					},
-				}
-				msgContents = append(msgContents, msgContent)
-			} else {
-				// Fallback if no ToolResult data
-				msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
-			}
-
-		default:
-			msgContents = append(msgContents, llms.TextParts(llms.ChatMessageTypeHuman, msg.Content))
-		}
-	}
-
-	// Create text channel for streaming
-	textChan := make(chan string, 1000)
-	var toolCalls []ToolCall
-
-	// Prepare streaming function (non-blocking)
-	streamFunc := func(ctx context.Context, chunk []byte) error {
-		chunkStr := string(chunk)
-
-		// Strip tool call JSON if present (Groq/some providers append it to text)
-		// Pattern: [{"id":"functions.X:Y" or [{"id":"call_X"
-		if idx := strings.Index(chunkStr, `[{"id":"`); idx >= 0 {
-			// Keep only the text before the JSON array
-			chunkStr = chunkStr[:idx]
-		}
-
-		// Skip empty chunks
-		if strings.TrimSpace(chunkStr) == "" {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case textChan <- chunkStr:
-			return nil
-		default:
-			return nil
-		}
-	}
-
-	// Build options
-	opts := []llms.CallOption{
-		llms.WithTemperature(p.config.Temperature),
-		llms.WithTools(tools),
-		llms.WithStreamingFunc(streamFunc),
-	}
-
-	if p.config.MaxOutputTokens > 0 {
-		opts = append(opts, llms.WithMaxTokens(p.config.MaxOutputTokens))
-	}
-
-	// LOG REQUEST: Serialize msgContents and tools before AI call
-	httpLogger.LogLangChainRequest(
-		p.config.Provider,
-		convertMsgContentsToJSON(msgContents),
-		convertToolsToJSON(tools),
-		map[string]interface{}{
-			"temperature":     p.config.Temperature,
-			"maxOutputTokens": p.config.MaxOutputTokens,
-			"model":           p.config.Model,
-		},
-	)
-
-	// Call GenerateContent in goroutine
-	type generateResult struct {
-		resp *llms.ContentResponse
-		err  error
-	}
-	resultChan := make(chan generateResult, 1)
-
-	go func() {
-		resp, err := p.llm.GenerateContent(ctx, msgContents, opts...)
-		resultChan <- generateResult{resp: resp, err: err}
-		close(textChan)
-	}()
-
-	// Wait for generation to complete
-	result := <-resultChan
-
-	// LOG RESPONSE: Log the response immediately after AI call
-	httpLogger.LogLangChainResponse(
-		p.config.Provider,
-		convertContentResponseToJSON(result.resp),
-		result.err,
-	)
-
-	if result.err != nil && result.err != context.Canceled {
-		return nil, fmt.Errorf("failed to generate content: %w", result.err)
-	}
-
-	// Extract tool calls and stop reason from response - USE AI-GENERATED IDs
-	var stopReason string
-	if result.resp != nil && len(result.resp.Choices) > 0 {
-		choice := result.resp.Choices[0]
-		stopReason = choice.StopReason // Capture stop reason from LangChain
-
-		// Check ToolCalls array first (preferred - has real IDs from AI)
-		if len(choice.ToolCalls) > 0 {
-			for _, tc := range choice.ToolCalls {
-				if tc.FunctionCall != nil {
-					var args map[string]interface{}
-					if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err == nil {
-						toolCalls = append(toolCalls, ToolCall{
-							ID:   tc.ID, // Use AI-generated ID from ToolCalls
-							Name: tc.FunctionCall.Name,
-							Args: args,
-						})
-					}
-				}
-			}
-		}
-	}
-
-	// Extract token usage from response
-	var tokenUsage *TokenUsage
-	if result.resp != nil {
-		tokenUsage = p.extractTokenUsageFromOpenAI(result.resp)
-		if tokenUsage != nil {
-			p.tokenLogger.LogUsage(tokenUsage)
-		}
-	}
-
-	// Record metrics to metrics store
-	if tokenUsage != nil {
-		metric := &ProviderMetric{
-			ID:               fmt.Sprintf("openai-%d", time.Now().UnixNano()),
-			Provider:         "openai",
-			Model:            p.config.Model,
-			PromptTokens:     tokenUsage.PromptTokens,
-			CompletionTokens: tokenUsage.CompletionTokens,
-			TotalTokens:      tokenUsage.TotalTokens,
-			Cost:             CalculateOpenAICost(p.config.Model, tokenUsage.PromptTokens, tokenUsage.CompletionTokens),
-			DurationMs:       0, // TODO: Track from method start time
-			Success:          result.err == nil,
-			ErrorMessage:     "",
-			Timestamp:        time.Now(),
-		}
-		if result.err != nil {
-			metric.ErrorMessage = result.err.Error()
-		}
-		if p.metricsStore != nil {
-			if err := p.metricsStore.RecordProviderMetric(metric); err != nil {
-				fmt.Printf("[Metrics] Failed to record OpenAI provider metric: %v\n", err)
-			}
-		}
-	}
-
-	return &ToolResponse{
-		TextChannel: textChan,
-		ToolCalls:   toolCalls,
-		StopReason:  stopReason,
-		TokenUsage:  tokenUsage,
-	}, nil
-}
-
-// anthropicProvider wraps langchaingo's Anthropic client
+// anthropicProvider implements direct HTTP calls to Anthropic API
+// This replaces the langchaingo wrapper for better control and proper tool parsing
 type anthropicProvider struct {
-	llm              *anthropic.LLM
-	config           *AIConfig
-	tokenExtractor   *TokenUsageExtractor
-	tokenLogger      *TokenUsageLogger
-	metricsStore     MetricsStore
+	httpClient            *http.Client
+	config                *AIConfig
+	tokenExtractor        *TokenUsageExtractor
+	tokenLogger           *TokenUsageLogger
+	metricsStore          MetricsStore
+	cacheBreakpointConfig CacheBreakpointConfig
 }
 
 func newAnthropicProvider(config *AIConfig, metricsStore MetricsStore) (*anthropicProvider, error) {
-	opts := []anthropic.Option{
-		anthropic.WithModel(config.Model),
-		anthropic.WithToken(config.APIKey),
-	}
-
-	llm, err := anthropic.New(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Anthropic client: %w", err)
-	}
-
 	return &anthropicProvider{
-		llm:            llm,
-		config:         config,
-		tokenExtractor: NewTokenUsageExtractor("anthropic"),
-		tokenLogger:    NewTokenUsageLogger(),
-		metricsStore:   metricsStore,
+		httpClient:            &http.Client{Timeout: 5 * time.Minute},
+		config:                config,
+		tokenExtractor:        NewTokenUsageExtractor("anthropic"),
+		tokenLogger:           NewTokenUsageLogger(),
+		metricsStore:          metricsStore,
+		cacheBreakpointConfig: DefaultCacheBreakpointConfig(),
 	}, nil
 }
 
 func (p *anthropicProvider) StreamChat(ctx context.Context, messages []Message) (<-chan string, error) {
-	// Convert messages to langchaingo format
-	content := p.messagesToContent(messages)
+	// Build Anthropic API messages
+	apiMessages := make([]map[string]interface{}, 0, len(messages))
+	var systemPrompt string
+
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			systemPrompt = msg.Content
+			continue
+		}
+		apiMessages = append(apiMessages, map[string]interface{}{
+			"role":    msg.Role,
+			"content": msg.Content,
+		})
+	}
+
+	// Anthropic requires max_tokens
+	maxTokens := p.config.MaxOutputTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+
+	reqBody := map[string]interface{}{
+		"model":      p.config.Model,
+		"messages":   apiMessages,
+		"max_tokens": maxTokens,
+		"stream":     true,
+	}
+	if systemPrompt != "" {
+		reqBody["system"] = systemPrompt
+	}
+	if p.config.Temperature > 0 {
+		reqBody["temperature"] = p.config.Temperature
+	}
 
 	// Create output channel
 	outputChan := make(chan string, 100)
 
-	// Start streaming in goroutine
 	go func() {
 		defer close(outputChan)
 
-		// Build call options
-		callOpts := []llms.CallOption{
-			llms.WithTemperature(p.config.Temperature),
-			llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+		bodyBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			outputChan <- fmt.Sprintf("ERROR: failed to marshal request: %v", err)
+			return
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(bodyBytes))
+		if err != nil {
+			outputChan <- fmt.Sprintf("ERROR: failed to create request: %v", err)
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", p.config.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+
+		resp, err := p.httpClient.Do(req)
+		if err != nil {
+			if err != context.Canceled {
+				outputChan <- fmt.Sprintf("ERROR: %v", err)
+			}
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			outputChan <- fmt.Sprintf("ERROR: Anthropic API error %d: %s", resp.StatusCode, string(body))
+			return
+		}
+
+		// Parse SSE stream
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break
+			}
+
+			var event struct {
+				Type  string `json:"type"`
+				Delta struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				continue
+			}
+
+			if event.Type == "content_block_delta" && event.Delta.Text != "" {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
-				case outputChan <- string(chunk):
-					return nil
+					return
+				case outputChan <- event.Delta.Text:
 				}
-			}),
-		}
-
-		// Add max tokens if configured
-		if p.config.MaxOutputTokens > 0 {
-			callOpts = append(callOpts, llms.WithMaxTokens(p.config.MaxOutputTokens))
-		}
-
-		// Stream with callback
-		_, err := p.llm.Call(ctx, content, callOpts...)
-
-		if err != nil && err != context.Canceled {
-			// Send error as last message
-			select {
-			case <-ctx.Done():
-			case outputChan <- fmt.Sprintf("ERROR: %v", err):
 			}
 		}
 	}()
@@ -523,28 +336,51 @@ func (p *anthropicProvider) StreamChat(ctx context.Context, messages []Message) 
 	return outputChan, nil
 }
 
-func (p *anthropicProvider) messagesToContent(messages []Message) string {
-	// Simple concatenation for now
-	var content string
-	for _, msg := range messages {
-		content += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
-	}
-	return content
-}
-
 // extractTokenUsageFromAnthropicResponse extracts token usage from Anthropic API response body
-func (p *anthropicProvider) extractTokenUsageFromAnthropicResponse(inputTokens, outputTokens int) *TokenUsage {
-	if inputTokens == 0 && outputTokens == 0 {
+// Includes prompt caching statistics for cost analysis
+func (p *anthropicProvider) extractTokenUsageFromAnthropicResponse(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int) *TokenUsage {
+	if inputTokens == 0 && outputTokens == 0 && cacheCreationTokens == 0 && cacheReadTokens == 0 {
 		return nil
 	}
-	
+
+	// Total input tokens = uncached + cache creation + cache read
+	totalInput := inputTokens + cacheCreationTokens + cacheReadTokens
+
 	return &TokenUsage{
-		PromptTokens:     inputTokens,
-		CompletionTokens: outputTokens,
-		TotalTokens:      inputTokens + outputTokens,
-		Provider:         "anthropic",
-		Model:            p.config.Model,
-		Timestamp:        time.Now(),
+		PromptTokens:        totalInput,
+		CompletionTokens:    outputTokens,
+		TotalTokens:         totalInput + outputTokens,
+		CacheCreationTokens: cacheCreationTokens,
+		CacheReadTokens:     cacheReadTokens,
+		Provider:            "anthropic",
+		Model:               p.config.Model,
+		Timestamp:           time.Now(),
+	}
+}
+
+// logCacheStatistics logs comprehensive cache statistics for observability.
+// Calculates and logs cache hit rate percentage when cache reads occur.
+func (p *anthropicProvider) logCacheStatistics(cacheCreationTokens, cacheReadTokens, inputTokens int) {
+	// Only log if there's any cache activity
+	if cacheCreationTokens == 0 && cacheReadTokens == 0 {
+		return
+	}
+
+	// Calculate cache hit rate if there are cache reads
+	if cacheReadTokens > 0 {
+		// Hit rate = (cache_read_tokens / total_input_context) * 100
+		totalInputContext := inputTokens + cacheReadTokens + cacheCreationTokens
+		if totalInputContext > 0 {
+			hitRate := float64(cacheReadTokens) / float64(totalInputContext) * 100
+			// 90% savings on cached tokens (cache reads cost 10% of input)
+			estimatedSavings := float64(cacheReadTokens) * 0.9
+			fmt.Printf("[CACHE HIT] Anthropic prompt cache: %.1f%% hit rate, %d tokens read, ~%.0f tokens saved\n",
+				hitRate, cacheReadTokens, estimatedSavings)
+		}
+	} else if cacheCreationTokens > 0 {
+		// Cache miss - new content being cached
+		fmt.Printf("[CACHE MISS] Anthropic prompt cache: %d tokens cached (subsequent requests will use cached tokens)\n",
+			cacheCreationTokens)
 	}
 }
 
@@ -556,7 +392,7 @@ func (p *anthropicProvider) SupportsTools() bool {
 
 // StreamChatWithTools implements tool calling for Anthropic using direct API calls
 // This bypasses langchaingo's broken tool parsing and uses Anthropic's native content blocks
-func (p *anthropicProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
+func (p *anthropicProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []Tool) (*ToolResponse, error) {
 	// Make direct API call to Anthropic to properly handle tool use content blocks
 	return p.callAnthropicDirectly(ctx, messages, tools)
 }
@@ -577,7 +413,7 @@ func sanitizeToolID(id string) string {
 
 // callAnthropicDirectly makes a direct HTTP call to Anthropic's Messages API
 // This is necessary because langchaingo doesn't properly parse Anthropic's tool_use content blocks
-func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
+func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages []Message, tools []Tool) (*ToolResponse, error) {
 	// Build Anthropic API request
 	apiMessages := make([]map[string]interface{}, 0, len(messages))
 	var systemPrompt string
@@ -707,6 +543,7 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	}
 
 	// Convert tools to Anthropic format
+	// BP1: Add cache_control to the LAST tool for prompt caching
 	apiTools := make([]map[string]interface{}, 0, len(tools))
 	for _, tool := range tools {
 		if tool.Function == nil {
@@ -718,6 +555,14 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 			"input_schema": tool.Function.Parameters,
 		})
 	}
+	// Add cache_control to the last tool (BP1) if caching is enabled
+	if p.cacheBreakpointConfig.Enabled && len(apiTools) > 0 {
+		lastToolIdx := len(apiTools) - 1
+		apiTools[lastToolIdx]["cache_control"] = map[string]interface{}{
+			"type": "ephemeral",
+			"ttl":  "1h", // 1-hour TTL for stable tool definitions
+		}
+	}
 
 	// Anthropic requires max_tokens to be set
 	maxTokens := p.config.MaxOutputTokens
@@ -725,14 +570,33 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		maxTokens = 4096 // Default
 	}
 
+	// BP3/BP4: Add cache_control to messages at fixed positions
+	// This ensures stable cache prefixes that don't change with every request
+	apiMessages = p.addMessageCacheBreakpoints(apiMessages)
+
 	reqBody := map[string]interface{}{
 		"model":      p.config.Model,
 		"messages":   apiMessages,
 		"max_tokens": maxTokens,
 	}
 
+	// BP2: Add cache_control to system message for prompt caching
 	if systemPrompt != "" {
-		reqBody["system"] = systemPrompt
+		if p.cacheBreakpointConfig.Enabled {
+			// Use array format with cache_control for proper caching
+			reqBody["system"] = []map[string]interface{}{
+				{
+					"type": "text",
+					"text": systemPrompt,
+					"cache_control": map[string]interface{}{
+						"type": "ephemeral",
+						"ttl":  "1h", // 1-hour TTL for stable system prompts
+					},
+				},
+			}
+		} else {
+			reqBody["system"] = systemPrompt
+		}
 	}
 	if len(apiTools) > 0 {
 		reqBody["tools"] = apiTools
@@ -761,6 +625,11 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", p.config.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	// Enable extended cache TTL beta feature (required for 1-hour cache TTL)
+	// Also enables computer-use and web-search beta features for compatibility
+	if p.cacheBreakpointConfig.Enabled {
+		req.Header.Set("anthropic-beta", "extended-cache-ttl-2025-04-11")
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -787,8 +656,10 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens             int `json:"input_tokens"`
+			OutputTokens            int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"` // Tokens written to cache
+			CacheReadInputTokens    int `json:"cache_read_input_tokens"`     // Tokens read from cache
 		} `json:"usage"`
 	}
 
@@ -833,11 +704,23 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		close(textChan)
 	}()
 
-	// Extract token usage from response
-	tokenUsage := p.extractTokenUsageFromAnthropicResponse(anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens)
+	// Extract token usage from response (including cache statistics)
+	tokenUsage := p.extractTokenUsageFromAnthropicResponse(
+		anthropicResp.Usage.InputTokens,
+		anthropicResp.Usage.OutputTokens,
+		anthropicResp.Usage.CacheCreationInputTokens,
+		anthropicResp.Usage.CacheReadInputTokens,
+	)
 	if tokenUsage != nil {
 		p.tokenLogger.LogUsage(tokenUsage)
 	}
+
+	// Log cache statistics for observability
+	p.logCacheStatistics(
+		anthropicResp.Usage.CacheCreationInputTokens,
+		anthropicResp.Usage.CacheReadInputTokens,
+		anthropicResp.Usage.InputTokens,
+	)
 
 	// Record metrics to metrics store
 	if tokenUsage != nil {
@@ -870,6 +753,82 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		StopReason:  anthropicResp.StopReason,
 		TokenUsage:  tokenUsage,
 	}, nil
+}
+
+// addMessageCacheBreakpoints adds cache_control to messages at FIXED positions (BP3/BP4).
+// This uses up to 2 of Anthropic's 4 breakpoint limit for conversation history caching.
+//
+// Strategy: Place breakpoints at fixed message indices (e.g., 10, 20, 30) rather than
+// relative positions (like "2nd-to-last"). Fixed positions maintain stable cache prefixes
+// that can be reused across requests, while relative positions would invalidate the cache
+// every time a new message is added.
+//
+// TTL ordering (Anthropic requirement): Earlier messages must have longer TTL.
+// - First breakpoint (later message, higher index) → 5m TTL
+// - Second breakpoint (earlier message, lower index) → 1h TTL
+func (p *anthropicProvider) addMessageCacheBreakpoints(messages []map[string]interface{}) []map[string]interface{} {
+	if !p.cacheBreakpointConfig.Enabled {
+		return messages
+	}
+
+	if len(messages) < p.cacheBreakpointConfig.MinMessagesForCaching {
+		return messages
+	}
+
+	// Find breakpoint positions from highest to lowest (most recent first)
+	// We only add up to 2 breakpoints (BP3 and BP4)
+	standardInterval := p.cacheBreakpointConfig.StandardInterval
+	maxBreakpoints := 2
+	breakpointsAdded := 0
+
+	for msgIdx := len(messages) - 1; msgIdx >= 0 && breakpointsAdded < maxBreakpoints; msgIdx-- {
+		// Check if this message is at a breakpoint interval (1-indexed position)
+		// Message at index 9 is position 10, index 19 is position 20, etc.
+		messagePosition := msgIdx + 1
+		if messagePosition%standardInterval != 0 {
+			continue
+		}
+
+		// Found a breakpoint position - add cache control
+		msg := messages[msgIdx]
+
+		// Determine TTL based on order found
+		// First breakpoint (later message) → shorter TTL (5m)
+		// Second breakpoint (earlier message) → longer TTL (1h)
+		ttl := "5m"
+		if breakpointsAdded > 0 {
+			ttl = "1h"
+		}
+
+		cacheControl := map[string]interface{}{
+			"type": "ephemeral",
+			"ttl":  ttl,
+		}
+
+		// Add cache_control to the message content
+		// Handle different content formats
+		if content, ok := msg["content"].(string); ok {
+			// Simple string content - convert to array with cache_control
+			messages[msgIdx]["content"] = []map[string]interface{}{
+				{
+					"type":          "text",
+					"text":          content,
+					"cache_control": cacheControl,
+				},
+			}
+		} else if contentBlocks, ok := msg["content"].([]map[string]interface{}); ok && len(contentBlocks) > 0 {
+			// Array of content blocks - add cache_control to the last block
+			lastIdx := len(contentBlocks) - 1
+			contentBlocks[lastIdx]["cache_control"] = cacheControl
+			messages[msgIdx]["content"] = contentBlocks
+		}
+
+		breakpointsAdded++
+		fmt.Printf("[CACHE] Added BP%d cache breakpoint at message %d (TTL: %s)\n",
+			breakpointsAdded+2, messagePosition, ttl) // BP3 or BP4
+	}
+
+	return messages
 }
 
 // customProvider is a placeholder for custom HTTP endpoint providers
@@ -912,7 +871,7 @@ func (p *customProvider) SupportsTools() bool {
 }
 
 // StreamChatWithTools is not supported for custom provider
-func (p *customProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []llms.Tool) (*ToolResponse, error) {
+func (p *customProvider) StreamChatWithTools(ctx context.Context, messages []Message, tools []Tool) (*ToolResponse, error) {
 	return nil, fmt.Errorf("tool calling not supported for custom provider")
 }
 

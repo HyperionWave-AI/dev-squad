@@ -50,6 +50,16 @@ func (h *ReflectionToolHandler) RegisterReflectionTools(server *mcp.Server) erro
 		return fmt.Errorf("failed to register reflection_query_relevant_lessons tool: %w", err)
 	}
 
+	// Register reflection_report_feedback tool
+	if err := h.registerReportFeedback(server); err != nil {
+		return fmt.Errorf("failed to register reflection_report_feedback tool: %w", err)
+	}
+
+	// Register reflection_get_feedback_stats tool
+	if err := h.registerGetFeedbackStats(server); err != nil {
+		return fmt.Errorf("failed to register reflection_get_feedback_stats tool: %w", err)
+	}
+
 	return nil
 }
 
@@ -667,4 +677,297 @@ func (h *ReflectionToolHandler) handleQueryRelevantLessons(args map[string]inter
 		"lessons":      lessonsData,
 		"situation":    situation,
 	}, nil
+}
+
+// registerReportFeedback registers the reflection_report_feedback tool
+func (h *ReflectionToolHandler) registerReportFeedback(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "reflection_report_feedback",
+		Description: "Quick feedback on agent actions - report issues, successes, or suggestions. Use this to track what works and what doesn't for automatic agent tuning.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"feedbackType": {
+					Type:        "string",
+					Description: "Type of feedback: 'issue' (something went wrong), 'success' (something worked well), 'suggestion' (improvement idea)",
+					Enum:        []interface{}{"issue", "success", "suggestion"},
+				},
+				"category": {
+					Type:        "string",
+					Description: "Category for aggregation: 'tool_usage', 'context_missing', 'wrong_approach', 'great_result', 'prompt_issue', 'performance', 'other'",
+					Enum:        []interface{}{"tool_usage", "context_missing", "wrong_approach", "great_result", "prompt_issue", "performance", "other"},
+				},
+				"summary": {
+					Type:        "string",
+					Description: "Brief description of the feedback (max 500 chars)",
+				},
+				"details": {
+					Type:        "string",
+					Description: "Optional detailed context or explanation",
+				},
+				"agentType": {
+					Type:        "string",
+					Description: "Which agent reported this (e.g., 'go-dev', 'ui-dev', 'sre', 'Explore', 'Plan')",
+				},
+				"toolInvolved": {
+					Type:        "string",
+					Description: "Optional: specific tool that worked/failed",
+				},
+				"severity": {
+					Type:        "number",
+					Description: "Severity level (1-5): 1=minor, 2=low, 3=medium, 4=high, 5=critical. Default is 3.",
+				},
+				"recommendation": {
+					Type:        "string",
+					Description: "Optional: recommended action or fix",
+				},
+			},
+			Required: []string{"feedbackType", "category", "summary", "agentType"},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleReportFeedback(args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleReportFeedback handles the reflection_report_feedback tool call
+func (h *ReflectionToolHandler) handleReportFeedback(args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	// Extract required fields
+	feedbackType, ok := args["feedbackType"].(string)
+	if !ok || feedbackType == "" {
+		return createErrorResult("feedbackType parameter is required"), nil, nil
+	}
+
+	category, ok := args["category"].(string)
+	if !ok || category == "" {
+		return createErrorResult("category parameter is required"), nil, nil
+	}
+
+	summary, ok := args["summary"].(string)
+	if !ok || summary == "" {
+		return createErrorResult("summary parameter is required"), nil, nil
+	}
+
+	agentType, ok := args["agentType"].(string)
+	if !ok || agentType == "" {
+		return createErrorResult("agentType parameter is required"), nil, nil
+	}
+
+	// Extract optional fields
+	details, _ := args["details"].(string)
+	toolInvolved, _ := args["toolInvolved"].(string)
+	recommendation, _ := args["recommendation"].(string)
+
+	// Extract severity (default 3=medium)
+	severity := 3.0
+	if sev, ok := args["severity"].(float64); ok {
+		severity = sev
+	}
+
+	// Build tags for searchability
+	tags := []string{"feedback", feedbackType, category, agentType}
+	if toolInvolved != "" {
+		tags = append(tags, "tool:"+toolInvolved)
+	}
+
+	// Create feedback reflection
+	feedback := &storage.Reflection{
+		Type:      "feedback",
+		Timestamp: time.Now().UTC(),
+		Data: map[string]interface{}{
+			"feedbackType":   feedbackType,
+			"category":       category,
+			"summary":        summary,
+			"details":        details,
+			"agentType":      agentType,
+			"toolInvolved":   toolInvolved,
+			"severity":       severity,
+			"recommendation": recommendation,
+		},
+		Confidence: severity / 5.0, // Normalize severity to 0-1 range for consistency
+		Tags:       tags,
+	}
+
+	// Store in MongoDB
+	feedbackId, err := h.reflectionStorage.StoreReflection(feedback)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to store feedback: %s", err.Error())), nil, nil
+	}
+
+	// Build result message
+	emoji := "📝"
+	switch feedbackType {
+	case "issue":
+		emoji = "⚠️"
+	case "success":
+		emoji = "✅"
+	case "suggestion":
+		emoji = "💡"
+	}
+
+	resultText := fmt.Sprintf(`%s Feedback recorded
+
+**ID:** %s
+**Type:** %s
+**Category:** %s
+**Agent:** %s
+**Severity:** %.0f/5
+**Summary:** %s
+
+This feedback will be aggregated for agent tuning analysis.`,
+		emoji, feedbackId, feedbackType, category, agentType, severity, summary)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultText},
+		},
+	}, map[string]interface{}{
+		"feedbackId":   feedbackId,
+		"feedbackType": feedbackType,
+		"category":     category,
+		"agentType":    agentType,
+		"stored":       true,
+	}, nil
+}
+
+// registerGetFeedbackStats registers the reflection_get_feedback_stats tool
+func (h *ReflectionToolHandler) registerGetFeedbackStats(server *mcp.Server) error {
+	tool := &mcp.Tool{
+		Name:        "reflection_get_feedback_stats",
+		Description: "Get aggregated feedback statistics for agent tuning analysis. View patterns by agent, category, or time period to identify improvement opportunities.",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"groupBy": {
+					Type:        "string",
+					Description: "How to group results: 'agent' (by agent type), 'category' (by feedback category), 'type' (by issue/success/suggestion)",
+					Enum:        []interface{}{"agent", "category", "type"},
+				},
+				"filterAgent": {
+					Type:        "string",
+					Description: "Optional: filter to specific agent type",
+				},
+				"filterCategory": {
+					Type:        "string",
+					Description: "Optional: filter to specific category",
+				},
+				"filterType": {
+					Type:        "string",
+					Description: "Optional: filter to 'issue', 'success', or 'suggestion'",
+				},
+				"days": {
+					Type:        "number",
+					Description: "Time period in days (default: 30)",
+				},
+				"limit": {
+					Type:        "number",
+					Description: "Max results to return (default: 20)",
+				},
+			},
+			Required: []string{},
+		},
+	}
+
+	server.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := extractArguments(req)
+		if err != nil {
+			return createErrorResult(fmt.Sprintf("failed to extract arguments: %s", err.Error())), nil
+		}
+		result, _, err := h.handleGetFeedbackStats(args)
+		return result, err
+	})
+
+	return nil
+}
+
+// handleGetFeedbackStats handles the reflection_get_feedback_stats tool call
+func (h *ReflectionToolHandler) handleGetFeedbackStats(args map[string]interface{}) (*mcp.CallToolResult, interface{}, error) {
+	// Extract optional parameters
+	groupBy, _ := args["groupBy"].(string)
+	if groupBy == "" {
+		groupBy = "agent" // default
+	}
+
+	filterAgent, _ := args["filterAgent"].(string)
+	filterCategory, _ := args["filterCategory"].(string)
+	filterType, _ := args["filterType"].(string)
+
+	days := 30.0
+	if d, ok := args["days"].(float64); ok {
+		days = d
+	}
+
+	limit := 20
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	// Get feedback stats from storage
+	stats, err := h.reflectionStorage.GetFeedbackStats(groupBy, filterAgent, filterCategory, filterType, int(days), limit)
+	if err != nil {
+		return createErrorResult(fmt.Sprintf("Failed to get feedback stats: %s", err.Error())), nil, nil
+	}
+
+	// Format results
+	var resultText string
+	resultText = fmt.Sprintf("📊 **Feedback Statistics** (Last %d days)\n\n", int(days))
+
+	if len(stats.Groups) == 0 {
+		resultText += "No feedback data found for the specified filters.\n"
+	} else {
+		resultText += fmt.Sprintf("**Total Feedback:** %d\n", stats.TotalCount)
+		resultText += fmt.Sprintf("**Issues:** %d | **Successes:** %d | **Suggestions:** %d\n\n",
+			stats.IssueCount, stats.SuccessCount, stats.SuggestionCount)
+
+		resultText += fmt.Sprintf("### Grouped by %s:\n\n", groupBy)
+
+		for _, group := range stats.Groups {
+			emoji := "📋"
+			if group.IssueCount > group.SuccessCount {
+				emoji = "⚠️"
+			} else if group.SuccessCount > group.IssueCount {
+				emoji = "✅"
+			}
+
+			resultText += fmt.Sprintf("%s **%s** (%d total)\n", emoji, group.Name, group.Count)
+			resultText += fmt.Sprintf("   Issues: %d | Successes: %d | Suggestions: %d\n",
+				group.IssueCount, group.SuccessCount, group.SuggestionCount)
+
+			if group.AvgSeverity > 0 {
+				resultText += fmt.Sprintf("   Avg Severity: %.1f/5\n", group.AvgSeverity)
+			}
+
+			// Show top issues if any
+			if len(group.TopIssues) > 0 {
+				resultText += "   Top Issues:\n"
+				for _, issue := range group.TopIssues {
+					resultText += fmt.Sprintf("   - %s\n", issue)
+				}
+			}
+
+			resultText += "\n"
+		}
+
+		// Add recommendations
+		if len(stats.Recommendations) > 0 {
+			resultText += "### 💡 Recommended Actions:\n\n"
+			for i, rec := range stats.Recommendations {
+				resultText += fmt.Sprintf("%d. %s\n", i+1, rec)
+			}
+		}
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: resultText},
+		},
+	}, stats, nil
 }
