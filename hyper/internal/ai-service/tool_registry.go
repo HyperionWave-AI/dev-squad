@@ -2,14 +2,11 @@ package aiservice
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/tmc/langchaingo/llms"
 )
 
 // ToolExecutor defines the interface for tools that can be called by AI
@@ -160,46 +157,45 @@ func (r *ToolRegistry) ExecuteToolCall(ctx context.Context, toolCall ToolCall) T
 	return result
 }
 
-// GetToolsForLangChain converts registered tools to LangChain Go format
-// This is used to pass tools to LLM providers via llms.WithTools()
-func (r *ToolRegistry) GetToolsForLangChain() []llms.Tool {
+// GetTools converts registered tools to the native Tool format
+// This is used to pass tools to LLM providers
+func (r *ToolRegistry) GetTools() []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return r.getToolsForLangChainUnlocked()
+	return r.getToolsUnlocked()
 }
 
-// getToolsForLangChainUnlocked is an internal helper that assumes the lock is already held
-func (r *ToolRegistry) getToolsForLangChainUnlocked() []llms.Tool {
-	tools := make([]llms.Tool, 0, len(r.tools))
+// getToolsUnlocked is an internal helper that assumes the lock is already held
+func (r *ToolRegistry) getToolsUnlocked() []Tool {
+	tools := make([]Tool, 0, len(r.tools))
 
 	for _, tool := range r.tools {
-		// Convert to LangChain format
-		langChainTool := llms.Tool{
+		nativeTool := Tool{
 			Type: "function",
-			Function: &llms.FunctionDefinition{
+			Function: &FunctionDefinition{
 				Name:        tool.Name(),
 				Description: tool.Description(),
 				Parameters:  tool.InputSchema(),
 			},
 		}
-		tools = append(tools, langChainTool)
+		tools = append(tools, nativeTool)
 	}
 
 	return tools
 }
 
-// GetFilteredToolsForLangChain converts only specified tools to LangChain Go format
+// GetFilteredTools converts only specified tools to the native Tool format
 // This is used to restrict which tools are available to subagents or other contexts
 // allowedNames: list of tool names to include (e.g., []string{"read_file", "write_file"})
 // If allowedNames is nil, returns ALL tools (coordinator mode with full access)
-func (r *ToolRegistry) GetFilteredToolsForLangChain(allowedNames []string) []llms.Tool {
+func (r *ToolRegistry) GetFilteredTools(allowedNames []string) []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	// If allowedNames is nil, return ALL tools (coordinator mode)
 	if allowedNames == nil {
-		return r.getToolsForLangChainUnlocked()
+		return r.getToolsUnlocked()
 	}
 
 	// Create a set for O(1) lookup
@@ -208,57 +204,36 @@ func (r *ToolRegistry) GetFilteredToolsForLangChain(allowedNames []string) []llm
 		allowedSet[name] = true
 	}
 
-	tools := make([]llms.Tool, 0, len(allowedNames))
+	tools := make([]Tool, 0, len(allowedNames))
 
 	for name, tool := range r.tools {
 		// Only include if in allowed list
 		if allowedSet[name] {
-			langChainTool := llms.Tool{
+			nativeTool := Tool{
 				Type: "function",
-				Function: &llms.FunctionDefinition{
+				Function: &FunctionDefinition{
 					Name:        tool.Name(),
 					Description: tool.Description(),
 					Parameters:  tool.InputSchema(),
 				},
 			}
-			tools = append(tools, langChainTool)
+			tools = append(tools, nativeTool)
 		}
 	}
 
 	return tools
 }
 
-// ParseToolCallsFromResponse extracts tool calls from LangChain response
-// This handles the LangChain AIChatMessage format
-func ParseToolCallsFromResponse(msg llms.ChatMessage) ([]ToolCall, error) {
-	aiMsg, ok := msg.(*llms.AIChatMessage)
-	if !ok {
-		return nil, fmt.Errorf("expected AIChatMessage, got %T", msg)
-	}
+// GetToolsForLangChain is a backwards-compatible alias for GetTools
+// Deprecated: Use GetTools instead
+func (r *ToolRegistry) GetToolsForLangChain() []Tool {
+	return r.GetTools()
+}
 
-	// If no tool calls, return empty slice
-	if len(aiMsg.ToolCalls) == 0 {
-		return []ToolCall{}, nil
-	}
-
-	var toolCalls []ToolCall
-	for _, tc := range aiMsg.ToolCalls {
-		// Parse arguments from JSON string to map
-		var args map[string]interface{}
-		if tc.FunctionCall != nil && tc.FunctionCall.Arguments != "" {
-			if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err != nil {
-				return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
-			}
-		}
-
-		toolCalls = append(toolCalls, ToolCall{
-			ID:   tc.ID,
-			Name: tc.FunctionCall.Name,
-			Args: args,
-		})
-	}
-
-	return toolCalls, nil
+// GetFilteredToolsForLangChain is a backwards-compatible alias for GetFilteredTools
+// Deprecated: Use GetFilteredTools instead
+func (r *ToolRegistry) GetFilteredToolsForLangChain(allowedNames []string) []Tool {
+	return r.GetFilteredTools(allowedNames)
 }
 
 // isValidToolName checks if a tool name follows lowercase_snake_case convention

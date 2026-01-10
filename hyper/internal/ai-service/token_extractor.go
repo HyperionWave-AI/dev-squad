@@ -9,12 +9,14 @@ import (
 
 // TokenUsage represents token consumption for a single API call
 type TokenUsage struct {
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	TotalTokens      int       `json:"total_tokens"`
-	Provider         string    `json:"provider"` // "openai", "anthropic", "groq", etc.
-	Model            string    `json:"model"`
-	Timestamp        time.Time `json:"timestamp"`
+	PromptTokens         int       `json:"prompt_tokens"`
+	CompletionTokens     int       `json:"completion_tokens"`
+	TotalTokens          int       `json:"total_tokens"`
+	CacheCreationTokens  int       `json:"cache_creation_tokens,omitempty"`  // Tokens written to cache (Anthropic)
+	CacheReadTokens      int       `json:"cache_read_tokens,omitempty"`      // Tokens read from cache (Anthropic)
+	Provider             string    `json:"provider"` // "openai", "anthropic", "groq", etc.
+	Model                string    `json:"model"`
+	Timestamp            time.Time `json:"timestamp"`
 }
 
 // TokenUsageLogger handles logging and storage of token usage metrics

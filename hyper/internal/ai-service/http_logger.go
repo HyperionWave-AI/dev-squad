@@ -153,3 +153,65 @@ func (l *HTTPLogger) LogLangChainResponse(provider string, response interface{},
 		fmt.Printf("[HTTP Logger] ✓ Logged LangChain response to %s\n", filename)
 	}
 }
+
+// LogOpenAIRequest logs an OpenAI API request with messages and tools
+func (l *HTTPLogger) LogOpenAIRequest(provider string, messages []map[string]interface{}, tools []map[string]interface{}, options map[string]interface{}) {
+	if !l.enabled {
+		return
+	}
+
+	num := l.counter.Add(1)
+	filename := filepath.Join(l.logDir, fmt.Sprintf("%d.req.json", num))
+
+	request := map[string]interface{}{
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"provider":  provider,
+		"messages":  messages,
+		"tools":     tools,
+		"options":   options,
+	}
+
+	data, err := json.MarshalIndent(request, "", "  ")
+	if err != nil {
+		fmt.Printf("[HTTP Logger] Warning: Failed to marshal OpenAI request: %v\n", err)
+		return
+	}
+
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		fmt.Printf("[HTTP Logger] Warning: Failed to write request file %s: %v\n", filename, err)
+	} else {
+		fmt.Printf("[HTTP Logger] ✓ Logged OpenAI request to %s\n", filename)
+	}
+}
+
+// LogOpenAIResponse logs an OpenAI API response
+func (l *HTTPLogger) LogOpenAIResponse(provider string, response interface{}, err error) {
+	if !l.enabled {
+		return
+	}
+
+	num := l.counter.Load()
+	filename := filepath.Join(l.logDir, fmt.Sprintf("%d.res.json", num))
+
+	result := map[string]interface{}{
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"provider":  provider,
+		"response":  response,
+	}
+
+	if err != nil {
+		result["error"] = err.Error()
+	}
+
+	data, jsonErr := json.MarshalIndent(result, "", "  ")
+	if jsonErr != nil {
+		fmt.Printf("[HTTP Logger] Warning: Failed to marshal OpenAI response: %v\n", jsonErr)
+		return
+	}
+
+	if writeErr := os.WriteFile(filename, data, 0644); writeErr != nil {
+		fmt.Printf("[HTTP Logger] Warning: Failed to write response file %s: %v\n", filename, writeErr)
+	} else {
+		fmt.Printf("[HTTP Logger] ✓ Logged OpenAI response to %s\n", filename)
+	}
+}
