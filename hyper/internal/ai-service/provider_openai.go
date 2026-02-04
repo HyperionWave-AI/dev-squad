@@ -226,38 +226,61 @@ func (p *openAIProvider) StreamChatWithTools(ctx context.Context, messages []Mes
 }
 
 // convertMessagesToOpenAI converts internal Message format to OpenAI SDK format
+// CRITICAL: Groups consecutive tool_call messages into a single assistant message
+// The OpenAI API requires all tool calls from one AI turn to be in ONE assistant message
 func (p *openAIProvider) convertMessagesToOpenAI(messages []Message) []openai.ChatCompletionMessageParamUnion {
 	result := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
 
-	for _, msg := range messages {
+	// First pass: collect consecutive tool_calls into groups
+	i := 0
+	for i < len(messages) {
+		msg := messages[i]
+
 		switch msg.Role {
 		case "system":
 			result = append(result, openai.SystemMessage(msg.Content))
+			i++
 
 		case "user":
 			result = append(result, openai.UserMessage(msg.Content))
+			i++
 
 		case "assistant":
 			result = append(result, openai.AssistantMessage(msg.Content))
+			i++
 
 		case "tool_call":
-			// Assistant message with tool calls
-			if msg.ToolCall != nil {
-				argsJSON, _ := json.Marshal(msg.ToolCall.Args)
-				assistantMsg := openai.ChatCompletionAssistantMessageParam{
-					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
-						{
-							ID: msg.ToolCall.ID,
-							Function: openai.ChatCompletionMessageToolCallFunctionParam{
-								Name:      msg.ToolCall.Name,
-								Arguments: string(argsJSON),
-							},
+			// Collect ALL consecutive tool_call messages into ONE assistant message
+			// This is CRITICAL for OpenAI API compliance
+			var toolCalls []openai.ChatCompletionMessageToolCallParam
+			var content string
+
+			for i < len(messages) && messages[i].Role == "tool_call" {
+				tc := messages[i]
+				if tc.ToolCall != nil {
+					argsJSON, _ := json.Marshal(tc.ToolCall.Args)
+					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
+						ID: tc.ToolCall.ID,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      tc.ToolCall.Name,
+							Arguments: string(argsJSON),
 						},
-					},
+					})
+					// Use content from first tool_call message
+					if content == "" && tc.Content != "" {
+						content = tc.Content
+					}
 				}
-				if msg.Content != "" {
+				i++
+			}
+
+			if len(toolCalls) > 0 {
+				assistantMsg := openai.ChatCompletionAssistantMessageParam{
+					ToolCalls: toolCalls,
+				}
+				if content != "" {
 					assistantMsg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
-						OfString: openai.String(msg.Content),
+						OfString: openai.String(content),
 					}
 				}
 				result = append(result, openai.ChatCompletionMessageParamUnion{
@@ -282,6 +305,11 @@ func (p *openAIProvider) convertMessagesToOpenAI(messages []Message) []openai.Ch
 				}
 				result = append(result, openai.ToolMessage(content, msg.ToolResult.ID))
 			}
+			i++
+
+		default:
+			// Skip unknown roles
+			i++
 		}
 	}
 
@@ -362,35 +390,53 @@ func (p *openAIProvider) mapStopReason(finishReason string) string {
 }
 
 // buildOpenAIMessagesForLogging converts messages to a format suitable for logging
+// CRITICAL: Groups consecutive tool_call messages to match actual API request format
 func (p *openAIProvider) buildOpenAIMessagesForLogging(messages []Message) []map[string]interface{} {
 	apiMessages := make([]map[string]interface{}, 0, len(messages))
 
-	for _, msg := range messages {
+	i := 0
+	for i < len(messages) {
+		msg := messages[i]
+
 		switch msg.Role {
 		case "system", "user", "assistant":
 			apiMessages = append(apiMessages, map[string]interface{}{
 				"role":    msg.Role,
 				"content": msg.Content,
 			})
+			i++
 
 		case "tool_call":
-			if msg.ToolCall != nil {
-				argsJSON, _ := json.Marshal(msg.ToolCall.Args)
-				toolCallMsg := map[string]interface{}{
-					"role": "assistant",
-					"tool_calls": []map[string]interface{}{
-						{
-							"id":   msg.ToolCall.ID,
-							"type": "function",
-							"function": map[string]interface{}{
-								"name":      msg.ToolCall.Name,
-								"arguments": string(argsJSON),
-							},
+			// Collect ALL consecutive tool_call messages into ONE assistant message
+			var toolCalls []map[string]interface{}
+			var content string
+
+			for i < len(messages) && messages[i].Role == "tool_call" {
+				tc := messages[i]
+				if tc.ToolCall != nil {
+					argsJSON, _ := json.Marshal(tc.ToolCall.Args)
+					toolCalls = append(toolCalls, map[string]interface{}{
+						"id":   tc.ToolCall.ID,
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":      tc.ToolCall.Name,
+							"arguments": string(argsJSON),
 						},
-					},
+					})
+					if content == "" && tc.Content != "" {
+						content = tc.Content
+					}
 				}
-				if msg.Content != "" {
-					toolCallMsg["content"] = msg.Content
+				i++
+			}
+
+			if len(toolCalls) > 0 {
+				toolCallMsg := map[string]interface{}{
+					"role":       "assistant",
+					"tool_calls": toolCalls,
+				}
+				if content != "" {
+					toolCallMsg["content"] = content
 				}
 				apiMessages = append(apiMessages, toolCallMsg)
 			}
@@ -415,6 +461,10 @@ func (p *openAIProvider) buildOpenAIMessagesForLogging(messages []Message) []map
 					"content":      content,
 				})
 			}
+			i++
+
+		default:
+			i++
 		}
 	}
 

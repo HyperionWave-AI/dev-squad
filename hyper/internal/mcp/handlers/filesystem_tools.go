@@ -114,12 +114,46 @@ func (h *FilesystemToolHandler) validatePath(path string) (string, error) {
 }
 
 // sanitizeCommand performs basic command sanitization to prevent command injection
+// Security settings can be configured via environment variables:
+//   - BASH_ALLOW_CHAINING: allow && and || (default: false)
+//   - BASH_ALLOW_PIPING: allow | (default: false)
+//   - BASH_ALLOW_SUBSTITUTION: allow $, `, (, ) (default: false)
 func (h *FilesystemToolHandler) sanitizeCommand(cmd string) (string, error) {
-	// Check for dangerous patterns
-	dangerous := []string{";", "&&", "||", "|", "`", "$", "(", ")"}
-	for _, pattern := range dangerous {
-		if strings.Contains(cmd, pattern) {
-			return "", fmt.Errorf("command contains potentially dangerous pattern: %s", pattern)
+	// Check config for allowed patterns
+	allowChaining := os.Getenv("BASH_ALLOW_CHAINING") == "true"
+	allowPiping := os.Getenv("BASH_ALLOW_PIPING") == "true"
+	allowSubstitution := os.Getenv("BASH_ALLOW_SUBSTITUTION") == "true"
+
+	// Semicolon is always dangerous (allows arbitrary command injection)
+	if strings.Contains(cmd, ";") {
+		return "", fmt.Errorf("command contains potentially dangerous pattern: ;")
+	}
+
+	// Command chaining operators (check before piping to avoid || matching |)
+	if !allowChaining {
+		if strings.Contains(cmd, "&&") {
+			return "", fmt.Errorf("command contains potentially dangerous pattern: &&")
+		}
+		if strings.Contains(cmd, "||") {
+			return "", fmt.Errorf("command contains potentially dangerous pattern: ||")
+		}
+	}
+
+	// Piping - need to check for single | that is not part of ||
+	if !allowPiping {
+		// Replace || with placeholder to avoid false positives
+		cmdWithoutOr := strings.ReplaceAll(cmd, "||", "__OR__")
+		if strings.Contains(cmdWithoutOr, "|") {
+			return "", fmt.Errorf("command contains potentially dangerous pattern: |")
+		}
+	}
+
+	// Command substitution
+	if !allowSubstitution {
+		for _, pattern := range []string{"`", "$", "(", ")"} {
+			if strings.Contains(cmd, pattern) {
+				return "", fmt.Errorf("command contains potentially dangerous pattern: %s", pattern)
+			}
 		}
 	}
 

@@ -1379,6 +1379,17 @@ func (h *RESTAPIHandler) SearchCode(c *gin.Context) {
 		if filePath, ok := hit.Payload["filePath"].(string); ok {
 			result.FilePath = filePath
 		}
+
+		// FILTER: Skip archived/deprecated files and tmp directories
+		if strings.Contains(result.FilePath, "/.archived/") || strings.Contains(result.FilePath, "/.archive/") || strings.Contains(result.FilePath, "/tmp/") {
+			continue
+		}
+
+		// FILTER: Skip files not matching folderPath filter
+		if req.FolderPath != "" && !strings.HasPrefix(result.FilePath, req.FolderPath) {
+			continue
+		}
+
 		if relativePath, ok := hit.Payload["relativePath"].(string); ok {
 			result.RelativePath = relativePath
 		}

@@ -70,6 +70,11 @@ func TestSanitizeCommand(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	handler := NewFilesystemToolHandler(logger, nil)
 
+	// Ensure env vars are unset to test default (restrictive) behavior
+	os.Unsetenv("BASH_ALLOW_CHAINING")
+	os.Unsetenv("BASH_ALLOW_PIPING")
+	os.Unsetenv("BASH_ALLOW_SUBSTITUTION")
+
 	tests := []struct {
 		name      string
 		command   string
@@ -114,6 +119,57 @@ func TestSanitizeCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSanitizeCommandWithConfig(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	handler := NewFilesystemToolHandler(logger, nil)
+
+	t.Run("allow chaining when configured", func(t *testing.T) {
+		os.Setenv("BASH_ALLOW_CHAINING", "true")
+		defer os.Unsetenv("BASH_ALLOW_CHAINING")
+
+		_, err := handler.sanitizeCommand("pwd && ls -la")
+		assert.NoError(t, err)
+
+		_, err = handler.sanitizeCommand("test -f file || echo not found")
+		assert.NoError(t, err)
+	})
+
+	t.Run("allow piping when configured", func(t *testing.T) {
+		os.Setenv("BASH_ALLOW_PIPING", "true")
+		defer os.Unsetenv("BASH_ALLOW_PIPING")
+
+		_, err := handler.sanitizeCommand("cat file | grep pattern")
+		assert.NoError(t, err)
+	})
+
+	t.Run("allow substitution when configured", func(t *testing.T) {
+		os.Setenv("BASH_ALLOW_SUBSTITUTION", "true")
+		defer os.Unsetenv("BASH_ALLOW_SUBSTITUTION")
+
+		_, err := handler.sanitizeCommand("echo $HOME")
+		assert.NoError(t, err)
+
+		_, err = handler.sanitizeCommand("echo $(pwd)")
+		assert.NoError(t, err)
+	})
+
+	t.Run("semicolon always blocked", func(t *testing.T) {
+		// Even with all permissions enabled, semicolon should be blocked
+		os.Setenv("BASH_ALLOW_CHAINING", "true")
+		os.Setenv("BASH_ALLOW_PIPING", "true")
+		os.Setenv("BASH_ALLOW_SUBSTITUTION", "true")
+		defer func() {
+			os.Unsetenv("BASH_ALLOW_CHAINING")
+			os.Unsetenv("BASH_ALLOW_PIPING")
+			os.Unsetenv("BASH_ALLOW_SUBSTITUTION")
+		}()
+
+		_, err := handler.sanitizeCommand("echo hello; rm -rf /")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "dangerous pattern")
+	})
 }
 
 func TestHandleFileReadWrite(t *testing.T) {

@@ -304,8 +304,8 @@ func (h *CodeToolsHandler) handleScan(ctx context.Context, args map[string]inter
 				continue
 			}
 
-			// Create Qdrant point
-			pointID := fmt.Sprintf("%s_%d", scannedFile.ID, chunk.ChunkNum)
+			// Create Qdrant point with deterministic UUID (Qdrant requires UUID or integer, not string)
+			pointID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%s_chunk_%d", scannedFile.ID, chunk.ChunkNum))).String()
 			chunk.VectorID = pointID
 
 			point := storage.CodeIndexPoint{

@@ -392,6 +392,12 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 		zap.String("projectRoot", projectRoot),
 		zap.String("query", query))
 
+	// Parse optional folderPath filter
+	var folderPathFilter string
+	if fp, ok := input["folderPath"].(string); ok && fp != "" {
+		folderPathFilter = fp
+	}
+
 	// Parse structural filter parameters
 	var structuralFilter storage.StructuralFilter
 	var hasStructuralFilters bool
@@ -545,10 +551,15 @@ func (t *CodeIndexSearchTool) Execute(ctx context.Context, input map[string]inte
 			filePath = fp
 		}
 
-		// FILTER: Skip archived/deprecated files
-		if strings.Contains(filePath, "/.archived/") || strings.Contains(filePath, "/.archive/") {
+		// FILTER: Skip archived/deprecated files and tmp directories
+		if strings.Contains(filePath, "/.archived/") || strings.Contains(filePath, "/.archive/") || strings.Contains(filePath, "/tmp/") {
 			t.logger.Debug("Skipping archived file from code search results",
 				zap.String("filePath", filePath))
+			continue
+		}
+
+		// FILTER: Skip files not matching folderPath filter
+		if folderPathFilter != "" && !strings.HasPrefix(filePath, folderPathFilter) {
 			continue
 		}
 

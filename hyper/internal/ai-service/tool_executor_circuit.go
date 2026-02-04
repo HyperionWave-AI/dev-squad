@@ -55,16 +55,17 @@ func NewCircuitBreaker(model, provider string) *CircuitBreaker {
 		}
 		log.Printf("[Circuit Breaker] Using Claude-optimized thresholds (more lenient)")
 	} else {
-		// GPT thresholds: More conservative
+		// GPT/DeepSeek thresholds: More lenient for capable models
 		cb.thresholds = map[string]int{
-			"read_file":         2, // Stop after 2 attempts (only 1 duplicate allowed)
-			"write_file":        1, // Never allow duplicate writes
-			"list_directory":    2, // Stop after 2 attempts
-			"bash":              3, // Allow more for command variations
-			"code_index_search": 3, // Allow query refinement
-			// Default for other tools: 4 attempts (see GetThreshold)
+			"read_file":         10, // Allow reading multiple files
+			"write_file":        5,  // Allow retries for writes
+			"list_directory":    10, // Allow exploring directories
+			"bash":              15, // Allow command variations
+			"code_index_search": 10, // Allow query refinement
+			"create_agent_task": 10, // Allow retries for parameter refinement
+			// Default for other tools: 15 attempts (see GetThreshold)
 		}
-		log.Printf("[Circuit Breaker] Using GPT thresholds (conservative)")
+		log.Printf("[Circuit Breaker] Using GPT thresholds (lenient)")
 	}
 
 	return cb
@@ -79,7 +80,7 @@ func (cb *CircuitBreaker) GetThreshold(toolName string) int {
 	if cb.isClaudeModel {
 		return 6
 	}
-	return 4
+	return 15 // Higher default for GPT/DeepSeek models
 }
 
 // GenerateSignature creates a unique signature for a tool call with its arguments.
