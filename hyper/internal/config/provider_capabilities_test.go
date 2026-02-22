@@ -163,10 +163,10 @@ func TestCalculateRemainingContext(t *testing.T) {
 	caps := DefaultProviderCapabilities() // 100k context, 8k reserved
 
 	tests := []struct {
-		systemBytes   int
-		messageBytes  int
-		expected      int
-		name          string
+		systemBytes  int
+		messageBytes int
+		expected     int
+		name         string
 	}{
 		{
 			systemBytes:  3500,  // ~1000 tokens
@@ -249,5 +249,35 @@ func TestProviderCapabilities_ProviderAgnostic(t *testing.T) {
 		if caps.SafeToolResultBytes <= 0 {
 			t.Errorf("%s/%s: SafeToolResultBytes should be positive, got %d", p.name, p.model, caps.SafeToolResultBytes)
 		}
+	}
+}
+
+func TestGetProviderCapabilities_ModelOverridesCoverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		wantMax  int
+	}{
+		{name: "gpt4 turbo preview", provider: "openai", model: "gpt-4-turbo-preview", wantMax: 128000},
+		{name: "gpt4 32k", provider: "openai", model: "gpt-4-32k", wantMax: 32768},
+		{name: "gpt3.5 turbo", provider: "openai", model: "gpt-3.5-turbo", wantMax: 16385},
+		{name: "gpt3.5 turbo 16k", provider: "openai", model: "gpt-3.5-turbo-16k", wantMax: 16385},
+		{name: "claude 3 sonnet", provider: "anthropic", model: "claude-3-sonnet", wantMax: 200000},
+		{name: "claude 3 haiku", provider: "anthropic", model: "claude-3-haiku", wantMax: 200000},
+		{name: "claude 2", provider: "anthropic", model: "claude-2", wantMax: 100000},
+		{name: "claude 2.1", provider: "anthropic", model: "claude-2.1", wantMax: 100000},
+		{name: "gemini 1.5 pro", provider: "google", model: "gemini-1.5-pro", wantMax: 1000000},
+		{name: "llama 3 70b", provider: "llama", model: "llama-3-70b", wantMax: 8192},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			caps := GetProviderCapabilities(tc.provider, tc.model)
+			if caps.MaxContextTokens != tc.wantMax {
+				t.Fatalf("GetProviderCapabilities(%q, %q).MaxContextTokens = %d, want %d",
+					tc.provider, tc.model, caps.MaxContextTokens, tc.wantMax)
+			}
+		})
 	}
 }

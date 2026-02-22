@@ -10,7 +10,7 @@ Expose all 31 MCP tools from the Hyperion Coordinator to the Chat service via La
 ## Completed Work
 
 ### 1. Coordinator Tools ✅ COMPLETED
-**File:** `coordinator/ai-service/tools/mcp/coordinator_tools.go`
+**File:** `hyper/internal/ai-service/tools/mcp/coordinator_tools.go`
 
 Added 14 new tool wrappers (total 16 coordinator tools):
 - `UpsertKnowledgeTool` - Store knowledge in coordinator
@@ -38,7 +38,7 @@ Added 14 new tool wrappers (total 16 coordinator tools):
 **Total:** 16 coordinator tools registered
 
 ### 2. Code Index Tools ✅ COMPLETED
-**File:** `coordinator/ai-service/tools/mcp/code_index_tools.go`
+**File:** `hyper/internal/ai-service/tools/mcp/code_index_tools.go`
 
 Added 3 new tool wrappers (total 5 code index tools):
 - `CodeIndexScanTool` - Scan/rescan folder (guides to MCP endpoint)
@@ -54,7 +54,7 @@ Added 3 new tool wrappers (total 5 code index tools):
 **Total:** 5 code index tools registered
 
 ### 3. Qdrant Tools ✅ ALREADY EXISTS
-**File:** `coordinator/ai-service/tools/mcp/qdrant_tools.go`
+**File:** `hyper/internal/ai-service/tools/mcp/qdrant_tools.go`
 
 Already implemented (no changes needed):
 - `QdrantFindTool` - Semantic search in Qdrant
@@ -65,7 +65,7 @@ Already implemented (no changes needed):
 ## Remaining Work
 
 ### 4. Filesystem MCP Tools ⚠️ NOT IMPLEMENTED
-**File:** `coordinator/ai-service/tools/mcp/filesystem_mcp_tools.go` (needs creation)
+**File:** `hyper/internal/ai-service/tools/mcp/filesystem_mcp_tools.go` (needs creation)
 
 **Status:** Skipped for now - optional/complex
 
@@ -75,10 +75,10 @@ These tools would wrap the MCP server's filesystem handlers:
 - `FileWriteMCPTool` - Wrap `handlers.handleFileWrite`
 - `ApplyPatchMCPTool` - Wrap `handlers.handleApplyPatch`
 
-**Reason for skipping:** The task notes mentioned these are for consistency with direct MCP calls. The existing Phase 1 filesystem tools in `coordinator/ai-service/tools/` already provide this functionality to the chat service. Creating wrappers for MCP handlers would be redundant.
+**Reason for skipping:** The task notes mentioned these are for consistency with direct MCP calls. The existing Phase 1 filesystem tools in `hyper/internal/ai-service/tools/` already provide this functionality to the chat service. Creating wrappers for MCP handlers would be redundant.
 
 ### 5. Tools Discovery ⚠️ NOT IMPLEMENTED
-**File:** `coordinator/ai-service/tools/mcp/tools_discovery.go` (needs creation)
+**File:** `hyper/internal/ai-service/tools/mcp/tools_discovery.go` (needs creation)
 
 **Status:** Skipped - security concern
 
@@ -94,7 +94,7 @@ Meta-tools for discovering available tools:
 - Not critical for chat functionality
 
 ### 6. Tool Registry Integration ✅ COMPLETED
-**File:** `coordinator/ai-service/tool_registry.go`
+**File:** `hyper/internal/ai-service/tool_registry.go`
 
 **Status:** No changes needed - registry uses GetToolRegistry() pattern
 
@@ -104,7 +104,7 @@ Meta-tools for discovering available tools:
 - Registration functions called directly with registry and storage dependencies
 
 ### 7. ChatService Integration ✅ COMPLETED
-**File:** `coordinator/ai-service/langchain_service.go`
+**File:** `hyper/internal/ai-service/langchain_service.go`
 
 **Status:** No changes needed - service uses external registration pattern
 
@@ -125,7 +125,7 @@ mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage)
 **Benefit:** Cleaner separation of concerns - ChatService doesn't need storage dependencies
 
 ### 8. HTTP Server Integration ✅ COMPLETED
-**File:** `coordinator/internal/server/http_server.go`
+**File:** `hyper/internal/server/http_server.go`
 
 **Status:** All MCP tools registered successfully
 
@@ -202,11 +202,11 @@ The integration is now complete:
    - Check for "Chat service ready with MCP tools" with tool list
 
 ## Files Modified
-- ✅ `coordinator/ai-service/tools/mcp/coordinator_tools.go` (+704 lines) - 13 new tools
-- ✅ `coordinator/ai-service/tools/mcp/code_index_tools.go` (+148 lines) - 3 new tools
-- ✅ `coordinator/ai-service/tools/mcp/IMPLEMENTATION_STATUS.md` (created) - Full documentation
-- ✅ `coordinator/internal/server/http_server.go` (modified) - Tool registration + HTTP tools routes
-- ✅ `coordinator/internal/handlers/http_tools.go` (fixed) - Added missing context import
+- ✅ `hyper/internal/ai-service/tools/mcp/coordinator_tools.go` (+704 lines) - 13 new tools
+- ✅ `hyper/internal/ai-service/tools/mcp/code_index_tools.go` (+148 lines) - 3 new tools
+- ✅ `hyper/internal/ai-service/tools/mcp/IMPLEMENTATION_STATUS.md` (created) - Full documentation
+- ✅ `hyper/internal/server/http_server.go` (modified) - Tool registration + HTTP tools routes
+- ✅ `hyper/internal/handlers/http_tools.go` (fixed) - Added missing context import
 
 ## Testing Plan
 1. Start coordinator service

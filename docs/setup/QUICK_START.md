@@ -1,72 +1,101 @@
-# Quick Start - Hyperion Coordinator MCP
+# Quick Start - Local Ollama + Qwen Coder
 
-## Default Setup
+This is the fastest local setup for running Hyperion with:
+- Chat model: `qwen2.5-coder` via Ollama
+- Embeddings: `nomic-embed-text` via Ollama
+- Local storage: MongoDB + Qdrant (Docker)
 
-### 1. Start the services
+## Prerequisites
+
+- Docker + Docker Compose
+- `hyper` binary available (`hyper` in `PATH` or full path to `bin/hyper`)
+
+## 1) Initialize a local project
+
 ```bash
-docker-compose up -d
+mkdir -p ~/hyperion-local
+cd ~/hyperion-local
+hyper init -provider ollama
 ```
 
-### 2. Access the UI
-Open your browser to: **http://localhost:5173**
+This creates:
+- `docker-compose.yml`
+- `.env.hyper`
+- `litellm.config.yaml`
+- `HYPER_README.md`
 
-### 3. Verify it's working
+## 2) Start local services
+
 ```bash
-# Check health
-curl http://localhost:5173/bridge-health
-
-# List available MCP tools
-curl http://localhost:5173/api/mcp/tools
+docker compose up -d
+docker compose logs -f ollama-pull
 ```
 
-## If Ports Are Already in Use
+Wait until `ollama-pull` finishes and confirms the embedding model download.
 
-If you see errors like "port already in use", you can easily change to different ports:
+## 3) Pull Qwen Coder in Ollama
 
-### Quick Fix
+`hyper init` pulls the embedding model by default, but not the chat model.
+
 ```bash
-# 1. Copy the override template
-cp docker-compose.override.yml.example docker-compose.override.yml
-
-# 2. Edit docker-compose.override.yml and change the ports:
-#    - Change "9095:7095" to "YOUR_PORT:7095"
-#    - Change "9173:80" to "YOUR_PORT:80"
-
-# 3. Restart
-docker-compose down
-docker-compose up -d
-
-# 4. Access on new port
-# Open: http://localhost:YOUR_PORT
+docker exec hyper-ollama ollama pull qwen2.5-coder:7b
+docker exec hyper-ollama ollama list
 ```
 
-### Example
-If ports 5173 and 7095 are taken, use 9173 and 9095:
-```yaml
-# docker-compose.override.yml
-services:
-  hyperion-http-bridge:
-    ports:
-      - "9095:7095"
-  hyperion-ui:
-    ports:
-      - "9173:80"
+You can also use a larger model (example: `qwen2.5-coder:14b`) if your machine has enough RAM/VRAM.
+
+## 4) Configure `.env.hyper` for local Ollama chat
+
+Ensure these values are set in `.env.hyper`:
+
+```bash
+# Chat / agent model through Ollama's OpenAI-compatible endpoint
+AI_PROVIDER=openai
+OPENAI_BASE_URL=http://localhost:7335/v1
+OPENAI_API_KEY=ollama
+AI_MODEL=qwen2.5-coder:7b
+
+# Embeddings
+EMBEDDING=ollama
+OLLAMA_URL=http://localhost:7335
+OLLAMA_MODEL=nomic-embed-text
 ```
 
-Access at: **http://localhost:9173**
+## 5) Run Hyperion
 
-## No CORS Issues!
+```bash
+hyper --mode=http --config=.env.hyper
+```
 
-The nginx reverse proxy handles CORS at the edge with port-agnostic configuration:
-- ✅ Works with **ANY localhost port** (5173, 9173, 10173, etc.)
-- ✅ **No code changes needed** when changing ports
-- ✅ **Secure by default** - only allows localhost origins
-- ✅ **Automatic configuration** - nginx validates and reflects the origin
+## 6) Verify
 
-Change ports freely without worrying about CORS whitelists or rebuilding containers!
+```bash
+# Hyper health
+curl http://localhost:7095/api/v1/health
+
+# Ollama models
+curl http://localhost:7335/api/tags
+```
+
+Open UI at: **http://localhost:7095**
+
+## Optional: Native Ollama (no Docker Ollama)
+
+If you run Ollama directly on your machine (`http://localhost:11434`), use:
+
+```bash
+OPENAI_BASE_URL=http://localhost:11434/v1
+OLLAMA_URL=http://localhost:11434
+```
+
+## Troubleshooting
+
+- `model "... not found"`: run `docker exec hyper-ollama ollama pull qwen2.5-coder:7b`
+- `failed to connect to Ollama`: check `docker logs hyper-ollama`
+- Slow responses: use a smaller model (`qwen2.5-coder:7b`) and reduce concurrency
 
 ## More Information
 
-- **Full port configuration guide**: See [PORT_CONFIGURATION.md](PORT_CONFIGURATION.md)
-- **Architecture details**: See [DOCKER.md](DOCKER.md)
-- **MCP server docs**: See [coordinator/mcp-server/README.md](coordinator/mcp-server/README.md)
+- `docs/setup/HYPER_INIT_GUIDE.md`
+- `docs/setup/HYPER_INIT_WITH_PROVIDER.md`
+- `docs/guides/README-HYPER.md`

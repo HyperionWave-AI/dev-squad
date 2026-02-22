@@ -20,11 +20,12 @@ const dockerComposeTemplate = `version: '3.8'
 # Services:
 #   - MongoDB: Primary database (port 27017)
 #   - Qdrant: Vector database (ports 7333-7334)
+#   - LiteLLM: OpenAI-compatible AI gateway (port 4000)
 #   - Ollama: GPU-accelerated embeddings (port 7335)
 #
 # Usage:
 #   docker compose up -d              # Start all services
-#   docker compose logs -f ollama     # Watch Ollama model download
+#   docker compose logs -f litellm    # Watch LiteLLM gateway logs
 #   docker compose down               # Stop all services
 #   docker compose down -v            # Stop and remove data
 
@@ -69,6 +70,31 @@ services:
       - hyper-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ==========================================
+  # LiteLLM - OpenAI-Compatible AI Gateway
+  # ==========================================
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: hyper-litellm
+    ports:
+      - "4000:4000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+    volumes:
+      - ./litellm.config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    networks:
+      - hyper-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000', timeout=5)"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -234,9 +260,15 @@ CODE_INDEX_AUTO_RECREATE=false
 # ==========================================
 # AI CONFIGURATION (Optional - for Chat features)
 # ==========================================
-# AI_PROVIDER=anthropic
+# OpenAI SDK + LiteLLM gateway (default docker-compose setup)
+# AI_PROVIDER=openai
+# OPENAI_BASE_URL=http://localhost:4000/v1
+# OPENAI_API_KEY=dummy-key
+# AI_MODEL=gpt-4o-mini
+
+# To use Claude via LiteLLM, set Anthropic key and model:
 # ANTHROPIC_API_KEY=sk-ant-your-key-here
-# AI_MODEL=claude-sonnet-4-20250514
+# AI_MODEL=claude-sonnet-4
 
 # Generation settings
 # MAX_ITERATIONS=1000
@@ -259,10 +291,11 @@ This directory was initialized with 'hyper init'.
 
 ### 1. Start Services
 
-    # Start MongoDB, Qdrant, and Ollama
+    # Start MongoDB, Qdrant, LiteLLM, and Ollama
     docker compose up -d
 
-    # Watch Ollama model download (first time only, takes 2-5 minutes)
+    # Watch LiteLLM + Ollama setup logs
+    docker compose logs -f litellm
     docker compose logs -f ollama-pull
 
 ### 2. Run Hyper
@@ -288,6 +321,7 @@ Open your browser to: **http://localhost:7095**
 | **MongoDB** | mongodb://localhost:27017 | 27017 | Primary database |
 | **Qdrant HTTP** | http://localhost:7333 | 7333 | Vector DB API |
 | **Qdrant gRPC** | http://localhost:7334 | 7334 | Vector DB gRPC |
+| **LiteLLM** | http://localhost:4000/v1 | 4000 | Chat model gateway |
 | **Ollama** | http://localhost:7335 | 7335 | Embeddings API |
 
 ## Configuration
@@ -304,6 +338,7 @@ Edit .env.hyper to customize your setup:
     docker compose logs -f
 
     # View specific service logs
+    docker compose logs -f litellm
     docker compose logs -f ollama
     docker compose logs -f mongodb
     docker compose logs -f qdrant
@@ -315,6 +350,7 @@ Edit .env.hyper to customize your setup:
     docker compose down -v
 
     # Restart a specific service
+    docker compose restart litellm
     docker compose restart ollama
 
 ## Switching Embedding Providers
@@ -349,6 +385,9 @@ Then restart hyper.
     # Qdrant
     curl http://localhost:7333/health
 
+    # LiteLLM
+    curl http://localhost:4000
+
     # Ollama
     curl http://localhost:7335/api/tags
 
@@ -370,9 +409,10 @@ Then restart hyper.
 
 ## Port Conflicts
 
-If you see port conflicts, this setup uses custom ports (7333-7335) to avoid common collisions.
+If you see port conflicts, this setup uses custom ports (4000, 7333-7335) to avoid common collisions.
 You can change these in docker-compose.yml:
 
+- LiteLLM: 4000 (change both port and OPENAI_BASE_URL in .env.hyper)
 - Qdrant: 7333 (change both ports and .env.hyper)
 - Ollama: 7335 (change both ports and .env.hyper)
 
@@ -395,6 +435,23 @@ You can change these in docker-compose.yml:
 - **Full Documentation:** See MAKEFILE_AND_DOCKER_GUIDE.md in the hyper repo
 - **Quick Reference:** See QUICK_REFERENCE.md in the hyper repo
 - **GitHub:** https://github.com/your-repo/hyper
+`
+
+const liteLLMConfigTemplate = `model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-sonnet-4-20250514
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
 `
 
 // ProviderConfig holds AI provider configuration
@@ -549,9 +606,20 @@ func validateProvider(config *ProviderConfig) error {
 			return fmt.Errorf("OpenAI API token is required (use -token flag)")
 		}
 		if config.Model == "" {
-			config.Model = "gpt-4" // Default model
+			config.Model = "gpt-4o-mini" // Default model
 		}
 		return validateOpenAI(config.Token, config.Model, config.APIURL)
+
+	case "litellm":
+		if config.Model == "" {
+			config.Model = "gpt-4o-mini"
+		}
+		// LiteLLM is usually local/proxy. Skip mandatory validation unless api-url + token are provided.
+		if config.APIURL != "" && config.Token != "" {
+			return validateOpenAI(config.Token, config.Model, config.APIURL)
+		}
+		fmt.Println("ℹ️  LiteLLM selected - skipping credential validation (configure keys in .env.hyper)")
+		return nil
 
 	case "anthropic", "claude":
 		if config.Token == "" {
@@ -577,7 +645,7 @@ func validateProvider(config *ProviderConfig) error {
 		return nil
 
 	default:
-		return fmt.Errorf("unsupported provider: %s (supported: openai, anthropic, voyage, ollama)", config.Provider)
+		return fmt.Errorf("unsupported provider: %s (supported: openai, litellm, anthropic, voyage, ollama)", config.Provider)
 	}
 }
 
@@ -598,9 +666,11 @@ func generateEnvWithProvider(config *ProviderConfig) string {
 			aiConfig += fmt.Sprintf("AI_PROVIDER=openai\n")
 			aiConfig += fmt.Sprintf("OPENAI_API_KEY=%s\n", config.Token)
 			aiConfig += fmt.Sprintf("AI_MODEL=%s\n", config.Model)
+			baseURL := "http://localhost:4000/v1"
 			if config.APIURL != "" {
-				aiConfig += fmt.Sprintf("OPENAI_BASE_URL=%s\n", config.APIURL)
+				baseURL = config.APIURL
 			}
+			aiConfig += fmt.Sprintf("OPENAI_BASE_URL=%s\n", baseURL)
 
 			// Update embedding section
 			env = strings.Replace(env, "EMBEDDING=ollama", "# EMBEDDING=ollama  # Using OpenAI for AI", 1)
@@ -608,15 +678,36 @@ func generateEnvWithProvider(config *ProviderConfig) string {
 			env = strings.Replace(env, "OLLAMA_MODEL=nomic-embed-text", "# OLLAMA_MODEL=nomic-embed-text", 1)
 
 		case "anthropic", "claude":
-			aiConfig += fmt.Sprintf("AI_PROVIDER=anthropic\n")
+			// Anthropic models are routed through LiteLLM using OpenAI-compatible API.
+			aiConfig += fmt.Sprintf("AI_PROVIDER=openai\n")
+			aiConfig += fmt.Sprintf("OPENAI_BASE_URL=http://localhost:4000/v1\n")
+			aiConfig += fmt.Sprintf("OPENAI_API_KEY=dummy-key\n")
 			aiConfig += fmt.Sprintf("ANTHROPIC_API_KEY=%s\n", config.Token)
 			aiConfig += fmt.Sprintf("AI_MODEL=%s\n", config.Model)
 			if config.APIURL != "" {
-				aiConfig += fmt.Sprintf("ANTHROPIC_BASE_URL=%s\n", config.APIURL)
+				aiConfig = strings.Replace(aiConfig, "OPENAI_BASE_URL=http://localhost:4000/v1\n", fmt.Sprintf("OPENAI_BASE_URL=%s\n", config.APIURL), 1)
 			}
 
 			// Keep Ollama for embeddings (Anthropic doesn't provide embeddings)
-			aiConfig += "\n# Note: Still using Ollama for embeddings (Anthropic doesn't provide embeddings)\n"
+			aiConfig += "\n# Note: Claude requests are routed via LiteLLM using OpenAI-compatible API.\n"
+			aiConfig += "# Note: Still using Ollama for embeddings (Anthropic doesn't provide embeddings).\n"
+
+		case "litellm":
+			aiConfig += fmt.Sprintf("AI_PROVIDER=openai\n")
+			aiConfig += fmt.Sprintf("AI_MODEL=%s\n", config.Model)
+			if config.APIURL != "" {
+				aiConfig += fmt.Sprintf("OPENAI_BASE_URL=%s\n", config.APIURL)
+			} else {
+				aiConfig += "OPENAI_BASE_URL=http://localhost:4000/v1\n"
+			}
+			if config.Token != "" {
+				aiConfig += fmt.Sprintf("OPENAI_API_KEY=%s\n", config.Token)
+			} else {
+				aiConfig += "OPENAI_API_KEY=dummy-key\n"
+			}
+			aiConfig += "# Configure upstream provider keys used by LiteLLM\n"
+			aiConfig += "# OPENAI_API_KEY=sk-your-openai-key\n"
+			aiConfig += "# ANTHROPIC_API_KEY=sk-ant-your-key\n"
 
 		case "voyage", "voyageai":
 			aiConfig += fmt.Sprintf("AI_PROVIDER=voyage\n")
@@ -647,7 +738,7 @@ func Init(config *ProviderConfig) error {
 		return fmt.Errorf("provider validation failed: %w", err)
 	}
 	// Check if files already exist
-	files := []string{"docker-compose.yml", ".env.hyper"}
+	files := []string{"docker-compose.yml", ".env.hyper", "litellm.config.yaml", "HYPER_README.md"}
 	var existingFiles []string
 
 	for _, file := range files {
@@ -688,6 +779,13 @@ func Init(config *ProviderConfig) error {
 	}
 	fmt.Println("✅ .env.hyper created")
 
+	// Create LiteLLM config
+	fmt.Println("📝 Creating litellm.config.yaml...")
+	if err := os.WriteFile("litellm.config.yaml", []byte(liteLLMConfigTemplate), 0644); err != nil {
+		return fmt.Errorf("failed to create litellm.config.yaml: %w", err)
+	}
+	fmt.Println("✅ litellm.config.yaml created")
+
 	// Create README.md
 	fmt.Println("📝 Creating HYPER_README.md...")
 	if err := os.WriteFile("HYPER_README.md", []byte(readmeTemplate), 0644); err != nil {
@@ -711,8 +809,9 @@ func Init(config *ProviderConfig) error {
 	fmt.Println("📁 Location:", cwd)
 	fmt.Println()
 	fmt.Println("📝 Files created:")
-	fmt.Println("   ✓ docker-compose.yml  - MongoDB + Qdrant + Ollama")
+	fmt.Println("   ✓ docker-compose.yml  - MongoDB + Qdrant + LiteLLM + Ollama")
 	fmt.Println("   ✓ .env.hyper          - Configuration file")
+	fmt.Println("   ✓ litellm.config.yaml - LiteLLM model routing config")
 	fmt.Println("   ✓ HYPER_README.md     - Setup instructions")
 	fmt.Println()
 	fmt.Println("🚀 Next steps:")
@@ -720,7 +819,8 @@ func Init(config *ProviderConfig) error {
 	fmt.Println("   1. Start services:")
 	fmt.Println("      docker compose up -d")
 	fmt.Println()
-	fmt.Println("   2. Watch Ollama model download (first time, 2-5 min):")
+	fmt.Println("   2. Verify LiteLLM + Ollama are ready:")
+	fmt.Println("      docker compose logs -f litellm")
 	fmt.Println("      docker compose logs -f ollama-pull")
 	fmt.Println()
 	fmt.Println("   3. Run Hyper:")
@@ -738,7 +838,16 @@ func Init(config *ProviderConfig) error {
 		fmt.Println("🔧 Provider Configuration:")
 		fmt.Printf("   Provider: %s\n", provider)
 		fmt.Printf("   Model: %s\n", config.Model)
-		fmt.Printf("   Token: %s...%s\n", config.Token[:8], config.Token[len(config.Token)-4:])
+		if config.Token != "" {
+			token := config.Token
+			if len(token) > 12 {
+				fmt.Printf("   Token: %s...%s\n", token[:8], token[len(token)-4:])
+			} else {
+				fmt.Printf("   Token: %s\n", token)
+			}
+		} else {
+			fmt.Println("   Token: (not set)")
+		}
 		if config.APIURL != "" {
 			fmt.Printf("   API URL: %s\n", config.APIURL)
 		}

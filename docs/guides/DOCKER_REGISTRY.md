@@ -71,9 +71,9 @@ docker compose -f docker-compose.dev.yml up -d
 gcloud auth configure-docker us-central1-docker.pkg.dev
 
 # Build image
-docker build -f coordinator/mcp-server/Dockerfile \
+docker build -f hyper/Dockerfile \
   -t hyperion-coordinator-mcp:latest \
-  coordinator/mcp-server
+  hyper
 
 # Tag for registry
 docker tag hyperion-coordinator-mcp:latest \
@@ -112,12 +112,12 @@ docker-compose.yml (Production)
 
 docker-compose.dev.yml (Development)
 ├── hyperion-mcp-server
-│   └── build: coordinator/mcp-server
+│   └── build: hyper
 │   └── volumes: [source code mounted for hot-reload]
 ├── hyperion-http-bridge
-│   └── build: coordinator/mcp-http-bridge
+│   └── build: hyper
 ├── hyperion-ui
-│   └── build: coordinator/ui
+│   └── build: ui
 └── [same infrastructure services]
 ```
 

@@ -154,7 +154,7 @@ func (b *BashToolExecutor) Execute(ctx context.Context, input map[string]interfa
 	}
 
 	// SYNCHRONOUS post-execution validation (only if error prevention mode is enabled)
-	errorPreventionMode := ctx.Value("errorPreventionMode")
+	errorPreventionMode := ctx.Value(aiservice.ErrorPreventionModeKey)
 	isErrorPreventionEnabled := errorPreventionMode != nil && errorPreventionMode.(bool)
 
 	if b.logger != nil {
@@ -396,7 +396,7 @@ func (a *ApplyPatchToolExecutor) Execute(ctx context.Context, input map[string]i
 	}
 
 	// SYNCHRONOUS post-patch validation (only if error prevention mode is enabled and not a dry-run)
-	errorPreventionMode := ctx.Value("errorPreventionMode")
+	errorPreventionMode := ctx.Value(aiservice.ErrorPreventionModeKey)
 	isErrorPreventionEnabled := errorPreventionMode != nil && errorPreventionMode.(bool)
 
 	if a.logger != nil {

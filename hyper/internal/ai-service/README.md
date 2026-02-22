@@ -1,10 +1,11 @@
-# AI Service - LangChain Go Multi-Provider Chat
+# AI Service - OpenAI + Anthropic Official SDK Chat
 
-Multi-provider AI service with streaming support for OpenAI, Anthropic (Claude), and custom endpoints.
+AI service with streaming/tool support using the official OpenAI Go SDK and Anthropic Go SDK, with optional OpenAI-compatible gateway routing (LiteLLM, Ollama, DeepInfra, etc.).
 
 ## Features
 
-- 🔌 **Multi-Provider Support**: OpenAI, Anthropic, custom HTTP endpoints
+- 🔌 **Native SDKs**: Official OpenAI + Anthropic Go SDK providers
+- 🔀 **Gateway-Friendly**: OpenAI-compatible routing for LiteLLM/custom endpoints
 - 🌊 **Streaming Responses**: Real-time token streaming via channels
 - 🔐 **JWT Integration**: Extract user identity from context for logging/multi-tenancy
 - ⚙️ **Configuration**: Environment-based config via .env.hyper
@@ -17,15 +18,23 @@ Multi-provider AI service with streaming support for OpenAI, Anthropic (Claude),
 Create or update `.env.hyper`:
 
 ```bash
-# OpenAI
+# OpenAI-compatible (direct OpenAI or LiteLLM)
 AI_PROVIDER="openai"
 OPENAI_API_KEY="sk-..."
-AI_MODEL="gpt-4"
+OPENAI_BASE_URL="http://localhost:4000/v1"   # optional, for LiteLLM
+AI_MODEL="gpt-4o-mini"
 
-# Or Anthropic
+# Anthropic native
 AI_PROVIDER="anthropic"
 ANTHROPIC_API_KEY="sk-ant-..."
-AI_MODEL="claude-3-sonnet-20240229"
+AI_MODEL="claude-sonnet-4"
+
+# Claude via LiteLLM (OpenAI-compatible gateway)
+AI_PROVIDER="openai"
+OPENAI_BASE_URL="http://localhost:4000/v1"
+OPENAI_API_KEY="dummy-key"
+ANTHROPIC_API_KEY="sk-ant-..."
+AI_MODEL="claude-sonnet-4"
 
 # Optional parameters
 MAX_ITERATION=100        # Default: 100
@@ -37,7 +46,7 @@ REASONING="o1"           # OpenAI reasoning mode (optional)
 ### 2. Initialize Service
 
 ```go
-import "hyperion-coordinator/ai-service"
+import "hyper/internal/ai-service"
 
 // Load configuration
 config, err := aiservice.LoadAIConfig("/path/to/.env.hyper")
@@ -108,9 +117,8 @@ ai-service/
 ChatService
     ↓
 ChatProvider (interface)
-    ├── openAIProvider (wraps langchaingo OpenAI)
-    ├── anthropicProvider (wraps langchaingo Anthropic)
-    └── customProvider (placeholder for custom endpoints)
+    ├── openAIProvider (official OpenAI SDK; routes via base URL if configured)
+    └── anthropicSDKProvider (official Anthropic SDK)
 ```
 
 ### Streaming Flow
@@ -132,10 +140,10 @@ ChatProvider (interface)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `AI_PROVIDER` or `PROVIDER` | Yes | - | Provider: `openai`, `anthropic`, or `custom` |
-| `API_KEY` or `{PROVIDER}_API_KEY` | Yes* | - | API key (* not required for custom) |
+| `AI_PROVIDER` or `PROVIDER` | Yes | - | Provider: `openai`, `litellm`, `anthropic`, or `custom` |
+| `API_KEY` or provider-specific key | Yes | - | API key used by OpenAI SDK (dummy keys allowed for local gateways) |
 | `AI_MODEL` or `MODEL` | No | Provider default | Model name |
-| `PROVIDER_URL` | Yes** | - | Custom endpoint URL (** required for custom) |
+| `PROVIDER_URL` | No* | - | Custom OpenAI-compatible endpoint URL (* required for `custom`) |
 | `MAX_ITERATION` | No | 100 | Maximum iterations |
 | `MAX_OUT_TOKENS` | No | 0 | Maximum output tokens (0 = provider default) |
 | `TEMPERATURE` | No | 0.7 | Temperature (0.0 - 2.0) |
@@ -143,8 +151,7 @@ ChatProvider (interface)
 
 ### Default Models
 
-- **OpenAI**: `gpt-4-turbo-preview`
-- **Anthropic**: `claude-3-sonnet-20240229`
+- **OpenAI-compatible**: `gpt-4o-mini`
 - **Custom**: No default (must specify)
 
 ## API Reference
@@ -340,7 +347,7 @@ func HandleChatSSE(c *gin.Context, chatService *aiservice.ChatService) {
 
 ## Dependencies
 
-- **github.com/tmc/langchaingo v0.1.13** - LangChain Go SDK
+- **github.com/openai/openai-go** - Official OpenAI Go SDK
 - **github.com/joho/godotenv v1.5.1** - Environment file loading
 
 ## License

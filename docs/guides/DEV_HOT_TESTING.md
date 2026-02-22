@@ -17,7 +17,7 @@ air -v
 
 ### 2. Install Node.js dependencies
 ```bash
-cd coordinator/ui
+cd ui
 npm install
 cd ../..
 ```
@@ -27,14 +27,11 @@ cd ../..
 # Check .air.toml at project root
 ls -la .air.toml
 
-# Check coordinator Air config
-ls -la coordinator/.air.toml
-
 # Check environment file
 ls -la .env.hyper
 
 # Check Vite config
-ls -la coordinator/ui/vite.config.ts
+ls -la ui/vite.config.ts
 ```
 
 ## Testing Procedure
@@ -103,7 +100,7 @@ curl -I http://localhost:5173
 ```bash
 # While dev-hot is running and browser is open at localhost:5173
 # Edit a React component
-nano coordinator/ui/src/App.tsx
+nano ui/src/App.tsx
 
 # Make a visible change (e.g., change a heading text)
 # Save the file
@@ -124,7 +121,7 @@ nano coordinator/ui/src/App.tsx
 ```bash
 # While dev-hot is running
 # Edit a Go file (e.g., add a log statement)
-nano coordinator/internal/server/http_server.go
+nano hyper/internal/server/http_server.go
 
 # Add a log statement in a handler
 # Save the file
@@ -211,7 +208,7 @@ sudo mv $(which air).bak $(which air)
 
 ```bash
 # Temporarily rename node_modules
-mv coordinator/ui/node_modules coordinator/ui/node_modules.bak
+mv ui/node_modules ui/node_modules.bak
 
 # Run dev-hot
 make dev-hot
@@ -222,8 +219,8 @@ make dev-hot
 # ✓ node_modules ready
 
 # Restore node_modules
-rm -rf coordinator/ui/node_modules
-mv coordinator/ui/node_modules.bak coordinator/ui/node_modules
+rm -rf ui/node_modules
+mv ui/node_modules.bak ui/node_modules
 ```
 
 **Verify:**
@@ -311,7 +308,7 @@ export PATH=$PATH:$(go env GOPATH)/bin
 ### Issue: Vite fails to start
 ```bash
 # Reinstall dependencies
-cd coordinator/ui
+cd ui
 rm -rf node_modules package-lock.json
 npm install
 ```

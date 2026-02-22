@@ -211,15 +211,15 @@ Response includes:
 
 This feature requires changes across all three projects:
 
-1. **MCP Server** (`coordinator/mcp-server/`) - Core logic and MongoDB storage
-2. **HTTP Bridge** (`coordinator/mcp-http-bridge/`) - HTTP → MCP translation (minimal changes)
-3. **UI** (`coordinator/ui/`) - React components for user interaction
+1. **MCP Server** (`hyper/`) - Core logic and MongoDB storage
+2. **HTTP Bridge** (`hyper/cmd/coordinator/main.go`) - HTTP → MCP translation (minimal changes)
+3. **UI** (`ui/`) - React components for user interaction
 
 ---
 
 ### Project 1: MCP Server Changes
 
-**File:** `coordinator/mcp-server/storage/tasks.go`
+**File:** `hyper/internal/mcp/storage/tasks.go`
 
 **1. Update Storage Interface:**
 ```go
@@ -290,7 +290,7 @@ func (s *MongoTaskStorage) AddTodoPromptNotes(agentTaskID string, todoID string,
 }
 ```
 
-**File:** `coordinator/mcp-server/handlers/tools.go`
+**File:** `hyper/internal/mcp/handlers/tools.go`
 
 **3. Register New Tools:**
 
@@ -350,7 +350,7 @@ func (h *CoordinatorHandler) handleAddTaskPromptNotes(params map[string]interfac
 
 ### Project 2: HTTP Bridge Changes
 
-**File:** `coordinator/mcp-http-bridge/main.go`
+**File:** `hyper/cmd/coordinator/main.go`
 
 **Changes Needed:** ✅ **NONE** (Bridge is stateless - automatically forwards new tools)
 
@@ -382,7 +382,7 @@ The bridge will:
 
 ### Project 3: UI Changes
 
-**File:** `coordinator/ui/src/components/TaskDetailDialog.tsx`
+**File:** `ui/src/components/TaskDetailDialog.tsx`
 
 **1. Add Prompt Notes Section:**
 ```tsx
@@ -516,7 +516,7 @@ const handleSaveTaskNotes = async () => {
 </ListItem>
 ```
 
-**File:** `coordinator/ui/src/services/mcpClient.ts`
+**File:** `ui/src/services/mcpClient.ts`
 
 **3. Add Client Methods:**
 ```typescript
@@ -930,7 +930,7 @@ expect(code).not.toContain("methodY");
 
 ### Phase 1: MCP Server Implementation (Week 1)
 
-**Project:** `coordinator/mcp-server/`
+**Project:** `hyper/`
 
 **Tasks:**
 1. Update data models (AgentTask, TodoItem) in `storage/tasks.go`
@@ -950,7 +950,7 @@ expect(code).not.toContain("methodY");
 
 ### Phase 2: HTTP Bridge Verification (Day 1 of Week 2)
 
-**Project:** `coordinator/mcp-http-bridge/`
+**Project:** `hyper/`
 
 **Tasks:**
 1. Verify bridge automatically forwards new tools (should require NO code changes)
@@ -970,7 +970,7 @@ expect(code).not.toContain("methodY");
 
 ### Phase 3: UI Implementation (Week 2)
 
-**Project:** `coordinator/ui/`
+**Project:** `ui/`
 
 **Tasks:**
 1. Update TypeScript types in `src/types/coordinator.ts`

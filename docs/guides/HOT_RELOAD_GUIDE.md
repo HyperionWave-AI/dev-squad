@@ -17,18 +17,18 @@ make dev-native
 ## What Gets Watched
 
 **Go Files:**
-- `coordinator/cmd/**/*.go`
-- `coordinator/internal/**/*.go`
-- `coordinator/mcp-server/**/*.go`
-- `coordinator/ai-service/**/*.go`
+- `hyper/cmd/**/*.go`
+- `hyper/internal/**/*.go`
+- `hyper/**/*.go`
+- `hyper/internal/ai-service/**/*.go`
 
 **UI Files:**
-- `coordinator/ui/src/**/*` (React/TypeScript)
+- `ui/src/**/*` (React/TypeScript)
 
 **Excluded:**
-- `coordinator/tmp/`
-- `coordinator/ui/node_modules/`
-- `coordinator/ui/dist/`
+- `tmp/`
+- `ui/node_modules/`
+- `ui/dist/`
 - `*_test.go` files
 
 ## How It Works
@@ -94,8 +94,8 @@ $(go env GOPATH)/bin/air -v
 ### Build fails
 ```bash
 # Clean and rebuild
-rm -rf coordinator/embed/ui
-rm -rf coordinator/ui/dist
+rm -rf hyper/embed/ui
+rm -rf ui/dist
 rm -f bin/hyper
 
 # Manual build to see errors
@@ -106,7 +106,7 @@ rm -f bin/hyper
 ### UI not updating
 ```bash
 # Force UI rebuild
-rm -f coordinator/ui/.last-ui-build
+rm -f ui/.last-ui-build
 make dev-native
 ```
 
@@ -125,7 +125,7 @@ echo "HTTP_PORT=7096" >> .env.hyper
 Edit `.air.toml` and modify `include_dir`:
 
 ```toml
-include_dir = ["coordinator/internal", "coordinator/ai-service"]
+include_dir = ["hyper/internal", "hyper/internal/ai-service"]
 ```
 
 ### Adjust rebuild delay
@@ -149,14 +149,14 @@ mv .air.toml.bak .air.toml
 
 ### `scripts/rebuild-ui.sh`
 Smart UI rebuild with timestamp detection:
-- Checks if `coordinator/ui/src/**/*` changed
-- Checks if `coordinator/ui/package.json` changed
+- Checks if `ui/src/**/*` changed
+- Checks if `ui/package.json` changed
 - Only rebuilds if necessary
 - Creates `.last-ui-build` marker
 
 ### `scripts/air-build.sh`
 Fast Go binary build:
-- Copies `coordinator/ui/dist` → `coordinator/embed/ui/`
+- Copies `ui/dist` → `hyper/embed/ui/`
 - Builds with `-tags embed`
 - Outputs to `bin/hyper` (15M)
 - ~2 second build time
@@ -217,8 +217,8 @@ After implementing changes with hot reload:
 
 ❌ **Don't:**
 - Run `make native` during development (too slow)
-- Edit files in `coordinator/embed/ui/` (gets overwritten)
-- Commit `coordinator/ui/.last-ui-build` marker
+- Edit files in `hyper/embed/ui/` (gets overwritten)
+- Commit `ui/.last-ui-build` marker
 - Run multiple `make dev-native` instances
 
 ## Support

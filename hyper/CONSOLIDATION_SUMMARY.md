@@ -196,7 +196,7 @@ make build-coordinator
 ./bin/hyper-coordinator --mode=http
 
 # Terminal 2: Run UI dev server
-cd coordinator/ui
+cd ui
 npm run dev
 # UI at http://localhost:5173
 ```

@@ -17,6 +17,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
+	aiservice "hyper/internal/ai-service"
 
 	"hyper/internal/ai-service/tools"
 	"hyper/internal/validation"
@@ -382,15 +383,15 @@ func (h *FilesystemToolHandler) handleFileRead(ctx context.Context, args map[str
 	encodedContent := base64.StdEncoding.EncodeToString(content.Bytes())
 
 	result := map[string]interface{}{
-		"success":      true,
-		"filePath":     tools.StripProjectRoot(validatedPath),
-		"size":         fileInfo.Size(),
-		"bytesRead":    content.Len(),
-		"offset":       offset,
-		"content":      encodedContent,
-		"encoding":     "base64",
-		"chunkSize":    chunkSize,
-		"isComplete":   offset+int64(content.Len()) >= fileInfo.Size(),
+		"success":    true,
+		"filePath":   tools.StripProjectRoot(validatedPath),
+		"size":       fileInfo.Size(),
+		"bytesRead":  content.Len(),
+		"offset":     offset,
+		"content":    encodedContent,
+		"encoding":   "base64",
+		"chunkSize":  chunkSize,
+		"isComplete": offset+int64(content.Len()) >= fileInfo.Size(),
 	}
 
 	jsonData, _ := json.MarshalIndent(result, "", "  ")
@@ -447,9 +448,9 @@ func (h *FilesystemToolHandler) registerFileWriteTool(server *mcp.Server) error 
 func (h *FilesystemToolHandler) handleFileWrite(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	// Log context values for debugging
 	h.logger.Info("📝 file_write called",
-		zap.Any("errorPreventionMode", ctx.Value("errorPreventionMode")),
-		zap.Any("sessionID", ctx.Value("sessionID")),
-		zap.Any("companyID", ctx.Value("companyID")))
+		zap.Any("errorPreventionMode", ctx.Value(aiservice.ErrorPreventionModeKey)),
+		zap.Any("sessionID", ctx.Value(aiservice.SessionIDKey)),
+		zap.Any("companyID", ctx.Value(aiservice.CompanyIDKey)))
 
 	filePath, ok := args["path"].(string)
 	if !ok || filePath == "" {
@@ -513,7 +514,7 @@ func (h *FilesystemToolHandler) handleFileWrite(ctx context.Context, args map[st
 	}
 
 	// SYNCHRONOUS post-write validation (only if error prevention mode is enabled)
-	errorPreventionMode := ctx.Value("errorPreventionMode")
+	errorPreventionMode := ctx.Value(aiservice.ErrorPreventionModeKey)
 	isErrorPreventionEnabled := errorPreventionMode != nil && errorPreventionMode.(bool)
 
 	h.logger.Debug("Post-write validation check",

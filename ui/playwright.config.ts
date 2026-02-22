@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const webPort = Number(process.env.PLAYWRIGHT_WEB_PORT || 7878);
+const webURL = `http://localhost:${webPort}`;
+
 /**
  * Playwright configuration for Code Search UI e2e testing
  * Supports chromium, webkit, mobile, tablet, and desktop viewports
@@ -17,7 +20,7 @@ export default defineConfig({
   ],
 
   use: {
-    baseURL: 'http://localhost:4097',
+    baseURL: webURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -33,7 +36,7 @@ export default defineConfig({
   // Auto-start unified hyper binary before running tests
   webServer: {
     command: 'cd .. && ./bin/hyper --mode=http --config=.env.hyper.hot',
-    url: 'http://localhost:4097',
+    url: `${webURL}/health`,
     reuseExistingServer: !process.env.CI,
     timeout: 30000, // 30 seconds to start
     stdout: 'pipe',

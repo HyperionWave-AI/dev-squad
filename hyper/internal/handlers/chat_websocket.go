@@ -189,7 +189,7 @@ var (
 
 // messageRateLimit tracks message rate per user
 type messageRateLimit struct {
-	lastMessage time.Time
+	lastMessage  time.Time
 	messageCount int
 	mu           sync.Mutex
 }
@@ -198,7 +198,7 @@ type messageRateLimit struct {
 func checkRateLimit(userID string) bool {
 	// Load or create rate limit entry
 	val, _ := userMessageRates.LoadOrStore(userID, &messageRateLimit{
-		lastMessage: time.Now(),
+		lastMessage:  time.Now(),
 		messageCount: 0,
 	})
 	rateLimit := val.(*messageRateLimit)
@@ -280,15 +280,15 @@ type AISettingsServiceInterface interface {
 
 // ChatWebSocketHandler handles WebSocket connections for real-time chat streaming
 type ChatWebSocketHandler struct {
-	chatService         ChatServiceInterface
-	aiService           AIServiceInterface
-	aiSettingsService   AISettingsServiceInterface
+	chatService            ChatServiceInterface
+	aiService              AIServiceInterface
+	aiSettingsService      AISettingsServiceInterface
 	compactionOrchestrator *CompactionOrchestrator
-	subchatStorage      SubchatStorageInterface
-	logger              *zap.Logger
-	toolResultProcessor executor.ToolResultProcessorFunc
-	resultInterceptor   *ToolResultInterceptor // Token-based result deflection
-	writeMutex          sync.Mutex             // Protects concurrent WebSocket writes (ping + message streaming)
+	subchatStorage         SubchatStorageInterface
+	logger                 *zap.Logger
+	toolResultProcessor    executor.ToolResultProcessorFunc
+	resultInterceptor      *ToolResultInterceptor // Token-based result deflection
+	writeMutex             sync.Mutex             // Protects concurrent WebSocket writes (ping + message streaming)
 }
 
 // SubchatStorageInterface defines the interface for subchat storage operations (system subagents)
@@ -1037,123 +1037,122 @@ func (h *ChatWebSocketHandler) handleMessages(aiCtx context.Context, httpCtx con
 					// Context still valid, continue processing
 				}
 
-			// Emit user message to WebSocket immediately (before database save)
-			userMsgEvent := models.StreamMessage{
-				Type:    "user_message",
-				Content: userMsg.Content,
-			}
-			if err := h.safeWriteJSON(conn, userMsgEvent); err != nil {
-				h.logger.Warn("Failed to emit user message to WebSocket",
-					zap.String("sessionId", sessionID.Hex()),
-					zap.Error(err))
-				// Continue processing even if emit fails
-			}
-
-			// Save user message to database
-			savedUserMsg, err := h.chatService.SaveMessage(aiCtx, sessionID, "user", userMsg.Content, companyID)
-			if err != nil {
-				h.logger.Error("Failed to save user message", zap.Error(err))
-				h.sendError(conn, "Failed to save message")
-				return // Defer will reset isProcessing
-			}
-
-			// FIX: Emit saved message with database ID for frontend reconciliation
-			// This allows frontend to update optimistic message with correct database ID
-			savedMsgEvent := models.StreamMessage{
-				Type:    "message_saved",
-				Content: savedUserMsg.ID.Hex(), // Send database ID as content
-			}
-			if err := h.safeWriteJSON(conn, savedMsgEvent); err != nil {
-				h.logger.Warn("Failed to emit saved message ID",
-					zap.String("sessionId", sessionID.Hex()),
-					zap.String("messageId", savedUserMsg.ID.Hex()),
-					zap.Error(err))
-			}
-
-			// Notify any running subagents about new message (for subchats)
-			notifier := GetMessageNotifier(h.logger)
-			notifier.NotifyNewMessage(sessionID)
-
-			// Check if this message is interrupting an active subchat
-			isInterrupting := notifier.IsSessionRegistered(sessionID)
-			if isInterrupting {
-				h.logger.Info("User message sent to active subchat - delegating to subchat interrupt handler",
-					zap.String("sessionId", sessionID.Hex()),
-					zap.String("userId", userID))
-
-				// CRITICAL FIX: Do NOT handle interruptions in main chat!
-				// The subchat's own interrupt handler (in coordinator_tools.go:2873)
-				// will pick up the notification via notifyCh and handle it properly.
-				// This prevents the "I'm a coordinator" bug where main chat responds
-				// to subchat interruptions with the coordinator system prompt.
-
-				// NotifyNewMessage already called above - subchat will receive via <-notifyCh
-				// Let the subchat maintain its execution context and agent identity
-
-
-				// FIX: Send 'done' event to properly close the WebSocket stream
-				// This prevents frontend from staying in isStreaming=true state
-				doneEvent := models.StreamMessage{
-					Type: "done",
+				// Emit user message to WebSocket immediately (before database save)
+				userMsgEvent := models.StreamMessage{
+					Type:    "user_message",
+					Content: userMsg.Content,
 				}
-				if err := h.safeWriteJSON(conn, doneEvent); err != nil {
-					h.logger.Warn("Failed to send done event for interrupt",
+				if err := h.safeWriteJSON(conn, userMsgEvent); err != nil {
+					h.logger.Warn("Failed to emit user message to WebSocket",
 						zap.String("sessionId", sessionID.Hex()),
 						zap.Error(err))
+					// Continue processing even if emit fails
 				}
-				return // Defer will reset isProcessing; skip to next message, don't call streamAIResponse
-			}
 
-			// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
-			// Create cancellable context for this AI execution (allows stop button to cancel)
-			// PHASE 3 Context Lifecycle: aiExecCtx is child of aiCtx which is child of httpCtx
-			// So HTTP cancellation propagates automatically through context hierarchy!
-			aiExecCtx, aiExecCancel := context.WithCancel(aiCtx)
+				// Save user message to database
+				savedUserMsg, err := h.chatService.SaveMessage(aiCtx, sessionID, "user", userMsg.Content, companyID)
+				if err != nil {
+					h.logger.Error("Failed to save user message", zap.Error(err))
+					h.sendError(conn, "Failed to save message")
+					return // Defer will reset isProcessing
+				}
 
-			// Store the cancel function so stop handler can call it
-			currentAICancelMu.Lock()
-			currentAICancel = aiExecCancel
-			currentAICancelMu.Unlock()
-
-			// PHASE 3 Context Lifecycle: Simplified cancellation propagation
-			// HTTP cancellation now flows automatically through context hierarchy:
-			//   HTTP -> AI (10min) -> aiExecCtx
-			// We only need to handle explicit cleanup.done signal
-			cleanupDone := make(chan struct{})
-			go func() {
-				defer close(cleanupDone)
-				select {
-				case <-cleanup.done:
-					h.logger.Info("🛑 Cleanup signal received - cancelling AI execution",
+				// FIX: Emit saved message with database ID for frontend reconciliation
+				// This allows frontend to update optimistic message with correct database ID
+				savedMsgEvent := models.StreamMessage{
+					Type:    "message_saved",
+					Content: savedUserMsg.ID.Hex(), // Send database ID as content
+				}
+				if err := h.safeWriteJSON(conn, savedMsgEvent); err != nil {
+					h.logger.Warn("Failed to emit saved message ID",
 						zap.String("sessionId", sessionID.Hex()),
-						zap.String("reason", "cleanup requested"))
-					aiExecCancel()
-				case <-aiExecCtx.Done():
-					// Context cancelled (HTTP disconnect, timeout, or stop button)
-					// Log the reason for debugging
-					if aiExecCtx.Err() == context.Canceled {
-						h.logger.Debug("AI execution context cancelled",
-							zap.String("sessionId", sessionID.Hex()))
-					} else if aiExecCtx.Err() == context.DeadlineExceeded {
-						h.logger.Info("AI execution context deadline exceeded",
-							zap.String("sessionId", sessionID.Hex()))
-					}
+						zap.String("messageId", savedUserMsg.ID.Hex()),
+						zap.Error(err))
 				}
-			}()
 
-			// Ensure we clean up the cancel function after execution
-			defer func() {
+				// Notify any running subagents about new message (for subchats)
+				notifier := GetMessageNotifier(h.logger)
+				notifier.NotifyNewMessage(sessionID)
+
+				// Check if this message is interrupting an active subchat
+				isInterrupting := notifier.IsSessionRegistered(sessionID)
+				if isInterrupting {
+					h.logger.Info("User message sent to active subchat - delegating to subchat interrupt handler",
+						zap.String("sessionId", sessionID.Hex()),
+						zap.String("userId", userID))
+
+					// CRITICAL FIX: Do NOT handle interruptions in main chat!
+					// The subchat's own interrupt handler (in coordinator_tools.go:2873)
+					// will pick up the notification via notifyCh and handle it properly.
+					// This prevents the "I'm a coordinator" bug where main chat responds
+					// to subchat interruptions with the coordinator system prompt.
+
+					// NotifyNewMessage already called above - subchat will receive via <-notifyCh
+					// Let the subchat maintain its execution context and agent identity
+
+					// FIX: Send 'done' event to properly close the WebSocket stream
+					// This prevents frontend from staying in isStreaming=true state
+					doneEvent := models.StreamMessage{
+						Type: "done",
+					}
+					if err := h.safeWriteJSON(conn, doneEvent); err != nil {
+						h.logger.Warn("Failed to send done event for interrupt",
+							zap.String("sessionId", sessionID.Hex()),
+							zap.Error(err))
+					}
+					return // Defer will reset isProcessing; skip to next message, don't call streamAIResponse
+				}
+
+				// ONLY stream response if NOT interrupting a subchat (i.e., this is main chat)
+				// Create cancellable context for this AI execution (allows stop button to cancel)
+				// PHASE 3 Context Lifecycle: aiExecCtx is child of aiCtx which is child of httpCtx
+				// So HTTP cancellation propagates automatically through context hierarchy!
+				aiExecCtx, aiExecCancel := context.WithCancel(aiCtx)
+
+				// Store the cancel function so stop handler can call it
 				currentAICancelMu.Lock()
-				currentAICancel = nil
+				currentAICancel = aiExecCancel
 				currentAICancelMu.Unlock()
-				aiExecCancel() // Always call cancel to release resources
-				// Wait for cleanup goroutine to exit (prevents goroutine leak)
-				<-cleanupDone
-			}()
 
-			h.streamAIResponse(aiExecCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
+				// PHASE 3 Context Lifecycle: Simplified cancellation propagation
+				// HTTP cancellation now flows automatically through context hierarchy:
+				//   HTTP -> AI (10min) -> aiExecCtx
+				// We only need to handle explicit cleanup.done signal
+				cleanupDone := make(chan struct{})
+				go func() {
+					defer close(cleanupDone)
+					select {
+					case <-cleanup.done:
+						h.logger.Info("🛑 Cleanup signal received - cancelling AI execution",
+							zap.String("sessionId", sessionID.Hex()),
+							zap.String("reason", "cleanup requested"))
+						aiExecCancel()
+					case <-aiExecCtx.Done():
+						// Context cancelled (HTTP disconnect, timeout, or stop button)
+						// Log the reason for debugging
+						if aiExecCtx.Err() == context.Canceled {
+							h.logger.Debug("AI execution context cancelled",
+								zap.String("sessionId", sessionID.Hex()))
+						} else if aiExecCtx.Err() == context.DeadlineExceeded {
+							h.logger.Info("AI execution context deadline exceeded",
+								zap.String("sessionId", sessionID.Hex()))
+						}
+					}
+				}()
 
-			// Defer will reset isProcessing after response complete
+				// Ensure we clean up the cancel function after execution
+				defer func() {
+					currentAICancelMu.Lock()
+					currentAICancel = nil
+					currentAICancelMu.Unlock()
+					aiExecCancel() // Always call cancel to release resources
+					// Wait for cleanup goroutine to exit (prevents goroutine leak)
+					<-cleanupDone
+				}()
+
+				h.streamAIResponse(aiExecCtx, conn, sessionID, userMsg.Content, companyID, cleanup)
+
+				// Defer will reset isProcessing after response complete
 			}(userMsg) // Pass userMsg to goroutine
 		}
 	}
@@ -1547,204 +1546,203 @@ TOOL USAGE RULES - PREVENT INFINITE LOOPS:
 
 	// Step 5: Inject system prompt as first message (if exists)
 	if systemPromptText != "" {
-	// Step 5: Inject session ID, company ID, error prevention mode, complexity analysis mode, and AI config into context for tool access
-	ctxWithSession := context.WithValue(ctx, "sessionID", sessionID.Hex())
-	ctxWithCompany := context.WithValue(ctxWithSession, "companyID", companyID)
-	ctxWithErrorPrevention := context.WithValue(ctxWithCompany, "errorPreventionMode", session.ErrorPreventionMode)
-	ctxWithComplexityAnalysis := context.WithValue(ctxWithErrorPrevention, "complexityAnalysisMode", session.ComplexityAnalysisMode)
-	// Inject AI config for code summarizer to use current session's provider/model
-	// Use plain string key "aiConfig" to ensure cross-package compatibility (typed context keys don't match across packages)
-	ctxWithAIConfig := context.WithValue(ctxWithComplexityAnalysis, "aiConfig", h.aiService.GetConfig())
+		// Step 5: Inject session ID, company ID, error prevention mode, complexity analysis mode, and AI config into context for tool access
+		ctxWithSession := context.WithValue(ctx, aiservice.SessionIDKey, sessionID.Hex())
+		ctxWithCompany := context.WithValue(ctxWithSession, aiservice.CompanyIDKey, companyID)
+		ctxWithErrorPrevention := context.WithValue(ctxWithCompany, aiservice.ErrorPreventionModeKey, session.ErrorPreventionMode)
+		ctxWithComplexityAnalysis := context.WithValue(ctxWithErrorPrevention, aiservice.ComplexityAnalysisModeKey, session.ComplexityAnalysisMode)
+		// Inject AI config for code summarizer to use current session's provider/model
+		ctxWithAIConfig := context.WithValue(ctxWithComplexityAnalysis, aiservice.AIConfigKey, h.aiService.GetConfig())
 
-	h.logger.Info("Context prepared for AI execution",
-		zap.String("sessionID", sessionID.Hex()),
-		zap.Bool("errorPreventionMode", session.ErrorPreventionMode),
-		zap.Bool("complexityAnalysisMode", session.ComplexityAnalysisMode),
-		zap.String("aiModel", h.aiService.GetConfig().Model),
-		zap.String("aiProvider", h.aiService.GetConfig().Provider))
+		h.logger.Info("Context prepared for AI execution",
+			zap.String("sessionID", sessionID.Hex()),
+			zap.Bool("errorPreventionMode", session.ErrorPreventionMode),
+			zap.Bool("complexityAnalysisMode", session.ComplexityAnalysisMode),
+			zap.String("aiModel", h.aiService.GetConfig().Model),
+			zap.String("aiProvider", h.aiService.GetConfig().Provider))
 
-	// Step 6: Register for interrupt notifications (for prioritized interrupt handling)
-	notifier := GetMessageNotifier(h.logger)
-	interruptCh := notifier.RegisterSession(sessionID)
-	defer notifier.UnregisterSession(sessionID)
+		// Step 6: Register for interrupt notifications (for prioritized interrupt handling)
+		notifier := GetMessageNotifier(h.logger)
+		interruptCh := notifier.RegisterSession(sessionID)
+		defer notifier.UnregisterSession(sessionID)
 
-	// Step 7: Create WebSocket sink for streaming output (using local adapter to avoid import cycles)
-	// PHASE 3 Buffer Monitoring: Use session-aware sink for buffer usage tracking
-	outputSink := newWebSocketSinkWithSession(conn, h, h.logger, sessionID.Hex())
+		// Step 7: Create WebSocket sink for streaming output (using local adapter to avoid import cycles)
+		// PHASE 3 Buffer Monitoring: Use session-aware sink for buffer usage tracking
+		outputSink := newWebSocketSinkWithSession(conn, h, h.logger, sessionID.Hex())
 
-	// Step 8: Determine allowed tools based on mode
-	var allowedTools []string
-	if isDirectSubagentChat {
-		// Direct subagent mode: Use filtered tools (exclude delegation tools)
-		allowedTools = h.aiService.GetAllowedToolsForDirectSubagent()
-		h.logger.Info("Using direct subagent mode with filtered tools",
-			zap.String("sessionId", sessionID.Hex()),
-			zap.Int("allowedToolsCount", len(allowedTools)),
-			zap.String("subagentName", func() string {
-				if session.ActiveSubagentName != nil {
-					return *session.ActiveSubagentName
-				}
-				if session.ActiveSubagentID != nil {
-					return session.ActiveSubagentID.Hex()
-				}
-				return "unknown"
-			}()))
-	} else {
-		// Coordinator mode: Use all tools (includes delegation)
-		h.logger.Info("Using coordinator mode with full tool access",
-			zap.String("sessionId", sessionID.Hex()))
-		// nil = all tools
-		allowedTools = nil
-	}
+		// Step 8: Determine allowed tools based on mode
+		var allowedTools []string
+		if isDirectSubagentChat {
+			// Direct subagent mode: Use filtered tools (exclude delegation tools)
+			allowedTools = h.aiService.GetAllowedToolsForDirectSubagent()
+			h.logger.Info("Using direct subagent mode with filtered tools",
+				zap.String("sessionId", sessionID.Hex()),
+				zap.Int("allowedToolsCount", len(allowedTools)),
+				zap.String("subagentName", func() string {
+					if session.ActiveSubagentName != nil {
+						return *session.ActiveSubagentName
+					}
+					if session.ActiveSubagentID != nil {
+						return session.ActiveSubagentID.Hex()
+					}
+					return "unknown"
+				}()))
+		} else {
+			// Coordinator mode: Use all tools (includes delegation)
+			h.logger.Info("Using coordinator mode with full tool access",
+				zap.String("sessionId", sessionID.Hex()))
+			// nil = all tools
+			allowedTools = nil
+		}
 
-	// Step 9: Create tool result processor with token-based deflection + byte-based limits
-	// This combines:
-	// 1. Token-based interceptor (context-aware, per-tool limits, metrics)
-	// 2. Byte-based processor (hard size limits, truncation tiers)
-	remainingContext := h.calculateRemainingContext(systemPromptText, messages)
-	h.logger.Info("📊 Context budget calculated for tool result processing",
-		zap.Int("remainingContextTokens", remainingContext),
-		zap.Int("messageCount", len(messages)))
+		// Step 9: Create tool result processor with token-based deflection + byte-based limits
+		// This combines:
+		// 1. Token-based interceptor (context-aware, per-tool limits, metrics)
+		// 2. Byte-based processor (hard size limits, truncation tiers)
+		remainingContext := h.calculateRemainingContext(systemPromptText, messages)
+		h.logger.Info("📊 Context budget calculated for tool result processing",
+			zap.Int("remainingContextTokens", remainingContext),
+			zap.Int("messageCount", len(messages)))
 
-	toolResultProcessor := func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
-		// PHASE 0: Check for code search summarization metadata and send notification
-		if toolName == "code_index_search" {
-			if resultMap, ok := output.(map[string]interface{}); ok {
-				if summarization, exists := resultMap["summarization"].(map[string]interface{}); exists {
-					if enabled, _ := summarization["enabled"].(bool); enabled {
-						resultsSummarized, _ := summarization["resultsSummarized"].(int)
-						// Handle float64 from JSON unmarshaling
-						if rs, ok := summarization["resultsSummarized"].(float64); ok {
-							resultsSummarized = int(rs)
+		toolResultProcessor := func(toolName string, output interface{}) (processedOutput string, shouldSave bool, shouldStream bool) {
+			// PHASE 0: Check for code search summarization metadata and send notification
+			if toolName == "code_index_search" {
+				if resultMap, ok := output.(map[string]interface{}); ok {
+					if summarization, exists := resultMap["summarization"].(map[string]interface{}); exists {
+						if enabled, _ := summarization["enabled"].(bool); enabled {
+							resultsSummarized, _ := summarization["resultsSummarized"].(int)
+							// Handle float64 from JSON unmarshaling
+							if rs, ok := summarization["resultsSummarized"].(float64); ok {
+								resultsSummarized = int(rs)
+							}
+							tokensUsed, _ := summarization["tokensUsed"].(int)
+							if tu, ok := summarization["tokensUsed"].(float64); ok {
+								tokensUsed = int(tu)
+							}
+
+							h.logger.Info("📋 Code search results summarized",
+								zap.Int("resultsSummarized", resultsSummarized),
+								zap.Int("tokensUsed", tokensUsed))
+
+							outputSink.SendSystemNotification(models.SystemNotification{
+								Category: "summarization",
+								Title:    "Search Results Summarized",
+								Message:  fmt.Sprintf("Summarized %d code search results", resultsSummarized),
+								Severity: "info",
+								Metadata: map[string]interface{}{
+									"toolName":          toolName,
+									"resultsSummarized": resultsSummarized,
+									"tokensUsed":        tokensUsed,
+								},
+							})
 						}
-						tokensUsed, _ := summarization["tokensUsed"].(int)
-						if tu, ok := summarization["tokensUsed"].(float64); ok {
-							tokensUsed = int(tu)
-						}
-
-						h.logger.Info("📋 Code search results summarized",
-							zap.Int("resultsSummarized", resultsSummarized),
-							zap.Int("tokensUsed", tokensUsed))
-
-						outputSink.SendSystemNotification(models.SystemNotification{
-							Category: "summarization",
-							Title:    "Search Results Summarized",
-							Message:  fmt.Sprintf("Summarized %d code search results", resultsSummarized),
-							Severity: "info",
-							Metadata: map[string]interface{}{
-								"toolName":          toolName,
-								"resultsSummarized": resultsSummarized,
-								"tokensUsed":        tokensUsed,
-							},
-						})
 					}
 				}
 			}
-		}
 
-		// PHASE 1: Token-based deflection (context-aware, per-tool limits)
-		if h.resultInterceptor != nil {
-			processedResult, deflection := h.resultInterceptor.CheckResult(toolName, output, remainingContext)
-			if deflection.WasDeflected {
-				// Record metrics
-				metrics.RecordToolResultDeflection(toolName)
-				metrics.RecordToolResultTokens(toolName, deflection.OriginalSize, true)
+			// PHASE 1: Token-based deflection (context-aware, per-tool limits)
+			if h.resultInterceptor != nil {
+				processedResult, deflection := h.resultInterceptor.CheckResult(toolName, output, remainingContext)
+				if deflection.WasDeflected {
+					// Record metrics
+					metrics.RecordToolResultDeflection(toolName)
+					metrics.RecordToolResultTokens(toolName, deflection.OriginalSize, true)
 
-				h.logger.Info("🛑 Tool result deflected by token-based interceptor",
-					zap.String("tool", toolName),
-					zap.Int("originalTokens", deflection.OriginalSize),
-					zap.Int("maxAllowed", deflection.MaxAllowed),
-					zap.Int("remainingContext", remainingContext))
+					h.logger.Info("🛑 Tool result deflected by token-based interceptor",
+						zap.String("tool", toolName),
+						zap.Int("originalTokens", deflection.OriginalSize),
+						zap.Int("maxAllowed", deflection.MaxAllowed),
+						zap.Int("remainingContext", remainingContext))
 
-				// Send deflection notification to frontend
-				overagePercent := float64(deflection.OriginalSize-deflection.MaxAllowed) / float64(deflection.MaxAllowed) * 100
-				outputSink.SendSystemNotification(models.SystemNotification{
-					Category: "deflection",
-					Title:    "Tool Result Deflected",
-					Message:  fmt.Sprintf("%s result exceeded token limit (%d tokens)", toolName, deflection.OriginalSize),
-					Severity: "warning",
-					Metadata: map[string]interface{}{
-						"toolName":   toolName,
-						"tokenCount": deflection.OriginalSize,
-						"limit":      deflection.MaxAllowed,
-						"overage":    fmt.Sprintf("%.1f%%", overagePercent),
-					},
-				})
+					// Send deflection notification to frontend
+					overagePercent := float64(deflection.OriginalSize-deflection.MaxAllowed) / float64(deflection.MaxAllowed) * 100
+					outputSink.SendSystemNotification(models.SystemNotification{
+						Category: "deflection",
+						Title:    "Tool Result Deflected",
+						Message:  fmt.Sprintf("%s result exceeded token limit (%d tokens)", toolName, deflection.OriginalSize),
+						Severity: "warning",
+						Metadata: map[string]interface{}{
+							"toolName":   toolName,
+							"tokenCount": deflection.OriginalSize,
+							"limit":      deflection.MaxAllowed,
+							"overage":    fmt.Sprintf("%.1f%%", overagePercent),
+						},
+					})
 
-				// Return deflection message
-				return deflection.Message, false, true // Don't save full, do stream the message
+					// Return deflection message
+					return deflection.Message, false, true // Don't save full, do stream the message
+				}
+
+				// Record non-deflected result metrics
+				estimator := NewTokenEstimator()
+				tokens := estimator.EstimateTokens(processedResult)
+				metrics.RecordToolResultTokens(toolName, tokens, false)
+
+				// Update output for next phase
+				output = processedResult
 			}
 
-			// Record non-deflected result metrics
-			estimator := NewTokenEstimator()
-			tokens := estimator.EstimateTokens(processedResult)
-			metrics.RecordToolResultTokens(toolName, tokens, false)
+			// PHASE 2: Byte-based processing (hard size limits, truncation tiers)
+			processed := h.processToolResultWithSizeLimit(toolName, output)
 
-			// Update output for next phase
-			output = processedResult
+			// Send summarization notification for suppressed or truncated results
+			if processed.Tier == "suppressed" || processed.Tier == "truncated" {
+				outputSink.SendSystemNotification(models.SystemNotification{
+					Category: "summarization",
+					Title:    "Tool Result Condensed",
+					Message:  fmt.Sprintf("%s result condensed (%s tier)", toolName, processed.Tier),
+					Severity: "info",
+					Metadata: map[string]interface{}{
+						"toolName":     toolName,
+						"tier":         processed.Tier,
+						"originalSize": processed.OriginalSize,
+						"isTruncated":  processed.IsTruncated,
+					},
+				})
+			}
+
+			return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
 		}
 
-		// PHASE 2: Byte-based processing (hard size limits, truncation tiers)
-		processed := h.processToolResultWithSizeLimit(toolName, output)
-
-		// Send summarization notification for suppressed or truncated results
-		if processed.Tier == "suppressed" || processed.Tier == "truncated" {
-			outputSink.SendSystemNotification(models.SystemNotification{
-				Category: "summarization",
-				Title:    "Tool Result Condensed",
-				Message:  fmt.Sprintf("%s result condensed (%s tier)", toolName, processed.Tier),
-				Severity: "info",
-				Metadata: map[string]interface{}{
-					"toolName":     toolName,
-					"tier":         processed.Tier,
-					"originalSize": processed.OriginalSize,
-					"isTruncated":  processed.IsTruncated,
-				},
+		// Step 10: Create executor config
+		// Callback for when message is saved despite WebSocket disconnection
+		onMessageSavedWhileDisconnected := func(sessID primitive.ObjectID) {
+			broadcaster := GetWebSocketBroadcaster(h.logger)
+			broadcaster.BroadcastToSession(sessID, models.StreamMessage{
+				Type:    "message_saved",
+				Content: "AI response saved - please refresh to see the full message",
 			})
 		}
 
-		return processed.OutputStr, processed.ShouldSaveFull, processed.ShouldStream
-	}
-
-	// Step 10: Create executor config
-	// Callback for when message is saved despite WebSocket disconnection
-	onMessageSavedWhileDisconnected := func(sessID primitive.ObjectID) {
-		broadcaster := GetWebSocketBroadcaster(h.logger)
-		broadcaster.BroadcastToSession(sessID, models.StreamMessage{
-			Type:    "message_saved",
-			Content: "AI response saved - please refresh to see the full message",
-		})
-	}
-
-	execConfig := executor.StreamConfig{
-		SessionID:                       sessionID,
-		CompanyID:                       companyID,
-		SystemPrompt:                    systemPromptText,
-		AllowedTools:                    allowedTools,
-		OutputSink:                      outputSink,
-		InterruptCh:                     interruptCh,
-		ToolResultProcessor:             toolResultProcessor,
-		OnMessageSavedWhileDisconnected: onMessageSavedWhileDisconnected,
-		Logger:                          h.logger,
-	}
-
-	// Step 11: Create and execute the stream executor (with adapted chat service)
-	chatServiceAdapter := &chatServiceAdapter{service: h.chatService}
-	exec := executor.NewStreamExecutor(execConfig, chatServiceAdapter, h.aiService)
-	fullResponse, err := exec.Execute(ctxWithAIConfig, langchainMessages)
-
-	if err != nil {
-		h.logger.Error("AI execution failed", zap.Error(err))
-		if !outputSink.IsDisconnected() {
-			h.sendError(conn, "AI execution failed: "+err.Error())
+		execConfig := executor.StreamConfig{
+			SessionID:                       sessionID,
+			CompanyID:                       companyID,
+			SystemPrompt:                    systemPromptText,
+			AllowedTools:                    allowedTools,
+			OutputSink:                      outputSink,
+			InterruptCh:                     interruptCh,
+			ToolResultProcessor:             toolResultProcessor,
+			OnMessageSavedWhileDisconnected: onMessageSavedWhileDisconnected,
+			Logger:                          h.logger,
 		}
-		return
-	}
 
-	h.logger.Info("AI execution completed successfully",
-		zap.String("sessionId", sessionID.Hex()),
-		zap.Int("responseLength", len(fullResponse)))
-}
+		// Step 11: Create and execute the stream executor (with adapted chat service)
+		chatServiceAdapter := &chatServiceAdapter{service: h.chatService}
+		exec := executor.NewStreamExecutor(execConfig, chatServiceAdapter, h.aiService)
+		fullResponse, err := exec.Execute(ctxWithAIConfig, langchainMessages)
+
+		if err != nil {
+			h.logger.Error("AI execution failed", zap.Error(err))
+			if !outputSink.IsDisconnected() {
+				h.sendError(conn, "AI execution failed: "+err.Error())
+			}
+			return
+		}
+
+		h.logger.Info("AI execution completed successfully",
+			zap.String("sessionId", sessionID.Hex()),
+			zap.Int("responseLength", len(fullResponse)))
+	}
 }
 
 // streamToolResult streams tool result to WebSocket with chunking for large outputs

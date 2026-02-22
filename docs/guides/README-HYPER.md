@@ -117,7 +117,7 @@ Open your browser to: **http://localhost:7095/ui**
 ./bin/hyper --mode=http
 
 # Or explicitly set:
-export EMBEDDING="llama"
+export EMBEDDING="ollama"
 export LLAMA_MODEL_PATH="models/nomic-embed-text-v1.5.Q4_K_M.gguf"
 ```
 
@@ -153,7 +153,7 @@ export OPENAI_API_KEY="your-key"
 - Speed: 15-30 seconds per chunk (slow, CPU-only)
 
 ```bash
-export EMBEDDING="local"
+export EMBEDDING="ollama"
 export TEI_URL="http://localhost:8080"
 ```
 
@@ -190,17 +190,17 @@ export CODE_INDEX_AUTO_SCAN="true"
 
 ```bash
 # Add folder for indexing
-curl -X POST http://localhost:7095/api/code-index/add-folder \
+curl -X POST http://localhost:7095/api/v1/code-index/add-folder \
   -H "Content-Type: application/json" \
   -d '{"folderPath": "/path/to/code"}'
 
 # Scan folder (generate embeddings)
-curl -X POST http://localhost:7095/api/code-index/scan \
+curl -X POST http://localhost:7095/api/v1/code-index/scan \
   -H "Content-Type: application/json" \
   -d '{"folderPath": "/path/to/code"}'
 
 # Search code semantically
-curl -X POST http://localhost:7095/api/code-index/search \
+curl -X POST http://localhost:7095/api/v1/code-index/search \
   -H "Content-Type: application/json" \
   -d '{"query": "authentication middleware", "limit": 10}'
 ```
@@ -214,7 +214,7 @@ curl -X POST http://localhost:7095/api/code-index/search \
 - Logs show: `Serving embedded UI from binary (production mode)`
 
 ### Development Mode (Filesystem UI)
-- UI served from `coordinator/ui/dist/`
+- UI served from `ui/dist/`
 - Requires running `npm run build` in UI directory
 - Useful for UI development with hot reload
 - Logs show: `Serving UI from filesystem (development mode)`
@@ -223,12 +223,12 @@ curl -X POST http://localhost:7095/api/code-index/search \
 
 ### Build Script (`build-native.sh`)
 1. Builds UI with Vite
-2. Copies UI dist to `coordinator/embed/ui/` for embedding
+2. Copies UI dist to `hyper/embed/ui/` for embedding
 3. Builds Go binary with embedded UI using `//go:embed`
 4. Creates optimized binary with `-ldflags="-s -w"` (strips debug info)
 
 ### Embedded Files
-- Location in binary: `coordinator/embed/ui.go`
+- Location in binary: `hyper/embed/ui.go`
 - Embed directive: `//go:embed all:ui/dist`
 - Served via: `http.FileSystem` interface
 - Total embedded size: ~4.2MB (compressed to ~800KB in binary)

@@ -11,13 +11,19 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    setupFiles: './tests/setup.ts',
+    setupFiles: './src/test/setup.ts',
     include: ['src/**/__tests__/**/*.{test,spec}.{ts,tsx}'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
       reportsDirectory: './test-reports/coverage',
       exclude: [
+        'dist/**',
+        'coverage/**',
+        'code-examples-invalid-date-fix.js',
+        'test-date-formatting.js',
+        'test_compaction.cjs',
+        'test_compaction_multi.cjs',
         'node_modules/',
         'tests/',
         '**/*.d.ts',

@@ -70,7 +70,7 @@ type ToolCapableProvider interface {
 }
 
 // ToolResponse contains the streaming response and any tool calls made by the AI
-// 
+//
 // Token Usage: The TokenUsage field contains token consumption metrics from the API response.
 // This includes prompt_tokens (input), completion_tokens (output), and total_tokens.
 // Token usage is automatically extracted from provider responses and logged via TokenUsageLogger.
@@ -89,12 +89,10 @@ func NewChatProvider(config *AIConfig, metricsStore MetricsStore) (ChatProvider,
 	}
 
 	switch config.Provider {
-	case "openai":
+	case "openai", "litellm", "custom":
 		return newOpenAIProvider(config, metricsStore)
 	case "anthropic":
-		return newAnthropicProvider(config, metricsStore)
-	case "custom":
-		return newCustomProvider(config)
+		return newAnthropicSDKProvider(config, metricsStore)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", config.Provider)
 	}
@@ -522,9 +520,9 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 					"role": "user",
 					"content": []map[string]interface{}{
 						{
-							"type":       "tool_result",
+							"type":        "tool_result",
 							"tool_use_id": sanitizeToolID(msg.ToolResult.ID),
-							"content":    resultStr,
+							"content":     resultStr,
 						},
 					},
 				})
@@ -639,15 +637,15 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Anthropic API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Parse response
 	var anthropicResp struct {
-		ID         string `json:"id"`
-		Type       string `json:"type"`
-		Role       string `json:"role"`
-		Content    []struct {
+		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
 			Type  string                 `json:"type"`
 			Text  string                 `json:"text,omitempty"`
 			ID    string                 `json:"id,omitempty"`
@@ -656,10 +654,10 @@ func (p *anthropicProvider) callAnthropicDirectly(ctx context.Context, messages 
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
-			InputTokens             int `json:"input_tokens"`
-			OutputTokens            int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
 			CacheCreationInputTokens int `json:"cache_creation_input_tokens"` // Tokens written to cache
-			CacheReadInputTokens    int `json:"cache_read_input_tokens"`     // Tokens read from cache
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`     // Tokens read from cache
 		} `json:"usage"`
 	}
 
@@ -846,23 +844,8 @@ func newCustomProvider(config *AIConfig) (*customProvider, error) {
 	}, nil
 }
 
-func (p *customProvider) StreamChat(ctx context.Context, messages []Message) (<-chan string, error) {
-	// Create output channel
-	outputChan := make(chan string, 100)
-
-	// Start streaming in goroutine
-	go func() {
-		defer close(outputChan)
-
-		// TODO: Implement custom HTTP endpoint streaming
-		// For now, return a placeholder error
-		select {
-		case <-ctx.Done():
-		case outputChan <- "ERROR: Custom provider not yet implemented":
-		}
-	}()
-
-	return outputChan, nil
+func (p *customProvider) StreamChat(_ context.Context, _ []Message) (<-chan string, error) {
+	return nil, fmt.Errorf("custom provider streaming is not implemented for endpoint %s", p.config.ProviderURL)
 }
 
 // SupportsTools returns false for custom provider (not implemented yet)

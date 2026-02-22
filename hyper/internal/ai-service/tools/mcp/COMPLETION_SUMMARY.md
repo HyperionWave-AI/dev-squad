@@ -17,7 +17,7 @@ Expose all 31 MCP tools from the Hyperion Coordinator to the Chat service via La
 
 ### 1. Coordinator Tools (16 total)
 
-**File:** `coordinator/ai-service/tools/mcp/coordinator_tools.go`
+**File:** `hyper/internal/ai-service/tools/mcp/coordinator_tools.go`
 
 Added 13 new tool wrappers:
 - `coordinator_upsert_knowledge` - Store knowledge in coordinator
@@ -45,7 +45,7 @@ Previously existing (3 tools):
 
 ### 2. Code Index Tools (5 total)
 
-**File:** `coordinator/ai-service/tools/mcp/code_index_tools.go`
+**File:** `hyper/internal/ai-service/tools/mcp/code_index_tools.go`
 
 Added 3 new tool wrappers:
 - `code_index_scan` - Scan/rescan folder for code updates
@@ -60,7 +60,7 @@ Previously existing (2 tools):
 
 ### 3. Qdrant Tools (2 total)
 
-**File:** `coordinator/ai-service/tools/mcp/qdrant_tools.go`
+**File:** `hyper/internal/ai-service/tools/mcp/qdrant_tools.go`
 
 Already implemented (no changes needed):
 - `qdrant_find` - Semantic similarity search in Qdrant
@@ -70,7 +70,7 @@ Already implemented (no changes needed):
 
 ### 4. HTTP Server Integration
 
-**File:** `coordinator/internal/server/http_server.go`
+**File:** `hyper/internal/server/http_server.go`
 
 Integrated all MCP tools with ChatService:
 ```go
@@ -93,7 +93,7 @@ mcptools.RegisterCodeIndexTools(toolRegistry, codeIndexStorage)
 
 ### 5. Bug Fixes
 
-**File:** `coordinator/internal/handlers/http_tools.go`
+**File:** `hyper/internal/handlers/http_tools.go`
 
 Fixed missing `context` import:
 ```go
@@ -121,14 +121,14 @@ import (
 - **Build Status:** ✅ Compiles successfully
 
 ### Files Modified
-1. `coordinator/ai-service/tools/mcp/coordinator_tools.go` (+704 lines)
-2. `coordinator/ai-service/tools/mcp/code_index_tools.go` (+148 lines)
-3. `coordinator/internal/server/http_server.go` (tool registration)
-4. `coordinator/internal/handlers/http_tools.go` (context import fix)
+1. `hyper/internal/ai-service/tools/mcp/coordinator_tools.go` (+704 lines)
+2. `hyper/internal/ai-service/tools/mcp/code_index_tools.go` (+148 lines)
+3. `hyper/internal/server/http_server.go` (tool registration)
+4. `hyper/internal/handlers/http_tools.go` (context import fix)
 
 ### Files Created
-1. `coordinator/ai-service/tools/mcp/IMPLEMENTATION_STATUS.md` - Detailed status tracking
-2. `coordinator/ai-service/tools/mcp/COMPLETION_SUMMARY.md` - This file
+1. `hyper/internal/ai-service/tools/mcp/IMPLEMENTATION_STATUS.md` - Detailed status tracking
+2. `hyper/internal/ai-service/tools/mcp/COMPLETION_SUMMARY.md` - This file
 
 ---
 

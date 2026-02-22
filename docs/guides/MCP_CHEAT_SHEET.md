@@ -56,16 +56,16 @@ mcp__hyper__coordinator_update_todo_status({
 
 ### 6. Search Knowledge
 ```typescript
-mcp__qdrant__qdrant-find({
-  collection_name: "technical-knowledge",
+mcp__hyper__knowledge_find({
+  collectionName: "technical-knowledge",
   query: "how to implement CSV export"
 })
 ```
 
 ### 7. Store Knowledge
 ```typescript
-mcp__qdrant__qdrant-store({
-  collection_name: "technical-knowledge",
+mcp__hyper__knowledge_store({
+  collectionName: "technical-knowledge",
   information: "Detailed implementation notes...",
   metadata: {
     taskId: "...",
@@ -112,8 +112,8 @@ mcp__hyper__coordinator_update_todo_status({
 | `coordinator_list_agent_tasks` | `agentName` (string, optional) | `humanTaskId` (string, optional) | - |
 | `coordinator_update_task_status` | `taskId` (string, required) | `status` (string, required) | `notes` (string, optional) |
 | `coordinator_update_todo_status` | `agentTaskId` (string, required) | `todoId` (string, required) | `status` (string, required) |
-| `qdrant-find` | `collection_name` (string, required) | `query` (string, required) | `limit` (number, optional) |
-| `qdrant-store` | `collection_name` (string, required) | `information` (string, required) | `metadata` (object, optional) |
+| `knowledge_find` | `collectionName` (string, required) | `query` (string, required) | `limit` (number, optional) |
+| `knowledge_store` | `collectionName` (string, required) | `information` (string, required) | `metadata` (object, optional) |
 
 ---
 
@@ -175,8 +175,8 @@ for (const todo of myTask.todos) {
 // 4. Task automatically marked completed when all TODOs done!
 
 // 5. Store knowledge
-await mcp__qdrant__qdrant-store({
-  collection_name: "technical-knowledge",
+await mcp__hyper__knowledge_store({
+  collectionName: "technical-knowledge",
   information: "Learned that...",
   metadata: {
     taskId: agentTaskId,

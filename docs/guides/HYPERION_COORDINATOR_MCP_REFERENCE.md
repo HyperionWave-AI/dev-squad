@@ -526,16 +526,13 @@ mcp__hyper__coordinator_add_task_prompt_notes({
 
 **HTTP Bridge Example:**
 ```bash
-curl -X POST http://hyperion:9999/coordinator/mcp/call \
+curl -X POST http://hyperion:9999/api/mcp/tools/call \
   -H "Content-Type: application/json" \
   -d '{
-    "method": "tools/call",
-    "params": {
-      "name": "coordinator_add_task_prompt_notes",
-      "arguments": {
-        "agentTaskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
-        "promptNotes": "Use streaming API"
-      }
+    "name": "coordinator_add_task_prompt_notes",
+    "arguments": {
+      "agentTaskId": "7b22374a-58a6-47fa-8790-978c6d2d4e5b",
+      "promptNotes": "Use streaming API"
     }
   }'
 ```
@@ -954,7 +951,7 @@ The coordinator MCP server provides **real-time workflow visibility resources** 
 - Find root causes of blocked tasks
 - Optimize parallel work via dependency analysis
 
-**📖 Full Resource Documentation:** See `coordinator/WORKFLOW_RESOURCES.md`
+**📖 Full Resource Documentation:** See this guide's "Workflow Resources" section.
 
 ---
 

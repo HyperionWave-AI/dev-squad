@@ -124,14 +124,14 @@ type UpdateTaskStatusResponse struct {
 }
 
 type CreateAgentTaskRequest struct {
-	HumanTaskID       string                    `json:"humanTaskId" binding:"required"`
-	AgentName         string                    `json:"agentName" binding:"required"`
-	Role              string                    `json:"role" binding:"required"`
-	Todos             []storage.TodoItemInput   `json:"todos" binding:"required"`
-	ContextSummary    string                    `json:"contextSummary,omitempty"`
-	FilesModified     []string                  `json:"filesModified,omitempty"`
-	QdrantCollections []string                  `json:"qdrantCollections,omitempty"`
-	PriorWorkSummary  string                    `json:"priorWorkSummary,omitempty"`
+	HumanTaskID       string                  `json:"humanTaskId" binding:"required"`
+	AgentName         string                  `json:"agentName" binding:"required"`
+	Role              string                  `json:"role" binding:"required"`
+	Todos             []storage.TodoItemInput `json:"todos" binding:"required"`
+	ContextSummary    string                  `json:"contextSummary,omitempty"`
+	FilesModified     []string                `json:"filesModified,omitempty"`
+	QdrantCollections []string                `json:"qdrantCollections,omitempty"`
+	PriorWorkSummary  string                  `json:"priorWorkSummary,omitempty"`
 }
 
 type CreateAgentTaskResponse struct {
@@ -217,11 +217,11 @@ type RebuildCollectionCountsResponse struct {
 
 // Code Index DTOs
 type AddFolderRequest struct {
-	FolderPath       string   `json:"folderPath" binding:"required"`
-	Description      string   `json:"description,omitempty"`
-	IncludePatterns  []string `json:"includePatterns,omitempty"`
-	ExcludePatterns  []string `json:"excludePatterns,omitempty"`
-	ChunkSize        string   `json:"chunkSize,omitempty"` // T-shirt size: s|m|l|xl
+	FolderPath      string   `json:"folderPath" binding:"required"`
+	Description     string   `json:"description,omitempty"`
+	IncludePatterns []string `json:"includePatterns,omitempty"`
+	ExcludePatterns []string `json:"excludePatterns,omitempty"`
+	ChunkSize       string   `json:"chunkSize,omitempty"` // T-shirt size: s|m|l|xl
 }
 
 type FileDetailsDTO struct {
@@ -304,9 +304,9 @@ type SearchResultDTO struct {
 	FullFileRetrieved bool    `json:"fullFileRetrieved"`
 	ChunkSize         string  `json:"chunkSize,omitempty"` // T-shirt size: s, m, l, xl
 	// AST metadata
-	ChunkType    string `json:"chunkType,omitempty"`
-	NodeType     string `json:"nodeType,omitempty"`
-	NodeName     string `json:"nodeName,omitempty"`
+	ChunkType string `json:"chunkType,omitempty"`
+	NodeType  string `json:"nodeType,omitempty"`
+	NodeName  string `json:"nodeName,omitempty"`
 }
 
 type SearchResponse struct {
@@ -787,7 +787,7 @@ func (h *RESTAPIHandler) BrowseKnowledge(c *gin.Context) {
 	}
 
 	// If no collection specified, browse across all major collections
-	collectionsToQuery := []string{}
+	var collectionsToQuery []string
 	if collection == "" || collection == "All Collections" {
 		collectionsToQuery = []string{
 			"technical-knowledge",
@@ -1211,39 +1211,39 @@ func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 // This matches the language metadata stored during indexing
 func fileExtensionToLanguage(extension string) string {
 	extensionMap := map[string]string{
-		".go":      "go",
-		".js":      "javascript",
-		".ts":      "typescript",
-		".jsx":     "javascript",
-		".tsx":     "typescript",
-		".py":      "python",
-		".java":    "java",
-		".c":       "c",
-		".cpp":     "cpp",
-		".h":       "c",
-		".hpp":     "cpp",
-		".cs":      "csharp",
-		".rb":      "ruby",
-		".php":     "php",
-		".rs":      "rust",
-		".swift":   "swift",
-		".kt":      "kotlin",
-		".m":       "objective-c",
-		".scala":   "scala",
-		".r":       "r",
-		".sql":     "sql",
-		".sh":      "shell",
-		".bash":    "shell",
-		".yaml":    "yaml",
-		".yml":     "yaml",
-		".json":    "json",
-		".xml":     "xml",
-		".html":    "html",
-		".css":     "css",
-		".scss":    "scss",
-		".less":    "less",
-		".vue":     "vue",
-		".md":      "markdown",
+		".go":    "go",
+		".js":    "javascript",
+		".ts":    "typescript",
+		".jsx":   "javascript",
+		".tsx":   "typescript",
+		".py":    "python",
+		".java":  "java",
+		".c":     "c",
+		".cpp":   "cpp",
+		".h":     "c",
+		".hpp":   "cpp",
+		".cs":    "csharp",
+		".rb":    "ruby",
+		".php":   "php",
+		".rs":    "rust",
+		".swift": "swift",
+		".kt":    "kotlin",
+		".m":     "objective-c",
+		".scala": "scala",
+		".r":     "r",
+		".sql":   "sql",
+		".sh":    "shell",
+		".bash":  "shell",
+		".yaml":  "yaml",
+		".yml":   "yaml",
+		".json":  "json",
+		".xml":   "xml",
+		".html":  "html",
+		".css":   "css",
+		".scss":  "scss",
+		".less":  "less",
+		".vue":   "vue",
+		".md":    "markdown",
 	}
 
 	// Normalize extension to lowercase with leading dot
@@ -1615,8 +1615,8 @@ func (h *RESTAPIHandler) EnableWatcher(c *gin.Context) {
 	h.logger.Info("Enabled file watcher", zap.Int("foldersAdded", addedCount))
 
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": fmt.Sprintf("File watcher enabled for %d folders", addedCount),
+		"success":        true,
+		"message":        fmt.Sprintf("File watcher enabled for %d folders", addedCount),
 		"foldersWatched": addedCount,
 	})
 }
@@ -1655,8 +1655,8 @@ func (h *RESTAPIHandler) DisableWatcher(c *gin.Context) {
 	h.logger.Info("Disabled file watcher", zap.Int("foldersRemoved", removedCount))
 
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": fmt.Sprintf("File watcher disabled, stopped watching %d folders", removedCount),
+		"success":        true,
+		"message":        fmt.Sprintf("File watcher disabled, stopped watching %d folders", removedCount),
 		"foldersStopped": removedCount,
 	})
 }
@@ -1675,9 +1675,9 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 
 	if len(folders) == 0 {
 		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "No folders to reindex",
-			"foldersReindexed": 0,
+			"success":           true,
+			"message":           "No folders to reindex",
+			"foldersReindexed":  0,
 			"totalFilesIndexed": 0,
 		})
 		return
@@ -1828,9 +1828,9 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 		zap.Int("totalFilesIndexed", totalFilesIndexed))
 
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": fmt.Sprintf("Reindexed %d folders", foldersReindexed),
-		"foldersReindexed": foldersReindexed,
+		"success":           true,
+		"message":           fmt.Sprintf("Reindexed %d folders", foldersReindexed),
+		"foldersReindexed":  foldersReindexed,
 		"totalFilesIndexed": totalFilesIndexed,
 		"totalFilesUpdated": totalFilesUpdated,
 		"totalFilesSkipped": totalFilesSkipped,
@@ -2165,14 +2165,14 @@ func (h *RESTAPIHandler) ClearAllIndexData(c *gin.Context) {
 
 // GetFileWithContentResponse includes full file content
 type GetFileWithContentResponse struct {
-	FileID      string `json:"fileId"`
-	Path        string `json:"path"`
-	Language    string `json:"language"`
-	Content     string `json:"content"`
-	LineCount   int    `json:"lineCount"`
-	Size        int64  `json:"size"`
-	ChunkCount  int    `json:"chunkCount"`
-	IndexedAt   string `json:"indexedAt"`
+	FileID     string `json:"fileId"`
+	Path       string `json:"path"`
+	Language   string `json:"language"`
+	Content    string `json:"content"`
+	LineCount  int    `json:"lineCount"`
+	Size       int64  `json:"size"`
+	ChunkCount int    `json:"chunkCount"`
+	IndexedAt  string `json:"indexedAt"`
 }
 
 // HandleGetFileWithContent returns a file with its full content assembled from chunks
@@ -2475,10 +2475,10 @@ func (h *RESTAPIHandler) handleCreateAgentTaskCommand(c *gin.Context, req AgentC
 		req.AgentType,
 		role,
 		todos,
-		"",   // contextSummary
-		nil,  // filesModified
-		nil,  // qdrantCollections
-		"",   // priorWorkSummary
+		"",  // contextSummary
+		nil, // filesModified
+		nil, // qdrantCollections
+		"",  // priorWorkSummary
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, AgentCommunicationResponse{

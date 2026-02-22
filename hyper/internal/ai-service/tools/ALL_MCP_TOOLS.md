@@ -1,10 +1,10 @@
 # Complete MCP Tools Inventory for Chat Integration
 
-## Total: 31 MCP Tools (from coordinator/mcp-server/main.go:447)
+## Total: 31 MCP Tools (from hyper/cmd/coordinator/main.go)
 
 ### ✅ Category 1: Coordinator Tools (17 tools)
 **Handler:** `toolHandler.RegisterToolHandlers()`
-**File:** `coordinator/mcp-server/handlers/tools.go`
+**File:** `hyper/internal/mcp/handlers/tools.go`
 
 1. `coordinator_upsert_knowledge` - Store knowledge entries
 2. `coordinator_query_knowledge` - Search knowledge base
@@ -26,14 +26,14 @@
 
 ### ✅ Category 2: Qdrant Tools (2 tools)
 **Handler:** `qdrantToolHandler.RegisterQdrantTools()`
-**File:** `coordinator/mcp-server/handlers/qdrant_tools.go`
+**File:** `hyper/internal/mcp/handlers/qdrant_tools.go`
 
 18. `knowledge_find` - Semantic search in knowledge base
 19. `knowledge_store` - Store knowledge with embeddings
 
 ### ✅ Category 3: Code Index Tools (5 tools)
 **Handler:** `codeToolsHandler.RegisterCodeIndexTools()`
-**File:** `coordinator/mcp-server/handlers/code_tools.go`
+**File:** `hyper/internal/mcp/handlers/code_tools.go`
 
 20. `code_index_add_folder` - Add folder to code index
 21. `code_index_scan` - Scan/rescan folder
@@ -43,7 +43,7 @@
 
 ### ✅ Category 4: Filesystem Tools (4 tools)
 **Handler:** `filesystemToolsHandler.RegisterFilesystemTools()`
-**File:** `coordinator/mcp-server/handlers/filesystem_tools.go`
+**File:** `hyper/internal/mcp/handlers/filesystem_tools.go`
 
 25. `bash` - Execute shell commands
 26. `file_read` - Read file contents
@@ -54,7 +54,7 @@
 
 ### ✅ Category 5: Tools Discovery (3 tools)
 **Handler:** `toolsDiscoveryHandler.RegisterToolsDiscoveryTools()`
-**File:** `coordinator/mcp-server/handlers/tools_discovery.go`
+**File:** `hyper/internal/mcp/handlers/tools_discovery.go`
 
 29. `discover_tools` - List all available tools
 30. `get_tool_schema` - Get tool schema by name

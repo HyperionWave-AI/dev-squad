@@ -30,6 +30,75 @@ func TestNewOpenAIProvider_DefaultConfig(t *testing.T) {
 	assert.NotNil(t, provider.tokenLogger)
 }
 
+func TestNewChatProvider_Routing(t *testing.T) {
+	testCases := []struct {
+		name               string
+		config             *AIConfig
+		expectOpenAI       bool
+		expectAnthropicSDK bool
+	}{
+		{
+			name: "openai",
+			config: &AIConfig{
+				Provider:      "openai",
+				Model:         "gpt-4o-mini",
+				APIKey:        "test-api-key",
+				MaxIterations: 100,
+				Temperature:   0.7,
+			},
+			expectOpenAI: true,
+		},
+		{
+			name: "litellm",
+			config: &AIConfig{
+				Provider:      "litellm",
+				ProviderURL:   "http://localhost:4000/v1",
+				Model:         "gpt-4o-mini",
+				APIKey:        "test-api-key",
+				MaxIterations: 100,
+				Temperature:   0.7,
+			},
+			expectOpenAI: true,
+		},
+		{
+			name: "anthropic-native-sdk",
+			config: &AIConfig{
+				Provider:      "anthropic",
+				Model:         "claude-3-5-sonnet-latest",
+				APIKey:        "test-api-key",
+				MaxIterations: 100,
+				Temperature:   0.7,
+			},
+			expectAnthropicSDK: true,
+		},
+		{
+			name: "custom-routed-via-openai",
+			config: &AIConfig{
+				Provider:      "custom",
+				ProviderURL:   "http://localhost:4000/v1",
+				Model:         "openai/gpt-4o-mini",
+				APIKey:        "test-api-key",
+				MaxIterations: 100,
+				Temperature:   0.7,
+			},
+			expectOpenAI: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewChatProvider(tc.config, nil)
+			require.NoError(t, err)
+
+			_, openAIOk := provider.(*openAIProvider)
+			_, anthropicOk := provider.(*anthropicSDKProvider)
+
+			assert.Equal(t, tc.expectOpenAI, openAIOk, "unexpected OpenAI provider routing")
+			assert.Equal(t, tc.expectAnthropicSDK, anthropicOk, "unexpected Anthropic provider routing")
+		})
+	}
+}
+
 // TestNewOpenAIProvider_CustomBaseURL tests provider creation with custom base URL
 func TestNewOpenAIProvider_CustomBaseURL(t *testing.T) {
 	config := &AIConfig{

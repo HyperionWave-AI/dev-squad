@@ -13,18 +13,35 @@ func main() {
 	fmt.Println("=== OpenAI Provider Test with DeepInfra ===")
 	fmt.Println()
 
+	setEnvOrExit := func(key, value string) {
+		if err := os.Setenv(key, value); err != nil {
+			fmt.Printf("❌ Failed to set %s: %v\n", key, err)
+			os.Exit(1)
+		}
+	}
+
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+	if apiKey == "" {
+		fmt.Println("❌ Missing API key")
+		fmt.Println("   Set API_KEY or OPENAI_API_KEY before running this command.")
+		os.Exit(1)
+	}
+
 	// Configure for DeepInfra
 	// DeepInfra API endpoint (OpenAI-compatible)
-	os.Setenv("AI_PROVIDER", "openai")
-	os.Setenv("PROVIDER_URL", "https://api.deepinfra.com/v1/openai")
-	os.Setenv("API_KEY", "CbceTXwStWFjr4V8qFdVEjmuqcjdnwf0")
+	setEnvOrExit("AI_PROVIDER", "openai")
+	setEnvOrExit("PROVIDER_URL", "https://api.deepinfra.com/v1/openai")
+	setEnvOrExit("API_KEY", apiKey)
 	// Best models on DeepInfra for tool use:
 	// - meta-llama/Llama-3.3-70B-Instruct (excellent, fast)
 	// - Qwen/Qwen2.5-72B-Instruct (great for coding)
 	// - deepseek-ai/DeepSeek-V3 (very capable)
-	os.Setenv("AI_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
-	os.Setenv("TEMPERATURE", "0.7")
-	os.Setenv("MAX_OUT_TOKENS", "1024")
+	setEnvOrExit("AI_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+	setEnvOrExit("TEMPERATURE", "0.7")
+	setEnvOrExit("MAX_OUT_TOKENS", "1024")
 
 	// Load config
 	config, err := aiservice.LoadAIConfig("")

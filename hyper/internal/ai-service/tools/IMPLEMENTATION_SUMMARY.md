@@ -83,7 +83,7 @@ Successfully implemented 5 LangChain Go tools for filesystem operations with com
 ```
 PASS
 coverage: 74.3% of statements
-ok      hyperion-coordinator/ai-service/tools   1.221s
+ok      hyper/internal/ai-service/tools   1.221s
 ```
 
 All test cases passing:

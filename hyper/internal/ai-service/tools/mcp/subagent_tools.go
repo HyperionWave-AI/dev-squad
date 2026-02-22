@@ -270,7 +270,7 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 
 	// ALWAYS try to get session ID from context first (most reliable)
 	var parentChatID string
-	if sessionID, hasSession := ctx.Value("sessionID").(string); hasSession && sessionID != "" {
+	if sessionID, hasSession := ctx.Value(aiservice.SessionIDKey).(string); hasSession && sessionID != "" {
 		parentChatID = sessionID
 		t.logger.Info("✅ Using session ID from context (auto-detected)",
 			zap.String("agentTaskId", agentTaskID),
@@ -295,7 +295,7 @@ func (t *ExecuteSubagentTool) Execute(ctx context.Context, input map[string]inte
 
 	// Extract company ID from context
 	var companyID string
-	if companyIDValue, hasCompanyID := ctx.Value("companyID").(string); hasCompanyID && companyIDValue != "" {
+	if companyIDValue, hasCompanyID := ctx.Value(aiservice.CompanyIDKey).(string); hasCompanyID && companyIDValue != "" {
 		companyID = companyIDValue
 		t.logger.Info("✅ Using company ID from context",
 			zap.String("agentTaskId", agentTaskID),
@@ -729,13 +729,15 @@ func convertToolResultToPlainEnglish(toolName string, output interface{}, errorM
 				if count == 0 {
 					return "📄 Code search completed: No results found"
 				}
-				
+
 				// Build summary of first few results
 				summary := fmt.Sprintf("📄 Code search completed: Found %d result(s)", count)
 				if count > 0 && count <= 3 {
 					// For small result sets, show file names
 					for i, r := range results {
-						if i >= 3 { break }
+						if i >= 3 {
+							break
+						}
 						if resultItem, ok := r.(map[string]interface{}); ok {
 							if filePath, ok := resultItem["filePath"].(string); ok {
 								summary += fmt.Sprintf("\n  • %s", filePath)
@@ -948,10 +950,10 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	// Create output sink that sends to subchat session and notifies parent
 	// KEY FIX: Uses broadcaster for direct WebSocket streaming (no pre-registration needed)
 	outputSink := executor.NewSubchatOutputSink(
-		chatSession.ID,    // subchat session for real-time display
-		parentSessionID,   // parent session for progress notifications
-		broadcaster,       // WebSocket broadcaster for subchat streaming
-		progressNotifier,  // progress notifier for parent updates
+		chatSession.ID,   // subchat session for real-time display
+		parentSessionID,  // parent session for progress notifications
+		broadcaster,      // WebSocket broadcaster for subchat streaming
+		progressNotifier, // progress notifier for parent updates
 		agentTask.AgentName,
 		t.logger,
 	)
@@ -1051,6 +1053,7 @@ func (t *ExecuteSubagentTool) executeSubagentInBackground(subchatID string, agen
 	// interrupt handling mechanism, which is the same as direct subagent chat
 	_ = progressTracker // Suppress unused variable warning (tracker used for file operation logging)
 }
+
 // buildExecutionPhaseSystemPrompt creates a strict system prompt using OPERATIONAL enforcement language
 // Uses concrete "WRITE-ONLY MODE" instead of abstract "PHASE: EXECUTE" for better model compliance
 func (t *ExecuteSubagentTool) buildExecutionPhaseSystemPrompt() string {
@@ -1316,7 +1319,9 @@ func (t *ExecuteSubagentTool) summarizeToolResult(toolName string, output interf
 
 				// Process first 3 results for detailed summary
 				for i, r := range results {
-					if i >= 3 { break }
+					if i >= 3 {
+						break
+					}
 					if resultItem, ok := r.(map[string]interface{}); ok {
 						// Extract metadata
 						filePath := ""
@@ -1338,7 +1343,7 @@ func (t *ExecuteSubagentTool) summarizeToolResult(toolName string, output interf
 
 						// Build result summary
 						summary.WriteString(fmt.Sprintf("\n%d. 📄 %s (lines %d-%d)\n", i+1, filePath, startLine, endLine))
-						
+
 						// Extract first meaningful line of code for context
 						if len(content) > 0 {
 							lines := strings.Split(content, "\n")
@@ -1457,4 +1462,3 @@ Respond with ONLY valid JSON (no markdown, no explanation):
 
 	return result.Category, result.Guidance, nil
 }
-

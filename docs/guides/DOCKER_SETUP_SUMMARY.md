@@ -8,14 +8,14 @@ The Hyperion Coordinator runs as a multi-container Docker setup with three main 
 
 1. **hyperion-http-bridge** (Port 7095)
    - Combines MCP Server + HTTP Bridge in one container
-   - Built from `coordinator/mcp-http-bridge/Dockerfile.combined`
+   - Built from the unified `hyper/` service sources
    - Spawns MCP server as subprocess
    - Provides REST API for web clients
    - Handles CORS for UI access
 
 2. **hyperion-ui** (Port 5173)
    - React + TypeScript dashboard
-   - Built from `coordinator/ui/Dockerfile`
+   - Built from `ui/Dockerfile`
    - Nginx serves static files
    - Production-optimized build
 
@@ -65,7 +65,7 @@ The HTTP Bridge allows requests from:
 - `http://localhost` - Docker UI
 - `http://hyperion-ui` - Internal Docker network
 
-Location: `coordinator/mcp-http-bridge/main.go:362-375`
+Location: `hyper/cmd/coordinator/main.go`
 
 ## Environment Variables
 
@@ -187,7 +187,7 @@ docker-compose up -d
 
 1. **Backend (Go) Changes**:
 ```bash
-# Edit files in coordinator/mcp-http-bridge/ or coordinator/mcp-server/
+# Edit files in hyper/
 docker-compose build hyperion-http-bridge
 docker-compose up -d hyperion-http-bridge
 docker-compose logs -f hyperion-http-bridge
@@ -195,7 +195,7 @@ docker-compose logs -f hyperion-http-bridge
 
 2. **Frontend (React) Changes**:
 ```bash
-# Edit files in coordinator/ui/
+# Edit files in ui/
 docker-compose build hyperion-ui
 docker-compose up -d hyperion-ui
 docker-compose logs -f hyperion-ui
@@ -211,8 +211,8 @@ docker-compose restart
 
 For faster iteration:
 ```bash
-cd coordinator
-./start-coordinator.sh
+cd hyper
+make dev-hot
 ```
 
 This runs:
@@ -226,19 +226,13 @@ This runs:
 ├── docker-compose.yml                  # Multi-service orchestration
 ├── .env                                # Environment configuration
 ├── install.sh                          # Automated setup script
-├── coordinator/
-│   ├── mcp-server/                     # MCP protocol server
-│   │   ├── main.go
-│   │   ├── handlers/
-│   │   └── storage/
-│   ├── mcp-http-bridge/               # HTTP ↔ MCP adapter
-│   │   ├── main.go
-│   │   ├── Dockerfile                 # Single-service build
-│   │   └── Dockerfile.combined        # Multi-stage build (used)
-│   └── ui/                            # React dashboard
-│       ├── src/
-│       ├── Dockerfile                 # Production build
-│       └── nginx.conf                 # Nginx configuration
+├── hyper/
+│   ├── cmd/coordinator/               # Unified HTTP + MCP entrypoint
+│   └── internal/                      # Core services, handlers, storage
+└── ui/                                # React dashboard
+    ├── src/
+    ├── Dockerfile                     # Production build
+    └── nginx.conf                     # Nginx configuration
 ```
 
 ## Production Deployment

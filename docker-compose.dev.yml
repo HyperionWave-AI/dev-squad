@@ -18,7 +18,10 @@ services:
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       - EMBEDDING=${EMBEDDING:-local}
       - TEI_URL=${TEI_URL:-http://embedding-service:8080}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - AI_PROVIDER=${AI_PROVIDER:-openai}
+      - AI_MODEL=${AI_MODEL:-gpt-4o-mini}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://litellm:4000/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-dummy-key}
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-nomic-embed-text}
@@ -32,6 +35,7 @@ services:
     depends_on:
       - mongodb
       - qdrant
+      - litellm
     restart: unless-stopped
     networks:
       - hyperion-network
@@ -58,7 +62,10 @@ services:
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       - EMBEDDING=${EMBEDDING:-local}
       - TEI_URL=${TEI_URL:-http://embedding-service:8080}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - AI_PROVIDER=${AI_PROVIDER:-openai}
+      - AI_MODEL=${AI_MODEL:-gpt-4o-mini}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://litellm:4000/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-dummy-key}
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
       - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-nomic-embed-text}
@@ -75,6 +82,7 @@ services:
     depends_on:
       - mongodb
       - qdrant
+      - litellm
     restart: unless-stopped
     networks:
       - hyperion-network
@@ -102,6 +110,28 @@ services:
     restart: unless-stopped
     networks:
       - hyperion-network
+
+  # LiteLLM Gateway (OpenAI-compatible API)
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+    volumes:
+      - ./docker-compose/litellm.config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # MongoDB Database (local development)
   mongodb:

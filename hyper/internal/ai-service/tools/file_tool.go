@@ -12,14 +12,15 @@ import (
 	"strings"
 	"time"
 
+	aiservice "hyper/internal/ai-service"
 	"hyper/internal/validation"
 
 	"go.uber.org/zap"
 )
 
 const (
-	maxReadSize  = 10 * 1024 * 1024 // 10MB
-	maxWriteSize = 5 * 1024 * 1024  // 5MB
+	maxReadSize   = 10 * 1024 * 1024 // 10MB
+	maxWriteSize  = 5 * 1024 * 1024  // 5MB
 	maxDirEntries = 1000
 )
 
@@ -97,7 +98,7 @@ func (r *ReadFileTool) Call(ctx context.Context, input string) (string, error) {
 }
 
 // WriteFileTool writes file contents with safety checks
-type WriteFileTool struct{
+type WriteFileTool struct {
 	validator *validation.CodeValidator
 	logger    *zap.Logger
 }
@@ -166,7 +167,7 @@ func (w *WriteFileTool) Call(ctx context.Context, input string) (string, error) 
 	}
 
 	// SYNCHRONOUS post-write validation (only if error prevention mode is enabled)
-	errorPreventionMode := ctx.Value("errorPreventionMode")
+	errorPreventionMode := ctx.Value(aiservice.ErrorPreventionModeKey)
 	isErrorPreventionEnabled := errorPreventionMode != nil && errorPreventionMode.(bool)
 
 	if w.logger != nil {

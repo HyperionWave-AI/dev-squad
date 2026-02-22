@@ -21,6 +21,16 @@ const (
 	IdentityKey contextKey = "identity"
 	// AIConfigKey is the context key for AI configuration (used by code summarizer)
 	AIConfigKey contextKey = "aiConfig"
+	// SessionIDKey is the context key for chat session ID.
+	SessionIDKey contextKey = "sessionID"
+	// CompanyIDKey is the context key for tenant/company ID.
+	CompanyIDKey contextKey = "companyID"
+	// ErrorPreventionModeKey toggles synchronous validation in filesystem tools.
+	ErrorPreventionModeKey contextKey = "errorPreventionMode"
+	// ComplexityAnalysisModeKey toggles complexity-analysis tooling behavior.
+	ComplexityAnalysisModeKey contextKey = "complexityAnalysisMode"
+	// LastHumanTaskIDKey stores workflow-created human task IDs for downstream tools.
+	LastHumanTaskIDKey contextKey = "lastHumanTaskId"
 )
 
 // Identity represents user identity extracted from JWT
@@ -616,7 +626,7 @@ func (s *ChatService) GetToolRegistry() *ToolRegistry {
 func (s *ChatService) calculateRemainingContext(messages []Message) int {
 	// Get max context window based on model provider
 	maxContextWindow := 128000 // Default for GPT models
-	if s.config.Provider == "anthropic" {
+	if IsClaudeModel(s.config.Model, s.config.Provider) {
 		maxContextWindow = 200000 // Claude models have 200K context
 	}
 

@@ -5,6 +5,7 @@ version: '3.8'
 #
 # Services:
 #   - hyperion-coordinator: Unified service (REST API + UI serving)
+#   - litellm: OpenAI-compatible AI gateway (routes to OpenAI/Anthropic/etc.)
 #   - mongodb: Database for tasks, files, chunks
 #   - qdrant: Vector database (optional, can use cloud)
 #   - embedding-service: Text embeddings for code search
@@ -27,7 +28,10 @@ services:
       - QDRANT_API_KEY=${QDRANT_API_KEY}
       - EMBEDDING=${EMBEDDING:-local}
       - TEI_URL=${TEI_URL:-http://embedding-service:8080}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AI_PROVIDER=${AI_PROVIDER:-openai}
+      - AI_MODEL=${AI_MODEL:-gpt-4o-mini}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://litellm:4000/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-dummy-key}
       - VOYAGE_API_KEY=${VOYAGE_API_KEY}
       - VOYAGE_MODEL=${VOYAGE_MODEL:-voyage-3}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -35,6 +39,8 @@ services:
       - CODE_INDEX_AUTO_SCAN=${CODE_INDEX_AUTO_SCAN:-false}
     depends_on:
       mongodb:
+        condition: service_healthy
+      litellm:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -44,6 +50,26 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
+
+  # LiteLLM Gateway (OpenAI-compatible API)
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+    volumes:
+      - ./docker-compose/litellm.config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
+    networks:
+      - hyperion-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
       start_period: 10s
 
   # MongoDB Database

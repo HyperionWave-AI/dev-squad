@@ -7,7 +7,7 @@ All tools implement the LangChain Go `tools.Tool` interface and accept JSON inpu
 ### BashTool
 
 ```go
-import "hyperion-coordinator/ai-service/tools"
+import "hyper/internal/ai-service/tools"
 
 // Create tool
 bashTool := &tools.BashTool{}
@@ -234,7 +234,7 @@ writeInput := `{"content":"..."}`  // Error: content size exceeds limit
 ```go
 import (
     "github.com/tmc/langchaingo/tools"
-    fstools "hyperion-coordinator/ai-service/tools"
+    fstools "hyper/internal/ai-service/tools"
 )
 
 // Create tool instances

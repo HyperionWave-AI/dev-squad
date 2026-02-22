@@ -48,6 +48,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   // Get conversation mode to determine if we should show tool calls
   const { mode } = useConversationMode();
   const showToolDetails = mode === 'debug';
+  const TOOL_DISPLAY_LIMIT = 5;
+  const [showAllTools, setShowAllTools] = useState(false);
 
   // Handle tool_call messages - only show in debug mode
   if (isToolCall && message.toolCall && !showToolDetails) {
@@ -193,6 +195,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   ]);
 
   const hasToolCalls = allToolCalls.length > 0;
+  const hasMoreTools = allToolCalls.length > TOOL_DISPLAY_LIMIT;
+  const toolsToDisplay = showAllTools || !hasMoreTools
+    ? allToolCalls
+    : allToolCalls.slice(0, TOOL_DISPLAY_LIMIT);
+  const hiddenCount = allToolCalls.length - TOOL_DISPLAY_LIMIT;
 
   return (
     <div
@@ -284,19 +291,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
         )}
 
         {/* Tool Calls Accordion - Only show in debug mode */}
-        {showToolDetails && hasToolCalls && (() => {
-          const TOOL_DISPLAY_LIMIT = 5;
-          const [showAllTools, setShowAllTools] = useState(false);
-          const hasMoreTools = allToolCalls.length > TOOL_DISPLAY_LIMIT;
-          const toolsToDisplay = showAllTools || !hasMoreTools
-            ? allToolCalls
-            : allToolCalls.slice(0, TOOL_DISPLAY_LIMIT);
-          const hiddenCount = allToolCalls.length - TOOL_DISPLAY_LIMIT;
-
-          return (
-            <div className="mt-3">
-              <Accordion.Root type="multiple">
-                {toolsToDisplay.map((toolCall) => {
+        {showToolDetails && hasToolCalls && (
+          <div className="mt-3">
+            <Accordion.Root type="multiple">
+              {toolsToDisplay.map((toolCall) => {
               const toolResult = allToolResults.get(toolCall.id);
               const isPending = pendingToolCalls.has(toolCall.id);
               const hasError = toolResult?.error;
@@ -375,8 +373,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
             </button>
           )}
         </div>
-      );
-    })()}
+      )}
       </div>
     </div>
   );

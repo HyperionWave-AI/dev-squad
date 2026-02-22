@@ -75,7 +75,7 @@ func (t *AnalyzeComplexityTool) InputSchema() map[string]interface{} {
 
 func (t *AnalyzeComplexityTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	// Check if complexity analysis mode is enabled
-	complexityMode := ctx.Value("complexityAnalysisMode")
+	complexityMode := ctx.Value(aiservice.ComplexityAnalysisModeKey)
 	if complexityMode == nil || !complexityMode.(bool) {
 		return map[string]interface{}{
 			"error":   "Complexity analysis mode is disabled",
@@ -670,7 +670,7 @@ func (t *CreateAgentTaskTool) Execute(ctx context.Context, input map[string]inte
 
 	// MANDATORY COMPLEXITY ANALYSIS CHECK: When toggle is ON, require pre-analysis
 	var complexityAnalysisResult *map[string]interface{}
-	complexityModeEnabled := ctx.Value("complexityAnalysisMode") != nil && ctx.Value("complexityAnalysisMode").(bool)
+	complexityModeEnabled := ctx.Value(aiservice.ComplexityAnalysisModeKey) != nil && ctx.Value(aiservice.ComplexityAnalysisModeKey).(bool)
 
 	if complexityModeEnabled {
 		zap.L().Info("🔍 Complexity Analysis Mode: ENABLED - checking for mandatory pre-analysis",
@@ -1422,7 +1422,6 @@ func (t *FindSimilarTasksTool) Execute(ctx context.Context, input map[string]int
 		"minScore":     minScore,
 	}, nil
 }
-
 
 // RegisterCoordinatorTools registers all coordinator tools with the tool registry
 func RegisterCoordinatorTools(

@@ -339,7 +339,7 @@ curl -v -H "Origin: http://localhost:5173" \
 
 ```bash
 # From the test directory
-cd coordinator/mcp-server
+cd hyper
 go test -v
 ```
 
@@ -470,13 +470,11 @@ docker-compose logs hyperion-ui
 **Verify Dockerfile:**
 ```bash
 # Test HTTP Bridge build manually
-docker build -f coordinator/mcp-http-bridge/Dockerfile.combined \
-  -t hyperion-test \
-  coordinator/
-docker run --rm -it hyperion-test
+docker-compose build hyperion-http-bridge
+docker-compose run --rm hyperion-http-bridge /app/hyper-mcp --help
 
 # Test UI build manually
-docker build -t hyperion-ui-test coordinator/ui/
+docker build -t hyperion-ui-test ui/
 docker run --rm -p 8080:80 hyperion-ui-test
 ```
 
@@ -567,7 +565,7 @@ version: '3.8'
 services:
   hyper-mcp:
     build:
-      context: ./coordinator/mcp-server
+      context: ./hyper
       dockerfile: Dockerfile
     container_name: hyper-mcp-prod
     environment:

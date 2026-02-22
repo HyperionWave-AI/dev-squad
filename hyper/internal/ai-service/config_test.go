@@ -97,6 +97,30 @@ func TestLoadAIConfig_CustomProvider(t *testing.T) {
 	if config.Model != "custom-model-v1" {
 		t.Errorf("Expected model 'custom-model-v1', got: %s", config.Model)
 	}
+	if config.APIKey == "" {
+		t.Error("Expected custom provider to receive dummy API key when ProviderURL is set")
+	}
+}
+
+func TestLoadAIConfig_LiteLLMProvider_DefaultURL(t *testing.T) {
+	t.Setenv("AI_PROVIDER", "litellm")
+	t.Setenv("AI_MODEL", "gpt-4o-mini")
+	t.Setenv("LITELLM_API_KEY", "sk-litellm-test")
+
+	config, err := LoadAIConfig("")
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if config.Provider != "litellm" {
+		t.Errorf("Expected provider 'litellm', got: %s", config.Provider)
+	}
+	if config.ProviderURL != "http://localhost:4000/v1" {
+		t.Errorf("Expected default LiteLLM URL, got: %s", config.ProviderURL)
+	}
+	if config.APIKey != "sk-litellm-test" {
+		t.Errorf("Expected LITELLM_API_KEY value, got: %s", config.APIKey)
+	}
 }
 
 func TestLoadAIConfig_InvalidProvider(t *testing.T) {
@@ -150,6 +174,19 @@ func TestLoadAIConfig_MissingProviderURL_ForCustom(t *testing.T) {
 	_, err := LoadAIConfig("")
 	if err == nil {
 		t.Fatal("Expected error for missing PROVIDER_URL with custom provider, got nil")
+	}
+}
+
+func TestLoadAIConfig_AnthropicRequiresAPIKey(t *testing.T) {
+	t.Setenv("AI_PROVIDER", "anthropic")
+	t.Setenv("AI_MODEL", "claude-sonnet-4")
+	t.Setenv("PROVIDER_URL", "https://api.anthropic.com/v1")
+	t.Setenv("API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	_, err := LoadAIConfig("")
+	if err == nil {
+		t.Fatal("Expected error for missing anthropic API key, got nil")
 	}
 }
 
@@ -211,6 +248,22 @@ func TestValidate_InvalidTemperature(t *testing.T) {
 	err := config.Validate()
 	if err == nil {
 		t.Fatal("Expected error for invalid temperature, got nil")
+	}
+}
+
+func TestValidate_LiteLLMProvider(t *testing.T) {
+	config := &AIConfig{
+		Provider:      "litellm",
+		ProviderURL:   "http://localhost:4000/v1",
+		APIKey:        "dummy-key",
+		Model:         "gpt-4o-mini",
+		MaxIterations: 100,
+		Temperature:   0.7,
+	}
+
+	err := config.Validate()
+	if err != nil {
+		t.Errorf("Expected no error, got: %v", err)
 	}
 }
 

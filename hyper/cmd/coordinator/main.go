@@ -18,9 +18,9 @@ import (
 	"hyper/internal/mcp/embeddings"
 	"hyper/internal/mcp/handlers"
 	"hyper/internal/mcp/indexer"
-	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/parser"
 	"hyper/internal/mcp/storage"
+	"hyper/internal/mcp/summarizer"
 	"hyper/internal/mcp/watcher"
 	"hyper/internal/server"
 	"hyper/internal/validation"
@@ -122,7 +122,6 @@ func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient,
 	return nil
 }
 
-
 // initLogger creates a logger that outputs to both console and file
 func initLogger() (*zap.Logger, error) {
 	// Ensure logs directory exists
@@ -194,8 +193,8 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "init" {
 		// Parse init-specific flags
 		initFlags := flag.NewFlagSet("init", flag.ExitOnError)
-		provider := initFlags.String("provider", "", "AI provider (openai, anthropic, voyage, ollama)")
-		model := initFlags.String("model", "", "AI model name (e.g., gpt-4, claude-sonnet-4, voyage-3)")
+		provider := initFlags.String("provider", "", "AI provider (openai, litellm, anthropic, voyage, ollama)")
+		model := initFlags.String("model", "", "AI model name (e.g., gpt-4o-mini, claude-sonnet-4, voyage-3)")
 		token := initFlags.String("token", "", "API token/key (required for cloud providers)")
 		apiURL := initFlags.String("api-url", "", "Custom API URL (optional)")
 
@@ -571,8 +570,7 @@ func main() {
 					logger.Info("Cleared stale file metadata successfully")
 
 					// Recreate the folder entry
-					folder, err = codeIndexStorage.AddFolder(projectRoot, "Auto-indexed project root")
-					if err != nil {
+					if _, err := codeIndexStorage.AddFolder(projectRoot, "Auto-indexed project root"); err != nil {
 						logger.Error("Failed to recreate folder metadata", zap.Error(err))
 					}
 				}

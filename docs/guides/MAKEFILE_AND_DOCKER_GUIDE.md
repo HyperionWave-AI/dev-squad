@@ -492,7 +492,7 @@ volumes:
 docker compose -f docker-compose.full.yml up -d
 
 # Configure Hyper to use TEI
-export EMBEDDING="local"
+export EMBEDDING="ollama"
 export TEI_URL="http://localhost:8080"
 ```
 
@@ -669,7 +669,7 @@ export OPENAI_MODEL="text-embedding-3-small"
 docker compose -f docker-compose.full.yml up -d
 
 # Configure Hyper
-export EMBEDDING="local"
+export EMBEDDING="ollama"
 export TEI_URL="http://localhost:8080"
 ```
 
@@ -722,9 +722,9 @@ QDRANT_KNOWLEDGE_COLLECTION="knowledge"
 
 # ==========================================
 # EMBEDDING PROVIDER
-# Options: llama, ollama, voyage, openai, local
+# Options: ollama, voyage, openai
 # ==========================================
-EMBEDDING="llama"
+EMBEDDING="ollama"
 
 # Llama.cpp (embedded)
 LLAMA_MODEL_PATH="models/nomic-embed-text-v1.5.Q4_K_M.gguf"

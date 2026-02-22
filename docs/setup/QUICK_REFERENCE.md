@@ -102,7 +102,7 @@ export OPENAI_MODEL="text-embedding-3-small"
 docker compose -f docker-compose.full.yml up -d
 
 # Configure
-export EMBEDDING="local"
+export EMBEDDING="ollama"
 export TEI_URL="http://localhost:8080"
 ```
 **Speed:** 15-30s per chunk | **Cost:** Free | **Dims:** 768
@@ -266,7 +266,7 @@ EMBEDDING="voyage"  # Best quality, cloud-hosted
 
 ### For Testing (No GPU)
 ```bash
-EMBEDDING="local"  # TEI, CPU-only, slower
+EMBEDDING="ollama"  # TEI, CPU-only, slower
 ```
 
 ---

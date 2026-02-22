@@ -12,12 +12,11 @@ All agents working on the AI Band Manager project (and any Hyperion project) nee
 {
   "mcpServers": {
     "hyper": {
-      "command": "node",
+      "command": "/Users/alcwynparker/Documents/2025/2025-09-30-dev-ex-mcp/hyper/bin/hyper",
       "args": [
-        "/Users/alcwynparker/Documents/2025/2025-09-30-dev-ex-mcp/coordinator/mcp-http-bridge/dist/index.js"
+        "--mode=mcp"
       ],
       "env": {
-        "COORDINATOR_API_URL": "http://localhost:3000",
         "LOG_LEVEL": "info"
       }
     }
@@ -134,10 +133,10 @@ Create a shared MCP configuration that all agent processes can reference.
 {
   "mcpServers": {
     "hyper": {
-      "command": "node",
-      "args": ["/path/to/mcp-http-bridge/dist/index.js"],
+      "command": "/path/to/hyper/bin/hyper",
+      "args": ["--mode=mcp"],
       "env": {
-        "COORDINATOR_API_URL": "http://localhost:3000"
+        "LOG_LEVEL": "info"
       }
     },
     "qdrant-mcp": {

@@ -64,8 +64,12 @@ export function usePromptNotes({ task, onUpdate }: UsePromptNotesParams): UsePro
       if (originalNotes !== undefined) {
         setDraftNotes(originalNotes);
       }
-      // Trigger UI rollback
-      onUpdate();
+      // Trigger UI rollback without surfacing secondary rollback errors.
+      try {
+        onUpdate();
+      } catch {
+        // Preserve original error state from the save path.
+      }
     } finally {
       setIsSaving(false);
     }
@@ -96,7 +100,11 @@ export function usePromptNotes({ task, onUpdate }: UsePromptNotesParams): UsePro
       if (originalNotes !== undefined) {
         setDraftNotes(originalNotes);
       }
-      onUpdate();
+      try {
+        onUpdate();
+      } catch {
+        // Preserve original error state from the clear path.
+      }
     } finally {
       setIsSaving(false);
     }

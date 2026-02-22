@@ -114,15 +114,15 @@ $ ls -lh bin/hyper
 #### Fixed References:
 ```typescript
 // OLD (removed):
-await mcp__qdrant__qdrant_find({ collection_name: "..." })
-await mcp__qdrant__qdrant_store({ collection_name: "..." })
+await legacy_qdrant_find({ legacyCollectionField: "..." })
+await legacy_qdrant_store({ legacyCollectionField: "..." })
 
 // NEW (current):
 await mcp__hyper__knowledge_find({ collectionName: "..." })
 await mcp__hyper__knowledge_store({ collectionName: "..." })
 ```
 
-**Also fixed:** Parameter names from `collection_name` → `collectionName` (camelCase compliance)
+**Also fixed:** Parameter names migrated from legacy snake_case to `collectionName` (camelCase compliance)
 
 ---
 
@@ -170,7 +170,7 @@ During testing, discovered compilation errors in other test files within the `ha
 ## 🎯 Verification Checklist
 
 - [x] Tool names changed from `qdrant_*` to `knowledge_*`
-- [x] Parameter names use camelCase (`collectionName` not `collection_name`)
+- [x] Parameter names use camelCase (`collectionName`, not legacy snake_case)
 - [x] Tool registration code updated
 - [x] Unit tests cover both tools comprehensively
 - [x] Binary builds without errors

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"hyper/internal/mcp/storage"
@@ -20,6 +21,7 @@ type ToolMetadataForIndexing struct {
 
 // ToolMetadataRegistry collects tool metadata during registration for later indexing
 type ToolMetadataRegistry struct {
+	mu    sync.RWMutex
 	tools []ToolMetadataForIndexing
 }
 
@@ -32,6 +34,9 @@ func NewToolMetadataRegistry() *ToolMetadataRegistry {
 
 // RegisterTool adds a tool to the registry for later indexing
 func (r *ToolMetadataRegistry) RegisterTool(toolName, description string, schema map[string]interface{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.tools = append(r.tools, ToolMetadataForIndexing{
 		ToolName:    toolName,
 		Description: description,
@@ -41,7 +46,12 @@ func (r *ToolMetadataRegistry) RegisterTool(toolName, description string, schema
 
 // GetTools returns all registered tools
 func (r *ToolMetadataRegistry) GetTools() []ToolMetadataForIndexing {
-	return r.tools
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tools := make([]ToolMetadataForIndexing, len(r.tools))
+	copy(tools, r.tools)
+	return tools
 }
 
 // RegisterToolWithServer is a helper that registers a tool with the MCP server

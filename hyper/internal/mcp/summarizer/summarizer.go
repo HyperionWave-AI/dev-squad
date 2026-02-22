@@ -25,7 +25,6 @@
 //		TokenPerResult:      100,
 //	}
 //	summarizer, err := NewLLMSummarizer(config, logger)
-//
 package summarizer
 
 import (
@@ -37,11 +36,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	aiservice "hyper/internal/ai-service"
 )
-
-// AIConfigKey is the context key for AI configuration
-// Uses plain string to ensure cross-package compatibility (typed context keys don't match across packages)
-const AIConfigKey = "aiConfig"
 
 // SessionAIConfig represents the AI configuration from the current session
 // This allows the summarizer to use the same provider/model as the chat session
@@ -101,13 +97,13 @@ type CodeSummarizer interface {
 
 // LLMSummarizer implements CodeSummarizer using an LLM
 type LLMSummarizer struct {
-	config         SummarizerConfig
-	cache          SummaryCache
-	tokenManager   *TokenManager
-	metrics        *MetricsCollector
-	llmClient      LLMClient
-	logger         *zap.Logger
-	mu             sync.RWMutex
+	config       SummarizerConfig
+	cache        SummaryCache
+	tokenManager *TokenManager
+	metrics      *MetricsCollector
+	llmClient    LLMClient
+	logger       *zap.Logger
+	mu           sync.RWMutex
 }
 
 // NewLLMSummarizer creates a new LLMSummarizer instance
@@ -136,12 +132,12 @@ func NewLLMSummarizer(config SummarizerConfig, logger *zap.Logger) (*LLMSummariz
 	metricsCollector := NewMetricsCollector(logger)
 
 	return &LLMSummarizer{
-		config:         config,
-		cache:          cache,
-		tokenManager:   tokenManager,
-		metrics:        metricsCollector,
-		llmClient:      llmClient,
-		logger:         logger,
+		config:       config,
+		cache:        cache,
+		tokenManager: tokenManager,
+		metrics:      metricsCollector,
+		llmClient:    llmClient,
+		logger:       logger,
 	}, nil
 }
 
@@ -261,7 +257,7 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, code string, metadata Cod
 // Falls back to the default llmClient if no AIConfig in context
 func (s *LLMSummarizer) getLLMClientFromContext(ctx context.Context) LLMClient {
 	// Try to get AIConfig from context (set by chat_websocket.go)
-	aiConfigVal := ctx.Value(AIConfigKey)
+	aiConfigVal := ctx.Value(aiservice.AIConfigKey)
 	if aiConfigVal == nil {
 		// No session config - use default client
 		s.logger.Debug("No AIConfig found in context, using default LLM client",

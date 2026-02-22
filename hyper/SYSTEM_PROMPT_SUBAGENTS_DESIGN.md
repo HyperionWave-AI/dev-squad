@@ -1015,7 +1015,7 @@ Response 400:
 
 ## Open Questions
 
-1. **UI Source Code Location**: Where is the frontend source code? (Not in `coordinator/ui/src/`)
+1. **UI Source Code Location**: Where is the frontend source code? (Not in `ui/src/`)
    - **Answer:** Check separate repository or confirm UI doesn't exist yet
 
 2. **System Prompt Caching**: Should we cache system prompts in memory?

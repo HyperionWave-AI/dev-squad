@@ -204,10 +204,10 @@ func StartHTTPServer(
 		knowledgeStorage,
 		toolsDiscoveryHandler,
 		subchatStorage,
-		aiChatService,  // AI service for sub-agent streaming
-		chatService,    // Chat service for message storage
+		aiChatService,     // AI service for sub-agent streaming
+		chatService,       // Chat service for message storage
 		aiSettingsService, // AI settings service for subagent prompts
-		logger,         // Logger for debugging
+		logger,            // Logger for debugging
 	); err != nil {
 		logger.Error("Failed to register coordinator tools", zap.Error(err))
 		return err
@@ -785,7 +785,6 @@ func StartHTTPServer(
 				zap.String("apiEndpoints", "/api/v1/tasks, /api/v1/agent-tasks, /api/v1/code-index, /api/v1/knowledge"),
 				zap.String("uiEndpoint", "/ui"))
 			startErr = nil
-			break
 		}
 
 		// If server started successfully, break out of retry loop

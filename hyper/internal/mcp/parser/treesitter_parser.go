@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -56,11 +57,8 @@ func NewTreeSitterParser(lang string) (*TreeSitterParser, error) {
 }
 
 // Parse implements the ASTParser interface
-func (p *TreeSitterParser) Parse(filePath string, content []byte) ([]CodeNode, error) {
+func (p *TreeSitterParser) Parse(filePath string, content []byte) (nodes []CodeNode, err error) {
 	// Recover from panics (Tree-sitter C library issues)
-	var nodes []CodeNode
-	var err error
-
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("tree-sitter panic (C library not available): %v", r)
@@ -78,7 +76,7 @@ func (p *TreeSitterParser) Parse(filePath string, content []byte) ([]CodeNode, e
 	parser.SetLanguage(p.language)
 
 	// Parse the source code
-	tree, parseErr := parser.ParseCtx(nil, nil, content)
+	tree, parseErr := parser.ParseCtx(context.TODO(), nil, content)
 	if parseErr != nil {
 		return nil, fmt.Errorf("failed to parse: %w", parseErr)
 	}
@@ -93,7 +91,7 @@ func (p *TreeSitterParser) Parse(filePath string, content []byte) ([]CodeNode, e
 	// Walk the AST and extract relevant nodes
 	p.walkNode(rootNode, content, &nodes, "")
 
-	return nodes, err
+	return nodes, nil
 }
 
 // SupportsLanguage implements the ASTParser interface

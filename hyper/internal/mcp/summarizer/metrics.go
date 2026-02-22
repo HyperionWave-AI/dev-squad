@@ -25,6 +25,7 @@
 package summarizer
 
 import (
+	"strconv"
 	"sync"
 	"time"
 
@@ -33,19 +34,18 @@ import (
 
 // SummarizationMetrics tracks metrics for code summarization
 type SummarizationMetrics struct {
-	TotalCount       int64
-	AICount          int64
-	HeuristicCount   int64
-	CachedCount      int64
-	ErrorCount       int64
-	LatencyMs        []int64
-	TokensUsed       int64
-	CacheHitRate     float64
-	CacheSize        int
-	AverageLatency   float64
-	P95Latency       int64
-	P99Latency       int64
-	mu               sync.RWMutex
+	TotalCount     int64
+	AICount        int64
+	HeuristicCount int64
+	CachedCount    int64
+	ErrorCount     int64
+	LatencyMs      []int64
+	TokensUsed     int64
+	CacheHitRate   float64
+	CacheSize      int
+	AverageLatency float64
+	P95Latency     int64
+	P99Latency     int64
 }
 
 // MetricsCollector collects and tracks summarization metrics
@@ -79,9 +79,6 @@ func (mc *MetricsCollector) RecordSummarization(summaryType string, latencyMs in
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 
-	mc.metrics.mu.Lock()
-	defer mc.metrics.mu.Unlock()
-
 	mc.metrics.TotalCount++
 
 	switch summaryType {
@@ -113,9 +110,6 @@ func (mc *MetricsCollector) RecordError(errorType string) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 
-	mc.metrics.mu.Lock()
-	defer mc.metrics.mu.Unlock()
-
 	mc.metrics.ErrorCount++
 
 	mc.logger.Warn("Summarization error recorded",
@@ -127,9 +121,6 @@ func (mc *MetricsCollector) RecordError(errorType string) {
 func (mc *MetricsCollector) UpdateCacheStats(hitRate float64, cacheSize int) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-
-	mc.metrics.mu.Lock()
-	defer mc.metrics.mu.Unlock()
 
 	mc.metrics.CacheHitRate = hitRate
 	mc.metrics.CacheSize = cacheSize
@@ -144,13 +135,9 @@ func (mc *MetricsCollector) GetMetrics() SummarizationMetrics {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
 
-	mc.metrics.mu.RLock()
-	defer mc.metrics.mu.RUnlock()
-
 	// Create a copy to avoid race conditions
 	metrics := *mc.metrics
-	metrics.LatencyMs = make([]int64, len(mc.metrics.LatencyMs))
-	copy(metrics.LatencyMs, mc.metrics.LatencyMs)
+	metrics.LatencyMs = append([]int64(nil), mc.metrics.LatencyMs...)
 
 	return metrics
 }
@@ -159,9 +146,6 @@ func (mc *MetricsCollector) GetMetrics() SummarizationMetrics {
 func (mc *MetricsCollector) ResetMetrics() {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
-
-	mc.metrics.mu.Lock()
-	defer mc.metrics.mu.Unlock()
 
 	mc.metrics = &SummarizationMetrics{
 		LatencyMs: make([]int64, 0, 1000),
@@ -175,9 +159,6 @@ func (mc *MetricsCollector) ResetMetrics() {
 func (mc *MetricsCollector) LogMetrics() {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-
-	mc.metrics.mu.RLock()
-	defer mc.metrics.mu.RUnlock()
 
 	uptime := time.Since(mc.startTime)
 	errorRate := 0.0
@@ -245,15 +226,12 @@ func (mc *MetricsCollector) GetSummaryBreakdown() map[string]interface{} {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
 
-	mc.metrics.mu.RLock()
-	defer mc.metrics.mu.RUnlock()
-
 	breakdown := map[string]interface{}{
-		"total":      mc.metrics.TotalCount,
-		"ai":         mc.metrics.AICount,
-		"heuristic":  mc.metrics.HeuristicCount,
-		"cached":     mc.metrics.CachedCount,
-		"errors":     mc.metrics.ErrorCount,
+		"total":     mc.metrics.TotalCount,
+		"ai":        mc.metrics.AICount,
+		"heuristic": mc.metrics.HeuristicCount,
+		"cached":    mc.metrics.CachedCount,
+		"errors":    mc.metrics.ErrorCount,
 	}
 
 	if mc.metrics.TotalCount > 0 {
@@ -270,9 +248,6 @@ func (mc *MetricsCollector) GetSummaryBreakdown() map[string]interface{} {
 func (mc *MetricsCollector) GetPerformanceStats() map[string]interface{} {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-
-	mc.metrics.mu.RLock()
-	defer mc.metrics.mu.RUnlock()
 
 	stats := map[string]interface{}{
 		"averageLatencyMs": mc.metrics.AverageLatency,
@@ -295,9 +270,6 @@ func (mc *MetricsCollector) GetPerformanceStats() map[string]interface{} {
 func (mc *MetricsCollector) PrometheusMetrics() string {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
-
-	mc.metrics.mu.RLock()
-	defer mc.metrics.mu.RUnlock()
 
 	metrics := ""
 
@@ -347,14 +319,13 @@ func (mc *MetricsCollector) PrometheusMetrics() string {
 
 // Helper functions for formatting metrics
 func formatInt64(v int64) string {
-	return string(rune(v))
+	return strconv.FormatInt(v, 10)
 }
 
 func formatInt(v int) string {
-	return string(rune(v))
+	return strconv.Itoa(v)
 }
 
 func formatFloat64(v float64) string {
-	// Simple float formatting
-	return string(rune(int64(v)))
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }

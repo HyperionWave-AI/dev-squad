@@ -374,6 +374,6 @@ docker exec -it hyperion-mcp-server vi /app/.gitignore
 
 ## See Also
 
-- [Code Indexing Documentation](../coordinator/mcp-server/CLAUDE.md)
-- [Docker File Watcher Guide](../coordinator/mcp-server/DOCKER_FILE_WATCHER.md)
+- [Code Indexing Documentation](../CLAUDE.md)
+- [Docker File Watcher Guide](../docs/guides/HOT_RELOAD_GUIDE.md)
 - [MCP Protocol Reference](https://modelcontextprotocol.io/)

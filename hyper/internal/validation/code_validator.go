@@ -15,8 +15,8 @@ import (
 // ValidationResult represents the outcome of code validation
 type ValidationResult struct {
 	Passed       bool              `json:"passed"`
-	Skipped      bool              `json:"skipped"`       // True if validation was skipped (plugin disabled)
-	Message      string            `json:"message"`       // Human-readable message about the result
+	Skipped      bool              `json:"skipped"` // True if validation was skipped (plugin disabled)
+	Message      string            `json:"message"` // Human-readable message about the result
 	Errors       []ValidationError `json:"errors"`
 	Warnings     []ValidationError `json:"warnings"`
 	CheckedFiles []string          `json:"checkedFiles"`
@@ -90,6 +90,18 @@ func (v *CodeValidator) ValidateFiles(ctx context.Context, files []string) (*Val
 		result, err := v.validateGo(ctx, goFiles)
 		if err != nil {
 			v.logger.Warn("Go validation failed to run", zap.Error(err))
+		} else {
+			allErrors = append(allErrors, result.Errors...)
+			allWarnings = append(allWarnings, result.Warnings...)
+			checkedFiles = append(checkedFiles, result.CheckedFiles...)
+			totalDuration += result.Duration
+		}
+	}
+
+	if len(pyFiles) > 0 {
+		result, err := v.validatePython(ctx, pyFiles)
+		if err != nil {
+			v.logger.Warn("Python validation failed to run", zap.Error(err))
 		} else {
 			allErrors = append(allErrors, result.Errors...)
 			allWarnings = append(allWarnings, result.Warnings...)
@@ -206,6 +218,69 @@ func (v *CodeValidator) validateGo(ctx context.Context, files []string) (*Valida
 		CheckedFiles: files,
 		Duration:     duration,
 		Command:      "go vet",
+	}, nil
+}
+
+// validatePython runs Python syntax checks via py_compile
+func (v *CodeValidator) validatePython(ctx context.Context, files []string) (*ValidationResult, error) {
+	start := time.Now()
+
+	pythonCmd := ""
+	if _, err := exec.LookPath("python3"); err == nil {
+		pythonCmd = "python3"
+	} else if _, err := exec.LookPath("python"); err == nil {
+		pythonCmd = "python"
+	}
+
+	if pythonCmd == "" {
+		return &ValidationResult{
+			Passed:       true,
+			Skipped:      true,
+			Warnings:     []ValidationError{{Message: "python3/python not found; skipped Python syntax validation", Severity: "warning"}},
+			CheckedFiles: files,
+			Duration:     time.Since(start),
+			Command:      "python -m py_compile",
+		}, nil
+	}
+
+	var allErrors []ValidationError
+	for _, file := range files {
+		cmd := exec.CommandContext(ctx, pythonCmd, "-m", "py_compile", file)
+		cmd.Dir = v.projectRoot
+
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			msg := strings.TrimSpace(stderr.String())
+			if msg == "" {
+				msg = err.Error()
+			}
+
+			lineNum := 0
+			for _, line := range strings.Split(msg, "\n") {
+				if strings.Contains(line, ", line ") {
+					fmt.Sscanf(line, "  File %*q, line %d", &lineNum)
+					break
+				}
+			}
+
+			allErrors = append(allErrors, ValidationError{
+				File:     file,
+				Line:     lineNum,
+				Message:  msg,
+				Code:     "PY_COMPILE",
+				Severity: "error",
+			})
+		}
+	}
+
+	return &ValidationResult{
+		Passed:       len(allErrors) == 0,
+		Errors:       allErrors,
+		CheckedFiles: files,
+		Duration:     time.Since(start),
+		Command:      pythonCmd + " -m py_compile",
 	}, nil
 }
 

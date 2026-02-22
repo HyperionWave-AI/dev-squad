@@ -190,7 +190,7 @@ User → Chat UI → WebSocket → Backend Chat Handler
 ## ⚠️ Open Questions (Need Your Input)
 
 ### 1. UI Source Code Location
-**Issue:** Couldn't find UI source code in `coordinator/ui/src/` or anywhere else.
+**Issue:** Couldn't find UI source code in `ui/src/` or anywhere else.
 **Question:** Where is the frontend source code? Or does it need to be created from scratch?
 
 ### 2. UI Framework

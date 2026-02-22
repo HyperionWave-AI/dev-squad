@@ -30,7 +30,7 @@ type StreamConfig struct {
 	OutputSink StreamOutputSink // Where to send stream output (WebSocket or ProgressNotifier)
 
 	// Optional callbacks
-	CompletionValidator CompletionValidatorFunc // Custom logic to determine when streaming is complete
+	CompletionValidator             CompletionValidatorFunc            // Custom logic to determine when streaming is complete
 	OnMessageSavedWhileDisconnected func(sessionID primitive.ObjectID) // Callback when message is saved but client disconnected
 
 	// Interrupt handling
@@ -117,7 +117,7 @@ func (e *StreamExecutor) Execute(ctx context.Context, messages []aiservice.Messa
 	var aiStream <-chan aiservice.StreamEvent
 	var err error
 
-	if e.config.AllowedTools != nil && len(e.config.AllowedTools) > 0 {
+	if len(e.config.AllowedTools) > 0 {
 		// Filtered tools mode (subchat or direct subagent)
 		e.logger.Info("Starting AI stream with filtered tools",
 			zap.String("sessionId", e.config.SessionID.Hex()),
@@ -435,8 +435,8 @@ func (e *StreamExecutor) handleToolCall(ctx context.Context, event *aiservice.St
 func (e *StreamExecutor) handleToolResult(ctx context.Context, event *aiservice.StreamEvent) error {
 	// Apply custom tool result processing if configured
 	var outputStr string
-	var shouldSave bool = true
-	var shouldStream bool = true
+	shouldSave := true
+	shouldStream := true
 
 	if e.config.ToolResultProcessor != nil {
 		outputStr, shouldSave, shouldStream = e.config.ToolResultProcessor(event.ToolResult.Name, event.ToolResult.Output)

@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 // AIConfig holds AI provider configuration from .env.hyper
 type AIConfig struct {
-	Provider          string  // "openai", "anthropic", or "custom"
+	Provider          string  // "openai", "anthropic", "custom", or "litellm"
 	ProviderURL       string  // Custom endpoint URL (for custom provider)
 	APIKey            string  // API key for the provider
 	MaxIterations     int     // Maximum iteration count (default: 100)
@@ -34,48 +35,62 @@ func LoadAIConfig(envFilePath string) (*AIConfig, error) {
 	}
 
 	// Parse provider (required)
-	provider := os.Getenv("AI_PROVIDER")
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("AI_PROVIDER")))
 	if provider == "" {
-		provider = os.Getenv("PROVIDER") // fallback to PROVIDER for compatibility
+		provider = strings.ToLower(strings.TrimSpace(os.Getenv("PROVIDER"))) // fallback to PROVIDER for compatibility
 	}
 	if provider == "" {
 		return nil, fmt.Errorf("AI_PROVIDER or PROVIDER environment variable is required")
 	}
 
 	// Validate provider
-	if provider != "openai" && provider != "anthropic" && provider != "custom" {
-		return nil, fmt.Errorf("provider must be 'openai', 'anthropic', or 'custom', got: %s", provider)
+	if provider != "openai" && provider != "anthropic" && provider != "custom" && provider != "litellm" {
+		return nil, fmt.Errorf("provider must be 'openai', 'anthropic', 'custom', or 'litellm', got: %s", provider)
 	}
 
-	// Parse provider URL (required for custom provider, optional for openai to support Ollama)
-	providerURL := os.Getenv("PROVIDER_URL")
+	// Parse provider URL.
+	// Priority: PROVIDER_URL > OPENAI_BASE_URL > LITELLM_BASE_URL
+	// This allows a single OpenAI-compatible path (OpenAI, LiteLLM, Ollama, etc.).
+	providerURL := strings.TrimSpace(os.Getenv("PROVIDER_URL"))
 	if providerURL == "" {
-		// Try OpenAI-specific base URL for Ollama support
-		providerURL = os.Getenv("OPENAI_BASE_URL")
+		providerURL = strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+	}
+	if providerURL == "" {
+		providerURL = strings.TrimSpace(os.Getenv("LITELLM_BASE_URL"))
+	}
+	if provider == "litellm" && providerURL == "" {
+		providerURL = "http://localhost:4000/v1"
 	}
 	if provider == "custom" && providerURL == "" {
 		return nil, fmt.Errorf("PROVIDER_URL is required for custom provider")
 	}
 
 	// Parse API key (required for openai/anthropic)
-	apiKey := os.Getenv("API_KEY")
+	apiKey := strings.TrimSpace(os.Getenv("API_KEY"))
 	if apiKey == "" {
 		// Try provider-specific keys
 		switch provider {
 		case "openai":
-			apiKey = os.Getenv("OPENAI_API_KEY")
+			apiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 		case "anthropic":
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+			apiKey = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+		case "litellm":
+			apiKey = strings.TrimSpace(os.Getenv("LITELLM_API_KEY"))
+			if apiKey == "" {
+				apiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+			}
 		}
 	}
-	// API key validation (allow dummy key for Ollama)
-	if (provider == "openai" || provider == "anthropic") && apiKey == "" {
-		// For Ollama or other local providers, allow default dummy key
-		if providerURL != "" && (provider == "openai") {
-			apiKey = "ollama" // Ollama doesn't validate keys, but library requires one
+	// API key validation (allow dummy key for OpenAI-compatible local/proxy endpoints)
+	if (provider == "openai" || provider == "anthropic" || provider == "litellm" || provider == "custom") && apiKey == "" {
+		if provider == "anthropic" {
+			return nil, fmt.Errorf("API_KEY or ANTHROPIC_API_KEY environment variable is required for anthropic provider")
+		}
+		if providerURL != "" {
+			// OpenAI SDK requires a key even when upstream doesn't enforce auth.
+			apiKey = "dummy-key"
 		} else {
-			return nil, fmt.Errorf("API_KEY or %s_API_KEY environment variable is required for %s provider",
-				provider, provider)
+			return nil, fmt.Errorf("API_KEY or provider-specific API key environment variable is required for %s provider", provider)
 		}
 	}
 
@@ -146,7 +161,7 @@ func LoadAIConfig(envFilePath string) (*AIConfig, error) {
 
 // Validate checks if the configuration is valid
 func (c *AIConfig) Validate() error {
-	if c.Provider != "openai" && c.Provider != "anthropic" && c.Provider != "custom" {
+	if c.Provider != "openai" && c.Provider != "anthropic" && c.Provider != "custom" && c.Provider != "litellm" {
 		return fmt.Errorf("invalid provider: %s", c.Provider)
 	}
 
@@ -154,7 +169,7 @@ func (c *AIConfig) Validate() error {
 		return fmt.Errorf("PROVIDER_URL required for custom provider")
 	}
 
-	if (c.Provider == "openai" || c.Provider == "anthropic") && c.APIKey == "" {
+	if c.APIKey == "" {
 		return fmt.Errorf("API key required for %s provider", c.Provider)
 	}
 

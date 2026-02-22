@@ -31,8 +31,8 @@ make dev-hot
 
 ### Edit React/TypeScript Files
 ```bash
-# 1. Edit any .tsx or .ts file in coordinator/ui/src/
-nano coordinator/ui/src/App.tsx
+# 1. Edit any .tsx or .ts file in ui/src/
+nano ui/src/App.tsx
 
 # 2. Save file
 # 3. Browser updates INSTANTLY (no reload needed)
@@ -41,8 +41,8 @@ nano coordinator/ui/src/App.tsx
 
 ### Edit Go Files
 ```bash
-# 1. Edit any .go file in coordinator/
-nano coordinator/internal/server/http_server.go
+# 1. Edit any .go file in hyper/
+nano hyper/internal/server/http_server.go
 
 # 2. Save file
 # 3. Watch terminal for "[Backend] Building..." message
@@ -71,7 +71,7 @@ air -v
 ### Frontend not loading
 ```bash
 # Reinstall node_modules
-cd coordinator/ui
+cd ui
 rm -rf node_modules package-lock.json
 npm install
 cd ../..
@@ -135,7 +135,7 @@ HTTP_PORT=7095
 ```
 
 ### Frontend Port (Default: 5173)
-Edit `coordinator/ui/vite.config.ts`:
+Edit `ui/vite.config.ts`:
 ```typescript
 server: {
   port: 5173,  // Change if needed

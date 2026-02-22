@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 
 	"hyper/internal/config"
@@ -351,18 +350,10 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					// Switch to fallback model
 					s.config.Model = s.config.FallbackModel
 
-					// Switch to Anthropic provider for Claude models
+					// Keep provider/auth settings unchanged and switch models only.
+					// Claude fallback uses the configured provider route (native Anthropic or OpenAI-compatible gateway).
 					if strings.Contains(strings.ToLower(s.config.FallbackModel), "claude") {
-						s.config.Provider = "anthropic"
-						// Load Anthropic API key from environment
-						anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
-						if anthropicKey == "" {
-							log.Printf("[ChatService] ERROR - RequestID: %s - ANTHROPIC_API_KEY not found in environment", requestID)
-							eventChan <- StreamEvent{Type: StreamEventError,
-								Error: "Rate limit error and ANTHROPIC_API_KEY not configured for fallback"}
-							return
-						}
-						s.config.APIKey = anthropicKey
+						log.Printf("[Rate Limit] Claude fallback selected - using configured provider route")
 					}
 
 					// Recreate provider with fallback model
@@ -616,7 +607,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					// Inject humanTaskId from workflowState into context for auto-population
 					toolCtx := ctx
 					if humanTaskID := workflowState.HumanTaskId; humanTaskID != "" {
-						toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+						toolCtx = context.WithValue(ctx, LastHumanTaskIDKey, humanTaskID)
 					}
 					result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
 					log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
@@ -828,7 +819,7 @@ DO NOT generate or make up a different task ID. Use the value shown above.
 					}
 				}
 
-					// Send tool result event (full result to client for display)
+				// Send tool result event (full result to client for display)
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
 				// Send tool result event (full result to client for display)
@@ -1271,9 +1262,6 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 			// 	}
 			// }
 
-			// Calculate context size before LLM API call
-			contextSize = calculateContextSize(currentMessages)
-
 			// Call provider with FILTERED tools
 			toolProvider := s.provider.(ToolCapableProvider)
 			response, err := toolProvider.StreamChatWithTools(ctx, currentMessages, tools)
@@ -1411,7 +1399,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 						// Inject humanTaskId from workflowState into context for auto-population
 						toolCtx := ctx
 						if humanTaskID := workflowState.HumanTaskId; humanTaskID != "" {
-							toolCtx = context.WithValue(ctx, "lastHumanTaskId", humanTaskID)
+							toolCtx = context.WithValue(ctx, LastHumanTaskIDKey, humanTaskID)
 						}
 						result = s.toolRegistry.ExecuteToolCall(toolCtx, toolCall)
 						log.Printf("[Tool Cache MISS] Executed '%s' - storing result in cache", toolCall.Name)
@@ -1421,7 +1409,7 @@ func (s *ChatService) StreamChatWithToolsFiltered(ctx context.Context, messages 
 					resultCache.Set(signature, &result)
 				}
 
-					// Send tool result event
+				// Send tool result event
 				eventChan <- StreamEvent{Type: StreamEventToolResult, ToolResult: &result}
 
 				// Tool execution complete - errors handled in circuit breaker below
