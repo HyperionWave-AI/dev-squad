@@ -1041,5 +1041,5 @@ For a typical medium-sized codebase (10K files), you might generate 50M tokens o
 
 ---
 
-*Last Updated: 2024*
+*Last Updated: February 22, 2026*
 *Project: Hyperion (hyper)*
