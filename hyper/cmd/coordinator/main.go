@@ -39,6 +39,12 @@ var (
 	GitCommit = "unknown"
 )
 
+func isFileWatcherDisabledByEnv() bool {
+	raw := strings.TrimSpace(os.Getenv("ENABLE_FILE_WATCHER"))
+	raw = strings.Trim(raw, "\"'")
+	return strings.EqualFold(raw, "false")
+}
+
 // ensureCodeIndexCollectionWithDimensions ensures the code index collection exists with the correct dimensions
 // If a dimension mismatch is detected, prompts the user to recreate the collection
 func ensureCodeIndexCollectionWithDimensions(qdrantClient *storage.QdrantClient, expectedDimensions int, logger *zap.Logger) error {
@@ -488,6 +494,16 @@ func main() {
 		logger.Fatal("Failed to initialize file watcher", zap.Error(err))
 	}
 
+	// Start file watcher worker loop unless explicitly disabled.
+	// Even if no folders are watched yet, this keeps watcher enable/disable APIs consistent.
+	if isFileWatcherDisabledByEnv() {
+		logger.Info("File watcher startup disabled via ENABLE_FILE_WATCHER=false")
+	} else {
+		if err := fileWatcher.Start(); err != nil {
+			logger.Warn("Failed to start file watcher at startup", zap.Error(err))
+		}
+	}
+
 	// Auto-index project root at startup
 	projectRoot := tools.GetProjectRoot()
 	logger.Info("Auto-indexing project root", zap.String("path", projectRoot))
@@ -503,6 +519,29 @@ func main() {
 
 	var collectionName string
 	needsIndexing := false
+
+	ensureProjectRootWatched := func() {
+		if fileWatcher == nil || !fileWatcher.IsRunning() {
+			return
+		}
+
+		folder, err := codeIndexStorage.GetFolderByPath(projectRoot)
+		if err != nil {
+			logger.Warn("Failed to fetch project root folder for watcher registration",
+				zap.String("path", projectRoot),
+				zap.Error(err))
+			return
+		}
+		if folder == nil || folder.Status != "active" {
+			return
+		}
+
+		if err := fileWatcher.AddFolder(folder); err != nil {
+			logger.Warn("Failed to register project root with file watcher",
+				zap.String("path", projectRoot),
+				zap.Error(err))
+		}
+	}
 
 	if existingMapping == nil {
 		// No mapping exists - use the configured QDRANT_CODE_COLLECTION
@@ -638,9 +677,14 @@ func main() {
 						zap.String("collection", collectionName),
 						zap.Int("pointCount", pointCount))
 				}
+
+				// Ensure watcher registration for project root after metadata creation/reindex.
+				ensureProjectRootWatched()
 			}
 		}()
 	} else if !needsIndexing {
+		// When indexing is skipped, still ensure watcher registration for existing active project root metadata.
+		ensureProjectRootWatched()
 		logger.Info("Skipping background indexing - collection already populated")
 	} else {
 		logger.Warn("Skipping background indexing - collection name is empty")

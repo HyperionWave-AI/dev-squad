@@ -1,0 +1,265 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  build-ui:
+    name: Build UI Bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        working-directory: ui
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - name: Upload UI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+          if-no-files-found: error
+
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    needs: build-ui
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cc: gcc
+            cxx: g++
+            apt_packages: ""
+          - target: linux-arm64
+            os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
+            apt_packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          - target: windows-amd64
+            os: ubuntu-latest
+            goos: windows
+            goarch: amd64
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            apt_packages: gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          - target: darwin-amd64
+            os: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            cc: clang
+            cxx: clang++
+            apt_packages: ""
+          - target: darwin-arm64
+            os: macos-14
+            goos: darwin
+            goarch: arm64
+            cc: clang
+            cxx: clang++
+            apt_packages: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: hyper/go.mod
+          cache-dependency-path: hyper/go.sum
+
+      - name: Install Cross Toolchain
+        if: runner.os == 'Linux' && matrix.apt_packages != ''
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt_packages }}
+
+      - name: Download UI Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: .tmp-ui-dist
+
+      - name: Sync UI Into Embedded Path
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf hyper/embed/ui/dist
+          mkdir -p hyper/embed/ui/dist
+          cp -R .tmp-ui-dist/. hyper/embed/ui/dist/
+
+      - name: Build Binary and Package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+
+          checksum_file() {
+            local in_file="$1"
+            local out_file="$2"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "${in_file}" > "${out_file}"
+            else
+              shasum -a 256 "${in_file}" > "${out_file}"
+            fi
+          }
+
+          mkdir -p "dist/${{ matrix.target }}"
+
+          binary_name="hyper"
+          archive_ext="tar.gz"
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            binary_name="hyper.exe"
+            archive_ext="zip"
+          fi
+
+          build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git_commit="${GITHUB_SHA::12}"
+          safe_ref="${GITHUB_REF_NAME:-dev}"
+          safe_ref="${safe_ref//\//-}"
+          asset_base="hyper_${safe_ref}_${{ matrix.target }}"
+
+          pushd hyper >/dev/null
+          CGO_ENABLED=1 go build -trimpath \
+            -ldflags "-s -w -X main.BuildTime=${build_time} -X main.GitCommit=${git_commit}" \
+            -o "../dist/${{ matrix.target }}/${binary_name}" \
+            ./cmd/coordinator
+          popd >/dev/null
+
+          if [[ "${archive_ext}" == "zip" ]]; then
+            (cd "dist/${{ matrix.target }}" && zip -9 "../${asset_base}.zip" "${binary_name}")
+            checksum_file "dist/${asset_base}.zip" "dist/${asset_base}.zip.sha256"
+          else
+            tar -C "dist/${{ matrix.target }}" -czf "dist/${asset_base}.tar.gz" "${binary_name}"
+            checksum_file "dist/${asset_base}.tar.gz" "dist/${asset_base}.tar.gz.sha256"
+          fi
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/hyper_*_${{ matrix.target }}*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: build-binaries
+    permissions:
+      contents: write
+    steps:
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create Combined Checksums
+        run: |
+          set -euo pipefail
+          find release-assets -name '*.sha256' -type f -print0 \
+            | sort -z \
+            | xargs -0 cat > release-assets/checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/*
+
+  docker:
+    name: Publish Docker Image
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Build Time
+        run: echo "BUILD_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "${GITHUB_ENV}"
+
+      - name: Set Image Name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_ENV}"
+
+      - name: Set Up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set Up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.release
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

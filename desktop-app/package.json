@@ -1,0 +1,10 @@
+{
+  "name": "hyper-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Desktop shell for Hyper built with Tauri",
+  "scripts": {
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build"
+  }
+}

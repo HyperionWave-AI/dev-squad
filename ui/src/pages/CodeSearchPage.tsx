@@ -55,8 +55,8 @@ export const CodeSearchPage: React.FC = () => {
       setStatus({
         totalFiles: statusData.totalFiles || 0,
         totalFolders: statusData.folders?.length || 0,
-        lastScanTime: statusData.lastScan,
-        isRunning: false, // Will be updated by actual API
+        lastScanTime: statusData.lastScanTime,
+        isRunning: statusData.watcherStatus === 'running',
       });
 
       // Convert folders array to IndexedFolder format
@@ -161,12 +161,9 @@ export const CodeSearchPage: React.FC = () => {
     }
   };
 
-  const handleWatcherToggle = async (_folderId: string, enabled: boolean) => {
+  const handleWatcherToggle = async (folderId: string, enabled: boolean) => {
     try {
-      // Toggle watcher for all folders (API doesn't support per-folder control yet)
-      const result = enabled
-        ? await codeIndexService.enableWatcher()
-        : await codeIndexService.disableWatcher();
+      const result = await codeIndexService.toggleFolderWatcher(folderId, enabled);
 
       if (result.success) {
         await loadStatus();

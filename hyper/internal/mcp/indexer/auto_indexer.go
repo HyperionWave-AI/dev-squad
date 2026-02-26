@@ -25,7 +25,7 @@ type AutoIndexer struct {
 // NewAutoIndexer creates a new auto-indexer instance
 func NewAutoIndexer(
 	codeIndexStorage *storage.CodeIndexStorage,
-	qdrantClient     *storage.QdrantClient,
+	qdrantClient *storage.QdrantClient,
 	embeddingClient embeddings.EmbeddingClient,
 	logger *zap.Logger,
 ) *AutoIndexer {
@@ -61,6 +61,12 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 			result.Error = fmt.Errorf("failed to create folder metadata: %w", err)
 			return result
 		}
+	}
+
+	// Preserve watcher preference across automatic reindex operations.
+	restoreStatus := "active"
+	if folder.Status == "inactive" {
+		restoreStatus = "inactive"
 	}
 
 	// Update folder status to scanning
@@ -229,7 +235,7 @@ func (a *AutoIndexer) IndexProjectRoot(ctx context.Context, projectRoot string, 
 	}
 
 	// Update folder status and scan time
-	if err := a.codeIndexStorage.UpdateFolderStatus(folder.ID, "active", ""); err != nil {
+	if err := a.codeIndexStorage.UpdateFolderStatus(folder.ID, restoreStatus, ""); err != nil {
 		a.logger.Warn("Failed to update folder status", zap.Error(err))
 	}
 

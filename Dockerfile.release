@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1.7
+
+FROM node:22-bookworm-slim AS ui-builder
+WORKDIR /src/ui
+
+COPY ui/package.json ui/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY ui/ ./
+RUN npm run build
+
+FROM golang:1.25-bookworm AS go-builder
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+
+WORKDIR /src
+
+# tree-sitter dependencies require CGO toolchain during build
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY hyper/go.mod hyper/go.sum ./hyper/
+WORKDIR /src/hyper
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+WORKDIR /src
+COPY hyper/ ./hyper/
+COPY --from=ui-builder /src/ui/dist /src/hyper/embed/ui/dist
+
+WORKDIR /src/hyper
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    mkdir -p /out \
+    && CGO_ENABLED=1 go build -trimpath \
+      -ldflags "-s -w -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+      -o /out/hyper ./cmd/coordinator
+
+FROM debian:bookworm-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home --home-dir /home/hyper --shell /usr/sbin/nologin hyper
+
+WORKDIR /home/hyper
+COPY --from=go-builder /out/hyper /usr/local/bin/hyper
+
+ENV HTTP_PORT=7095
+ENV GIN_MODE=release
+EXPOSE 7095
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${HTTP_PORT}/health" || exit 1
+
+USER hyper
+ENTRYPOINT ["/usr/local/bin/hyper"]
+CMD ["--mode=http"]

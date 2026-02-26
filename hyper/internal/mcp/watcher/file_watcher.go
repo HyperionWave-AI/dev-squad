@@ -28,22 +28,24 @@ type FileWatcher struct {
 	logger          *zap.Logger
 
 	// Debouncing
-	debounceTime    time.Duration
-	debounceMutex   sync.Mutex
-	debounceTimers  map[string]*time.Timer
+	debounceTime   time.Duration
+	debounceMutex  sync.Mutex
+	debounceTimers map[string]*time.Timer
 
 	// Watched folders
-	watchedFolders  map[string]*storage.IndexedFolder
-	foldersMutex    sync.RWMutex
+	watchedFolders map[string]*storage.IndexedFolder
+	foldersMutex   sync.RWMutex
 
 	// Async event processing
-	eventQueue      chan fsnotify.Event
-	workerCount     int
+	eventQueue  chan fsnotify.Event
+	workerCount int
 
 	// Control
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	stateMutex sync.RWMutex
+	running    bool
 }
 
 // NewFileWatcher creates a new file watcher instance
@@ -72,9 +74,10 @@ func NewFileWatcher(
 		debounceTimers:  make(map[string]*time.Timer),
 		watchedFolders:  make(map[string]*storage.IndexedFolder),
 		eventQueue:      make(chan fsnotify.Event, 100), // Buffered channel for async processing
-		workerCount:     3,                               // Number of concurrent workers
+		workerCount:     3,                              // Number of concurrent workers
 		ctx:             ctx,
 		cancel:          cancel,
+		running:         false,
 	}
 
 	return fw, nil
@@ -82,15 +85,26 @@ func NewFileWatcher(
 
 // Start begins watching all indexed folders
 func (fw *FileWatcher) Start() error {
-	// Check if file watcher is disabled via ENV
-	if os.Getenv("ENABLE_FILE_WATCHER") == "false" {
-		fw.logger.Info("File watcher is DISABLED via ENABLE_FILE_WATCHER=false")
+	if isWatcherDisabledByEnv() {
+		return fmt.Errorf("file watcher disabled via ENABLE_FILE_WATCHER=false")
+	}
+
+	fw.stateMutex.Lock()
+	if fw.running {
+		fw.stateMutex.Unlock()
 		return nil
 	}
+	fw.ctx, fw.cancel = context.WithCancel(context.Background())
+	fw.running = true
+	fw.stateMutex.Unlock()
 
 	// Load all indexed folders from MongoDB
 	folders, err := fw.mongoStorage.ListFolders()
 	if err != nil {
+		fw.stateMutex.Lock()
+		fw.running = false
+		fw.stateMutex.Unlock()
+		fw.cancel()
 		return fmt.Errorf("failed to list folders: %w", err)
 	}
 
@@ -125,16 +139,38 @@ func (fw *FileWatcher) Start() error {
 
 // Stop stops the file watcher
 func (fw *FileWatcher) Stop() error {
-	fw.cancel()
-	close(fw.eventQueue) // Close queue to signal workers to stop
+	fw.stateMutex.Lock()
+	if !fw.running {
+		fw.stateMutex.Unlock()
+		return nil
+	}
+	cancel := fw.cancel
+	fw.stateMutex.Unlock()
+
+	cancel()
 	fw.wg.Wait()
 
-	if err := fw.watcher.Close(); err != nil {
-		return fmt.Errorf("failed to close watcher: %w", err)
+	// Stop and clear all pending debounce timers.
+	fw.debounceMutex.Lock()
+	for _, timer := range fw.debounceTimers {
+		timer.Stop()
 	}
+	fw.debounceTimers = make(map[string]*time.Timer)
+	fw.debounceMutex.Unlock()
+
+	fw.stateMutex.Lock()
+	fw.running = false
+	fw.stateMutex.Unlock()
 
 	fw.logger.Info("File watcher stopped")
 	return nil
+}
+
+// isWatcherDisabledByEnv returns true when the watcher kill-switch is enabled.
+func isWatcherDisabledByEnv() bool {
+	raw := strings.TrimSpace(os.Getenv("ENABLE_FILE_WATCHER"))
+	raw = strings.Trim(raw, "\"'")
+	return strings.EqualFold(raw, "false")
 }
 
 // validateSafePath validates that a path is safe to watch
@@ -162,8 +198,8 @@ func (fw *FileWatcher) validateSafePath(path string) error {
 		}
 		// Also check if path is a subdirectory of dangerous paths (except /Users, /home, /opt/project, etc.)
 		if strings.HasPrefix(cleanPath, dangerous+"/") &&
-		   dangerous != "/opt" && // Allow /opt/project but not /opt itself
-		   dangerous != "/tmp" {   // Allow /tmp/myproject but not /tmp itself
+			dangerous != "/opt" && // Allow /opt/project but not /opt itself
+			dangerous != "/tmp" { // Allow /tmp/myproject but not /tmp itself
 			return fmt.Errorf("FORBIDDEN: cannot watch system subdirectory '%s' under '%s'", cleanPath, dangerous)
 		}
 	}
@@ -385,11 +421,15 @@ func (fw *FileWatcher) processWorker(workerID int) {
 
 	fw.logger.Info("File watcher worker started", zap.Int("workerID", workerID))
 
-	for event := range fw.eventQueue {
-		fw.processFileEvent(event)
+	for {
+		select {
+		case <-fw.ctx.Done():
+			fw.logger.Info("File watcher worker stopped", zap.Int("workerID", workerID))
+			return
+		case event := <-fw.eventQueue:
+			fw.processFileEvent(event)
+		}
 	}
-
-	fw.logger.Info("File watcher worker stopped", zap.Int("workerID", workerID))
 }
 
 // processFileEvent processes a debounced file event
@@ -715,8 +755,8 @@ func (fw *FileWatcher) shouldIgnore(path string) bool {
 
 	// Ignore lock files (except .go.sum, Cargo.lock for reference)
 	if strings.HasSuffix(base, "package-lock.json") ||
-	   strings.HasSuffix(base, "yarn.lock") ||
-	   strings.HasSuffix(base, "pnpm-lock.yaml") {
+		strings.HasSuffix(base, "yarn.lock") ||
+		strings.HasSuffix(base, "pnpm-lock.yaml") {
 		return true
 	}
 
@@ -795,4 +835,26 @@ func (fw *FileWatcher) ScanFolder(folder *storage.IndexedFolder) error {
 		zap.Int("totalFiles", len(scannedFiles)))
 
 	return nil
+}
+
+// IsRunning returns true when the watcher event loop and workers are active.
+func (fw *FileWatcher) IsRunning() bool {
+	fw.stateMutex.RLock()
+	defer fw.stateMutex.RUnlock()
+	return fw.running
+}
+
+// WatchedFolderCount returns the current number of folders actively watched.
+func (fw *FileWatcher) WatchedFolderCount() int {
+	fw.foldersMutex.RLock()
+	defer fw.foldersMutex.RUnlock()
+	return len(fw.watchedFolders)
+}
+
+// IsFolderWatched returns true if the folder path is currently watched.
+func (fw *FileWatcher) IsFolderWatched(folderPath string) bool {
+	fw.foldersMutex.RLock()
+	defer fw.foldersMutex.RUnlock()
+	_, exists := fw.watchedFolders[folderPath]
+	return exists
 }

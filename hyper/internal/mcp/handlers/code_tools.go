@@ -811,9 +811,9 @@ func (h *CodeToolsHandler) handleSearch(ctx context.Context, args map[string]int
 	}
 	response["estimatedTokens"] = estimatedTokens
 	response["tokenEstimate"] = map[string]interface{}{
-		"mode":              responseMode,
-		"perResult":         estimateResponseModeTokens(storage.SearchResult{}, responseMode),
-		"totalEstimated":    estimatedTokens,
+		"mode":           responseMode,
+		"perResult":      estimateResponseModeTokens(storage.SearchResult{}, responseMode),
+		"totalEstimated": estimatedTokens,
 		"breakdown": map[string]interface{}{
 			"summary": "~100-200 tokens per result",
 			"preview": "~300-500 tokens per result",
@@ -1008,19 +1008,24 @@ func (h *CodeToolsHandler) handleStatus(ctx context.Context) (*mcp.CallToolResul
 		}
 	}
 
-	// Determine watcher status (running if file watcher exists and has active folders)
+	// Determine watcher status from actual watcher runtime and watched folder count.
 	watcherStatus := "stopped"
-	if h.fileWatcher != nil && status.ActiveFolders > 0 {
+	if h.fileWatcher != nil && h.fileWatcher.IsRunning() && h.fileWatcher.WatchedFolderCount() > 0 {
 		watcherStatus = "running"
 	}
 
 	// Transform folders to UI format
 	uiFolders := make([]map[string]interface{}, 0, len(folders))
 	for _, folder := range folders {
+		enabled := folder.Status == "active"
+		if h.fileWatcher != nil {
+			enabled = h.fileWatcher.IsFolderWatched(folder.Path)
+		}
+
 		uiFolders = append(uiFolders, map[string]interface{}{
 			"folderPath": folder.Path,
 			"fileCount":  folder.FileCount,
-			"enabled":    folder.Status == "active",
+			"enabled":    enabled,
 		})
 	}
 

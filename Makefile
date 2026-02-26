@@ -1,8 +1,12 @@
-.PHONY: help build native install install-air dev run run-dev run-stdio configure-native run-mcp-local configure-claude-local desktop desktop-dev desktop-build test clean test-connection
+.PHONY: help build native install install-air dev run run-dev run-stdio configure-native run-mcp-local configure-claude-local desktop desktop-dev desktop-build desktop-build-all desktop-install desktop-build-install desktop-install-applications test clean test-connection
 
 # Load environment variables from .env file
 include .env
 export
+
+MODE ?= dev
+PLATFORM ?=
+PLATFORMS ?=
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -148,46 +152,34 @@ run-mcp-http: native ## Run unified binary in HTTP mode (REST API + UI on port 7
 # Desktop App Targets
 #
 
-desktop: ## Build and run desktop app (development mode)
-	@echo "🖥️  Starting Hyperion Coordinator Desktop App (development)..."
-	@if [ ! -f bin/hyper ]; then \
-		echo "Building native binary first..."; \
-		$(MAKE) native; \
+desktop: ## Tauri desktop runner (MODE=dev|build, PLATFORM=<one>, PLATFORMS="<many>")
+	@echo "🖥️  Hyper Desktop"
+	@if [ ! -d desktop-app/src-tauri ]; then \
+		echo "Error: desktop-app/src-tauri not found."; \
+		exit 1; \
 	fi
 	@if [ ! -f .env.hyper ]; then \
-		echo "⚠️  Warning: .env.hyper not found. Please configure before running."; \
+		echo "⚠️  Warning: .env.hyper not found. Hyper sidecar may fail to start."; \
 	fi
-	@echo "Starting hyper server in background..."
-	@pkill -f "bin/hyper" || true
-	@sleep 1
-	@cd bin && ./hyper --mode=http 2>&1 | sed 's/^/[hyper] /' &
-	@echo "Waiting for server to be ready..."
-	@sleep 5
-	@echo "Launching Tauri desktop app..."
-	cd desktop-app && npm install && npm run dev
+	@./scripts/desktop.sh --mode "$(MODE)" $(if $(PLATFORM),--platform "$(PLATFORM)") $(if $(PLATFORMS),--platforms "$(PLATFORMS)")
 
-desktop-dev: desktop ## Alias for desktop (development mode)
+desktop-dev: ## Launch desktop app in development mode (host platform)
+	@$(MAKE) desktop MODE=dev
 
-desktop-build: native ## Build desktop app for distribution
-	@echo "🖥️  Building Hyperion Coordinator Desktop App for distribution..."
-	@echo "This will create a native app bundle for your platform"
-	@if [ ! -f .env.hyper ]; then \
-		echo "⚠️  Warning: .env.hyper not found. The app will need it at runtime."; \
-	fi
-	cd desktop-app && npm install && npm run build
-	@echo ""
-	@echo "✅ Desktop app built successfully!"
-	@echo ""
-	@echo "📦 Output location:"
-	@echo "   macOS:   desktop-app/src-tauri/target/release/bundle/dmg/"
-	@echo "   macOS:   desktop-app/src-tauri/target/release/bundle/macos/"
-	@echo "   Windows: desktop-app/src-tauri/target/release/bundle/msi/"
-	@echo "   Linux:   desktop-app/src-tauri/target/release/bundle/appimage/"
-	@echo ""
-	@echo "💡 To install:"
-	@echo "   macOS:   Open the .dmg file"
-	@echo "   Windows: Run the .msi installer"
-	@echo "   Linux:   Run the .AppImage file"
+desktop-build: ## Build desktop bundle(s); accepts PLATFORM or PLATFORMS
+	@$(MAKE) desktop MODE=build PLATFORM="$(PLATFORM)" PLATFORMS="$(PLATFORMS)"
+
+desktop-build-all: ## Build common platform bundles (requires cross toolchains where applicable)
+	@$(MAKE) desktop MODE=build PLATFORMS="macos-arm64 macos-amd64 linux-amd64 windows-amd64"
+
+desktop-install: ## Install desktop app (host by default). Supports PLATFORM and INSTALL_DEST
+	@./scripts/desktop.sh --mode install $(if $(PLATFORM),--platform "$(PLATFORM)") $(if $(PLATFORMS),--platforms "$(PLATFORMS)")
+
+desktop-build-install: ## Build desktop app, then install to /Applications (macOS)
+	@$(MAKE) desktop-build PLATFORM="$(PLATFORM)"
+	@$(MAKE) desktop-install PLATFORM="$(PLATFORM)" INSTALL_DEST="/Applications"
+
+desktop-install-applications: desktop-build-install ## Alias: build + install desktop app to /Applications
 
 #
 # Utilities

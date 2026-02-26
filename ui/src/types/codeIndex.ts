@@ -35,9 +35,13 @@ export interface FolderInfo {
 }
 
 export interface IndexStatus {
-  indexed: boolean;
+  indexed?: boolean;
   folders: FolderInfo[];
   totalFiles: number;
+  totalFolders?: number;
+  totalSize?: number;
   fileCount?: number; // Legacy field, use totalFiles instead
   lastScan?: string;
+  lastScanTime?: string;
+  watcherStatus?: 'running' | 'stopped';
 }

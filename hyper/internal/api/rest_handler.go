@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -55,6 +56,13 @@ var validCommunicationTypes = map[string]bool{
 
 // Maximum message length
 const maxMessageLength = 10000
+
+// isFileWatcherDisabledByEnv returns true when watcher runtime is intentionally disabled.
+func isFileWatcherDisabledByEnv() bool {
+	raw := strings.TrimSpace(os.Getenv("ENABLE_FILE_WATCHER"))
+	raw = strings.Trim(raw, "\"'")
+	return strings.EqualFold(raw, "false")
+}
 
 // REST API Data Transfer Objects (DTOs)
 type TaskDTO struct {
@@ -328,6 +336,7 @@ type IndexStatusResponse struct {
 	TotalFolders  int         `json:"totalFolders"`
 	TotalFiles    int         `json:"totalFiles"`
 	TotalSize     int64       `json:"totalSize"`
+	LastScanTime  time.Time   `json:"lastScanTime,omitempty"`
 	WatcherStatus string      `json:"watcherStatus"` // "running" or "stopped"
 	Folders       []FolderDTO `json:"folders"`
 }
@@ -934,9 +943,16 @@ func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 		return
 	}
 	if existing != nil {
+		message := "Folder already indexed."
+		if isFileWatcherDisabledByEnv() {
+			message = "Folder already indexed. File watcher is disabled by server configuration."
+		} else if h.fileWatcher != nil && h.fileWatcher.IsFolderWatched(existing.Path) {
+			message = "Folder already indexed. File watcher is monitoring changes."
+		}
+
 		c.JSON(http.StatusOK, AddFolderResponse{
 			Success: true,
-			Message: "Folder already indexed. File watcher is monitoring changes.",
+			Message: message,
 			Folder:  existing,
 		})
 		return
@@ -949,12 +965,23 @@ func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 		return
 	}
 
-	// Add folder to file watcher
-	if h.fileWatcher != nil {
+	// Add folder to file watcher only if watcher runtime is active.
+	// If watcher runtime is stopped, keep folder indexed but mark watcher inactive for clarity in UI.
+	watcherEnabled := false
+	if h.fileWatcher != nil && h.fileWatcher.IsRunning() {
 		if err := h.fileWatcher.AddFolder(folder); err != nil {
 			h.logger.Warn("Failed to add folder to file watcher", zap.Error(err))
 		} else {
+			watcherEnabled = true
 			h.logger.Info("Added folder to file watcher", zap.String("path", absPath))
+		}
+	}
+
+	if !watcherEnabled {
+		if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "inactive", ""); err != nil {
+			h.logger.Warn("Failed to mark folder watcher as inactive",
+				zap.String("folderID", folder.ID),
+				zap.Error(err))
 		}
 	}
 
@@ -965,9 +992,18 @@ func (h *RESTAPIHandler) AddFolder(c *gin.Context) {
 		zap.Strings("includePatterns", req.IncludePatterns),
 		zap.Strings("excludePatterns", req.ExcludePatterns))
 
+	message := "Folder added successfully. Use /api/code-index/scan to index existing files."
+	if watcherEnabled {
+		message = "Folder added successfully. File watcher is now monitoring changes. Use /api/code-index/scan to index existing files."
+	} else if isFileWatcherDisabledByEnv() {
+		message = "Folder added successfully. File watcher is disabled by server configuration. Use /api/code-index/scan to index existing files."
+	} else if h.fileWatcher != nil {
+		message = "Folder added successfully. File watcher is currently stopped. Enable watcher to monitor changes. Use /api/code-index/scan to index existing files."
+	}
+
 	c.JSON(http.StatusCreated, AddFolderResponse{
 		Success: true,
-		Message: "Folder added successfully. File watcher is now monitoring changes. Use /api/code-index/scan to index existing files.",
+		Message: message,
 		Folder:  folder,
 	})
 }
@@ -1078,6 +1114,13 @@ func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 		return
 	}
 
+	// Preserve watcher preference across scans.
+	// A manual scan should not force a previously inactive watcher back to active.
+	restoreStatus := "active"
+	if folder.Status == "inactive" {
+		restoreStatus = "inactive"
+	}
+
 	// Update folder status to scanning
 	if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "scanning", ""); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update folder status: " + err.Error()})
@@ -1184,7 +1227,7 @@ func (h *RESTAPIHandler) ScanFolder(c *gin.Context) {
 	}
 
 	// Update folder status and scan time
-	if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "active", ""); err != nil {
+	if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, restoreStatus, ""); err != nil {
 		h.logger.Warn("Failed to update folder status", zap.Error(err))
 	}
 
@@ -1555,20 +1598,25 @@ func (h *RESTAPIHandler) GetIndexStatus(c *gin.Context) {
 		}
 	}
 
-	// Determine watcher status (running if file watcher exists and has active folders)
+	// Determine watcher status from actual watcher runtime and watched folder count.
 	watcherStatus := "stopped"
-	if h.fileWatcher != nil && status.ActiveFolders > 0 {
+	if h.fileWatcher != nil && h.fileWatcher.IsRunning() && h.fileWatcher.WatchedFolderCount() > 0 {
 		watcherStatus = "running"
 	}
 
 	// Transform folders to UI format
 	uiFolders := make([]FolderDTO, 0, len(folders))
 	for _, folder := range folders {
+		enabled := folder.Status == "active"
+		if h.fileWatcher != nil {
+			enabled = h.fileWatcher.IsFolderWatched(folder.Path)
+		}
+
 		uiFolders = append(uiFolders, FolderDTO{
 			ConfigId:   folder.ID,
 			FolderPath: folder.Path,
 			FileCount:  folder.FileCount,
-			Enabled:    folder.Status == "active",
+			Enabled:    enabled,
 		})
 	}
 
@@ -1576,6 +1624,7 @@ func (h *RESTAPIHandler) GetIndexStatus(c *gin.Context) {
 		TotalFolders:  status.TotalFolders,
 		TotalFiles:    status.TotalFiles,
 		TotalSize:     totalSize,
+		LastScanTime:  status.LastScanTime,
 		WatcherStatus: watcherStatus,
 		Folders:       uiFolders,
 	})
@@ -1591,6 +1640,21 @@ func (h *RESTAPIHandler) EnableWatcher(c *gin.Context) {
 		return
 	}
 
+	if isFileWatcherDisabledByEnv() {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "File watcher is disabled by server configuration (ENABLE_FILE_WATCHER=false)",
+		})
+		return
+	}
+
+	// Ensure watcher runtime (event loop + workers) is active.
+	if err := h.fileWatcher.Start(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to start file watcher runtime: " + err.Error(),
+		})
+		return
+	}
+
 	// Get all folders
 	folders, err := h.codeIndexStorage.ListFolders()
 	if err != nil {
@@ -1602,22 +1666,40 @@ func (h *RESTAPIHandler) EnableWatcher(c *gin.Context) {
 
 	// Start watching all folders
 	addedCount := 0
+	failedCount := 0
 	for _, folder := range folders {
 		if err := h.fileWatcher.AddFolder(folder); err != nil {
 			h.logger.Warn("Failed to add folder to watcher",
 				zap.String("path", folder.Path),
 				zap.Error(err))
+			failedCount++
+			if statusErr := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "inactive", ""); statusErr != nil {
+				h.logger.Warn("Failed to mark folder inactive after watcher add failure",
+					zap.String("folderID", folder.ID),
+					zap.Error(statusErr))
+			}
 		} else {
 			addedCount++
+			if statusErr := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "active", ""); statusErr != nil {
+				h.logger.Warn("Failed to mark folder active after watcher enable",
+					zap.String("folderID", folder.ID),
+					zap.Error(statusErr))
+			}
 		}
 	}
 
 	h.logger.Info("Enabled file watcher", zap.Int("foldersAdded", addedCount))
 
+	message := fmt.Sprintf("File watcher enabled for %d folders", addedCount)
+	if failedCount > 0 {
+		message = fmt.Sprintf("%s (%d failed)", message, failedCount)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success":        true,
-		"message":        fmt.Sprintf("File watcher enabled for %d folders", addedCount),
+		"message":        message,
 		"foldersWatched": addedCount,
+		"failed":         failedCount,
 	})
 }
 
@@ -1649,6 +1731,12 @@ func (h *RESTAPIHandler) DisableWatcher(c *gin.Context) {
 				zap.Error(err))
 		} else {
 			removedCount++
+		}
+
+		if statusErr := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "inactive", ""); statusErr != nil {
+			h.logger.Warn("Failed to mark folder inactive after watcher disable",
+				zap.String("folderID", folder.ID),
+				zap.Error(statusErr))
 		}
 	}
 
@@ -1691,6 +1779,12 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 
 	for _, folder := range folders {
 		h.logger.Info("Reindexing folder", zap.String("path", folder.Path))
+
+		// Preserve watcher preference across reindex operations.
+		restoreStatus := "active"
+		if folder.Status == "inactive" {
+			restoreStatus = "inactive"
+		}
 
 		// Get collection name (with fallback to default)
 		mapping, _ := h.codeIndexStorage.GetPathMapping(folder.Path)
@@ -1803,7 +1897,7 @@ func (h *RESTAPIHandler) ReindexAll(c *gin.Context) {
 		}
 
 		// Update folder status and scan time
-		if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, "active", ""); err != nil {
+		if err := h.codeIndexStorage.UpdateFolderStatus(folder.ID, restoreStatus, ""); err != nil {
 			h.logger.Warn("Failed to update folder status", zap.Error(err))
 		}
 
@@ -2057,20 +2151,18 @@ func (h *RESTAPIHandler) HandleToggleWatcher(c *gin.Context) {
 		return
 	}
 
-	// Update folder status based on enabled flag
-	newStatus := "inactive"
-	if req.Enabled {
-		newStatus = "active"
-	}
-
-	// Update folder status in storage
-	if err := h.codeIndexStorage.UpdateFolderStatus(folderID, newStatus, ""); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update folder status: " + err.Error()})
-		return
-	}
-
 	// Add or remove from file watcher
 	if req.Enabled {
+		if isFileWatcherDisabledByEnv() {
+			c.JSON(http.StatusConflict, gin.H{"error": "File watcher is disabled by server configuration (ENABLE_FILE_WATCHER=false)"})
+			return
+		}
+
+		if err := h.fileWatcher.Start(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start watcher runtime: " + err.Error()})
+			return
+		}
+
 		if err := h.fileWatcher.AddFolder(folder); err != nil {
 			h.logger.Error("Failed to add folder to watcher",
 				zap.String("path", folder.Path),
@@ -2078,6 +2170,12 @@ func (h *RESTAPIHandler) HandleToggleWatcher(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enable watcher: " + err.Error()})
 			return
 		}
+
+		if err := h.codeIndexStorage.UpdateFolderStatus(folderID, "active", ""); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update folder status: " + err.Error()})
+			return
+		}
+
 		h.logger.Info("Enabled watcher for folder", zap.String("path", folder.Path))
 	} else {
 		if err := h.fileWatcher.RemoveFolder(folder.Path); err != nil {
@@ -2085,6 +2183,12 @@ func (h *RESTAPIHandler) HandleToggleWatcher(c *gin.Context) {
 				zap.String("path", folder.Path),
 				zap.Error(err))
 		}
+
+		if err := h.codeIndexStorage.UpdateFolderStatus(folderID, "inactive", ""); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update folder status: " + err.Error()})
+			return
+		}
+
 		h.logger.Info("Disabled watcher for folder", zap.String("path", folder.Path))
 	}
 

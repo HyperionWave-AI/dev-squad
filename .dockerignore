@@ -1,0 +1,37 @@
+.git
+.github
+.claude
+.codacy
+.hyper
+.DS_Store
+
+bin
+logs
+tmp
+docs
+featureDocs
+readme-resources
+desktop-app
+docker-compose
+
+docker-compose.yml
+docker-compose.dev.yml
+
+ui/node_modules
+ui/dist
+ui2
+
+# Keep only Go source + module metadata from hyper/
+hyper/*
+!hyper/go.mod
+!hyper/go.sum
+!hyper/cmd/
+!hyper/cmd/**
+!hyper/internal/
+!hyper/internal/**
+!hyper/embed/
+!hyper/embed/**
+
+# Exclude generated artifacts inside included directories
+hyper/cmd/coordinator/coordinator
+hyper/embed/ui/dist

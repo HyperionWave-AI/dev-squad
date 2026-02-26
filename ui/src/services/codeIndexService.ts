@@ -96,6 +96,14 @@ export const codeIndexService = {
     });
   },
 
+  async toggleFolderWatcher(folderId: string, enabled: boolean): Promise<{ success: boolean; enabled: boolean; message: string }> {
+    return fetchWithAuth(`${API_BASE}/api/v1/code-index/folders/${encodeURIComponent(folderId)}/watcher`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
   async reindexAll(): Promise<{
     success: boolean;
     message: string;
